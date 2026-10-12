@@ -8,11 +8,12 @@ import { SiteService } from '../../services/site.service';
 import { ListLoadState } from '../shared/list-load-state';
 import { trendLabel, trendClass } from '../../formatting/revenue-trend';
 import { siteStockClass } from '../../formatting/site-stock-status';
+import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 
 @Component({
   selector: 'app-site-list',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, NayaxStatusBannerComponent],
   templateUrl: './site-list.component.html'
 })
 export class SiteListComponent implements OnInit {

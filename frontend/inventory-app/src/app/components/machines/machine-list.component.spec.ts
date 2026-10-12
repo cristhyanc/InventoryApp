@@ -4,6 +4,16 @@ import { of, throwError } from 'rxjs';
 import { MachineListComponent } from './machine-list.component';
 import { MachineService } from '../../services/machine.service';
 import { Machine } from '../../models/models';
+import { AccessService } from '../../access/access.service';
+import { NayaxConnectionService } from '../../services/nayax-connection.service';
+
+/** The banner (issue #539) is composed by this page; it is stubbed `Ready` so it stays hidden. */
+function nayaxStatusBannerProviders(status: 'Ready' | 'NotConfigured' = 'Ready') {
+  return [
+    { provide: NayaxConnectionService, useValue: { status: () => of({ status, machineChecksPending: false }) } },
+    { provide: AccessService, useValue: { allows: () => of(true) } }
+  ];
+}
 
 function machine(overrides: Partial<Machine>): Machine {
   return {
@@ -104,7 +114,8 @@ describe('MachineListComponent rendering', () => {
       imports: [MachineListComponent],
       providers: [
         provideRouter([]),
-        { provide: MachineService, useValue: { getAll: () => of(machines) } }
+        { provide: MachineService, useValue: { getAll: () => of(machines) } },
+        ...nayaxStatusBannerProviders()
       ]
     }).compileComponents();
 
@@ -154,7 +165,8 @@ describe('MachineListComponent rendering', () => {
       imports: [MachineListComponent],
       providers: [
         provideRouter([]),
-        { provide: MachineService, useValue: { getAll: () => throwError(() => new Error('boom')) } }
+        { provide: MachineService, useValue: { getAll: () => throwError(() => new Error('boom')) } },
+        ...nayaxStatusBannerProviders()
       ]
     }).compileComponents();
     const fixture = TestBed.createComponent(MachineListComponent);
@@ -171,5 +183,28 @@ describe('MachineListComponent rendering', () => {
     const link = host.querySelector('a[href="/machines/10"]');
     expect(link).not.toBeNull();
     expect(link?.textContent).toContain('Front Lobby Snacks');
+  });
+
+  it('shows the Nayax status banner when the connection is not Ready (issue #539)', async () => {
+    await TestBed.configureTestingModule({
+      imports: [MachineListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: MachineService, useValue: { getAll: () => of([MACHINE_A]) } },
+        ...nayaxStatusBannerProviders('NotConfigured')
+      ]
+    }).compileComponents();
+    const fixture = TestBed.createComponent(MachineListComponent);
+    fixture.detectChanges();
+    const host = fixture.nativeElement as HTMLElement;
+
+    expect(host.querySelector('[data-testid="nayax-status-banner"]')).not.toBeNull();
+  });
+
+  it('hides the Nayax status banner once the connection is Ready (issue #539)', async () => {
+    const fixture = await renderList([MACHINE_A]);
+    const host = fixture.nativeElement as HTMLElement;
+
+    expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
   });
 });

@@ -1456,7 +1456,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Nayax Settings, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). What is still outstanding before a second business goes live is the rest of #328's self-service work (the connection banners are #539); the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Nayax Settings, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
 
 #### Membership roles and capabilities (issue #521)
 
@@ -2664,6 +2664,48 @@ starts granted, so an unanswered read leaves the wizard as it was before roles w
 
 **What is deliberately not here.** The connection banners on other screens (#539) and any backend
 change.
+
+### Nayax connection status banners (issue #539)
+
+Issue #539 — the last slice of #506, under #328 — is the explanation every other Nayax-dependent
+screen was missing: Machines (`MachineListComponent`, `MachineDetailComponent`), Sites
+(`SiteListComponent`, `SiteProductsComponent`), Pick List (`PickListComponent`) and the Sync Restock
+workflow (`MachineRestockSyncComponent`) all read a live Nayax projection through
+`INayaxLynxClient` (`ListMachineDashboard`, `ListMachineProducts`, `GetSiteSummaries`,
+`GetSiteProducts`, the Pick List projection and `SyncMachineStockFromNayax`), so each of them now
+composes the one shared `NayaxStatusBannerComponent`
+(`frontend/inventory-app/src/app/components/shared/nayax-status-banner/`) just under its page header
+(and, on `MachineRestockSyncComponent`, inside its own card beside the Sync Restock button, since
+that is the workflow a Manager or Operator actually triggers). It is **frontend only**: it adds no
+endpoint and decides no rule of its own.
+
+**It reads the same status the wizard reads, once, and adds nothing to it.** The banner calls
+`NayaxConnectionService.status()` (`GET …/nayax-connection/status`, issue #537, `Dashboard.View` -
+every role) on its own `ngOnInit` and shows nothing until that answer is known. It is hidden while
+the status is `Ready` and while the read could not be answered at all - a page's own data load
+already reports its own failure, and a banner built on a probe nobody could answer would only add a
+second, possibly wrong, explanation beside it - and shown for every other published status
+(`NotConfigured`, `PendingPermissions`, `NeedsAttention`).
+
+**Who sees the setup link is `Integration.Manage`, not a role string.** That capability is the one
+`RoleCapabilities` grants to an Owner alone, so the banner reads it through
+`AccessService.allows('Integration.Manage')` exactly as `NayaxConnectionWizardComponent` does, and
+with the same fail-open default (`canManage` starts `true`) so an unanswered capability read never
+hides a link an Owner's role would show once the identity is known. An Owner sees "Nayax isn't fully
+connected for this business." with a link to the wizard (`/admin/nayax-settings`, independently
+guarded by the same capability); a Manager or Operator sees the fixed sentence "Nayax isn't fully
+connected for this business. Ask a business Owner to finish the Nayax connection." with no link at
+all - never a derived "ask your admin" message, because this is the one sentence #328 agreed on.
+
+**What is deliberately not here.** The wizard itself (#538) and making these screens usable without
+Nayax at all, which is #329's release-gated work - the banner only explains the failure these
+screens already have; it does not give any of them a working degraded mode.
+
+**What proves it.** `NayaxStatusBannerComponent`'s own spec - every published status for an Owner
+and for a non-Owner, hidden on `Ready`, hidden while unread and while the status call fails, the
+Owner's link target, and the Manager/Operator sentence verbatim. Each host component's own spec
+proves the banner is composed and reacts to the same `NotConfigured`/`Ready` stub the banner's own
+spec already covers in full, rather than re-asserting that matrix six more times.
 
 ### Document storage
 

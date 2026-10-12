@@ -1,19 +1,22 @@
 <section class="mt-8 card">
-  <div class="card-body flex items-center justify-between gap-4">
-    <div>
-      <h2 class="card-title">Sync Restock</h2>
-      <p class="text-md-body value-muted">Import Nayax stock-adjustment alerts and reconcile them into storage inventory. Manual restocking above remains available as a fallback.</p>
+  <div class="card-body">
+    <app-nayax-status-banner></app-nayax-status-banner>
+    <div class="flex items-center justify-between gap-4">
+      <div>
+        <h2 class="card-title">Sync Restock</h2>
+        <p class="text-md-body value-muted">Import Nayax stock-adjustment alerts and reconcile them into storage inventory. Manual restocking above remains available as a fallback.</p>
+      </div>
+      <button
+        #syncTrigger
+        type="button"
+        (click)="syncRestock()"
+        [disabled]="(syncing$ | async) ?? false"
+        aria-haspopup="dialog"
+        class="btn btn-secondary"
+      >
+        {{ (syncing$ | async) ? 'Syncing…' : 'Sync Restock' }}
+      </button>
     </div>
-    <button
-      #syncTrigger
-      type="button"
-      (click)="syncRestock()"
-      [disabled]="(syncing$ | async) ?? false"
-      aria-haspopup="dialog"
-      class="btn btn-secondary"
-    >
-      {{ (syncing$ | async) ? 'Syncing…' : 'Sync Restock' }}
-    </button>
   </div>
 </section>
 
