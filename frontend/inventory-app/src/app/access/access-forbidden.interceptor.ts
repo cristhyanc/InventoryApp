@@ -3,12 +3,9 @@ import { inject } from '@angular/core';
 import { catchError, throwError } from 'rxjs';
 import { AccessService } from './access.service';
 
-/** `GET /api/me/access` itself, whatever base URL `ConfigService` resolved. */
-const ACCESS_ENDPOINT_PATTERN = /\/me\/access$/;
-
 /** Whether a refused request is one whose refusal says something about the member's role. */
 export function isMemberAccessRefusal(url: string): boolean {
-  return !url.startsWith('/assets/') && !url.includes('/assets/') && !ACCESS_ENDPOINT_PATTERN.test(url);
+  return !url.startsWith('/assets/') && !url.includes('/assets/') && !url.endsWith('/me/access');
 }
 
 /**
