@@ -15,9 +15,10 @@ namespace InventoryApi.Tests.Application.Members;
 ///   business it was given - so a use case that passed a business the invite does not belong to
 ///   would write nothing here, exactly as it would write nothing in the database.</item>
 ///   <item><b>The two writes are conditional.</b> The reactivation matches only a revoked row and
-///   the close matches only a live invite, each reporting whether it did anything. That is what lets
-///   a test stage another redemption landing between this one's read and its write and assert that
-///   nothing is reported as granted on the strength of the stale read.</item>
+///   the close matches only a live invite - judged at the instant the caller hands it, exactly as
+///   the real <c>UPDATE</c>'s <c>WHERE</c> clause is - each reporting whether it did anything. That
+///   is what lets a test stage another redemption, or an expiry, landing between this one's read and
+///   its write and assert that nothing is reported as granted on the strength of the stale read.</item>
 /// </list>
 ///
 /// The relational and concurrency proof stays where it belongs -
@@ -72,7 +73,8 @@ public sealed class FakeMemberInviteRedemptionStore : IMemberInviteRedemptionSto
             status,
             expiresAtUtc,
             businessStatus,
-            UsedByMembershipId: null);
+            UsedByMembershipId: null,
+            UsedAtUtc: null);
 
     public void AddMembership(int businessId, ActorIdentity identity, int membershipId, bool isActive)
     {
@@ -82,7 +84,8 @@ public sealed class FakeMemberInviteRedemptionStore : IMemberInviteRedemptionSto
             isActive,
             BusinessRole.Operator,
             DisplayName: null,
-            Email: null);
+            Email: null,
+            StatusChangedAtUtc: null);
         _nextMembershipId = Math.Max(_nextMembershipId, membershipId + 1);
     }
 
@@ -165,7 +168,8 @@ public sealed class FakeMemberInviteRedemptionStore : IMemberInviteRedemptionSto
             IsActive: true,
             role,
             profile.DisplayName,
-            profile.Email);
+            profile.Email,
+            createdAtUtc);
 
         return Task.FromResult(membershipId);
     }
@@ -200,6 +204,7 @@ public sealed class FakeMemberInviteRedemptionStore : IMemberInviteRedemptionSto
             // An absent claim leaves the stored value alone rather than erasing it (issue #524).
             DisplayName = profile.DisplayName ?? existing.DisplayName,
             Email = profile.Email ?? existing.Email,
+            StatusChangedAtUtc = reactivatedAtUtc,
         };
 
         return Task.FromResult(true);
@@ -233,6 +238,7 @@ public sealed class FakeMemberInviteRedemptionStore : IMemberInviteRedemptionSto
         {
             StoredStatus = MemberInviteStatus.Used,
             UsedByMembershipId = membershipId,
+            UsedAtUtc = usedAtUtc,
         };
 
         return Task.FromResult(true);
@@ -255,7 +261,8 @@ public sealed class FakeMemberInviteRedemptionStore : IMemberInviteRedemptionSto
         MemberInviteStatus StoredStatus,
         DateTime ExpiresAtUtc,
         BusinessStatus BusinessStatus,
-        int? UsedByMembershipId);
+        int? UsedByMembershipId,
+        DateTime? UsedAtUtc);
 
     /// <summary>One stored membership, as this fake holds it.</summary>
     public sealed record Membership(
@@ -263,5 +270,6 @@ public sealed class FakeMemberInviteRedemptionStore : IMemberInviteRedemptionSto
         bool IsActive,
         BusinessRole Role,
         string? DisplayName,
-        string? Email);
+        string? Email,
+        DateTime? StatusChangedAtUtc);
 }

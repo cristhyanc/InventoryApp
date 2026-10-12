@@ -30,6 +30,11 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// subtly-different copy of them. Add a seeding or read-back helper here when a new race needs one;
 /// keep the assertions in the test.</para>
 ///
+/// <para><see cref="MemberInviteRedemptionExpiryTests"/> (issue #608) uses it for a single writer
+/// rather than a race: it needs the same migrated database, the same seeded businesses and the same
+/// read-back helpers to prove that a refusal at the last step inside the real transaction takes the
+/// membership row back with it.</para>
+///
 /// <para>Dispose it at the end of a test class (it is <see cref="IAsyncDisposable"/>): that clears
 /// the SQLite connection pool and deletes the file.</para>
 /// </summary>

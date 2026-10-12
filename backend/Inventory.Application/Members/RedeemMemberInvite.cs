@@ -42,12 +42,18 @@ public sealed record RedeemedMemberInvite(BusinessRole Role);
 /// before any invite is looked up, and because it is the only place the deactivated-business
 /// sentence can be chosen from.</para>
 ///
-/// <para><strong>The invite is read, judged and closed inside one transaction.</strong> The
-/// authoritative read happens after <c>BEGIN IMMEDIATE</c> has taken the write lock, and the
-/// <c>UPDATE</c> that marks the invite used carries its own "only while still live" condition, so
-/// the decision and the mutation are one operation twice over. A second redemption of the same
-/// invite therefore matches nothing and is refused with its membership write rolled back, and two
-/// invites redeemed at once by one identity leave exactly one membership and one unused invite.</para>
+/// <para><strong>The invite is read, judged and closed inside one transaction, and so is the
+/// clock.</strong> The authoritative read happens after <c>BEGIN IMMEDIATE</c> has taken the write
+/// lock, and the <c>UPDATE</c> that marks the invite used carries its own "only while still live"
+/// condition, so the decision and the mutation are one operation twice over. A second redemption of
+/// the same invite therefore matches nothing and is refused with its membership write rolled back,
+/// and two invites redeemed at once by one identity leave exactly one membership and one unused
+/// invite. The <em>instants</em> both of those are judged at are read inside the transaction too
+/// (issue #608): the decision at the moment the lock was granted, and the consumption immediately
+/// before the close. An invite that expires while this request waits for the write lock, or while
+/// its membership is being prepared, is therefore refused rather than admitted on the strength of
+/// an instant from before the wait - and what the row and the audit trail record is when the
+/// redemption happened, not when the request arrived.</para>
 ///
 /// <para><strong>Every refusal is one of two sentences.</strong> An unusable invite - expired, used,
 /// cancelled, unknown, of a business that is not active, or granting a role this deployment does
@@ -120,8 +126,10 @@ public sealed class RedeemMemberInvite
 
         await RefuseIfIneligibleAsync(actor.Identity, cancellationToken).ConfigureAwait(false);
 
-        var nowUtc = _clock.UtcNow;
-
+        // Deliberately no instant read here (issue #608). Everything this request is judged and
+        // stamped by is sampled inside the transaction below, because the only interesting thing
+        // that can happen between here and there is a wait: the caller who is eligible now may be
+        // held at BEGIN IMMEDIATE for as long as another writer holds the write lock.
         var redeemed = await _guard
             .ExecuteAsync(
                 // The caller gains an active membership, so eligibility is re-checked for them
@@ -130,13 +138,14 @@ public sealed class RedeemMemberInvite
                 // itself. No business has to keep an Owner either - a redemption can only add
                 // access, never remove an Owner's.
                 new MembershipWriteIntent(IdentityGainingAnActiveMembership: actor.Identity),
-                writeToken => RedeemAsync(tokenHash, actor, nowUtc, writeToken),
+                writeToken => RedeemAsync(tokenHash, actor, writeToken),
                 cancellationToken)
             .ConfigureAwait(false);
 
         // After the commit, because a rolled-back redemption did not happen. The event carries the
         // actor, the business, the invite and the role it granted - and structurally no token and no
-        // name (see MemberInviteAuditEntry).
+        // name (see MemberInviteAuditEntry). Its instant is the one the invite was really consumed
+        // at, so the trail describes the redemption rather than the wait that preceded it.
         _audit.Record(new MemberInviteAuditEntry(
             actor.Identity.DirectoryTenantId,
             actor.Identity.ObjectId,
@@ -144,7 +153,7 @@ public sealed class RedeemMemberInvite
             redeemed.InviteId,
             MemberInviteChange.Redeemed,
             redeemed.Role,
-            nowUtc));
+            redeemed.ConsumedAtUtc));
 
         return new RedeemedMemberInvite(redeemed.Role);
     }
@@ -177,13 +186,23 @@ public sealed class RedeemMemberInvite
     /// The in-transaction half: the authoritative read of the invite, the policy applied to it, the
     /// membership created or reactivated, and the invite closed - in that order, so an invite that
     /// stops being live between the read and the close takes the membership write back with it.
+    ///
+    /// <para><strong>Both instants are sampled here, and that is the point</strong> (issue #608).
+    /// This method runs with the <c>BEGIN IMMEDIATE</c> write lock already held, so
+    /// <c>decisionAtUtc</c> is the first instant at which this request could possibly act - however
+    /// long it waited for the lock. Reading the clock before the wait and judging the invite by that
+    /// value is a time-of-check defect: a link that expired during the wait would still satisfy the
+    /// old instant and be consumed after expiry. The consumption is then sampled again, immediately
+    /// before the conditional close, because preparing the membership takes time too and the close
+    /// is the moment the invite is actually spent.</para>
     /// </summary>
     private async Task<Redeemed> RedeemAsync(
         string tokenHash,
         ActorProfile actor,
-        DateTime nowUtc,
         CancellationToken cancellationToken)
     {
+        var decisionAtUtc = _clock.UtcNow;
+
         var invite = await _store.FindByTokenHashAsync(tokenHash, cancellationToken).ConfigureAwait(false);
 
         if (invite is null
@@ -192,28 +211,34 @@ public sealed class RedeemMemberInvite
                 invite.ExpiresAtUtc,
                 invite.BusinessStatus,
                 invite.Role,
-                nowUtc))
+                decisionAtUtc))
         {
             throw new DomainValidationException(MemberInviteRedemptionPolicy.InvalidInviteMessage);
         }
 
-        var membershipId = await JoinAsync(invite, actor, nowUtc, cancellationToken).ConfigureAwait(false);
+        var membershipId = await JoinAsync(invite, actor, decisionAtUtc, cancellationToken)
+            .ConfigureAwait(false);
+
+        var consumedAtUtc = _clock.UtcNow;
 
         var closed = await _store
-            .MarkUsedAsync(invite.BusinessId, invite.InviteId, membershipId, nowUtc, cancellationToken)
+            .MarkUsedAsync(invite.BusinessId, invite.InviteId, membershipId, consumedAtUtc, cancellationToken)
             .ConfigureAwait(false);
 
         if (!closed)
         {
-            // The invite stopped being live between the read above and this statement - another
-            // redemption of the same link committed first. Refusing here rolls the membership this
-            // attempt just wrote back with the transaction, which is what keeps one invite to one
-            // membership: without the condition in that UPDATE, both callers would be let in and
-            // the row would record only one of them.
+            // The invite stopped being live between the read above and this statement: another
+            // redemption of the same link committed first, it was cancelled, or - judged at the
+            // fresh instant this statement carries - it expired while this attempt was preparing
+            // the membership. Refusing here rolls that membership write back with the transaction,
+            // whether it created a row or brought a revoked one back, which is what keeps one
+            // invite to one membership and keeps an expired link from granting anything: without
+            // the condition in that UPDATE, both callers would be let in and the row would record
+            // only one of them.
             throw new DomainValidationException(MemberInviteRedemptionPolicy.InvalidInviteMessage);
         }
 
-        return new Redeemed(invite.BusinessId, invite.InviteId, invite.Role);
+        return new Redeemed(invite.BusinessId, invite.InviteId, invite.Role, consumedAtUtc);
     }
 
     /// <summary>
@@ -225,11 +250,16 @@ public sealed class RedeemMemberInvite
     /// <em>active</em> row is unreachable - the eligibility rule refused the caller before and
     /// inside the transaction - and is refused rather than quietly re-granted, because reaching it
     /// would mean the rule that is supposed to be authoritative was not.
+    ///
+    /// <para><paramref name="joinedAtUtc"/> is the instant the transaction's authoritative decision
+    /// was made at, so the row records the state it reached when the business really admitted this
+    /// person. It is not the instant the invite is consumed at, which is sampled afterwards: this
+    /// write may still be rolled back.</para>
     /// </summary>
     private async Task<int> JoinAsync(
         RedeemableMemberInvite invite,
         ActorProfile actor,
-        DateTime nowUtc,
+        DateTime joinedAtUtc,
         CancellationToken cancellationToken)
     {
         var existing = await _store
@@ -244,7 +274,7 @@ public sealed class RedeemMemberInvite
                     actor.Identity,
                     actor.Profile,
                     invite.Role,
-                    nowUtc,
+                    joinedAtUtc,
                     cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -260,7 +290,7 @@ public sealed class RedeemMemberInvite
                 existing.Value.MembershipId,
                 invite.Role,
                 actor.Profile,
-                nowUtc,
+                joinedAtUtc,
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -275,6 +305,13 @@ public sealed class RedeemMemberInvite
         return existing.Value.MembershipId;
     }
 
-    /// <summary>What the committed redemption was about, so the audit can describe it exactly.</summary>
-    private sealed record Redeemed(BusinessId BusinessId, int InviteId, BusinessRole Role);
+    /// <summary>
+    /// What the committed redemption was about, so the audit can describe it exactly - including
+    /// the instant the invite was really consumed at, which is the instant the audit reports.
+    /// </summary>
+    private sealed record Redeemed(
+        BusinessId BusinessId,
+        int InviteId,
+        BusinessRole Role,
+        DateTime ConsumedAtUtc);
 }
