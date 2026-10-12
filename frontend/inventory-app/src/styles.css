@@ -1699,6 +1699,10 @@ video {
   cursor: pointer;
 }
 
+.list-decimal {
+  list-style-type: decimal;
+}
+
 .list-disc {
   list-style-type: disc;
 }
@@ -2129,6 +2133,10 @@ video {
   vertical-align: top;
 }
 
+.font-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
 .font-sans {
   font-family: Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
@@ -2505,8 +2513,16 @@ img {
     margin-right: -1.5rem;
   }
 
+  .sm\:max-w-md {
+    max-width: 28rem;
+  }
+
   .sm\:max-w-none {
     max-width: none;
+  }
+
+  .sm\:max-w-xs {
+    max-width: 20rem;
   }
 
   .sm\:grid-cols-2 {
