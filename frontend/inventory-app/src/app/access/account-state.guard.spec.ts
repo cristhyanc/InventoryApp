@@ -4,7 +4,12 @@ import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { Subject, of, throwError } from 'rxjs';
 import { AccountState, AccountStateName, AccountStateService } from './account-state.service';
-import { ACCOUNT_STATE_ROUTE, accountStateGuard } from './account-state.guard';
+import {
+  ACCOUNT_STATE_ROUTE,
+  REDEEMABLE_ACCOUNT_STATES,
+  accountStateGuard,
+  nonRedeemableAccountStateDestination
+} from './account-state.guard';
 import { apiConfig, readingHttp, signedInIdentity } from './identity-cache.spec-helpers';
 
 @Component({ standalone: true, template: 'dashboard' })
@@ -162,6 +167,30 @@ describe('ACCOUNT_STATE_ROUTE', () => {
       ].sort()
     );
   });
+});
+
+/**
+ * `REDEEMABLE_ACCOUNT_STATES` and `nonRedeemableAccountStateDestination` (issue #535): which
+ * account states `/invite/:token` offers the Accept button to, and where every other state is
+ * sent instead.
+ */
+describe('REDEEMABLE_ACCOUNT_STATES and nonRedeemableAccountStateDestination', () => {
+  it('admits exactly the three states that hold no active membership', () => {
+    expect([...REDEEMABLE_ACCOUNT_STATES].sort()).toEqual(
+      ['ApplicationRejected', 'MembershipRevoked', 'NoMembership'].sort()
+    );
+  });
+
+  it('sends a Member to the dashboard', () => {
+    expect(nonRedeemableAccountStateDestination('Member')).toBe('/');
+  });
+
+  it.each(Object.entries(ACCOUNT_STATE_ROUTE) as [AccountStateName, string][])(
+    'sends %s to the page ACCOUNT_STATE_ROUTE already names for it',
+    (state, path) => {
+      expect(nonRedeemableAccountStateDestination(state)).toBe(`/${path}`);
+    }
+  );
 });
 
 /** Pins the shape `AccountState` exposes, so a renamed field is caught here rather than at runtime. */

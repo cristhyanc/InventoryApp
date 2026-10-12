@@ -64,12 +64,12 @@ export const routes: Routes = [
     component: AccessUnavailableComponent
   },
   {
-    // The real invite acceptance page is issue #535's task; this placeholder exists only so the
-    // route and its guard bypass are real before that page is built.
+    // The invite acceptance page (issue #535): reads the token, strips it from the address bar,
+    // and lets a NoMembership/MembershipRevoked/ApplicationRejected caller redeem it. Carries only
+    // `MsalGuard`, for the reason the comment above gives.
     path: 'invite/:token',
     canActivate: [MsalGuard],
-    data: { heading: "You've been invited" },
-    component: OnboardingPlaceholderComponent
+    loadComponent: () => import('./access/invite-acceptance.component').then((m) => m.InviteAcceptanceComponent)
   },
   {
     path: '',
