@@ -14,7 +14,7 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// <summary>
 /// Two genuine concurrent writers against one real SQLite database, for the membership rules that
 /// are only rules if they are serialised (issue #522's shared write path, issue #532's invite
-/// redemption, and issue #507's self-service application next).
+/// redemption and issue #541's self-service business application).
 ///
 /// <para><strong>Why a file and not a shared in-memory database.</strong> A shared in-memory SQLite
 /// database is one connection, and the EF InMemory provider has no locking at all, so neither can
@@ -25,10 +25,10 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// <para><strong>Why it is shared.</strong> Every one of these races is the same shape: seed a
 /// world, release two operations at the same instant, then assert that exactly one won and that the
 /// loser left nothing behind. Issue #532 uses it for "the same invite twice" and "two invites, one
-/// identity"; issue #507 extends it for "invite versus application", which needs the same two
-/// businesses, the same identity seeding and the same barrier - and must not grow a second,
-/// subtly-different copy of them. Add a seeding or read-back helper here when a new race needs one;
-/// keep the assertions in the test.</para>
+/// identity"; issue #541 extends it for "invite versus application" and "two applications by one
+/// identity", which need the same two businesses, the same identity seeding and the same barrier -
+/// and must not grow a second, subtly-different copy of them. Add a seeding or read-back helper here
+/// when a new race needs one; keep the assertions in the test.</para>
 ///
 /// <para><see cref="MemberInviteRedemptionExpiryTests"/> (issue #608) uses it for a single writer
 /// rather than a race: it needs the same migrated database, the same seeded businesses and the same
@@ -170,6 +170,17 @@ internal sealed class MembershipWriteRaceHarness : IAsyncDisposable
     {
         using var db = TestAppDbContext.Unrestricted(Options);
         return db.MemberInvites.AsNoTracking().OrderBy(invite => invite.Id).ToList();
+    }
+
+    /// <summary>
+    /// Every business row, in key order - including any a race created, which is what issue #541's
+    /// self-service application needs: "exactly one succeeded" there is partly a statement about
+    /// how many tenants exist afterwards.
+    /// </summary>
+    public List<Business> Businesses()
+    {
+        using var db = TestAppDbContext.Unrestricted(Options);
+        return db.Businesses.AsNoTracking().OrderBy(business => business.Id).ToList();
     }
 
     /// <summary>

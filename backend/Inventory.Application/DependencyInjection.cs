@@ -15,6 +15,7 @@ using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformDiagnostics;
 using Inventory.Application.Products;
@@ -94,6 +95,17 @@ public static class ApplicationServiceCollectionExtensions
         // context. It is the one use case here reached by a caller with no resolved business, so it
         // takes no ICurrentBusinessProvider at all.
         services.AddScoped<RedeemMemberInvite>();
+
+        // The self-service business application (issue #541). Scoped for the same reasons the
+        // redemption is: the business and the membership it creates are written through the
+        // request's own AppDbContext, inside MembershipWriteGuard's transaction on that same
+        // context, and it is the second use case here reached by a caller with no resolved business
+        // - so it takes no ICurrentBusinessProvider either. The rate limiter is a singleton because
+        // the window it remembers is state about the process rather than about one request: "this
+        // identity has applied five times in the last ten minutes" must be the same answer for
+        // every request, exactly as the Nayax test limiter's window is.
+        services.AddSingleton<BusinessApplicationRateLimiter>();
+        services.AddScoped<ApplyForBusiness>();
 
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
