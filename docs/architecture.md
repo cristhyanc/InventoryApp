@@ -1456,7 +1456,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). What is still outstanding before a second business goes live is the rest of #328's self-service work: those endpoints have no user interface yet (the wizard is #538 and the banners #539), so in practice an existing business's credential still arrives through the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Nayax Settings, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). What is still outstanding before a second business goes live is the rest of #328's self-service work (the connection banners are #539); the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
 
 #### Membership roles and capabilities (issue #521)
 
@@ -1526,8 +1526,8 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Nayax Settings | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
-| Admin → Nayax connection test (issue #536, added as a reviewed edit) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
-| Admin → Nayax connection save and re-test (issue #537, added as a reviewed edit) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Nayax Settings → connection wizard, Test (issue #536, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Nayax Settings → connection wizard, Save and Re-test (issue #537, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Connection banners on every page that needs Nayax (issue #539) | `GET api/settings/nayax-connection/status` (issue #537) | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Admin → Costing Repair | `api/admin/inventory-cost-repair/*` (preview, apply, history) | `Data.Repair` | ✘ | ✘ | ✔ |
 | Admin → Inventory AVCO Transition Baseline | `api/admin/inventory-cost-transition/*` (preview, apply, preview-all, apply-all) | `Data.Repair` | ✘ | ✘ | ✔ |
@@ -2376,10 +2376,11 @@ status code and never the token, the authorization header or the upstream body, 
 `NayaxConnectionCheckRunnerTests.The_token_and_the_upstream_body_never_reach_the_report_or_a_log`
 sweeps both for a success and for each refusal.
 
-**What is deliberately not here.** The wizard UI (#538), the connection banners (#539), the permanent
-credential store and provider (#500's own slices), and anything that creates a Nayax token or
-requests a permission automatically. Saving a draft and re-testing the stored credentials arrived
-with issue #537, immediately below.
+**What is deliberately not here.** The connection banners (#539), the permanent credential store and
+provider (#500's own slices), and anything that creates a Nayax token or requests a permission
+automatically. Saving a draft and re-testing the stored credentials arrived with issue #537,
+immediately below, and the Owner-facing wizard over all of it with issue #538 — see
+[The Nayax connection wizard](#the-nayax-connection-wizard-issue-538).
 
 **What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionCheckPolicyTests` — every
 documented status on every check, the two `404` readings, no answer at all, and the vocabulary itself,
@@ -2414,7 +2415,9 @@ its `Retry-After`. `CapabilityAuthorizationApiTests` and
 Issue #537 — the next slice of #506, under the contract of #328 — is what turns a completed test into
 the business's connection, and what lets an Owner run those checks again later against the token the
 business is actually using. It adds three endpoints to `NayaxConnectionController` and one additive
-column, and nothing else: no wizard (#538), no banners (#539).
+column, and nothing else: no banners (#539). The Owner-facing wizard that drives these endpoints
+arrived separately with issue #538 — see
+[The Nayax connection wizard](#the-nayax-connection-wizard-issue-538).
 
 | Endpoint | Capability | What it does |
 | --- | --- | --- |
@@ -2578,6 +2581,63 @@ its exact sentence and the replacement's row byte-for-byte unchanged — the sha
 read for each role with exactly two fields, and a non-Owner neither saving nor re-testing.
 `CapabilityAuthorizationApiTests` and `EndpointAuthorizationClassificationTests` carry the three
 endpoints' capability rows.
+
+### The Nayax connection wizard (issue #538)
+
+Issue #538 — the Owner-facing slice of #506, under #328 — is the screen over the endpoints above: a
+six-step wizard on Admin → Nayax Settings, beside the processing-fee editor it did not replace. It is
+**frontend only**: it adds no endpoint, changes no contract and holds no rule of its own.
+
+`NayaxConnectionWizardComponent` and the presentational `NayaxConnectionChecklistComponent`
+(`frontend/inventory-app/src/app/components/admin/nayax-settings/`) are composed by the routed
+`NayaxSettingsComponent` per [Page composition boundary](#page-composition-boundary-issue-191): the
+steps, the token field, the checklist, the support request and the save/re-test lifecycle belong to
+the wizard, not to the page. `NayaxConnectionService` is the one client for the four endpoints.
+
+**The token field is write-only, and that is the point of the whole shape.** Step 3's input is bound
+to no component state — no `ngModel`, no signal, no field — because a component property holding a
+Lynx token is exactly what must not exist. It is read from the DOM when Test is pressed, passed once
+to `POST …/test`, and cleared the instant that call returns, on a success, a refusal and a transport
+failure alike. Nothing writes it to `localStorage`, `sessionStorage`, a cookie, the URL or a toast,
+and nothing re-sends it: Save carries the server's own opaque draft id, so the credentials stored are
+the ones the server tested (see
+[Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537)).
+`NayaxConnectionWizardComponent`'s spec asserts the absence - the token in no own property, in
+neither storage, and the field emptied on both paths - because "we do not keep it" is a claim only a
+test can keep true.
+
+**It concludes nothing about the connection.** Every check line, cause sentence, machine count and
+status on screen is the server's own finding, read through the one area/cause vocabulary the
+checklist and the support request share. A `NotChecked` line is rendered as neither a pass nor a
+failure, and it says *why* from the machine count: zero machines reads "no machines in this Nayax
+account yet", while no count at all reads "the machine list could not be read" — a business that has
+machines must not be sent to set them up. The checklist also states that the restock write call is
+never tested and is checked on first real use, because a connection test must not change an
+operator's Nayax data.
+
+**Step 5 exists because the fix is usually Nayax's to make.** When any line failed, the wizard
+composes a ready-to-copy request naming the operator id and every refused area with its cause, links
+the Nayax support portal (`https://nayax.service-now.com/csm`) and offers
+`integration-support@nayax.com` as the secondary contact. The request names no token. Step 5 is
+skipped entirely when the server reported nothing failed.
+
+**Save and re-test say what the server said.** Save is not offered for a run whose sign-in did not
+pass, or whose draft has expired — the server refuses both, and this only avoids spending a request
+on a known refusal. A consumed or refused draft is withdrawn from the screen, so a second save is
+impossible here as well as refused. The stored-connection panel reads `GET …/status` on arrival,
+shows the status, prompts "Re-test once your machines are set up" while the machine checks are
+pending, and offers Re-test in every status including `NeedsAttention`. A re-test that concluded
+nothing says the stored status is left exactly as it was; a `409` shows the server's own *"The
+connection changed while testing. Run the test again."*, and the component carries that sentence
+itself for a refusal that arrives with no body.
+
+**Owner only in three places, authoritative in neither of the first two.** The route requires
+`Integration.Manage` (`app.routes.ts`), the wizard hides itself and refuses its own actions without
+that capability, and each endpoint checks it and refuses the request regardless. The capability read
+starts granted, so an unanswered read leaves the wizard as it was before roles were rendered.
+
+**What is deliberately not here.** The connection banners on other screens (#539) and any backend
+change.
 
 ### Document storage
 
@@ -3560,7 +3620,10 @@ hosting every Admin workflow that had not yet moved out and linked to the ones t
 (`SiteCommissionAgreementsComponent`) are the first two moves: each owns the form and history/
 table UI for its workflow, but calls `NayaxSettingsService`, `ReportingService`, and
 `SiteService` exactly as `AdminComponent` did, so the Nayax processing-fee and site-commission
-API boundaries, effective-dating, and financial calculations are unchanged.
+API boundaries, effective-dating, and financial calculations are unchanged. Issue #538 added the
+Nayax connection wizard to `/admin/nayax-settings` as a composed child component beside that
+unchanged fee-rate editor — see
+[The Nayax connection wizard](#the-nayax-connection-wizard-issue-538).
 
 **Admin Imports (issue #389, Admin split 2/3).** `/admin/imports` (`AdminImportsComponent`) is the
 authenticated UI entry point for the three supported import workflows, moved out of
