@@ -203,16 +203,16 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
     expect(router.url).toBe('/');
   });
 
-  it('shows the API-provided message for an unusable invite', async () => {
-    const redeem = jest.fn(() =>
-      throwError(
-        () =>
-          new HttpErrorResponse({
-            status: 400,
-            error: { message: 'This invite link cannot be used. It may already have been used.' }
-          })
-      )
-    );
+  it.each<[string, number, string]>([
+    ['an unusable invite', 400, 'This invite link cannot be used. It may already have been used.'],
+    ['a caller who already belongs to a business', 409, 'This person is already a member of a business.'],
+    [
+      'a caller who must first be released from a deactivated business',
+      409,
+      'Your account is still attached to a deactivated organisation.'
+    ]
+  ])('shows the API-provided message for %s', async (_description, status, message) => {
+    const redeem = jest.fn(() => throwError(() => new HttpErrorResponse({ status, error: { message } })));
     const { fixture } = await createHarness({ redeem });
 
     fixture.detectChanges();
@@ -220,45 +220,7 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
     await fixture.whenStable();
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.textContent).toContain(
-      'This invite link cannot be used. It may already have been used.'
-    );
-  });
-
-  it('shows the API-provided message for a caller who already belongs to a business', async () => {
-    const redeem = jest.fn(() =>
-      throwError(
-        () => new HttpErrorResponse({ status: 409, error: { message: 'This person is already a member of a business.' } })
-      )
-    );
-    const { fixture } = await createHarness({ redeem });
-
-    fixture.detectChanges();
-    fixture.componentInstance.accept();
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(fixture.nativeElement.textContent).toContain('This person is already a member of a business.');
-  });
-
-  it('shows the API-provided message for a caller who must first be released from a deactivated business', async () => {
-    const redeem = jest.fn(() =>
-      throwError(
-        () =>
-          new HttpErrorResponse({
-            status: 409,
-            error: { message: 'Your account is still attached to a deactivated organisation.' }
-          })
-      )
-    );
-    const { fixture } = await createHarness({ redeem });
-
-    fixture.detectChanges();
-    fixture.componentInstance.accept();
-    await fixture.whenStable();
-    fixture.detectChanges();
-
-    expect(fixture.nativeElement.textContent).toContain('Your account is still attached to a deactivated organisation.');
+    expect(fixture.nativeElement.textContent).toContain(message);
   });
 
   it('falls back to a generic message when the refusal carries none', async () => {
