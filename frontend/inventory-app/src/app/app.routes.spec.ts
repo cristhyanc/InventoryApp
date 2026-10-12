@@ -2,6 +2,7 @@ import { MsalGuard } from '@azure/msal-angular';
 import { Route } from '@angular/router';
 import { ACCESS_NOT_ALLOWED_PATH } from './access/capability.guard';
 import { accountStateGuard } from './access/account-state.guard';
+import { platformAdminGuard } from './access/platform-admin.guard';
 import { AccessNotAllowedComponent } from './access/access-not-allowed.component';
 import { AccessUnavailableComponent } from './access/access-unavailable.component';
 import { OnboardingPlaceholderComponent } from './access/onboarding-placeholder.component';
@@ -109,14 +110,23 @@ describe('Admin costing and maintenance routes (issue #390)', () => {
   });
 
   /**
-   * The super-admin diagnostics page (#335) is routed like any other authenticated page: the
-   * guard only requires a signed-in actor, because platform-admin access is decided by the
-   * diagnostics API on every request rather than by the router. Entering the URL directly
-   * therefore reaches a page that shows a refusal, not data.
+   * The super-admin diagnostics page (#335), moved under `/super-admin` in issue #546.
+   * `platformAdminGuard` asks the same platform-admin check the page itself asks on arrival, so
+   * entering the URL directly still reaches a page that shows a refusal, not data, whichever of
+   * the two answers first.
    */
-  it('serves the Platform Diagnostics page behind ordinary authentication, not a frontend role (issue #335)', async () => {
-    expect(route('admin/diagnostics').canActivate).toContain(MsalGuard);
-    await expect(loadedComponent('admin/diagnostics')).resolves.toBe(PlatformDiagnosticsComponent);
+  it('serves the Platform Diagnostics page behind the platform-admin guard, not a frontend role (issues #335, #546)', async () => {
+    expect(route('super-admin/diagnostics').canActivate).toEqual([MsalGuard, platformAdminGuard]);
+    await expect(loadedComponent('super-admin/diagnostics')).resolves.toBe(PlatformDiagnosticsComponent);
+  });
+
+  /** The old address (#335) redirects to its new home (#546) rather than serving the page. */
+  it('redirects the old /admin/diagnostics address to /super-admin/diagnostics', () => {
+    const redirect = route('admin/diagnostics');
+
+    expect(redirect.redirectTo).toBe('/super-admin/diagnostics');
+    expect(redirect.pathMatch).toBe('full');
+    expect(redirect.canActivate).toBeUndefined();
   });
 
   /**
@@ -143,11 +153,13 @@ describe('capability route guards (issue #528)', () => {
 
   /**
    * `/access-not-allowed` is where a capability guard *sends* a member, so guarding it by one
-   * would send them away from their own explanation; `/admin/diagnostics` is decided by the
-   * diagnostics API per request rather than by any business role, and shows a refusal instead of
-   * data (issue #335). The account-state routing destinations and the invite route (issue #529)
-   * are the other exceptions, for the same reason `accountStateGuard` is absent from them -
-   * see the `account-state routing and the global 403 handler` describe block below.
+   * would send them away from their own explanation. The account-state routing destinations and
+   * the invite route (issue #529) are the other exceptions, for the same reason `accountStateGuard`
+   * is absent from them - see the `account-state routing and the global 403 handler` describe
+   * block below. `/super-admin/diagnostics` is decided by the diagnostics API per request rather
+   * than by any business role (issue #335) and carries `platformAdminGuard` instead (issue #546,
+   * see the describe block below), so it is guarded but not by a capability and does not appear
+   * here.
    */
   it('guards every authenticated route with a capability, except the ones that cannot carry one', () => {
     const unguarded = authenticatedRoutes()
@@ -160,8 +172,7 @@ describe('capability route guards (issue #528)', () => {
       'application-pending',
       'application-rejected',
       'access-unavailable',
-      'invite/:token',
-      'admin/diagnostics'
+      'invite/:token'
     ]);
   });
 
@@ -221,5 +232,20 @@ describe('account-state routing (issue #529)', () => {
   it('serves the real access-unavailable page, behind authentication alone', () => {
     expect(route('access-unavailable').canActivate).toEqual([MsalGuard]);
     expect(route('access-unavailable').component).toBe(AccessUnavailableComponent);
+  });
+});
+
+/**
+ * `/super-admin/*` routing (issue #546). `platformAdminGuard` is neither a capability guard nor
+ * `accountStateGuard`: platform-admin authority has nothing to do with business membership or
+ * role, so a refusal belongs on the dashboard, never on a membership-handling destination.
+ */
+describe('super-admin routing (issue #546)', () => {
+  it('guards /super-admin/diagnostics with MsalGuard then platformAdminGuard, and nothing else', () => {
+    expect(route('super-admin/diagnostics').canActivate).toEqual([MsalGuard, platformAdminGuard]);
+  });
+
+  it('carries no accountStateGuard, because platform-admin authority is independent of membership', () => {
+    expect(route('super-admin/diagnostics').canActivate ?? []).not.toContain(accountStateGuard);
   });
 });

@@ -43,6 +43,9 @@ const SITES: BreadcrumbParent = { label: 'Sites', path: '/sites' };
 const PURCHASES: BreadcrumbParent = { label: 'Purchases', path: '/purchases' };
 const REPORTS: BreadcrumbParent = { label: 'Reports', path: '/reports' };
 const ADMIN: BreadcrumbParent = { label: 'Admin', path: '/admin' };
+// No path: the Super Admin group (issue #546) is a sidebar heading with no landing page of its
+// own, unlike `/admin`'s `AdminComponent` hub.
+const SUPER_ADMIN: BreadcrumbParent = { label: 'Super Admin' };
 
 /**
  * Every routed page with a meaningful parent. Covers the nested Products, Machines, Sites,
@@ -74,7 +77,7 @@ export const breadcrumbRoutes: readonly BreadcrumbRouteEntry[] = [
   { pattern: '/admin/costing-repair', label: 'Costing Repair', parent: ADMIN },
   { pattern: '/admin/historical-gst-classification', label: 'Historical GST Classification', parent: ADMIN },
   { pattern: '/admin/nayax-sale-timestamp-repair', label: 'Nayax Sale Timestamp Repair', parent: ADMIN },
-  { pattern: '/admin/diagnostics', label: 'Platform Diagnostics', parent: ADMIN },
+  { pattern: '/super-admin/diagnostics', label: 'Platform Diagnostics', parent: SUPER_ADMIN },
   { pattern: '/admin/nayax-settings', label: 'Nayax Settings', parent: ADMIN },
   { pattern: '/admin/site-commission-agreements', label: 'Site Commission Agreements', parent: ADMIN }
 ];

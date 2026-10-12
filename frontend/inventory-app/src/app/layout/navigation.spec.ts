@@ -6,10 +6,12 @@ import {
   NavLink,
   activeNavGroup,
   activeNavRoute,
+  businessesNavPlaceholder,
   navLinks,
   navigationFor,
   platformDiagnosticsNavLink,
-  primaryNavigation
+  primaryNavigation,
+  superAdminNavGroup
 } from './navigation';
 
 /**
@@ -68,7 +70,7 @@ function group(label: string, items: readonly NavItem[] = primaryNavigation): Na
 }
 
 function childRoutes(label: string, items: readonly NavItem[] = primaryNavigation): { label: string; route: string }[] {
-  return group(label, items).children.map((child) => ({ label: child.label, route: child.route }));
+  return navLinks([group(label, items)]).map((child) => ({ label: child.label, route: child.route }));
 }
 
 function declaredRoutePaths(): Set<string> {
@@ -185,30 +187,34 @@ describe('primary navigation (issue #391)', () => {
 });
 
 /**
- * The conditional super-admin diagnostics link (issue #335).
+ * The top-level Super Admin group (issue #546, parent #510 under #328), which took
+ * `Platform Diagnostics` out of the business `Admin` group (issue #335) and added the Businesses
+ * placeholder (#547 builds the real page).
  *
- * The link is presentation only. `GET /api/admin/diagnostics/access` decides whether it is
+ * The group is presentation only. `GET /api/admin/diagnostics/access` decides whether it is
  * composed in, and the API is independently authorized on every request, so a navigation without
- * the link hides a page rather than protecting one: `/admin/diagnostics` entered directly still
+ * it hides a page rather than protecting one: `/super-admin/diagnostics` entered directly still
  * works, and still shows nothing an unauthorized caller could read.
  */
-describe('navigationFor (issue #335)', () => {
-  it('offers no diagnostics destination until the API confirms platform-admin access', () => {
-    expect(navLinks(ownerNavigation()).map((link) => link.route)).not.toContain(platformDiagnosticsNavLink.route);
+describe('navigationFor (issue #546)', () => {
+  it('offers no Super Admin group until the API confirms platform-admin access', () => {
+    expect(ownerNavigation().map((entry) => entry.label)).not.toContain('Super Admin');
     expect(childRoutes('Admin', ownerNavigation())).toEqual(adminChildRoutes);
   });
 
-  it('adds it to the Admin group, last, once the API confirms access', () => {
-    expect(childRoutes('Admin', ownerNavigation(true))).toEqual([
-      ...adminChildRoutes,
-      { label: 'Platform Diagnostics', route: '/admin/diagnostics' }
+  it('adds it last, holding Platform Diagnostics and the Businesses placeholder, once the API confirms access', () => {
+    expect(group('Super Admin', ownerNavigation(true)).children).toEqual([
+      platformDiagnosticsNavLink,
+      businessesNavPlaceholder
     ]);
   });
 
-  it('changes nothing else: the same groups, the same order, and no other new destination', () => {
-    expect(ownerNavigation(true).map((entry) => `${entry.kind}:${entry.label}`)).toEqual(
-      primaryNavigation.map((entry) => `${entry.kind}:${entry.label}`)
-    );
+  it('changes nothing else: the same groups in the same order, with Super Admin appended last', () => {
+    expect(ownerNavigation(true).map((entry) => `${entry.kind}:${entry.label}`)).toEqual([
+      ...primaryNavigation.map((entry) => `${entry.kind}:${entry.label}`),
+      'group:Super Admin'
+    ]);
+    expect(childRoutes('Admin', ownerNavigation(true))).toEqual(adminChildRoutes);
     expect(navLinks(ownerNavigation(true)).map((link) => link.route)).toEqual([
       ...navLinks(primaryNavigation).map((link) => link.route),
       platformDiagnosticsNavLink.route
@@ -241,24 +247,31 @@ describe('navigationFor (issue #335)', () => {
     expect(undeclaredRoutes(navigationFor(undefined, true))).toEqual([]);
   });
 
-  it('resolves the diagnostics page as the active entry inside the Admin group', () => {
+  it('resolves the diagnostics page as the active entry inside the Super Admin group', () => {
     const granted = ownerNavigation(true);
 
-    expect(activeNavRoute(granted, '/admin/diagnostics')).toBe('/admin/diagnostics');
-    expect(activeNavGroup(granted, '/admin/diagnostics')?.label).toBe('Admin');
-    expect(activeNavRoute(ownerNavigation(), '/admin/diagnostics')).toBeUndefined();
+    expect(activeNavRoute(granted, '/super-admin/diagnostics')).toBe('/super-admin/diagnostics');
+    expect(activeNavGroup(granted, '/super-admin/diagnostics')?.label).toBe('Super Admin');
+    expect(activeNavRoute(ownerNavigation(), '/super-admin/diagnostics')).toBeUndefined();
   });
 
   /**
-   * The diagnostics link declares no capability, so it is offered to the configured platform
-   * administrator whatever business role they hold - which is the point: no role grants it, and
-   * only `GET /api/admin/diagnostics/access` can say yes.
+   * Neither child declares a capability, so the group is offered to the configured platform
+   * administrator whatever business role they hold - which is the point: no role grants either,
+   * and only `GET /api/admin/diagnostics/access` can say yes.
    */
-  it('keeps the diagnostics link independent of the member capabilities', () => {
+  it('keeps the group independent of the member capabilities', () => {
     const operator = navigationFor(OPERATOR, true);
 
-    expect(childRoutes('Admin', operator)).toEqual([{ label: 'Platform Diagnostics', route: '/admin/diagnostics' }]);
-    expect(navLinks(navigationFor(OPERATOR, false)).map((link) => link.route)).not.toContain('/admin/diagnostics');
+    expect(group('Super Admin', operator).children).toEqual([platformDiagnosticsNavLink, businessesNavPlaceholder]);
+    expect(navLinks(navigationFor(OPERATOR, false)).map((link) => link.route)).not.toContain(
+      platformDiagnosticsNavLink.route
+    );
+  });
+
+  it('declares the Businesses placeholder with no route, so it introduces no destination ahead of its page (#547)', () => {
+    expect(businessesNavPlaceholder).toEqual({ kind: 'placeholder', label: 'Businesses' });
+    expect(superAdminNavGroup.children).toContain(businessesNavPlaceholder);
   });
 });
 
@@ -352,9 +365,10 @@ describe('navigationFor capabilities (issue #528)', () => {
    */
   it('offers every destination when the capability set is not known', () => {
     expect(navigationFor(undefined, false)).toEqual(primaryNavigation);
-    expect(childRoutes('Admin', navigationFor(undefined, true))).toEqual([
-      ...adminChildRoutes,
-      { label: 'Platform Diagnostics', route: '/admin/diagnostics' }
+    expect(childRoutes('Admin', navigationFor(undefined, true))).toEqual(adminChildRoutes);
+    expect(group('Super Admin', navigationFor(undefined, true)).children).toEqual([
+      platformDiagnosticsNavLink,
+      businessesNavPlaceholder
     ]);
   });
 

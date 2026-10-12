@@ -90,7 +90,7 @@ function navGroup(label: string): NavGroup {
   return primaryNavigation.find((entry) => entry.label === label) as NavGroup;
 }
 
-const adminChildRoutes = navGroup('Admin').children.map((child) => child.route);
+const adminChildRoutes = navLinks([navGroup('Admin')]).map((child) => child.route);
 
 describe('SidebarNavComponent structure (issue #391)', () => {
   it('renders one primary navigation landmark with every top-level entry', async () => {
@@ -247,65 +247,65 @@ describe('SidebarNavComponent collapsed state (issue #391)', () => {
 });
 
 /**
- * The conditional super-admin diagnostics link (issue #335). The sidebar renders the API's
- * answer; it never decides it, and a hidden link protects nothing - `/admin/diagnostics` and both
- * diagnostics endpoints are independently authorized by the API.
+ * The top-level Super Admin group (issue #546, parent #510 under #328). The sidebar renders the
+ * API's answer; it never decides it, and a hidden group protects nothing -
+ * `/super-admin/diagnostics` and both diagnostics endpoints are independently authorized by the
+ * API.
  */
-describe('SidebarNavComponent super-admin diagnostics link (issue #335)', () => {
-  it('offers no diagnostics link when the API does not confirm platform-admin access', async () => {
-    const { fixture, host } = await render({ diagnosticsAccess: of(false) });
-    groupToggle(host, 'Admin').click();
-    fixture.detectChanges();
+describe('SidebarNavComponent Super Admin group (issue #546)', () => {
+  it('offers no Super Admin group when the API does not confirm platform-admin access', async () => {
+    const { host } = await render({ diagnosticsAccess: of(false) });
 
-    expect(link(host, '/admin/diagnostics')).toBeNull();
+    expect(host.textContent).not.toContain('Super Admin');
     expect(host.textContent).not.toContain('Platform Diagnostics');
   });
 
-  it('offers no diagnostics link while the access probe has not answered', async () => {
-    const { fixture, host } = await render({ diagnosticsAccess: NEVER });
-    groupToggle(host, 'Admin').click();
-    fixture.detectChanges();
+  it('offers no Super Admin group while the access probe has not answered', async () => {
+    const { host } = await render({ diagnosticsAccess: NEVER });
 
-    expect(link(host, '/admin/diagnostics')).toBeNull();
+    expect(host.textContent).not.toContain('Super Admin');
   });
 
-  it('offers no diagnostics link when the access probe fails', async () => {
-    const { fixture, host } = await render({ diagnosticsAccess: throwError(() => new Error('probe failed')) });
-    groupToggle(host, 'Admin').click();
-    fixture.detectChanges();
+  it('offers no Super Admin group when the access probe fails', async () => {
+    const { host } = await render({ diagnosticsAccess: throwError(() => new Error('probe failed')) });
 
-    expect(link(host, '/admin/diagnostics')).toBeNull();
+    expect(host.textContent).not.toContain('Super Admin');
   });
 
-  it('renders it inside the Admin group once the API confirms access', async () => {
+  it('renders Platform Diagnostics and the inert Businesses placeholder once the API confirms access', async () => {
     const { fixture, host } = await render({ diagnosticsAccess: of(true) });
-    expect(link(host, '/admin/diagnostics')).toBeNull();
+    expect(link(host, '/super-admin/diagnostics')).toBeNull();
 
-    groupToggle(host, 'Admin').click();
+    groupToggle(host, 'Super Admin').click();
     fixture.detectChanges();
 
-    const diagnostics = link(host, '/admin/diagnostics');
+    const diagnostics = link(host, '/super-admin/diagnostics');
     expect(diagnostics).not.toBeNull();
     expect(diagnostics?.textContent?.trim()).toBe('Platform Diagnostics');
-    for (const route of adminChildRoutes) {
-      expect(link(host, route)).not.toBeNull();
-    }
+
+    expect(host.textContent).toContain('Businesses');
+    expect(Array.from(host.querySelectorAll('a')).some((anchor) => anchor.textContent?.trim() === 'Businesses')).toBe(
+      false
+    );
   });
 
-  it('marks the diagnostics page active and opens the Admin group for it', async () => {
-    const { host } = await render({ url: '/admin/diagnostics', diagnosticsAccess: of(true) });
+  it('marks the diagnostics page active and opens the Super Admin group for it', async () => {
+    const { host } = await render({ url: '/super-admin/diagnostics', diagnosticsAccess: of(true) });
 
-    expect(groupToggle(host, 'Admin').getAttribute('aria-expanded')).toBe('true');
-    expect(link(host, '/admin/diagnostics')?.getAttribute('aria-current')).toBe('page');
+    expect(groupToggle(host, 'Super Admin').getAttribute('aria-expanded')).toBe('true');
+    expect(link(host, '/super-admin/diagnostics')?.getAttribute('aria-current')).toBe('page');
   });
 
-  it('adds no other destination when access is confirmed', async () => {
+  it('adds no other destination when access is confirmed, besides its own two children', async () => {
     const { component } = await render({ diagnosticsAccess: of(true) });
 
-    expect(component.navigation.map((entry) => entry.label)).toEqual(primaryNavigation.map((entry) => entry.label));
+    expect(component.navigation.map((entry) => entry.label)).toEqual([
+      ...primaryNavigation.map((entry) => entry.label),
+      'Super Admin'
+    ]);
     expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
       ...navLinks(primaryNavigation).map((entry) => entry.route),
-      '/admin/diagnostics'
+      '/super-admin/diagnostics'
     ]);
   });
 });
@@ -387,12 +387,15 @@ describe('SidebarNavComponent capability-driven menu (issue #528)', () => {
     );
   });
 
-  it('still offers the diagnostics link to an Operator the diagnostics API confirms', async () => {
+  it('still offers the Super Admin group to an Operator the diagnostics API confirms, with no Admin group', async () => {
     const { fixture, host } = await render({ access: of(operator), diagnosticsAccess: of(true) });
-    groupToggle(host, 'Admin').click();
+    groupToggle(host, 'Super Admin').click();
     fixture.detectChanges();
 
-    expect(link(host, '/admin/diagnostics')).not.toBeNull();
+    expect(link(host, '/super-admin/diagnostics')).not.toBeNull();
+    expect(Array.from(host.querySelectorAll('button')).some((button) => button.textContent?.trim() === 'Admin')).toBe(
+      false
+    );
     expect(link(host, '/admin/nayax-settings')).toBeNull();
   });
 });

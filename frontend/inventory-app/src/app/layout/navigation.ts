@@ -32,12 +32,26 @@ export interface NavLink {
   readonly capability?: Capability;
 }
 
+/**
+ * An inert group child with no page of its own yet (issue #546's Businesses placeholder, built in
+ * #547). It renders as plain text rather than a link, because this file's one rule - every `route`
+ * must be a real page already declared in `app.routes.ts` - leaves no route to give it before that
+ * page exists.
+ */
+export interface NavPlaceholder {
+  readonly kind: 'placeholder';
+  readonly label: string;
+}
+
+/** Anything a group may hold: a real destination or an inert placeholder. */
+export type NavGroupChild = NavLink | NavPlaceholder;
+
 /** An expandable heading. It toggles its children and is deliberately not itself a destination. */
 export interface NavGroup {
   readonly kind: 'group';
   readonly label: string;
   readonly icon: string;
-  readonly children: readonly NavLink[];
+  readonly children: readonly NavGroupChild[];
 }
 
 export type NavItem = NavLink | NavGroup;
@@ -109,19 +123,39 @@ export const primaryNavigation: readonly NavItem[] = [
 ];
 
 /**
- * The super-admin platform diagnostics page (issue #335).
+ * The super-admin platform diagnostics page (issue #335, moved to its own group in issue #546).
  *
  * It is deliberately not part of `primaryNavigation`, because it is not a destination every
- * signed-in operator has: it is composed into the `Admin` group by `navigationFor` only while
- * `GET /api/admin/diagnostics/access` confirms the signed-in actor is the configured platform
- * administrator. The link is presentation, never a boundary - `/admin/diagnostics` entered
- * directly still resolves, and both diagnostics endpoints authorize every request themselves, so
- * a hidden link hides a page rather than protecting one.
+ * signed-in operator has: it is composed into the top-level `Super Admin` group by `navigationFor`
+ * only while `GET /api/admin/diagnostics/access` confirms the signed-in actor is the configured
+ * platform administrator. The link is presentation, never a boundary - `/super-admin/diagnostics`
+ * entered directly still resolves, and both diagnostics endpoints authorize every request
+ * themselves, so a hidden link hides a page rather than protecting one.
  */
 export const platformDiagnosticsNavLink: NavLink = {
   kind: 'link',
   label: 'Platform Diagnostics',
-  route: '/admin/diagnostics'
+  route: '/super-admin/diagnostics'
+};
+
+/** The Businesses page's placeholder (issue #546; the real page is issue #547). */
+export const businessesNavPlaceholder: NavPlaceholder = {
+  kind: 'placeholder',
+  label: 'Businesses'
+};
+
+/**
+ * The top-level Super Admin group (issue #546, parent #510 under #328): kept apart from the
+ * business `Admin` group because neither of its destinations is granted by a business role.
+ * `navigationFor` composes it in only while `GET /api/admin/diagnostics/access` confirms the
+ * signed-in actor is the configured platform administrator - the same probe that used to append
+ * `platformDiagnosticsNavLink` to `Admin` instead.
+ */
+export const superAdminNavGroup: NavGroup = {
+  kind: 'group',
+  label: 'Super Admin',
+  icon: 'settings',
+  children: [platformDiagnosticsNavLink, businessesNavPlaceholder]
 };
 
 /**
@@ -137,10 +171,10 @@ export const platformDiagnosticsNavLink: NavLink = {
  * menu over a failed read would be worse than offering a page that answers `403` - see
  * `AccessService`.
  *
- * `Platform Diagnostics` keeps the behaviour issue #335 gave it, unchanged and independent of any
- * capability: it is appended to the end of the `Admin` group only while
- * `GET /api/admin/diagnostics/access` confirms access, and it declares no capability of its own
- * because no business role grants it.
+ * `Super Admin` keeps the behaviour issue #335 gave `Platform Diagnostics`, unchanged and
+ * independent of any capability: the whole group is appended, last, only while
+ * `GET /api/admin/diagnostics/access` confirms access, and neither of its children declares a
+ * capability of its own because no business role grants either.
  *
  * Everything here copies rather than mutates, so `primaryNavigation` stays the full declared
  * navigation and one member's rendered menu can never leak into another's.
@@ -149,13 +183,7 @@ export function navigationFor(
   capabilities: CapabilitySet | undefined,
   hasPlatformDiagnosticsAccess: boolean
 ): readonly NavItem[] {
-  const offered = hasPlatformDiagnosticsAccess
-    ? primaryNavigation.map((item) =>
-        item.kind === 'group' && item.label === 'Admin'
-          ? { ...item, children: [...item.children, platformDiagnosticsNavLink] }
-          : item
-      )
-    : primaryNavigation;
+  const offered = hasPlatformDiagnosticsAccess ? [...primaryNavigation, superAdminNavGroup] : primaryNavigation;
 
   if (capabilities === undefined) {
     return offered;
@@ -166,7 +194,7 @@ export function navigationFor(
       return allowsLink(capabilities, item) ? [item] : [];
     }
 
-    const children = item.children.filter((child) => allowsLink(capabilities, child));
+    const children = item.children.filter((child) => allowsChild(capabilities, child));
     return children.length === 0 ? [] : [{ ...item, children }];
   });
 }
@@ -175,9 +203,16 @@ function allowsLink(capabilities: CapabilitySet, navLink: NavLink): boolean {
   return navLink.capability === undefined || capabilities.has(navLink.capability);
 }
 
-/** Every destination in the navigation, top-level links first, then each group's children. */
+/** A placeholder is always kept; a link is kept only while `allowsLink` allows it. */
+function allowsChild(capabilities: CapabilitySet, child: NavGroupChild): boolean {
+  return child.kind === 'placeholder' || allowsLink(capabilities, child);
+}
+
+/** Every real destination in the navigation, top-level links first, then each group's children. */
 export function navLinks(items: readonly NavItem[]): readonly NavLink[] {
-  return items.flatMap((item) => (item.kind === 'group' ? item.children : [item]));
+  return items.flatMap((item) =>
+    item.kind === 'group' ? item.children.filter((child): child is NavLink => child.kind === 'link') : [item]
+  );
 }
 
 function normalizePath(url: string): string {
@@ -225,6 +260,7 @@ export function activeNavGroup(items: readonly NavItem[], url: string): NavGroup
   }
 
   return items.find(
-    (item): item is NavGroup => item.kind === 'group' && item.children.some((child) => child.route === active)
+    (item): item is NavGroup =>
+      item.kind === 'group' && item.children.some((child) => child.kind === 'link' && child.route === active)
   );
 }
