@@ -233,7 +233,7 @@ public class NayaxConnectionSaveTransactionTests
 
             await using var setup = TestAppDbContext.Unrestricted(options);
             await setup.Database.EnsureCreatedAsync();
-            var business = new Business { Name = "Vending Co", CreatedAtUtc = Now };
+            var business = new Business { Name = "Vending Co", Status = BusinessStatus.Active, CreatedAtUtc = Now };
             setup.Businesses.Add(business);
             await setup.SaveChangesAsync();
 
