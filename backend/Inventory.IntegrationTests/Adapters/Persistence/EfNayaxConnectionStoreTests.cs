@@ -569,6 +569,82 @@ public class EfNayaxConnectionStoreTests
         await Assert.ThrowsAsync<DbUpdateException>(() => unrestricted.SaveChangesAsync());
     }
 
+    /// <summary>
+    /// A status result that says something about the machine checks writes it, and one that says
+    /// nothing leaves the column exactly as it is (issue #537). The second half is what keeps a
+    /// 401 from an ordinary Nayax call - which never ran those checks - from claiming they passed.
+    /// </summary>
+    [Fact]
+    public async Task A_status_result_writes_the_pending_machine_checks_only_when_it_states_them()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+        var saved = await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        Assert.True(await store.TryApplyStatusResultAsync(
+            new NayaxConnectionStatusResult(saved.CredentialRevision, NayaxConnectionStatus.Ready, TestedAt)
+            {
+                MachineChecksPending = true,
+            },
+            CancellationToken.None));
+        Assert.True((await fixture.ReadRowAsync(fixture.BusinessA)).MachineChecksPending);
+        Assert.True((await store.FindAsync(CancellationToken.None))!.MachineChecksPending);
+
+        // The shape an ordinary call's 401 report uses: a status and nothing about the machines.
+        Assert.True(await store.TryApplyStatusResultAsync(
+            new NayaxConnectionStatusResult(
+                saved.CredentialRevision, NayaxConnectionStatus.NeedsAttention, TestedAt),
+            CancellationToken.None));
+        var afterUnauthorized = await fixture.ReadRowAsync(fixture.BusinessA);
+        Assert.Equal(NayaxConnectionStatus.NeedsAttention, afterUnauthorized.Status);
+        Assert.True(afterUnauthorized.MachineChecksPending);
+
+        Assert.True(await store.TryApplyStatusResultAsync(
+            new NayaxConnectionStatusResult(saved.CredentialRevision, NayaxConnectionStatus.Ready, TestedAt)
+            {
+                MachineChecksPending = false,
+            },
+            CancellationToken.None));
+        Assert.False((await fixture.ReadRowAsync(fixture.BusinessA)).MachineChecksPending);
+    }
+
+    /// <summary>
+    /// A credential save clears the pending-machine-checks flag for the same reason it clears the
+    /// last-tested instant: those checks were run - or not run - against the token being replaced.
+    /// </summary>
+    [Fact]
+    public async Task A_later_save_clears_the_previous_credential_s_pending_machine_checks()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+        var first = await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+        await store.TryApplyStatusResultAsync(
+            new NayaxConnectionStatusResult(first.CredentialRevision, NayaxConnectionStatus.Ready, TestedAt)
+            {
+                MachineChecksPending = true,
+            },
+            CancellationToken.None);
+
+        var second = await store.SaveCredentialAsync(OtherOperatorId, OtherToken, CancellationToken.None);
+
+        Assert.Equal(2, second.CredentialRevision);
+        Assert.False(second.MachineChecksPending);
+        Assert.False((await fixture.ReadRowAsync(fixture.BusinessA)).MachineChecksPending);
+    }
+
+    /// <summary>A first save starts with nothing pending, like every other test fact.</summary>
+    [Fact]
+    public async Task A_first_save_reports_no_pending_machine_checks()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+
+        var saved = await fixture.StoreFor(fixture.BusinessA)
+            .SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        Assert.False(saved.MachineChecksPending);
+        Assert.False((await fixture.ReadRowAsync(fixture.BusinessA)).MachineChecksPending);
+    }
+
     /// <summary>The gate an ordinary Nayax call hands to the snapshot read (issue #520).</summary>
     private static bool Allowed(NayaxConnectionStatus status) =>
         NayaxConnectionStatusGate.AllowsOrdinaryOperations(status);

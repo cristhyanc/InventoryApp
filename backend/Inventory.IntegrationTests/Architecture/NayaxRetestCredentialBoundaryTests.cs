@@ -15,9 +15,10 @@ namespace InventoryApi.Tests.Architecture;
 /// architecture or unit test that proves it, and this is it - a review habit would not survive the
 /// next person who needs a token.
 ///
-/// The allow-list is exactly three types: the port, its one implementation, and the composition
-/// that registers them. Issue #506's Owner-only re-test endpoint will add itself here, as a
-/// conscious, reviewed edit alongside this comment; nothing else may.
+/// The allow-list is exactly four types: the port, its one implementation, the composition that
+/// registers them, and - since issue #537 - the Owner-only re-test use case this boundary was
+/// always for, added as the conscious, reviewed edit this comment anticipated. Nothing else may
+/// join it.
 /// </summary>
 public class NayaxRetestCredentialBoundaryTests
 {
@@ -32,6 +33,12 @@ public class NayaxRetestCredentialBoundaryTests
         "Inventory.Application.Nayax.NayaxConnectionRetestCredentialProvider",
         // The composition root of Inventory.Application: it registers the port and must name it.
         "Inventory.Application.ApplicationServiceCollectionExtensions",
+        // The Owner-only re-test of issue #537, which is the one consumer this boundary was always
+        // for: a connection in NeedsAttention is exactly the one an operator has to recover, and
+        // the gate that refuses ordinary calls in that state would make recovery impossible. It
+        // writes its result back through the store's conditional, revision-bound update, so a
+        // credential replaced while it ran keeps its own status.
+        "Inventory.Application.Nayax.RetestNayaxConnection",
     ];
 
     private static readonly (string Layer, Assembly Assembly)[] ProductionAssemblies =

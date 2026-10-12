@@ -168,6 +168,10 @@ public static class InfrastructureServiceCollectionExtensions
         // accepted: no Nayax call may resolve one, and nothing that reads the connection may reach
         // one by accident.
         services.AddScoped<INayaxConnectionTestDraftStore, EfNayaxConnectionTestDraftStore>();
+        // The transaction a save-from-draft (issue #537) claims the draft and writes the credential
+        // in. It is registered over the request's own AppDbContext, which is the scoped unit of work
+        // both stores above are constructed with, so the two writes join one transaction.
+        services.AddScoped<INayaxConnectionSaveTransactions, EfNayaxConnectionSaveTransactions>();
         services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
         services.AddScoped<ICategoryStore, EfCategoryStore>();
         services.AddScoped<ISupplierStore, EfSupplierStore>();

@@ -122,6 +122,13 @@ public static class ApplicationServiceCollectionExtensions
         services.AddSingleton<NayaxConnectionTestRateLimiter>();
         services.AddScoped<TestNayaxConnection>();
 
+        // Saving a tested draft, re-testing the stored token and reporting the connection's state
+        // (issue #537). The re-test shares the singleton limiter above on purpose: a re-test is the
+        // same eight calls against the same upstream, so test and re-test runs count together.
+        services.AddScoped<SaveNayaxConnection>();
+        services.AddScoped<RetestNayaxConnection>();
+        services.AddScoped<GetNayaxConnectionStatus>();
+
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();
         services.AddScoped<GetNayaxProcessingFees>();

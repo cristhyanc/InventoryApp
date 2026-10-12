@@ -179,6 +179,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<DateTime?>("LastTestedAtUtc")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("MachineChecksPending")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("OperatorId")
                         .IsRequired()
                         .HasColumnType("TEXT");

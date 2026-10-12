@@ -31,14 +31,18 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
         string operatorId,
         string accessToken,
         NayaxConnectionStatus status,
-        int credentialRevision = 1)
+        int credentialRevision = 1,
+        bool machineChecksPending = false)
     {
         _connection = new NayaxConnection(
             operatorId,
             status,
             credentialRevision,
             LastTestedAtUtc: null,
-            UpdatedAtUtc: new DateTime(2026, 10, 10, 0, 0, 0, DateTimeKind.Utc));
+            UpdatedAtUtc: new DateTime(2026, 10, 10, 0, 0, 0, DateTimeKind.Utc))
+        {
+            MachineChecksPending = machineChecksPending,
+        };
         _accessToken = accessToken;
     }
 
@@ -53,6 +57,13 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
 
     /// <summary>Every status result that was discarded as stale, in order.</summary>
     public List<NayaxConnectionStatusResult> DiscardedResults { get; } = new();
+
+    /// <summary>
+    /// Every token a credential save stored, in order (issue #537), so a save-from-draft test can
+    /// state that what was stored is the pair the test ran with - and that a refused save stored
+    /// nothing at all.
+    /// </summary>
+    public List<string> SavedTokens { get; } = new();
 
     /// <summary>The exception the next credential read should throw, if any.</summary>
     public Exception? CredentialReadFailure { get; set; }
@@ -127,6 +138,8 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
         string accessToken,
         CancellationToken cancellationToken)
     {
+        // MachineChecksPending is left at its default, like the real adapter's save: the machine
+        // checks that were or were not verified belong to the token being replaced.
         _connection = new NayaxConnection(
             operatorId,
             NayaxConnectionStatus.PendingPermissions,
@@ -134,6 +147,7 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
             LastTestedAtUtc: null,
             UpdatedAtUtc: new DateTime(2026, 10, 10, 0, 0, 0, DateTimeKind.Utc));
         _accessToken = accessToken;
+        SavedTokens.Add(accessToken);
 
         return Task.FromResult(_connection);
     }
@@ -152,6 +166,9 @@ internal sealed class FakeNayaxConnectionStore : INayaxConnectionStore
         _connection = _connection with
         {
             Status = result.Status,
+            // Left alone when the result says nothing about the machine checks, exactly as the real
+            // adapter's two statements do (issue #537).
+            MachineChecksPending = result.MachineChecksPending ?? _connection.MachineChecksPending,
             LastTestedAtUtc = result.TestedAtUtc,
             UpdatedAtUtc = result.TestedAtUtc,
         };

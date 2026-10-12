@@ -29,6 +29,12 @@ public sealed class FakeNayaxConnectionTestDraftStore : INayaxConnectionTestDraf
     /// <summary>Every draft ever stored, in order, so a replacement can be seen as one.</summary>
     public List<NewNayaxConnectionTestDraft> Stored { get; } = [];
 
+    /// <summary>
+    /// Every draft a save actually claimed, in order. A save that was refused claims nothing, so an
+    /// empty list is how "nothing was consumed" is asserted (issue #537).
+    /// </summary>
+    public List<Guid> Claimed { get; } = [];
+
     public Task ReplaceAsync(NewNayaxConnectionTestDraft draft, CancellationToken cancellationToken)
     {
         Current = draft;
@@ -55,5 +61,32 @@ public sealed class FakeNayaxConnectionTestDraftStore : INayaxConnectionTestDraf
             draft.ResultsJson,
             draft.CreatedAtUtc,
             draft.ExpiresAtUtc));
+    }
+
+    /// <summary>
+    /// Claims and removes the draft, reproducing the real adapter's single-use conditional delete:
+    /// the second claim of one id finds nothing, which is the behaviour the save's 409 depends on.
+    /// The relational proof that one <c>DELETE</c> really is what decides lives in the integration
+    /// tests; this keeps the use-case tests honest about consuming a draft exactly once.
+    /// </summary>
+    public Task<ClaimedNayaxConnectionTestDraft?> TryClaimAsync(
+        Guid draftId,
+        ActorIdentity actor,
+        CancellationToken cancellationToken)
+    {
+        if (Current is not { } draft
+            || draft.Id != draftId
+            || draft.CreatedBy != actor
+            || draft.ExpiresAtUtc <= _clock.UtcNow)
+        {
+            return Task.FromResult<ClaimedNayaxConnectionTestDraft?>(null);
+        }
+
+        Current = null;
+        Claimed.Add(draft.Id);
+
+        return Task.FromResult<ClaimedNayaxConnectionTestDraft?>(new ClaimedNayaxConnectionTestDraft(
+            draft.Credential,
+            draft.ResultsJson));
     }
 }

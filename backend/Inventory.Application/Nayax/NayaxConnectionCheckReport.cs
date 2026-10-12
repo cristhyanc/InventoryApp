@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using Inventory.Domain.Nayax;
 
 namespace Inventory.Application.Nayax;
@@ -65,4 +66,43 @@ public sealed record NayaxConnectionCheckReport(
     /// keeps it.
     /// </summary>
     public bool NothingFailed => Lines.All(line => line.Status != NayaxConnectionCheckStatus.Failed);
+
+    /// <summary>
+    /// Whether this run left the machine-scoped checks unverified (issue #537) - the business had no
+    /// machine in Nayax to run them against, or the machine list itself could not be read.
+    ///
+    /// It is what a saved or re-tested connection records so the wizard can ask for a re-test once
+    /// machines exist, and it is deliberately not a failure: the credentials did nothing wrong, and
+    /// <see cref="NothingFailed"/> stays <see langword="true"/>. Which checks need a machine is the
+    /// Domain's answer, not a list repeated here.
+    /// </summary>
+    [JsonIgnore]
+    public bool MachineChecksPending => Lines.Any(line =>
+        NayaxConnectionCheckPolicy.RequiresMachine(line.Check)
+        && line.Status == NayaxConnectionCheckStatus.NotChecked);
+
+    /// <summary>
+    /// What this run concluded about the credentials it tested (issue #537), through the one Domain
+    /// rule. The projection - which line is the sign-in, and whether any other line failed - is
+    /// here; what each answer means is <see cref="NayaxConnectionCheckOutcomePolicy"/>'s.
+    ///
+    /// A report with no sign-in line at all reads as a sign-in that was never checked, and so
+    /// concludes nothing. That cannot come from the runner, which reports every declared check, but
+    /// it can come from a stored report, and the fail-closed answer is the same either way.
+    /// </summary>
+    [JsonIgnore]
+    public NayaxConnectionCheckOutcome Outcome
+    {
+        get
+        {
+            var signIn = Lines.FirstOrDefault(line => line.Check == NayaxConnectionCheck.SignIn);
+
+            return NayaxConnectionCheckOutcomePolicy.Classify(
+                signIn?.Status ?? NayaxConnectionCheckStatus.NotChecked,
+                signIn?.Failure,
+                Lines.Any(line =>
+                    line.Check != NayaxConnectionCheck.SignIn
+                    && line.Status == NayaxConnectionCheckStatus.Failed));
+        }
+    }
 }

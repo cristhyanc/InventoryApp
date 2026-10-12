@@ -35,7 +35,20 @@ public sealed record NayaxConnection(
     NayaxConnectionStatus Status,
     int CredentialRevision,
     DateTime? LastTestedAtUtc,
-    DateTime UpdatedAtUtc);
+    DateTime UpdatedAtUtc)
+{
+    /// <summary>
+    /// Whether the last completed connection check left the machine-scoped checks unverified
+    /// (issue #537): the business had no machine in Nayax to run them against.
+    ///
+    /// It is an additive member rather than a sixth positional one so that every existing caller
+    /// keeps saying exactly what it said before. <see langword="false"/> is also what a connection
+    /// that no check has ever run against reports - including the one the human-run
+    /// <c>migrate-nayax-connection</c> command stored - because this flag exists to ask for a
+    /// re-test once machines are set up, not to make a connection that works look incomplete.
+    /// </summary>
+    public bool MachineChecksPending { get; init; }
+}
 
 /// <summary>
 /// The outcome of testing one business's stored Nayax credentials, ready to be applied back to the
@@ -52,4 +65,17 @@ public sealed record NayaxConnection(
 public sealed record NayaxConnectionStatusResult(
     int CredentialRevision,
     NayaxConnectionStatus Status,
-    DateTime TestedAtUtc);
+    DateTime TestedAtUtc)
+{
+    /// <summary>
+    /// What this result says about the machine-scoped checks (issue #537), or
+    /// <see langword="null"/> when it says nothing about them and the stored value is to be left
+    /// alone.
+    ///
+    /// Only a completed connection check knows: a 401 reported by an ordinary Nayax call
+    /// (<see cref="INayaxRequestCredentialProvider.ReportUnauthorizedAsync"/>) and the human-run
+    /// credential migration both pass <see langword="null"/>, because neither ran the machine
+    /// checks, and overwriting the flag with "not pending" would claim they had.
+    /// </summary>
+    public bool? MachineChecksPending { get; init; }
+}

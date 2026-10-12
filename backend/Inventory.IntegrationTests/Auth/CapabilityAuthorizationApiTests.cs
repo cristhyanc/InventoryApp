@@ -116,6 +116,13 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // allowance is spent or anything is sent to Nayax, so the allowed direction is safe to call
         // here: an Owner is answered 400, never 403.
         { "Integration.Manage", "POST", "/api/settings/nayax-connection/test", "Owner" },
+        // Issue #537. The empty body carries no draft id, which the use case refuses with 400
+        // before a draft is read or a transaction is begun, so an Owner is answered 400 and never
+        // 403. The status read is the connection banner: every role may ask whether Nayax is
+        // working for their business, because a Manager and an Operator see that banner and cannot
+        // open the Owner-only settings page at all.
+        { "Integration.Manage", "POST", "/api/settings/nayax-connection/save", "Owner" },
+        { "Dashboard.View", "GET", "/api/settings/nayax-connection/status", "Operator,Manager,Owner" },
         { "Data.Repair", "GET", $"/api/admin/inventory-cost-repair/{MissingId}", "Owner" },
         { "Data.Repair", "POST", "/api/admin/historical-gst-classification/preview", "Owner" },
         { "Data.Repair", "POST", "/api/sale-costing/backfill", "Owner" },
@@ -159,6 +166,11 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // Issue #548. Only the refusal direction: the allowed direction would rename the shared
         // fixture's business and move its time zone, which every other row here reads.
         { "Business.Manage", "PUT", "/api/business/settings", false, "Operator,Manager" },
+
+        // Issue #537. Only the refusal direction: the re-test authenticates to Nayax with whatever
+        // this host's connection holds, and this fixture substitutes no check runner, so the
+        // allowed direction belongs in NayaxConnectionSaveRetestApiTests where it does.
+        { "Integration.Manage", "POST", "/api/settings/nayax-connection/retest", false, "Operator,Manager" },
     };
 
     /// <summary>

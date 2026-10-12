@@ -1454,7 +1454,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). What is still outstanding before a second business goes live is the rest of #328's self-service work, above all the Owner-facing connection wizard and re-test endpoints of issue #506: today a business's credential reaches the database only through that human-run command, so there is no supported way for a second business to connect its own Nayax account. Running the command is a human step, described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). What is still outstanding before a second business goes live is the rest of #328's self-service work: those endpoints have no user interface yet (the wizard is #538 and the banners #539), so in practice an existing business's credential still arrives through the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
 
 #### Membership roles and capabilities (issue #521)
 
@@ -1507,7 +1507,7 @@ The classes are asserted to be mutually exclusive, and that there are exactly fo
 
 Issue #526 is #502's second and last enforcement slice. The twelve controllers #525 deliberately left on its `PendingClassification` list — the Manager-only financial surfaces, the Owner-only Nayax configuration and the five maintenance data repairs — now each declare the capability #328's agreed table gives them, and that list is gone. Nothing else changed: no new capability, no new policy, no schema change, no route, verb or response body, and no change to the one `RoleCapabilities` table. The mechanism is exactly the one described above; this subsection records *which capability each surface declares and why*.
 
-**The matrix, by page and endpoint.** The capability is declared on the controller in every case, because every action of each of these surfaces needs the same one. Requirements accumulate down an endpoint, so a controller-level declaration is the narrowest honest statement when that is true, and no action-level override was added anywhere in this slice. The table is kept complete as endpoints are added: the last two rows are the member management of issue #533 and the invite links of issue #531, each of which followed the same shape — its own controller, one capability, and a row here in the same change.
+**The matrix, by page and endpoint.** The capability was declared on the controller in every case of this slice, because every action of each of these surfaces needed the same one. Requirements accumulate down an endpoint, so a controller-level declaration is the narrowest honest statement when that is true, and no action-level override was added anywhere in #526 itself. The table is kept complete as endpoints are added: the member management of issue #533 and the invite links of issue #531 each followed the same shape — its own controller, one capability, and a row here in the same change. Two later reviewed edits — issue #548's business settings and issue #537's Nayax connection status read — declare per action instead, for the reason given under the table.
 
 | Page | Endpoints | Capability | Operator | Manager | Owner |
 | --- | --- | --- | --- | --- | --- |
@@ -1525,6 +1525,8 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Admin → Nayax connection test (issue #536, added as a reviewed edit) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Nayax connection save and re-test (issue #537, added as a reviewed edit) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Connection banners on every page that needs Nayax (issue #539) | `GET api/settings/nayax-connection/status` (issue #537) | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Admin → Costing Repair | `api/admin/inventory-cost-repair/*` (preview, apply, history) | `Data.Repair` | ✘ | ✘ | ✔ |
 | Admin → Inventory AVCO Transition Baseline | `api/admin/inventory-cost-transition/*` (preview, apply, preview-all, apply-all) | `Data.Repair` | ✘ | ✘ | ✔ |
 | Admin → Historical GST Classification | `api/admin/historical-gst-classification/*` (preview, apply) | `Data.Repair` | ✘ | ✘ | ✔ |
@@ -1533,7 +1535,9 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | *(Users page, issue #505 — added by issue #533)* | `api/members` (list), `api/members/{membershipId}/role`, `.../revoke`, `.../reinstate` | `Members.Manage` | ✘ | ✘ | ✔ |
 | *(Users page, issue #505 — added by issue #531)* | `api/members/invites` (create, list), `api/members/invites/{inviteId}/cancel` | `Members.Manage` | ✘ | ✘ | ✔ |
 
-The table's `Business.Manage` row was added by issue #548, which is the first endpoint to declare that capability: the capability existed in the one role → capability table from issue #521 and nothing required it until an Owner could change the business record. Its read shares its write's capability, as the next paragraph's rule says a read normally does — the settings read reports the business's contact address, ABN and GST registration, which is the business's own tax and contact detail rather than anything a page needs to render. It is nevertheless the one row whose controller holds a second, weaker rule: `GET api/business/current` on the same `BusinessController` keeps `Dashboard.View`, so both are declared per action and neither inherits the other. See [Business settings API](#business-settings-api-issue-548).
+The table's `Business.Manage` row was added by issue #548, which is the first endpoint to declare `Business.Manage`: the capability existed in the one role → capability table from issue #521 and nothing required it until an Owner could change the business record. Its read shares its write's capability, as the next paragraph's rule says a read normally does — the settings read reports the business's contact address, ABN and GST registration, which is the business's own tax and contact detail rather than anything a page needs to render. It is nevertheless one of the two rows whose controller holds a second, weaker rule: `GET api/business/current` on the same `BusinessController` keeps `Dashboard.View`, so both are declared per action and neither inherits the other. See [Business settings API](#business-settings-api-issue-548).
+
+The other is `NayaxConnectionController` since issue #537: its test, save and re-test actions declare `Integration.Manage` and its status read declares `Dashboard.View`, each on the action, because the connection banners every member sees have to be able to ask whether Nayax is working (see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537)). Both controllers are the same shape and the same reason: because requirements accumulate, a controller-level capability beside a weaker action-level one would silently require both, so where one controller's actions genuinely differ, every action declares its own.
 
 **A read shares its surface's capability, with one deliberate exception.** `Expenses.Manage` covers the expense list and the attachment download as well as the writes, and `Reports.View` covers each report and its export: an export is the same figures in another container, and a separate capability for it would be a way to read a report that is otherwise refused. The one read/write split in the whole matrix stays #525's supplier GST defaults, because an Operator recording a purchase genuinely needs to see which classification it will be given. The site commission *report* is not split onto `Reports.View` either: it is the surface the agreements are maintained from, and a role that could read what a site is owed but not why would be shown a number it cannot check.
 
@@ -1859,7 +1863,10 @@ this section describes the storage, and
 
 **One row per business, owned centrally.** `BusinessNayaxConnection` (`Inventory.Infrastructure/Models`)
 holds the operator id, the encrypted access token, the id of the key that encrypted it, the
-connection status, the credential revision, and the last-tested and updated instants. It implements
+connection status, the credential revision, whether the last completed check left the machine checks
+unverified (`MachineChecksPending`, added additively by issue #537 — see
+[Save and re-test](#saving-a-tested-connection-and-re-testing-it-issue-537)), and the last-tested
+and updated instants. It implements
 `IBusinessOwned`, so it is filtered, indexed and stamped by the same mechanisms as every other
 tenant-owned entity, with no predicate of its own anywhere; the additive
 `AddBusinessNayaxConnections` migration creates the table and a **unique index on `BusinessId`**, so
@@ -1894,9 +1901,9 @@ Nayax features fail closed until a human provisions one — and nothing else doe
 **`CredentialRevision` is what makes a status write safe.** The Application port is
 `Inventory.Application.Nayax.INayaxConnectionStore`, implemented by
 `Inventory.Infrastructure.Persistence.EfNayaxConnectionStore`. A credential save increments the
-revision in the database, resets the status to `PendingPermissions` and clears the last-tested
-instant, so a newly stored token can never inherit the previous token's test result; the first save
-creates the row at revision 1. A save is atomic, and it takes part in a transaction its caller has
+revision in the database, resets the status to `PendingPermissions`, and clears the last-tested
+instant and the pending-machine-checks flag, so a newly stored token can never inherit the previous
+token's test result; the first save creates the row at revision 1. A save is atomic, and it takes part in a transaction its caller has
 already begun on the same context instead of committing on its own, which is what lets
 `migrate-nayax-connection` make the save and the status write that follows it one change (see
 [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)); with no transaction in
@@ -1906,6 +1913,9 @@ CredentialRevision = @r`, where the business predicate is contributed by the cen
 and the revision predicate by the caller's expected value. Zero rows matched means an operator saved
 different credentials while the test was running: the result is discarded, not written, and one
 structured `ILogger` warning records it with the business id and the two revisions and nothing else.
+A status result that also knows about the machine checks writes `MachineChecksPending` in that same
+statement, and one that does not — the `401` an ordinary Nayax call reports, which never ran those
+checks — leaves that column exactly as it is rather than claiming they passed (issue #537).
 That is also why this adapter refuses to run without a single resolved business —
 `ExecuteUpdate` executes in the database without passing through `BusinessOwnershipEnforcer`, so an
 unscoped context would be the one way such a statement could carry no business predicate at all.
@@ -2299,9 +2309,10 @@ status code and never the token, the authorization header or the upstream body, 
 `NayaxConnectionCheckRunnerTests.The_token_and_the_upstream_body_never_reach_the_report_or_a_log`
 sweeps both for a success and for each refusal.
 
-**What is deliberately not here.** Saving a draft and re-testing stored credentials (#537), the
-wizard UI (#538), the connection banners (#539), the permanent credential store and provider (#500's
-own slices), and anything that creates a Nayax token or requests a permission automatically.
+**What is deliberately not here.** The wizard UI (#538), the connection banners (#539), the permanent
+credential store and provider (#500's own slices), and anything that creates a Nayax token or
+requests a permission automatically. Saving a draft and re-testing the stored credentials arrived
+with issue #537, immediately below.
 
 **What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionCheckPolicyTests` — every
 documented status on every check, the two `404` readings, no answer at all, and the vocabulary itself,
@@ -2327,6 +2338,164 @@ the real migration history, the token never echoed, the draft encrypted and boun
 replacing the first, the stored connection untouched, `400` for a missing field, and the `429` with
 its `Retry-After`. `CapabilityAuthorizationApiTests` and
 `EndpointAuthorizationClassificationTests` carry the endpoint's capability row.
+
+### Saving a tested connection and re-testing it (issue #537)
+
+Issue #537 — the next slice of #506, under the contract of #328 — is what turns a completed test into
+the business's connection, and what lets an Owner run those checks again later against the token the
+business is actually using. It adds three endpoints to `NayaxConnectionController` and one additive
+column, and nothing else: no wizard (#538), no banners (#539).
+
+| Endpoint | Capability | What it does |
+| --- | --- | --- |
+| `POST api/settings/nayax-connection/save` | `Integration.Manage` | Promotes one draft into the connection and deletes it |
+| `POST api/settings/nayax-connection/retest` | `Integration.Manage` | Runs the same checks with the **stored** token and writes what they concluded |
+| `GET api/settings/nayax-connection/status` | `Dashboard.View` | Reports the status and whether the machine checks are still pending |
+
+**Save takes a draft id and never a token.** That is the whole point of the two-step shape: the
+credentials being stored are exactly the ones the server tested, so one token's successful test can
+never be presented as evidence for another, and a request cannot store a credential nothing has
+tried. `NayaxConnectionSaveRequest` is one nullable `Guid` and **must never gain** an operator id, a
+token, a status, a check result or a business id. The operator id, the token and the results all come
+out of the claimed draft; the business comes from the caller's membership and the actor from the
+validated Entra `(tid, oid)` pair, so another business's draft and another member's draft are not
+saveable.
+
+**Claiming the draft and writing the credential are one transaction.** `Inventory.Application.Nayax.SaveNayaxConnection`
+opens it through the narrow `INayaxConnectionSaveTransactions` port — named for this one operation
+because the transaction spans *both* Nayax connection ports, so putting it on either would imply the
+other's writes were outside it — and `EfNayaxConnectionSaveTransactions` opens it on the request's own
+`AppDbContext`, the scoped unit of work both EF adapters are constructed with. It asks SQLite for
+`BEGIN IMMEDIATE`, the second place in the application to do so and for the same reason as
+`EfBusinessMembershipWriteStore` (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)):
+a deferred transaction takes its write lock at the first write, which is *after* the read the claim is
+decided on, so two simultaneous saves would meet each other at their deletes — where one is already
+waiting to commit and SQLite can only answer "busy". With the lock taken at `BEGIN`, the second
+caller waits and then reads the first one's committed state, and the refusal is the deliberate `409`.
+Inside it:
+
+- **The claim is a conditional delete that must remove exactly one row.**
+  `INayaxConnectionTestDraftStore.TryClaimAsync` reads the row (id, owning business from the central
+  query filter, creating actor, `ExpiresAt > @now`), decrypts the token, and then deletes under that
+  same predicate; the claim succeeds only when the `DELETE` removed one row. The delete — not the
+  read — is what the caller branches on, because a test-then-delete would leave exactly the race this
+  is for open. Decryption happens *before* the delete so a key-configuration failure consumes
+  nothing.
+- **Two saves of one draft therefore end as one save and one refusal**, with `CredentialRevision`
+  increased exactly once. The refusal is `409` with the fixed sentence *"This test result was already
+  used or has expired. Run the test again."* — the same answer for an unknown id, an expired draft,
+  another business's, another member's, and one a previous save already claimed, because
+  distinguishing them would tell a caller that somebody else's draft exists.
+- **A refusal commits nothing.** The transaction is simply not committed, so a save refused for a
+  failed sign-in, or one whose credential write fails, puts the claimed draft back rather than
+  destroying a tested token the Owner can no longer save.
+
+**The status comes from that draft's own results, through one Domain rule.**
+`Inventory.Domain.Nayax.NayaxConnectionCheckOutcomePolicy` is the only place a completed run is
+interpreted, beside `NayaxConnectionCheckPolicy` and `NayaxConnectionStatusGate` and for the same
+reason: "this token works", "this token is missing a permission" and "this token is dead" need
+completely different actions from an operator. It takes the three facts it needs — the sign-in line's
+status, its failure cause, and whether any other executed check failed — so the Domain keeps no
+dependency on the Application layer's report type; the projection lives on
+`NayaxConnectionCheckReport.Outcome`.
+
+| Run | Outcome | Status it concludes | May be saved |
+| --- | --- | --- | --- |
+| Every executed check passed | `Ready` | `Ready` | ✔ |
+| Sign-in passed, another executed check failed | `PendingPermissions` | `PendingPermissions` | ✔ |
+| Sign-in refused with `401` | `TokenRejected` | `NeedsAttention` | ✘ |
+| Sign-in did not pass and gave no verdict | `Inconclusive` | *(none — status unchanged)* | ✘ |
+
+**Only a `401` is a verdict on the token.** That is Nayax's own documented meaning — "the token is
+invalid or has expired", against a `403`'s "Insufficient permissions to perform this action", a
+verdict on one endpoint's scope
+([App tokens](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/app-tokens), confirmed
+for this change). Every other way a sign-in can fail to pass — Nayax unavailable, an answer nobody
+has interpreted, the sign-in endpoint itself refused for lack of a scope, a line never checked —
+concludes **nothing**: the issue spells out the `401` and the `5xx` cases, and this is the fail-closed
+reading of the rest, because concluding anything from an answer nobody interpreted would either break
+a working connection or bless a dead one. A save is refused whenever the sign-in did not pass (`400`,
+*"The tested token did not sign in to Nayax, so it was not saved…"*): a token that has never been
+shown to authenticate must not replace what the business is using today.
+
+**"Not checked" machine lines do not block `Ready`, and the saved connection records them.** A
+business connecting Nayax before its first machine exists has nothing to run `GET machines/{id}`
+against, which is a fact about the account and not a fault of the credentials. The save stores
+`Ready` and sets `MachineChecksPending`, computed from the report as "any machine-scoped line was
+never checked" — which checks need a machine stays `NayaxConnectionCheckPolicy.RequiresMachine`'s
+answer. A later re-test that reaches them clears it. `false` is therefore both "the machine checks
+passed" and "no check has ever run", deliberately: the flag exists to ask an Owner to re-test once
+their machines are set up, so the additive migration backfills nothing and the connection the
+human-run `migrate-nayax-connection` command stored — which has been authenticating in production —
+reports "not pending" rather than being made to look incomplete.
+
+**Re-test is the one ordinary consumer of the gate-free credential read.**
+`Inventory.Application.Nayax.RetestNayaxConnection` resolves the stored token through
+`INayaxConnectionRetestCredentialProvider` ([issue #520](#per-business-nayax-credentials-issue-520)),
+which deliberately ignores `NayaxConnectionStatusGate` — a connection in `NeedsAttention` is exactly
+the one an operator has to recover, and the gate that refuses ordinary calls in that state would make
+recovery impossible. It is listed in `NayaxRetestCredentialBoundaryTests`' allow-list as the reviewed
+exception that boundary always anticipated, and nothing else may join it. It runs the same read-only
+checks through the same `INayaxConnectionCheckRunner`, so a re-test makes exactly the same eight
+`GET`s and no write.
+
+**Its result is bound to the revision it tested, and a run that learned nothing writes nothing.** The
+credential read reports the revision the token was read at, and the status is written by #518's
+conditional `UPDATE … WHERE CredentialRevision = @r`. An Owner who saves a replacement token while a
+re-test is in flight therefore keeps the replacement's own status: the older run describes credentials
+that no longer exist, so its result is discarded and the caller gets `409` with the fixed sentence
+*"The connection changed while testing. Run the test again."* When the sign-in produced no verdict at
+all — a `5xx`, a timeout, an open circuit — **nothing is written**, not even a last-tested instant
+that would claim the current credentials had been checked: the response is `200` with
+`statusUpdated: false`, the stored status read back from the row, and the lines that say Nayax was
+unavailable. A business with no stored credentials has nothing to re-test and gets the stable
+`nayax_not_connected` `409`.
+
+**Test and re-test share one per-business allowance.** A re-test is the same eight calls against the
+same upstream, so it claims from the same `NayaxConnectionTestRateLimiter` singleton, before the
+runner, and the two count together: five runs per business per rolling ten minutes in any mix, then
+`429` with a `Retry-After` and no Nayax call at all.
+
+**The status read is for every member, and answers two things.** The banners of #539 are shown to a
+Manager and an Operator, who cannot open the Owner-only integration settings at all, so
+`GET …/status` carries `Dashboard.View` and returns the status name and `machineChecksPending` and
+**nothing else** — no operator id, no credential revision, no last-tested instant, no check lines. It
+never decrypts the stored token. A business with no row reads `NotConfigured`, which is also what a
+caller whose business does not resolve reads. Because capability requirements accumulate down an
+endpoint, the capability is declared **per action** on `NayaxConnectionController` rather than on the
+controller: a controller-level `Integration.Manage` would mean this read required both and so be
+Owner-only (issues #525 and #526).
+
+**What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionCheckOutcomePolicyTests` — every
+row of the table above, each unstated sign-in failure concluding nothing, a failed sign-in deciding
+the outcome whatever else failed, and an undeclared status or outcome refused rather than defaulted.
+`Inventory.UnitTests/Application/Nayax/SaveNayaxConnectionTests` — the status from the draft's own
+results, the stored credentials being the tested ones, unchecked machine lines saved `Ready` with the
+flag set, a failed sign-in refused with nothing stored and nothing committed, a draft saved only once
+with the revision increased once, expiry and actor binding refused identically, and a missing draft id
+refused before a transaction is begun. `RetestNayaxConnectionTests` — each outcome from each of
+`Ready`, `PendingPermissions` and `NeedsAttention`, an unavailable Nayax leaving the row
+byte-for-byte, the revision the checks ran with, the pending machine checks recorded and then
+cleared, a replacement saved mid-run keeping its own status, no stored credentials, and the shared
+allowance. `GetNayaxConnectionStatusTests` — the two fields, `NotConfigured`, and no token decrypted.
+`Adapters/Persistence/NayaxConnectionSaveTransactionTests` — relational SQLite over a database
+*file*, so two saves of one draft are genuinely concurrent: exactly one succeeds, the other is the
+`409`, the revision increases once, and the draft is consumed once; plus a refused save and a failed
+credential write both leaving the draft in place.
+`Adapters/Persistence/EfNayaxConnectionTestDraftStoreTests` — the claim returning the decrypted
+credential and deleting the row, a second claim finding nothing, a draft that disappears between the
+read and the delete claiming nothing, cross-business and unscoped claims refused, and an
+undecryptable token failing closed without consuming the draft.
+`Adapters/Persistence/EfNayaxConnectionStoreTests` — the machine-checks column written only by a
+result that states it, and cleared by a credential save.
+`Adapters/Persistence/AddNayaxConnectionMachineChecksPendingMigrationTests` — the column arrives, no
+other column or index changes, the existing connection is byte-for-byte unchanged and reads "not
+pending", and nothing is backfilled. `Controllers/NayaxConnectionSaveRetestApiTests` — the whole flow
+through the real pipeline and the real migration history: test then save, the token as ciphertext and
+never echoed, every refusal's status and sentence, the re-test outcomes including the recovery from
+`NeedsAttention` and the re-test overtaken by a save, the shared `429`, the status read for each role
+with exactly two fields, and a non-Owner neither saving nor re-testing. `CapabilityAuthorizationApiTests`
+and `EndpointAuthorizationClassificationTests` carry the three endpoints' capability rows.
 
 ### Document storage
 

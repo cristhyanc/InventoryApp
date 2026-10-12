@@ -64,7 +64,13 @@ public class AddBusinessNayaxConnectionsMigrationTests
 
             // No credential is created or inferred for the business that already exists: the
             // migration command for it is issue #519, run by a human.
-            Assert.Empty(await after.BusinessNayaxConnections.ToListAsync());
+            //
+            // Projected rather than materialised, like the product below: this database stops at
+            // TargetMigration, so a column a later additive migration adds to this table - issue
+            // #537's MachineChecksPending - does not exist here yet.
+            Assert.Empty(await after.BusinessNayaxConnections
+                .Select(candidate => candidate.Id)
+                .ToListAsync());
 
             // One row per business is a schema guarantee, not an adapter convention.
             Assert.True(await UniqueBusinessIndexExistsAsync(connection));
