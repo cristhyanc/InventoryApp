@@ -1,6 +1,7 @@
 using System.Data.Common;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Nayax;
@@ -707,8 +708,8 @@ public class EfNayaxConnectionStoreTests
 
             await using var setup = TestAppDbContext.Unrestricted(options);
             await setup.Database.EnsureCreatedAsync();
-            var a = new Business { Name = "Vending A", CreatedAtUtc = SavedAt };
-            var b = new Business { Name = "Vending B", CreatedAtUtc = SavedAt };
+            var a = new Business { Name = "Vending A", Status = BusinessStatus.Active, CreatedAtUtc = SavedAt };
+            var b = new Business { Name = "Vending B", Status = BusinessStatus.Active, CreatedAtUtc = SavedAt };
             setup.Businesses.AddRange(a, b);
             await setup.SaveChangesAsync();
             commands.Clear();

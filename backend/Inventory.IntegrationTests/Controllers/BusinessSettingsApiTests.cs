@@ -239,6 +239,8 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
     [InlineData("a malformed contact email", "Validated Co", "owner@", null, true, "Australia/Sydney")]
     [InlineData("an email with no domain dot", "Validated Co", "owner@example", null, true, "Australia/Sydney")]
     [InlineData("an email with a space", "Validated Co", "own er@example.com", null, true, "Australia/Sydney")]
+    [InlineData("an email whose domain label is not a host name", "Validated Co", "owner@!.com", null, true, "Australia/Sydney")]
+    [InlineData("an email carrying a mailbox delimiter", "Validated Co", "owner@example.com>", null, true, "Australia/Sydney")]
     [InlineData("a missing GST registration", "Validated Co", "owner@example.com", null, null, "Australia/Sydney")]
     [InlineData("an ABN failing its checksum", "Validated Co", "owner@example.com", "51824753557", true, "Australia/Sydney")]
     [InlineData("an ABN of the wrong length", "Validated Co", "owner@example.com", "5182475355", true, "Australia/Sydney")]
@@ -270,6 +272,56 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
         Assert.Equal(before.ContactEmail, after.ContactEmail);
         Assert.Equal(before.Abn, after.Abn);
         Assert.Equal(before.GstRegistered, after.GstRegistered);
+    }
+
+    /// <summary>
+    /// The two malformed addresses issue #593 reports, against a business whose five settings have
+    /// all been recorded: each save is refused with <c>400</c>, every stored setting keeps the value
+    /// the accepted save left - the name, the ABN, the GST registration and the time zone this
+    /// request also submitted, as much as the address itself - and no change is audited, because
+    /// nothing changed.
+    /// </summary>
+    [Theory]
+    [InlineData("owner@!.com")]
+    [InlineData("owner@example.com>")]
+    public async Task A_malformed_contact_email_is_refused_and_changes_nothing(string contactEmail)
+    {
+        await _factory.SeedAsync();
+        var client = _factory.Authenticated(ApiFactory.MalformedEmailOwnerObjectId);
+
+        var accepted = await client.PutAsync(Uri, Body(
+            name: "Malformed Co",
+            contactEmail: "owner@example.com",
+            abn: SpacedAbn,
+            gstRegistered: true,
+            timeZoneId: "Australia/Sydney"));
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        var before = await _factory.StoredAsync(ApiFactory.MalformedEmailBusinessId);
+
+        _factory.ClearLog();
+        var refused = await client.PutAsync(Uri, Body(
+            name: "Renamed Malformed Co",
+            contactEmail: contactEmail,
+            abn: null,
+            gstRegistered: false,
+            timeZoneId: "America/New_York"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+
+        var after = await _factory.StoredAsync(ApiFactory.MalformedEmailBusinessId);
+        Assert.Equal(before.Name, after.Name);
+        Assert.Equal(before.ContactEmail, after.ContactEmail);
+        Assert.Equal(before.Abn, after.Abn);
+        Assert.Equal(before.GstRegistered, after.GstRegistered);
+        Assert.Equal(before.TimeZoneId, after.TimeZoneId);
+
+        Assert.DoesNotContain(
+            _factory.LogMessages,
+            message => message.Contains("Business settings changed", StringComparison.Ordinal));
+
+        // The refusal names the rule, never the value: the submitted address does not come back.
+        var body = await refused.Content.ReadAsStringAsync();
+        Assert.DoesNotContain(contactEmail, body, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -416,6 +468,7 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
         public const int NoChangeBusinessId = 8;
         public const int PartialAuditBusinessId = 9;
         public const int IsolationBusinessId = 10;
+        public const int MalformedEmailBusinessId = 11;
 
         public const string DirectoryTenantId = "88888888-8888-8888-8888-888888888888";
         public const string OwnerObjectId = "11111111-1111-1111-1111-111111111111";
@@ -430,6 +483,7 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
         public const string NoChangeOwnerObjectId = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
         public const string PartialAuditOwnerObjectId = "cccccccc-cccc-cccc-cccc-cccccccccccc";
         public const string IsolationOwnerObjectId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+        public const string MalformedEmailOwnerObjectId = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
 
         private static readonly DateTime CreatedAt = new(2026, 2, 10, 4, 0, 0, DateTimeKind.Utc);
 
@@ -522,7 +576,8 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
                 Business(TimeZoneBusinessId, "Zone Vending Co", BusinessTimeZoneId),
                 Business(NoChangeBusinessId, "No Change Vending Co", BusinessTimeZoneId),
                 Business(PartialAuditBusinessId, "Partial Vending Co", BusinessTimeZoneId),
-                Business(IsolationBusinessId, "Isolation Vending Co", BusinessTimeZoneId));
+                Business(IsolationBusinessId, "Isolation Vending Co", BusinessTimeZoneId),
+                Business(MalformedEmailBusinessId, "Malformed Vending Co", BusinessTimeZoneId));
 
             db.BusinessMemberships.AddRange(
                 Membership(BusinessId, OwnerObjectId, BusinessRole.Owner),
@@ -535,7 +590,8 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
                 Membership(TimeZoneBusinessId, TimeZoneOwnerObjectId, BusinessRole.Owner),
                 Membership(NoChangeBusinessId, NoChangeOwnerObjectId, BusinessRole.Owner),
                 Membership(PartialAuditBusinessId, PartialAuditOwnerObjectId, BusinessRole.Owner),
-                Membership(IsolationBusinessId, IsolationOwnerObjectId, BusinessRole.Owner));
+                Membership(IsolationBusinessId, IsolationOwnerObjectId, BusinessRole.Owner),
+                Membership(MalformedEmailBusinessId, MalformedEmailOwnerObjectId, BusinessRole.Owner));
 
             await db.SaveChangesAsync();
             _seeded = true;
@@ -547,6 +603,7 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
                 Id = id,
                 Name = name,
                 TimeZoneId = timeZoneId,
+                Status = BusinessStatus.Active,
                 CreatedAtUtc = CreatedAt,
             };
 

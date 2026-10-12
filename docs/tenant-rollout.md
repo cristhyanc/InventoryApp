@@ -162,10 +162,12 @@ stored value.
 Give each member their own `Role` key (`Members:1:Role`, and so on); one entry's role never carries
 onto another. Re-running the command never changes the role an existing member already holds, for
 the same reason it never resurrects a revoked approval — so a role cannot be corrected by editing
-this configuration and running again. Today a role is set when the membership row is created and
-changed only by a human directly in the database; the members page that will change one is issue
-#524. A signed-in member can see their own role and capabilities at `GET /api/me/access`, and a
-change applies on their next request.
+this configuration and running again. A role is set when the membership row is created and changed
+afterwards through the Owner-only `PUT /api/members/{membershipId}/role` (issue #533), which also
+revokes and reinstates a membership and always keeps the business at least one active Owner — see
+[docs/architecture.md § Member management](architecture.md#member-management-list-role-revoke-and-reinstate-issue-533).
+The Users page that will drive it is issue #505. A signed-in member can see their own role and
+capabilities at `GET /api/me/access`, and a change applies on their next request.
 
 Since issues #525 and #526 the role a member is given decides what the API lets them call, rather
 than only describing them: every endpoint requires the capability its caller's role must grant and
@@ -202,6 +204,40 @@ business as active only while its status is `Active` — so a business left `Pen
 `Deactivated` reports an unfinished rollout rather than a healthy one. A member of such a business
 signs in successfully and is told their own account state by `GET /api/me/account-state`, but reaches
 no business data at all.
+
+#### A status is always stated, never defaulted (issue #584)
+
+Since issue #584 nothing creates a business without saying what its status is. `bootstrap-business`
+is unchanged in what it does — it still creates the business as `Active`, and still only for the
+authorized caller the configuration names — but it now states that status because the application
+gives it no choice: the entity property is `required`, a status outside the declared four is refused
+on `SaveChanges`, and the `Businesses.Status` column's database default is no longer `Active`. There
+is still nothing to configure, and no step of this procedure changes.
+
+**For an existing database, the operational effect is one migration and no data change.**
+`RemoveBusinessStatusActiveDatabaseDefault` replaces the column's `DEFAULT 20` (`Active`) with
+`DEFAULT 0`, a value that is not a status at all and that the access decision denies. It preserves
+every business's exact status — an `Active` business stays `Active` and keeps its access, a
+`Deactivated`, `Pending` or `Rejected` one stays denied — and changes no other column. It does this
+with four in-place statements rather than rebuilding the `Businesses` table: a replacement column is
+added with the new default, each row's status is copied into it, the old column is dropped, and the
+replacement is renamed into its place, all inside the migration's transaction. The only visible
+schema difference besides the default is that `Status` is now the last column of the table, which
+nothing reads by position. Startup applies it automatically in Production exactly as it applies any
+other pending migration (see
+[Automatic Production-startup migration](#automatic-production-startup-migration-issue-201)); it
+needs no window, no backfill and no manual step beyond the backup this procedure already requires.
+
+**Rolling it back is equally uneventful.** `Down` restores issue #540's schema, `Active` default
+included, and again preserves every stored status, so a downgrade reactivates, deactivates or
+reclassifies no business. What a rollback restores is the accidental-`Active` default itself — the
+thing this change removed — so a database that has been rolled back is again one where an `INSERT`
+that omits the status would create a reachable business.
+
+**If a business ever shows a status of `0`.** That is not one of the four statuses: it means a row
+was inserted by something that bypassed the application, and it denies all access. Do not "fix" it
+by guessing. Decide what the business actually is and set that status deliberately, the same way any
+other lifecycle decision is made.
 
 ## Rollout sequence
 
@@ -379,8 +415,10 @@ business's ledger, and neither is a decision a migration may make unattended.
    it again rather than applying with the problem still present.
 
 Note that until the duplicate exists the index never fires: the application's single live business
-cannot produce this state through any supported path, and no request path creates, revokes or
-reactivates a membership today. A database that has it, has it from a hand-written change.
+cannot produce this state through any supported path. No request path creates a membership today,
+and the one path that revokes or reinstates one — the Owner-only member management of issue #533 —
+re-checks this exact rule inside the write transaction the index backs up, so it refuses rather than
+creates the state. A database that has it, has it from a hand-written change.
 
 ## Migrating the Nayax connection into the business (issue #519)
 

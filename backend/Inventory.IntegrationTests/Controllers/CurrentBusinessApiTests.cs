@@ -2,6 +2,7 @@ using System.Net;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.AspNetCore.Authentication;
@@ -169,6 +170,7 @@ public sealed class CurrentBusinessApiTests : IClassFixture<CurrentBusinessApiTe
                     Id = SydneyBusinessId,
                     Name = "Sydney Vending",
                     TimeZoneId = "Australia/Sydney",
+                    Status = BusinessStatus.Active,
                     CreatedAtUtc = CreatedAt,
                 },
                 new Business
@@ -176,6 +178,7 @@ public sealed class CurrentBusinessApiTests : IClassFixture<CurrentBusinessApiTe
                     Id = NewYorkBusinessId,
                     Name = "New York Vending",
                     TimeZoneId = "America/New_York",
+                    Status = BusinessStatus.Active,
                     CreatedAtUtc = CreatedAt,
                 });
             db.BusinessMemberships.AddRange(

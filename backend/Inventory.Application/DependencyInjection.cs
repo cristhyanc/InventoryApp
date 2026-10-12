@@ -11,6 +11,7 @@ using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
+using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
@@ -69,6 +70,23 @@ public static class ApplicationServiceCollectionExtensions
         // the transaction it opens is the request's own AppDbContext transaction, which the
         // operation's write has to save inside.
         services.AddScoped<MembershipWriteGuard>();
+
+        // The Owner's member management (issue #533). Scoped like the rest of tenancy: each answer
+        // belongs to one caller's resolved business, and the writer shares the request's own
+        // AppDbContext with the write guard whose transaction its writes have to run inside.
+        services.AddScoped<MemberChangeWriter>();
+        services.AddScoped<ListMembers>();
+        services.AddScoped<ChangeMemberRole>();
+        services.AddScoped<RevokeMember>();
+        services.AddScoped<ReinstateMember>();
+
+        // The Owner's invite links (issue #531). Scoped for the same reason: each answer belongs to
+        // one caller's resolved business, and the cancellation's conditional write runs on that
+        // request's own AppDbContext - which is also what lets #509's deactivation call the store's
+        // cancel-all inside its own transaction.
+        services.AddScoped<CreateMemberInvite>();
+        services.AddScoped<ListMemberInvites>();
+        services.AddScoped<CancelMemberInvite>();
 
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are

@@ -1,8 +1,8 @@
 import { Injectable, Provider } from '@angular/core';
 import { CanActivate } from '@angular/router';
 import { MsalBroadcastService, MsalGuard, MsalService } from '@azure/msal-angular';
-import { AccountInfo, InteractionStatus } from '@azure/msal-browser';
-import { Observable, of } from 'rxjs';
+import { AccountInfo, EventMessage, InteractionStatus } from '@azure/msal-browser';
+import { EMPTY, Observable, of } from 'rxjs';
 
 /**
  * The browser-side half of the dedicated end-to-end testing setup (issue #46).
@@ -65,10 +65,15 @@ export function createE2ETestMsalService(): MsalService {
   } as unknown as MsalService;
 }
 
-/** MSAL is never interacting here, so the broadcast service reports a settled pipeline once. */
+/**
+ * MSAL is never interacting here, so the broadcast service reports a settled pipeline once and
+ * never raises an account event: the synthetic account is fixed for the whole run, so there is no
+ * sign-in, sign-out or active-account change for `AccessService` to react to (issue #528).
+ */
 export function createE2ETestMsalBroadcastService(): MsalBroadcastService {
   return {
-    inProgress$: of(InteractionStatus.None) as Observable<InteractionStatus>
+    inProgress$: of(InteractionStatus.None) as Observable<InteractionStatus>,
+    msalSubject$: EMPTY as Observable<EventMessage>
   } as unknown as MsalBroadcastService;
 }
 

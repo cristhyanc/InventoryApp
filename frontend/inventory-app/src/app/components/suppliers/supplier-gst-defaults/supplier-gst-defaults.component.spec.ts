@@ -1,6 +1,8 @@
 import { TestBed } from '@angular/core/testing';
-import { of, Subject, throwError } from 'rxjs';
+import { BehaviorSubject, NEVER, Observable, of, Subject, throwError } from 'rxjs';
 import { SupplierGstDefaultsComponent } from './supplier-gst-defaults.component';
+import { AccessService } from '../../../access/access.service';
+import { Capability } from '../../../access/capabilities';
 import { SupplierService } from '../../../services/supplier.service';
 import { GstClassification, SupplierGstDefaults } from '../../../models/models';
 
@@ -23,13 +25,24 @@ const defaultsFor = (
   packageGstDefault
 });
 
+/**
+ * The capability answer is stubbed: the component renders what `GET /api/me/access` reported and
+ * decides nothing itself, and the write is refused by the API whatever it renders (issue #528).
+ * Granted by default, which is what every role but an Operator holds.
+ */
 async function render(
   getGstDefaults: jest.Mock = jest.fn(() => of(noDefaults)),
-  setGstDefaults: jest.Mock = jest.fn(() => of(undefined))
+  setGstDefaults: jest.Mock = jest.fn(() => of(undefined)),
+  canManage: Observable<boolean> = of(true)
 ) {
+  const allows = jest.fn((_capability: Capability) => canManage);
+
   await TestBed.configureTestingModule({
     imports: [SupplierGstDefaultsComponent],
-    providers: [{ provide: SupplierService, useValue: { getGstDefaults, setGstDefaults } }]
+    providers: [
+      { provide: SupplierService, useValue: { getGstDefaults, setGstDefaults } },
+      { provide: AccessService, useValue: { allows } }
+    ]
   }).compileComponents();
 
   const fixture = TestBed.createComponent(SupplierGstDefaultsComponent);
@@ -52,7 +65,7 @@ async function render(
     fixture.detectChanges();
   };
 
-  return { fixture, host, saveButton, save, openSupplier, getGstDefaults, setGstDefaults };
+  return { fixture, host, saveButton, save, openSupplier, getGstDefaults, setGstDefaults, allows, canManage };
 }
 
 describe('SupplierGstDefaultsComponent', () => {
@@ -260,5 +273,84 @@ describe('SupplierGstDefaultsComponent', () => {
     expect(host.textContent).toContain('applies only where the purchased product has no GST rule of its own');
     expect(host.textContent).toContain('never inherit the product-line default');
     expect(host.textContent).toContain('does not change the GST classification of any');
+  });
+});
+
+/**
+ * The editor is the one action this page hides by role (issue #528). Reading the defaults stays on
+ * `Purchasing.Operate`, because an Operator recording a purchase needs to see which classification
+ * it will be given; changing them needs `Suppliers.ManageGstDefaults`. The API enforces the same
+ * split, so this hides a control rather than protecting the configuration.
+ */
+describe('SupplierGstDefaultsComponent without Suppliers.ManageGstDefaults (issue #528)', () => {
+  function withoutManage(getGstDefaults?: jest.Mock, setGstDefaults?: jest.Mock) {
+    return render(
+      getGstDefaults ?? jest.fn(() => of(noDefaults)),
+      setGstDefaults ?? jest.fn(() => of(undefined)),
+      of(false)
+    );
+  }
+
+  it('asks the access service for exactly that capability', async () => {
+    const { allows } = await render();
+
+    expect(allows).toHaveBeenCalledWith('Suppliers.ManageGstDefaults');
+  });
+
+  it('renders no Save control', async () => {
+    const { host } = await withoutManage();
+
+    const buttons = Array.from(host.querySelectorAll('button')).map((button) => button.textContent?.trim() ?? '');
+    expect(buttons.some((text) => text.startsWith('Save'))).toBe(false);
+    expect(host.textContent).toContain('Your role can see these defaults but not change them');
+  });
+
+  it('still shows the stored defaults, read-only, because the classification is worth seeing', async () => {
+    const { host, fixture, getGstDefaults } = await withoutManage(
+      jest.fn(() =>
+        of({
+          supplierId: 7,
+          productLineGstDefault: GstClassification.GstFree,
+          deliveryGstDefault: GstClassification.Taxable,
+          packageGstDefault: GstClassification.Unknown
+        })
+      )
+    );
+
+    expect(getGstDefaults).toHaveBeenCalledWith(7);
+    expect(fixture.componentInstance.form.productLineGstDefault).toBe(GstClassification.GstFree);
+    for (const select of Array.from(host.querySelectorAll<HTMLSelectElement>('select'))) {
+      expect(select.disabled).toBe(true);
+    }
+  });
+
+  it('issues no PUT even if save() is reached some other way', async () => {
+    const setGstDefaults = jest.fn(() => of(undefined));
+    const { fixture } = await withoutManage(undefined, setGstDefaults);
+
+    fixture.componentInstance.save();
+
+    expect(setGstDefaults).not.toHaveBeenCalled();
+  });
+
+  it('offers the control again when a refreshed capability set allows it', async () => {
+    const canManage = new BehaviorSubject(false);
+    const { fixture, host } = await render(undefined, undefined, canManage);
+    expect(host.querySelectorAll('button')).toHaveLength(0);
+
+    canManage.next(true);
+    fixture.detectChanges();
+
+    expect(host.querySelector('button')?.textContent?.trim()).toBe('Save GST defaults');
+  });
+
+  /**
+   * The fail-open rule: an unanswered or unreadable capability set must not take the editor away
+   * from the Owner it belongs to, because the API refuses the write regardless.
+   */
+  it('keeps the control while the capability set has not answered', async () => {
+    const { host } = await render(undefined, undefined, NEVER);
+
+    expect(host.querySelector('button')?.textContent?.trim()).toBe('Save GST defaults');
   });
 });

@@ -59,6 +59,13 @@ public class AppDbContext : DbContext
     public DbSet<BusinessBackfillAudit> BusinessBackfillAudits => Set<BusinessBackfillAudit>();
 
     public DbSet<BusinessMembership> BusinessMemberships => Set<BusinessMembership>();
+
+    /// <summary>
+    /// The single-use invite links an Owner creates for their own business (issue #531). Ordinary
+    /// tenant-owned data, unlike the membership table above, and the token is stored only as a
+    /// hash; see <see cref="MemberInvite"/>.
+    /// </summary>
+    public DbSet<MemberInvite> MemberInvites => Set<MemberInvite>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
     public DbSet<Product> Products => Set<Product>();
@@ -127,12 +134,18 @@ public class AppDbContext : DbContext
     /// <see cref="BusinessAbnEnforcer"/> joins them on the same terms (issue #540): the business's
     /// ABN appears on tax invoices and in the GST accounting aid, so a value that cannot be an ABN
     /// is refused centrally rather than per write path.
+    ///
+    /// <see cref="BusinessStatusEnforcer"/> joins them for the strongest of those reasons (issue
+    /// #584): the business's lifecycle status is what decides whether its data may be reached at
+    /// all, so a status nobody declared is refused here rather than stored as a business whose
+    /// access state nobody chose.
     /// </summary>
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
         BusinessAbnEnforcer.Enforce(this);
+        BusinessStatusEnforcer.Enforce(this);
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
@@ -143,12 +156,14 @@ public class AppDbContext : DbContext
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
         BusinessAbnEnforcer.Enforce(this);
+        BusinessStatusEnforcer.Enforce(this);
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureTenancy(modelBuilder);
+        ConfigureMemberInvites(modelBuilder);
 
         modelBuilder.Entity<Product>()
             .Property(p => p.UnitPrice)
@@ -666,6 +681,81 @@ public class AppDbContext : DbContext
             Expression.Property(context, nameof(CurrentBusinessId)));
 
         return Expression.Lambda(Expression.OrElse(filteringDisabled, owned), entity);
+    }
+
+    /// <summary>
+    /// Maps the single-use member invite links of issue #531.
+    ///
+    /// The invite is tenant-owned, so its business key, its <c>BusinessId</c> index and its global
+    /// query filter all come from <see cref="ConfigureBusinessOwnership"/> and are deliberately not
+    /// repeated here. What this method adds is what is specific to an invite: the bounds on its
+    /// columns, the per-business uniqueness of the token hash, and the foreign key to the
+    /// membership a redemption creates.
+    /// </summary>
+    private static void ConfigureMemberInvites(ModelBuilder modelBuilder)
+    {
+        var invite = modelBuilder.Entity<MemberInvite>();
+
+        // The role the invite grants (issue #521's vocabulary) and what became of the invite. Both
+        // are required integer columns holding a declared value, and neither carries a CHECK
+        // constraint, for the reason BusinessMembership.Role carries none: SQLite cannot add one to
+        // an existing table without rebuilding it, and a value a newer deployment writes has to
+        // fail closed in the policy regardless - MemberInvitePolicy reports an undeclared status as
+        // unknown and never as Pending.
+        invite.Property(x => x.Role).IsRequired();
+        invite.Property(x => x.Status).IsRequired();
+
+        // The Owner's note is display-only free text. Bounded in the schema as well as in
+        // MemberInvitePolicy, and deliberately not indexed: nothing looks an invite up by it.
+        invite.Property(x => x.Note).HasMaxLength(MemberInvitePolicy.MaxNoteLength);
+
+        // The token's digest. Required and fixed-width, because the row exists only once a token
+        // has been generated for it: an empty hash would be an invite nothing could ever redeem.
+        invite.Property(x => x.TokenHash).IsRequired().HasMaxLength(MemberInviteToken.HashLength);
+
+        // Unique per business, which is the repository-wide rule for a uniqueness constraint on
+        // tenant-owned data (docs/architecture.md § Tenant ownership): a globally unique index here
+        // would let one business's row deny another's, and BusinessOwnershipCoverageTests fails the
+        // build for one. Global uniqueness is not what makes a token unambiguous anyway - 256 bits
+        // of cryptographic randomness is - and the index also makes "which invite is this token?"
+        // an index seek within a business.
+        invite.HasIndex(x => new { x.BusinessId, x.TokenHash }).IsUnique();
+
+        invite.Property(x => x.CreatedByDirectoryTenantId).IsRequired();
+        invite.Property(x => x.CreatedByObjectId).IsRequired();
+
+        // The membership a redemption created (#532). Restrict, not Cascade, for the reason
+        // BusinessMembership's own foreign key to Businesses is restricted: a membership an invite
+        // records as redeemed must not be deletable in a way that silently drops the link between
+        // the access and the invite that granted it. There is no navigation property, because
+        // nothing in this slice or the next loads the membership through the invite.
+        invite
+            .HasOne<BusinessMembership>()
+            .WithMany()
+            .HasForeignKey(x => x.RedeemedByMembershipId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // All four instants are persisted UTC and all four are reported by the invite API, so each
+        // is marked UTC on the way out - see the StockAdjustment.CreatedAt comment below for why
+        // the SQLite provider makes that necessary. The conversion changes no stored byte and no
+        // comparison, so the expiry condition in the cancellation's WHERE clause is unaffected: a
+        // DateTime comparison looks at ticks, not Kind.
+        invite.Property(x => x.CreatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        invite.Property(x => x.ExpiresAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        invite.Property(x => x.UsedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        invite.Property(x => x.CancelledAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
     }
 
     /// <summary>

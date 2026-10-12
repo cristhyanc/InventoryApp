@@ -313,6 +313,7 @@ public sealed class MeAccessApiTests : IClassFixture<MeAccessApiTests.ApiFactory
                     Id = BusinessId,
                     Name = BusinessName,
                     TimeZoneId = BusinessTimeZoneId,
+                    Status = BusinessStatus.Active,
                     CreatedAtUtc = CreatedAt,
                 },
                 new Business
@@ -320,6 +321,7 @@ public sealed class MeAccessApiTests : IClassFixture<MeAccessApiTests.ApiFactory
                     Id = OtherBusinessId,
                     Name = OtherBusinessName,
                     TimeZoneId = OtherBusinessTimeZoneId,
+                    Status = BusinessStatus.Active,
                     CreatedAtUtc = CreatedAt,
                 });
 

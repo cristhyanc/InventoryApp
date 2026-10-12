@@ -13,6 +13,7 @@ using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
+using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
@@ -144,6 +145,14 @@ public static class InfrastructureServiceCollectionExtensions
         // separate from the membership write store above because it changes nothing a membership
         // means and takes none of that path's write lock.
         services.AddScoped<IMemberProfileWriteStore, EfMemberProfileWriteStore>();
+        // The Owner-facing member roster and the three targeted member updates (issue #533). It
+        // reads and writes the same non-tenant-owned table as the two stores above, and takes the
+        // business id explicitly for that reason.
+        services.AddScoped<IBusinessMemberStore, EfBusinessMemberStore>();
+        // The Owner's invite links (issue #531). Unlike the three stores above it names no business
+        // in its statements: an invite is ordinary tenant-owned data, so the central query filter
+        // scopes its reads and BusinessOwnershipEnforcer stamps its insert.
+        services.AddScoped<IMemberInviteStore, EfMemberInviteStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has

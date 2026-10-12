@@ -516,8 +516,8 @@ public class EfNayaxConnectionTestDraftStoreTests
 
             await using var setup = TestAppDbContext.Unrestricted(options);
             await setup.Database.EnsureCreatedAsync();
-            var a = new Business { Name = "Vending A", CreatedAtUtc = CreatedAt };
-            var b = new Business { Name = "Vending B", CreatedAtUtc = CreatedAt };
+            var a = new Business { Name = "Vending A", Status = BusinessStatus.Active, CreatedAtUtc = CreatedAt };
+            var b = new Business { Name = "Vending B", Status = BusinessStatus.Active, CreatedAtUtc = CreatedAt };
             setup.Businesses.AddRange(a, b);
             await setup.SaveChangesAsync();
 

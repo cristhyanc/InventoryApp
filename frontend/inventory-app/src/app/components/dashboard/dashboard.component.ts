@@ -149,6 +149,56 @@ export class DashboardComponent implements OnInit {
   }
 
   /**
+   * The week's sales, or `null` when this caller was not given them (issue #527): a role without
+   * `Dashboard.ViewFinancials` receives a summary with no `salesThisWeek` object at all.
+   */
+  get salesThisWeek(): DashboardSalesThisWeek | null {
+    return this.summary?.salesThisWeek ?? null;
+  }
+
+  /**
+   * Whether to render the "Sales this week" card at all (issue #528).
+   *
+   * It is hidden only when a summary that *was* loaded does not carry the figure, which is what
+   * the API's redaction looks like. A summary that is still loading or that failed keeps the card,
+   * reporting "Unavailable" exactly as before: not knowing the figure yet, or at all, is a
+   * different thing from having been told it is not this member's to see.
+   */
+  get isSalesCardShown(): boolean {
+    return this.summary === null || this.summary.salesThisWeek !== undefined;
+  }
+
+  /**
+   * Whether to render the "Inventory" card, on the same rule: its primary value is the
+   * business-owned inventory valuation, so a caller the valuation was withheld from is shown no
+   * inventory card rather than a card with its figure removed. An *incomplete* valuation is
+   * `inventoryValueAtCost: null`, which is present and keeps the card (see `inventoryValueDisplay`).
+   */
+  get isInventoryCardShown(): boolean {
+    return this.summary === null || this.summary.inventory.inventoryValueAtCost !== undefined;
+  }
+
+  /**
+   * The "Sales this week" card's value and comparison line, read without the template having to
+   * narrow an optional object. They are only rendered while `isSalesCardShown` is true, so the
+   * `null` branch covers a summary that is still loading or that failed, never a redacted one.
+   */
+  get salesValueDisplay(): string {
+    const week = this.salesThisWeek;
+    return week === null ? 'Unavailable' : money(week.sales);
+  }
+
+  get salesComparisonDisplay(): string {
+    const week = this.salesThisWeek;
+    return week === null ? 'Comparison unavailable' : this.salesComparisonText(week);
+  }
+
+  get salesComparisonDisplayClass(): string {
+    const week = this.salesThisWeek;
+    return week === null ? 'value-muted' : this.salesComparisonClass(week);
+  }
+
+  /**
    * The "Sales this week" comparison line. The percentage/amount is never recomputed here - only
    * `week.changePercent`/`week.comparisonNote`, already decided by
    * `Inventory.Domain.Reporting.Dashboard.PeriodRevenueComparisonPolicy`, choose what is shown.

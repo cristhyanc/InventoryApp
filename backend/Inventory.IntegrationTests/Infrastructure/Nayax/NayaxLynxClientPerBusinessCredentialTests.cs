@@ -3,6 +3,7 @@ using System.Text;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Nayax;
@@ -315,8 +316,8 @@ public class NayaxLynxClientPerBusinessCredentialTests
 
             await using var setup = TestAppDbContext.Unrestricted(options);
             await setup.Database.EnsureCreatedAsync();
-            var a = new Business { Name = "Vending A", CreatedAtUtc = Now };
-            var b = new Business { Name = "Vending B", CreatedAtUtc = Now };
+            var a = new Business { Name = "Vending A", Status = BusinessStatus.Active, CreatedAtUtc = Now };
+            var b = new Business { Name = "Vending B", Status = BusinessStatus.Active, CreatedAtUtc = Now };
             setup.Businesses.AddRange(a, b);
             await setup.SaveChangesAsync();
 

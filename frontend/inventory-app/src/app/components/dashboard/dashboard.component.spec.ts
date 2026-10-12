@@ -1,29 +1,36 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { DashboardComponent } from './dashboard.component';
-import { DashboardSummary, Machine, Product, Site } from '../../models/models';
+import { DashboardSalesThisWeek, DashboardSummary, Machine, Product, Site } from '../../models/models';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
 
+/**
+ * Declared on its own rather than inline, because `DashboardSummary.salesThisWeek` is optional
+ * since issue #527 - a role without `Dashboard.ViewFinancials` is not given it - and spreading an
+ * optional property would make every field of a derived fixture optional too.
+ */
+const SALES_THIS_WEEK: DashboardSalesThisWeek = {
+  sales: 300,
+  transactionCount: 3,
+  period: { startUtc: '2026-10-05T14:00:00Z', endUtc: '2026-10-08T09:30:00Z', firstBusinessDate: '2026-10-05T00:00:00Z', lastBusinessDate: '2026-10-08T00:00:00Z' },
+  comparisonPeriod: { startUtc: '2026-09-28T14:00:00Z', endUtc: '2026-10-01T09:30:00Z', firstBusinessDate: '2026-09-28T00:00:00Z', lastBusinessDate: '2026-10-01T00:00:00Z' },
+  isComparisonAvailable: true,
+  comparisonSales: 240,
+  comparisonTransactionCount: 2,
+  changeAmount: 60,
+  changePercent: 25,
+  comparisonNote: null
+};
+
 const SUMMARY: DashboardSummary = {
   asOfUtc: '2026-10-08T09:30:00Z',
   businessDate: '2026-10-08T00:00:00Z',
-  salesThisWeek: {
-    sales: 300,
-    transactionCount: 3,
-    period: { startUtc: '2026-10-05T14:00:00Z', endUtc: '2026-10-08T09:30:00Z', firstBusinessDate: '2026-10-05T00:00:00Z', lastBusinessDate: '2026-10-08T00:00:00Z' },
-    comparisonPeriod: { startUtc: '2026-09-28T14:00:00Z', endUtc: '2026-10-01T09:30:00Z', firstBusinessDate: '2026-09-28T00:00:00Z', lastBusinessDate: '2026-10-01T00:00:00Z' },
-    isComparisonAvailable: true,
-    comparisonSales: 240,
-    comparisonTransactionCount: 2,
-    changeAmount: 60,
-    changePercent: 25,
-    comparisonNote: null
-  },
+  salesThisWeek: SALES_THIS_WEEK,
   needsRefill: {
     machinesNeedingRefill: 2,
     machinesWithEmptySelections: 1,
@@ -142,12 +149,12 @@ describe('DashboardComponent sales this week comparison', () => {
     const component = createComponent(of(SUMMARY));
     component.ngOnInit();
 
-    expect(component.salesComparisonText(SUMMARY.salesThisWeek)).toBe('↑ 25.0% vs same time last week');
-    expect(component.salesComparisonClass(SUMMARY.salesThisWeek)).toBe('value-positive');
+    expect(component.salesComparisonText(SALES_THIS_WEEK)).toBe('↑ 25.0% vs same time last week');
+    expect(component.salesComparisonClass(SALES_THIS_WEEK)).toBe('value-positive');
   });
 
   it('shows a negative comparison distinctly', () => {
-    const week = { ...SUMMARY.salesThisWeek, changePercent: -10 };
+    const week = { ...SALES_THIS_WEEK, changePercent: -10 };
     const component = createComponent(of(SUMMARY));
 
     expect(component.salesComparisonText(week)).toBe('↓ 10.0% vs same time last week');
@@ -156,7 +163,7 @@ describe('DashboardComponent sales this week comparison', () => {
 
   it('shows the backend note instead of a percentage when the comparison is unavailable', () => {
     const week = {
-      ...SUMMARY.salesThisWeek,
+      ...SALES_THIS_WEEK,
       isComparisonAvailable: false,
       comparisonSales: null,
       changeAmount: null,
@@ -173,7 +180,7 @@ describe('DashboardComponent sales this week comparison', () => {
 
   it('shows the backend note instead of a misleading percentage for a zero-baseline prior period', () => {
     const week = {
-      ...SUMMARY.salesThisWeek,
+      ...SALES_THIS_WEEK,
       isComparisonAvailable: true,
       comparisonSales: 0,
       changeAmount: 300,
@@ -274,6 +281,82 @@ describe('DashboardComponent dashboard summary loading/failure', () => {
     expect(component.summary).toEqual(SUMMARY);
     expect(component.isSummaryFailed).toBe(false);
     expect(component.isLoadingSummary).toBe(false);
+  });
+});
+
+/**
+ * The redacted summary a role without `Dashboard.ViewFinancials` receives (issue #527): no
+ * `salesThisWeek` object and no `inventory.inventoryValueAtCost`, both **absent** rather than
+ * `null` or `0`. The page hides the two money cards instead of rendering a figure it was not
+ * given (issue #528).
+ */
+const REDACTED_SUMMARY: DashboardSummary = {
+  asOfUtc: SUMMARY.asOfUtc,
+  businessDate: SUMMARY.businessDate,
+  needsRefill: SUMMARY.needsRefill,
+  needsOrdering: SUMMARY.needsOrdering,
+  inventory: {
+    isInventoryValueComplete: SUMMARY.inventory.isInventoryValueComplete,
+    productsWithUnknownCost: SUMMARY.inventory.productsWithUnknownCost,
+    productCount: SUMMARY.inventory.productCount,
+    unitsInStorage: SUMMARY.inventory.unitsInStorage
+  }
+};
+
+describe('DashboardComponent redacted financial figures (issues #527 and #528)', () => {
+  it('hides the sales and inventory-value cards when the summary carries neither figure', () => {
+    const component = createComponent(of(REDACTED_SUMMARY));
+    component.ngOnInit();
+
+    expect(component.isSalesCardShown).toBe(false);
+    expect(component.isInventoryCardShown).toBe(false);
+    expect(component.salesThisWeek).toBeNull();
+  });
+
+  it('keeps both cards for a summary that carries the figures', () => {
+    const component = createComponent(of(SUMMARY));
+    component.ngOnInit();
+
+    expect(component.isSalesCardShown).toBe(true);
+    expect(component.isInventoryCardShown).toBe(true);
+    expect(component.salesThisWeek).toEqual(SUMMARY.salesThisWeek);
+  });
+
+  /**
+   * `null` is already a meaningful answer for `inventoryValueAtCost` - the valuation is incomplete
+   * - so it must stay distinguishable from a withheld figure, which is absent. An incomplete
+   * valuation keeps its card and reports "Unavailable" exactly as before.
+   */
+  it('keeps the inventory card for an incomplete valuation, which is null rather than absent', () => {
+    const incomplete: DashboardSummary = {
+      ...SUMMARY,
+      inventory: { ...SUMMARY.inventory, inventoryValueAtCost: null, isInventoryValueComplete: false }
+    };
+    const component = createComponent(of(incomplete));
+    component.ngOnInit();
+
+    expect(component.isInventoryCardShown).toBe(true);
+    expect(component.inventoryValueDisplay(incomplete.inventory)).toBe('Unavailable');
+  });
+
+  it('keeps both cards while the summary is loading or after it failed, reporting them as unavailable', () => {
+    const loading = createComponent(new Subject<DashboardSummary>());
+    loading.ngOnInit();
+    const failed = createComponent(throwError(() => new Error('network error')) as Observable<DashboardSummary>);
+    failed.ngOnInit();
+
+    expect(loading.isSalesCardShown).toBe(true);
+    expect(loading.isInventoryCardShown).toBe(true);
+    expect(failed.isSalesCardShown).toBe(true);
+    expect(failed.isInventoryCardShown).toBe(true);
+  });
+
+  it('reads no withheld figure as a zero week or an empty valuation', () => {
+    const component = createComponent(of(REDACTED_SUMMARY));
+    component.ngOnInit();
+
+    expect(component.summary?.salesThisWeek).toBeUndefined();
+    expect(component.summary?.inventory.inventoryValueAtCost).toBeUndefined();
   });
 });
 
@@ -414,6 +497,37 @@ describe('DashboardComponent template rendering', () => {
     const values = Array.from(host.querySelectorAll('.stat-card-value')).map((el) => el.textContent?.trim());
     expect(values).toEqual(['Unavailable', 'Unavailable', 'Unavailable', 'Unavailable']);
     expect(host.textContent).toContain('The Dashboard summary could not be loaded');
+  });
+
+  /**
+   * A role without `Dashboard.ViewFinancials` is given the two non-financial cards (issue #527).
+   * The page must render them correctly with both money figures absent - never as `$0.00`, never
+   * as "Unavailable", and never by reading a property the response does not have.
+   */
+  it('renders only the two non-financial cards for a redacted summary', async () => {
+    const host = await renderDashboard({ summary$: of(REDACTED_SUMMARY) });
+
+    const labels = Array.from(host.querySelectorAll('.stat-card-label')).map((el) => el.textContent?.trim());
+    expect(labels).toEqual(['Needs refill', 'Needs ordering']);
+  });
+
+  it('renders no sales or inventory figure at all in a redacted summary', async () => {
+    const host = await renderDashboard({ summary$: of(REDACTED_SUMMARY) });
+
+    const values = Array.from(host.querySelectorAll('.stat-card-value')).map((el) => el.textContent?.trim());
+    expect(values).toEqual(['2', '4']);
+    expect(host.textContent).not.toContain('Sales this week');
+    expect(host.textContent).not.toContain('$1,234.56');
+    expect(host.textContent).not.toContain('$0.00');
+  });
+
+  it('keeps the remaining cards and their figures and links unchanged under redaction', async () => {
+    const host = await renderDashboard({ summary$: of(REDACTED_SUMMARY) });
+    const hrefs = Array.from(host.querySelectorAll('a.stat-card')).map((card) => card.getAttribute('href'));
+
+    expect(hrefs).toEqual(['/pick-list', '/products/needs-ordering']);
+    expect(host.textContent).toContain('2 low · 1 empty selections across 5 machines evaluated');
+    expect(host.textContent).toContain('of 50 products in the catalogue');
   });
 });
 

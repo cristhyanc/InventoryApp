@@ -1,4 +1,5 @@
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Data;
@@ -26,8 +27,8 @@ public sealed class FinancialAdapterTenancyTests : IDisposable
         using var seed = TestAppDbContext.Unrestricted(_options);
         seed.Database.EnsureCreated();
         seed.Businesses.AddRange(
-            new Business { Id = 1, Name = "A", CreatedAtUtc = Day },
-            new Business { Id = 2, Name = "B", CreatedAtUtc = Day });
+            new Business { Id = 1, Name = "A", Status = BusinessStatus.Active, CreatedAtUtc = Day },
+            new Business { Id = 2, Name = "B", Status = BusinessStatus.Active, CreatedAtUtc = Day });
         seed.SaveChanges();
         foreach (var businessId in new[] { 1, 2 })
         {
