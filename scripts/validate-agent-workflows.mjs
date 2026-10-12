@@ -1776,6 +1776,44 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   verifyImplementationModelSelection(read);
   verifyProviderModeProvenance(read);
   verifyNayaxDocumentationAccess(read);
+  verifyAgentBranchCleanup(read);
+}
+
+export const branchCleanupPath = '.github/workflows/agent-branch-cleanup.yml';
+export const branchCleanupScriptPath = 'scripts/agent-branch-cleanup.sh';
+
+/**
+ * Checkpoint/recovery storage branches and closed agent pull request branches are deleted by trusted
+ * code only: the closed-PR workflow never checks out pull request code, the implementation job runs the
+ * helper from trusted develop rather than the agent-edited tree, and the helper never force-pushes.
+ */
+export function verifyAgentBranchCleanup(read = readRepositoryFile) {
+  const script = read(branchCleanupScriptPath);
+  for (const required of ['set -euo pipefail', 'git merge-base --is-ancestor "$sha" "$head_sha"', 'credential.helper=', 'core.hooksPath=/dev/null', '--delete "$ref"']) {
+    requireText(script, required, branchCleanupScriptPath);
+  }
+  for (const forbidden of ['--force', '+refs/', 'git config --global', 'x-access-token:${GH_TOKEN}@']) forbidText(script, forbidden, branchCleanupScriptPath);
+
+  const workflow = read(branchCleanupPath);
+  for (const required of [
+    'pull_request_target:', 'types: [closed]', '      - develop', 'permissions: {}',
+    "github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'agent/issue-')",
+    'ref: develop', 'persist-credentials: false', `bash ${branchCleanupScriptPath} "https://github.com/\${GITHUB_REPOSITORY}.git" "$issue" "$mode" "$HEAD_SHA"`,
+    '[ "$live_sha" != "$HEAD_SHA" ] || [ "$open_on_branch" != "0" ]',
+  ]) requireText(workflow, required, branchCleanupPath);
+  for (const forbidden of ['ref: ${{ github.event.pull_request', 'claude-code-action', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'actions: write', 'issues: write', '--force']) {
+    forbidText(workflow, forbidden, branchCleanupPath);
+  }
+
+  const job = section(read(implementPath), '  implement:\n', '  dispatch-architecture:\n', 'agent-implement.yml implementation job');
+  requireOrder(job, '      - name: Push implementation and create pull request', '      - name: Delete storage branches contained in the published pull request', 'storage cleanup after publish');
+  requireOrder(job, '      - name: Delete storage branches contained in the published pull request', '      - name: Record implementation outcome', 'storage cleanup before outcome');
+  const cleanup = section(job, '      - name: Delete storage branches contained in the published pull request\n', '      - name: Record implementation outcome\n', 'agent-implement.yml storage cleanup');
+  for (const required of [
+    "if: steps.publish_implementation.outcome == 'success'", 'continue-on-error: true',
+    'git show "$BASE_SHA:scripts/agent-branch-cleanup.sh" > "$cleanup"', '"$ISSUE_NUMBER" contained "$HEAD_SHA"',
+  ]) requireText(cleanup, required, 'agent-implement.yml storage cleanup');
+  forbidText(cleanup, 'bash scripts/agent-branch-cleanup.sh', 'agent-implement.yml storage cleanup must not run the agent-edited helper');
 }
 
 /**

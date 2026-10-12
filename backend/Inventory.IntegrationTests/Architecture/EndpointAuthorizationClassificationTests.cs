@@ -311,6 +311,7 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/settings/nayax-processing-fee-rates", "GET", Capability.IntegrationManage)]
     [InlineData("api/settings/nayax-processing-fee-rates", "POST", Capability.IntegrationManage)]
     [InlineData("api/data-quality/nayax-catalog-reconciliation", "GET", Capability.IntegrationManage)]
+    [InlineData("api/settings/nayax-connection/test", "POST", Capability.IntegrationManage)]
     [InlineData("api/nayax-sales-sync", "POST", Capability.DashboardView)]
     [InlineData("api/admin/inventory-cost-repair/preview", "POST", Capability.DataRepair)]
     [InlineData("api/admin/inventory-cost-repair/apply", "POST", Capability.DataRepair)]
@@ -353,6 +354,37 @@ public class EndpointAuthorizationClassificationTests
         string route,
         string httpMethod) =>
         Assert.Equal([Capability.MembersManage], CapabilitiesOf(Endpoint(route, httpMethod)));
+
+    /// <summary>
+    /// The Owner's business settings (issue #548). The read is listed beside the write deliberately:
+    /// it reports the business's contact address, ABN and GST registration, so it is restricted with
+    /// the write rather than following <c>GET api/business/current</c>'s <c>Dashboard.View</c> - and
+    /// a later change that moved either of them onto a capability every member holds fails here.
+    /// </summary>
+    [Theory]
+    [InlineData("api/business/settings", "GET", Capability.BusinessManage)]
+    [InlineData("api/business/settings", "PUT", Capability.BusinessManage)]
+    public void The_business_settings_endpoints_require_business_manage(
+        string route,
+        string httpMethod,
+        Capability capability) =>
+        Assert.Contains(capability, CapabilitiesOf(Endpoint(route, httpMethod)));
+
+    /// <summary>
+    /// The contrast that makes the row above meaningful: the two surfaces on the one business
+    /// controller declare different capabilities, so the settings endpoints cannot have inherited
+    /// the shell read's rule and the shell read cannot have been narrowed to an Owner's.
+    /// </summary>
+    [Fact]
+    public void The_business_controllers_shell_read_and_settings_surfaces_declare_different_capabilities()
+    {
+        Assert.Equal(
+            [Capability.DashboardView],
+            CapabilitiesOf(Endpoint("api/business/current", "GET")));
+        Assert.Equal(
+            [Capability.BusinessManage],
+            CapabilitiesOf(Endpoint("api/business/settings", "PUT")));
+    }
 
     /// <summary>
     /// A preview is as restricted as its apply. Every action of every data-repair controller

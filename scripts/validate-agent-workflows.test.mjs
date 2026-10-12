@@ -6,6 +6,7 @@ import './agent-review-transport.test.mjs';
 import './agent-architecture-handoff.test.mjs';
 import './agent-pr-guard.test.mjs';
 import './agent-outcomes.test.mjs';
+import './agent-branch-cleanup.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';
@@ -32,6 +33,8 @@ import {
   verifyScopedDirectoryCreationPermissions,
   appPushRetryPath,
   implementPath,
+  branchCleanupPath,
+  verifyAgentBranchCleanup,
   architecturePath,
   issueTemplatePath,
   pullRequestTemplatePath,
@@ -87,6 +90,25 @@ function replaceOnce(text, from, to) {
 function readWithOverrides(overrides) {
   return (path) => (Object.hasOwn(overrides, path) ? overrides[path] : readRepositoryFile(path));
 }
+
+describe('agent branch cleanup', () => {
+  it('accepts the repository workflows', () => {
+    assert.doesNotThrow(() => verifyAgentBranchCleanup());
+  });
+
+  it('rejects running the cleanup helper from the agent-edited tree', () => {
+    const implement = readRepositoryFile(implementPath).replace(
+      'git show "$BASE_SHA:scripts/agent-branch-cleanup.sh" > "$cleanup"\n          bash "$cleanup"',
+      'bash scripts/agent-branch-cleanup.sh',
+    );
+    assert.throws(() => verifyAgentBranchCleanup(readWithOverrides({ [implementPath]: implement })), /storage cleanup/);
+  });
+
+  it('rejects a closed-PR cleanup that checks out pull request code', () => {
+    const workflow = readRepositoryFile(branchCleanupPath).replace('ref: develop', 'ref: ${{ github.event.pull_request.head.sha }}');
+    assert.throws(() => verifyAgentBranchCleanup(readWithOverrides({ [branchCleanupPath]: workflow })), /agent-branch-cleanup\.yml/);
+  });
+});
 
 describe('GitHub expression evaluation', () => {
   const context = {

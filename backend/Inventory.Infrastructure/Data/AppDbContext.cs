@@ -85,6 +85,13 @@ public class AppDbContext : DbContext
     /// <see cref="BusinessNayaxConnection"/>.
     /// </summary>
     public DbSet<BusinessNayaxConnection> BusinessNayaxConnections => Set<BusinessNayaxConnection>();
+
+    /// <summary>
+    /// Each business's one short-lived, encrypted Nayax connection-test draft (issue #536). Not the
+    /// accepted connection above and never read by a Nayax call; see
+    /// <see cref="NayaxConnectionTestDraft"/>.
+    /// </summary>
+    public DbSet<NayaxConnectionTestDraft> NayaxConnectionTestDrafts => Set<NayaxConnectionTestDraft>();
     public DbSet<SiteCommissionAgreement> SiteCommissionAgreements => Set<SiteCommissionAgreement>();
     public DbSet<CommissionPayment> CommissionPayments => Set<CommissionPayment>();
     public DbSet<InventoryCostTransitionBaseline> InventoryCostTransitionBaselines => Set<InventoryCostTransitionBaseline>();
@@ -271,6 +278,35 @@ public class AppDbContext : DbContext
                     : fromProvider);
         modelBuilder.Entity<BusinessNayaxConnection>()
             .Property(x => x.UpdatedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        // One connection-test draft per business (issue #536), for the same reason the connection
+        // above has one row per business: "a new test replaces the previous draft" is then a schema
+        // guarantee rather than a convention the adapter has to remember, so a second draft - and a
+        // second decryptable token - cannot exist for a business however the write path is called.
+        modelBuilder.Entity<NayaxConnectionTestDraft>()
+            .HasIndex(draft => draft.BusinessId)
+            .IsUnique();
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.OperatorId).IsRequired();
+        // Required, not nullable, as on the connection: the row exists only once a test has stored
+        // credentials, so an empty ciphertext or a nameless key would be a state nothing can act on.
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.AccessTokenCiphertext).IsRequired();
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.EncryptionKeyId).IsRequired();
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.ResultsJson).IsRequired();
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.CreatedByDirectoryTenantId).IsRequired();
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.CreatedByObjectId).IsRequired();
+        // Both instants are persisted UTC and both are reported, so each is marked UTC on the way
+        // out - see the StockAdjustment.CreatedAt comment below for why the SQLite provider makes
+        // that necessary. The expiry comparison is a tick comparison either way.
+        modelBuilder.Entity<NayaxConnectionTestDraft>()
+            .Property(x => x.CreatedAt)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        modelBuilder.Entity<NayaxConnectionTestDraft>()
+            .Property(x => x.ExpiresAt)
             .HasConversion(
                 toProvider => toProvider,
                 fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));

@@ -51,6 +51,12 @@ public static class ApplicationServiceCollectionExtensions
         // tenancy-scoped: the answer belongs to one caller's membership.
         services.AddScoped<GetCurrentBusiness>();
 
+        // The Owner's own business settings (issue #548). Scoped for the same reason: both read and
+        // write act on the business one caller's membership resolved, and a saved time zone has to
+        // take effect on the next request rather than being held in a cache.
+        services.AddScoped<GetBusinessSettings>();
+        services.AddScoped<UpdateBusinessSettings>();
+
         // The signed-in member's role and capabilities (issue #521). Per request for the same
         // reason, and so a role change applies on the next request rather than being cached.
         services.AddScoped<GetCurrentAccess>();
@@ -100,6 +106,13 @@ public static class ApplicationServiceCollectionExtensions
         // separate port, so nothing that injects the ordinary provider can reach it.
         services.AddScoped<INayaxRequestCredentialProvider, NayaxRequestCredentialProvider>();
         services.AddScoped<INayaxConnectionRetestCredentialProvider, NayaxConnectionRetestCredentialProvider>();
+
+        // The Owner-only connection test (issue #536). The rate limiter is a singleton because the
+        // window it remembers is state about the process rather than about one request: "this
+        // business has run five tests in the last ten minutes" must be the same answer for every
+        // request, exactly as MemberProfileRefreshThrottle's hour is.
+        services.AddSingleton<NayaxConnectionTestRateLimiter>();
+        services.AddScoped<TestNayaxConnection>();
 
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();

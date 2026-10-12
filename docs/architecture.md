@@ -1476,9 +1476,9 @@ Ownership answers "whose data is this?". A role answers "what may this member do
 
 #### Capability authorization (issue #525)
 
-A role that nothing checks is a label. Issue #525 is where the capability table starts deciding requests: the everyday business endpoints declare the capability they need, and an architecture test stops a new endpoint from quietly defaulting to "every active member may call it". It is the first of #502's two enforcement slices; the Manager- and Owner-only controllers it deliberately left open are [issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526) below, and the dashboard's financial redaction is #527.
+A role that nothing checks is a label. Issue #525 is where the capability table starts deciding requests: the everyday business endpoints declare the capability they need, and an architecture test stops a new endpoint from quietly defaulting to "every active member may call it". It is the first of #502's two enforcement slices; the Manager- and Owner-only controllers it deliberately left open are [issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526) below, and the dashboard's financial redaction — the one capability that decides part of a *response* rather than an endpoint — is [issue #527](#dashboard-financial-redaction-issue-527).
 
-**Where it is enforced: the authorization middleware, from one table.** `InventoryApi.Auth.CapabilityPolicy` names one ASP.NET Core authorization policy per declared `Capability` (`Capability:Inventory.Operate`, and so on for all fifteen), `Program.cs` registers every one of them, and `BusinessCapabilityAuthorizationHandler` answers them all by asking `RoleCapabilities.Allows`. A controller or action declares one with `[RequireCapability(Capability.InventoryOperate)]`, which is an `AuthorizeAttribute` carrying that policy's name, so the decision is made by the authorization middleware before any action runs — not by a filter each controller has to remember, and not inside a use case. Every capability is registered even where no endpoint declares it yet, so #526 added attributes and nothing else, and #527 and the member-management issues will do the same.
+**Where it is enforced: the authorization middleware, from one table.** `InventoryApi.Auth.CapabilityPolicy` names one ASP.NET Core authorization policy per declared `Capability` (`Capability:Inventory.Operate`, and so on for all fifteen), `Program.cs` registers every one of them, and `BusinessCapabilityAuthorizationHandler` answers them all by asking `RoleCapabilities.Allows`. A controller or action declares one with `[RequireCapability(Capability.InventoryOperate)]`, which is an `AuthorizeAttribute` carrying that policy's name, so the decision is made by the authorization middleware before any action runs — not by a filter each controller has to remember, and not inside a use case. Every capability is registered even where no endpoint declares it yet, so #526 added attributes and nothing else, and the member-management issues will do the same. `Dashboard.ViewFinancials` is the one capability that is deliberately **not** an endpoint requirement: what a role without it may not see is two figures inside a response every role may request, which an `AuthorizeAttribute` cannot express — see [Dashboard financial redaction](#dashboard-financial-redaction-issue-527).
 
 **Controllers reference capabilities, never roles.** Which roles hold a capability is `RoleCapabilities`'s single answer, and it is the same answer `GET /api/me/access` reports, so the API and the frontend's rendering decisions cannot disagree. An architecture test fails the build if any controller attribute names a `BusinessRole` at all.
 
@@ -1522,7 +1522,9 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Imports | `api/imports/products`, `api/imports/nayax-sales`, `api/imports/pending-xml` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Nayax Settings | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Nayax connection test (issue #536, added as a reviewed edit) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Admin → Costing Repair | `api/admin/inventory-cost-repair/*` (preview, apply, history) | `Data.Repair` | ✘ | ✘ | ✔ |
 | Admin → Inventory AVCO Transition Baseline | `api/admin/inventory-cost-transition/*` (preview, apply, preview-all, apply-all) | `Data.Repair` | ✘ | ✘ | ✔ |
 | Admin → Historical GST Classification | `api/admin/historical-gst-classification/*` (preview, apply) | `Data.Repair` | ✘ | ✘ | ✔ |
@@ -1530,13 +1532,15 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Nayax Historical Cost Recovery | `api/sale-costing/*` (backfill, Nayax cost backfill dry run and apply) | `Data.Repair` | ✘ | ✘ | ✔ |
 | *(Users page, issue #505 — added by issue #533)* | `api/members` (list), `api/members/{membershipId}/role`, `.../revoke`, `.../reinstate` | `Members.Manage` | ✘ | ✘ | ✔ |
 
+The table's last row was added by issue #548, which is the first endpoint to declare `Business.Manage`: the capability existed in the one role → capability table from issue #521 and nothing required it until an Owner could change the business record. Its read shares its write's capability, as the next paragraph's rule says a read normally does — the settings read reports the business's contact address, ABN and GST registration, which is the business's own tax and contact detail rather than anything a page needs to render. It is nevertheless the one row whose controller holds a second, weaker rule: `GET api/business/current` on the same `BusinessController` keeps `Dashboard.View`, so both are declared per action and neither inherits the other. See [Business settings API](#business-settings-api-issue-548).
+
 **A read shares its surface's capability, with one deliberate exception.** `Expenses.Manage` covers the expense list and the attachment download as well as the writes, and `Reports.View` covers each report and its export: an export is the same figures in another container, and a separate capability for it would be a way to read a report that is otherwise refused. The one read/write split in the whole matrix stays #525's supplier GST defaults, because an Operator recording a purchase genuinely needs to see which classification it will be given. The site commission *report* is not split onto `Reports.View` either: it is the surface the agreements are maintained from, and a role that could read what a site is owed but not why would be shown a number it cannot check.
 
 **A preview is as restricted as its apply.** All five repair controllers put `Data.Repair` on the controller, covering preview, dry run, history read and apply alike. A preview reads exactly the financial history its apply rewrites and returns the fingerprint or plan id the apply is authorised by, and on `api/sale-costing` the only difference between projecting the change and writing it is a `dryRun` flag. Restricting the apply while leaving the preview open would restrict nothing anybody cares about and hand every member the business's costing ledger. `EndpointAuthorizationClassificationTests.Every_action_of_a_repair_controller_requires_only_the_data_repair_capability` pins that none of them drifts onto a weaker capability later.
 
 **The two endpoints no page owns, and the reviewed reasoning for each.** Issue #526 says `NayaxSalesSyncController` and `DataQualityController` follow the page that calls them:
 
-- `POST api/nayax-sales-sync` → **`Dashboard.View`**. The home Dashboard calls it on load, before Sites and Machines, so both sections calculate from one freshness boundary (issue #187). `Imports.Run` would leave an Operator's Dashboard refreshing nothing and reporting stale sales on every visit — the page broken for them rather than a decision anybody made. It surfaces no figure the Dashboard does not already show, and redacting those figures by role is #527.
+- `POST api/nayax-sales-sync` → **`Dashboard.View`**. The home Dashboard calls it on load, before Sites and Machines, so both sections calculate from one freshness boundary (issue #187). `Imports.Run` would leave an Operator's Dashboard refreshing nothing and reporting stale sales on every visit — the page broken for them rather than a decision anybody made. It surfaces no figure the Dashboard does not already show, and redacting those figures by role is [issue #527](#dashboard-financial-redaction-issue-527) below.
 - `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
 
 **What an Operator and a Manager lose, and when.** An Operator can no longer reach expenses, any report or export, the imports, the site commission surface, the Nayax fee rates, the catalogue reconciliation or any repair. A Manager additionally cannot reach the Nayax fee rates, the catalogue reconciliation or any repair — a Manager may read a report whose underlying fee rate only an Owner may change, which is the agreed table and not a defect. Routes, verbs, request shapes and success responses are unchanged; the only new answer is the bare `403` an under-privileged caller receives. Every member of the one live business is an `Owner`, so nothing anybody reaches changes until non-Owner roles are assigned.
@@ -1545,7 +1549,32 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 
 **One testing detail worth knowing.** `POST api/imports/nayax-sales`, `POST api/admin/nayax-sale-timestamp-repair/preview` and the multipart expense create/update overloads declare `[Consumes("multipart/form-data")]`. A declared content type is matched during **endpoint selection**, which runs *before* the authorization middleware, so a JSON body on one of those routes answers `415` for every caller whatever role they hold. A test that wants to assert anything about authorization there has to send a multipart body; the `415` reads no membership and leaks nothing.
 
-**What proves this slice.** `EndpointAuthorizationClassificationTests` — the four-class rule with no pending list, the same rule per controller, the 32 rows reading each #526 capability back off its route (both page-following mappings included), and the repair-controller rule above. `CapabilityAuthorizationApiTests` — every new surface in the role matrix, called as all three roles through the real pipeline and the real migration history with a second business present throughout; the write and apply actions in the one direction a test may assert without running them; a caller with no membership refused everywhere; and the three two-business isolation tests described above.
+**What proves this slice.** `EndpointAuthorizationClassificationTests` — the four-class rule with no pending list, the same rule per controller, the 33 rows reading each Manager/Owner capability back off its route (#526's own 32, both page-following mappings included, plus issue #536's connection test added to the same theory as a reviewed edit), and the repair-controller rule above. `CapabilityAuthorizationApiTests` — every new surface in the role matrix, called as all three roles through the real pipeline and the real migration history with a second business present throughout; the write and apply actions in the one direction a test may assert without running them; a caller with no membership refused everywhere; and the three two-business isolation tests described above.
+
+#### Dashboard financial redaction (issue #527)
+
+Everything above decides whether a request is answered at all. `Dashboard.ViewFinancials` is the one capability that decides part of a *response*, and issue #527 is where it starts doing so: `GET /api/dashboard/summary` sent every member the week's sales and the inventory valuation, and the Dashboard is the landing page, so every role holds `Dashboard.View` and must keep reaching it. What an Operator may not see is two figures inside the body, which an endpoint attribute cannot express.
+
+**Two published shapes, and the role picks one.** The summary now returns `Inventory.Application.Dashboard.IDashboardSummaryDto`, the union of exactly two types:
+
+| Caller | Shape | Top-level properties | `inventory` properties |
+| --- | --- | --- | --- |
+| Role grants `Dashboard.ViewFinancials` (Manager, Owner) | `DashboardSummaryDto` (unchanged) | `asOfUtc`, `businessDate`, `salesThisWeek`, `needsRefill`, `needsOrdering`, `inventory` | `inventoryValueAtCost`, `isInventoryValueComplete`, `productsWithUnknownCost`, `productCount`, `unitsInStorage` |
+| Role does not (Operator) | `RedactedDashboardSummaryDto` | `asOfUtc`, `businessDate`, `needsRefill`, `needsOrdering`, `inventory` | `isInventoryValueComplete`, `productsWithUnknownCost`, `productCount`, `unitsInStorage` |
+
+Nothing else differs: `asOfUtc`, `businessDate`, the refill and ordering cards and every remaining inventory figure are value-for-value what the same request produces for a Manager, and a Manager's and an Owner's response is byte-for-byte what it was before — no property added, renamed, retyped or removed.
+
+**A redacted figure is absent, not `null` and not `0`.** That is why this is two types rather than one type with nullable properties and a "redacted" flag. `null` is *already* a meaningful answer for `inventoryValueAtCost` — "the valuation is incomplete, because some product's cost is unknown" ([Inventory Value tile](#dashboard-inventory-value-tile-issue-42)) — so reusing it for "you may not see this" would make an incomplete valuation and a withheld one indistinguishable. `0` would read as a known zero week, which is a financial statement about the business and a false one. A property the returned type does not have, finally, cannot be reintroduced by a later change to a serializer option, a converter or an attribute, and there is no flag anybody can forget to read. MVC serializes the object the action returned, so the absence is the type's shape rather than a serialization setting.
+
+**The figures are not calculated for a caller who may not see them.** `GetDashboardSummary` resolves the caller's role first and, when the capability is absent, does not call `IDashboardSummarySalesFactsProvider` at all: there is no week-to-date query in that request, so nothing is read and then dropped. The inventory valuation needs no extra read either way — the redacted card is projected from the same single catalogue snapshot the non-financial cards already use, through the same `InventoryValuationPolicy` — so a redacted request makes two reads instead of three and no formula is duplicated.
+
+**The decision is made in the use case, from the one capability table.** This is the deliberate exception to "capabilities are decided by the authorization middleware": the decision is about which figures are *read*, so it belongs where the reading happens. It still comes from `RoleCapabilities.Allows` — the one role → capability table `GET /api/me/access` reports from — through `ICurrentBusinessProvider`, the same per-request memoised membership resolution `BusinessCapabilityAuthorizationHandler` and `BusinessScopeMiddleware` read, so what the endpoint enforces, what the response contains and what the frontend was told cannot drift apart, and a role change applies on the member's next request. No role name appears in the decision. It fails closed: a caller whose membership does not resolve, for any denial reason, is refused with `BusinessAccessDeniedException` before anything is read, rather than being treated as the least-privileged role — unreachable through the endpoint, whose `Dashboard.View` policy refuses them first, and fail-closed if it ever were.
+
+**The controller stays thin.** `DashboardController` keeps `[RequireCapability(Capability.DashboardView)]` exactly as #525 left it, returns whichever shape the use case built, and strips, recomputes and re-decides nothing. No endpoint's authorization class changed and nothing was added to `EndpointAuthorizationClassificationTests`. The Development-only Swagger document describes the union's common properties; the two concrete shapes are documented here rather than as an OpenAPI `oneOf`, because no generated client exists ([API documentation policy](#api-documentation-policy)).
+
+**The Angular Dashboard still expects the full shape**, which is issue #503's task and deliberately out of scope here: `DashboardSummary` in `models.ts` types both figures as always present, and the template reads `summary.salesThisWeek.sales` directly. The Inventory tile already degrades correctly, but the sales card would fail for a caller who is not given that object. Nobody can reach that today — every member of the one live business is an `Owner` — and the fix is for the page to read `GET /api/me/access` and stop asking for figures it may not be given, never for the API to send `null` instead.
+
+**What proves this slice.** `DashboardSummaryRedactionApiTests` (the exact serialized property sets through the real request pipeline and the real migration history, with three members of one business holding the three roles over one seeded fleet, catalogue and completed sale: an Operator's top-level and `inventory` sets, that neither property name nor either figure appears anywhere in their body, the full sets plus the seeded valuation for a Manager and an Owner, and an Operator's remaining figures matching a Manager's value for value) and `GetDashboardSummaryRedactionTests` (the decision over a fixed clock, with the roles written out literally from #328's table: the redacted shape for an Operator, zero calls to the sales port and no period handed to it, the non-financial figures identical to an Owner's, the incomplete-valuation flag and unknown-cost count surviving redaction, every figure for a Manager and an Owner, and every denial reason refused with nothing read). `GetDashboardSummaryTenancyTests` additionally covers, relationally, that an unresolved membership reads neither the sales, the catalogue nor the fleet.
 
 #### One active membership per identity (issue #522)
 
@@ -1683,9 +1712,27 @@ Whether a business may be reached used to be a boolean. `Business.IsActive` coul
 
 **Account state gained its two application states.** `AccountStatePolicy` now returns an `AccountStateDecision` — the state and the rejection reason together, so neither can be reported without the other — and `GET /api/me/account-state` answers `ApplicationPending` for an active membership in a `Pending` business and `ApplicationRejected`, with the business's recorded reason, for an inactive membership in a `Rejected` one. See [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523) for the full precedence.
 
-**What this slice does not do.** The application endpoints that create a `Pending` business are issue #541 (which also adds the `SelfServiceOnboarding:Enabled` flag `onboardingEnabled` reports), approve/reject/deactivate are #509's, and the owner settings page is #511's. Nothing writes a status other than `Active` today, and nothing writes a profile value at all: the status, the columns and the rules are what this slice provides.
+**What this slice does not do.** The application endpoints that create a `Pending` business are issue #541 (which also adds the `SelfServiceOnboarding:Enabled` flag `onboardingEnabled` reports), approve/reject/deactivate are #509's, and the owner settings page is #549's. Nothing writes a status other than `Active` today: the status, the columns and the rules are what this slice provides. The profile columns stayed unwritten until [Business settings API](#business-settings-api-issue-548) below, which is the one request path that writes them — and it still writes no status.
 
 **The migration.** `AddBusinessLifecycleStatusAndProfile` adds `Status`, maps every existing row from the flag it already carries (`IsActive = 1` → `Active`, `0` → `Deactivated`) while that flag is still readable, and only then drops it, so no business's access changes across the upgrade and nothing is inferred from anything else. It drops the column in place with `ALTER TABLE ... DROP COLUMN`, which SQLite has supported for an unindexed, unconstrained column since 3.35, rather than through the provider's table rebuild: rebuilding the table that decides who may reach a business's financial data is risk this change does not need. `Down` restores the flag from the status by the same mapping read backwards — only `Active` becomes `1`, so a pending or rejected business reverts to inactive, the fail-closed direction. `BusinessLifecycleStatusMigrationTests` proves the mapping both ways on a relational database, that the profile columns arrive holding nothing, that no business is invented when there is none to map, and that access after the upgrade is decided from the mapped status through the real adapter and the real policy; `BusinessAbnPersistenceTests` proves the ABN refusal on insert and on update and the profile round-trip.
+
+#### Business settings API (issue #548)
+
+Issue #540 added the columns a business records about itself and left them unwritten. Issue #548, one slice of #511 under #328, is the one request path that writes them: an Owner can change their business's name, contact address, ABN, GST registration and time zone. The page that calls it is #549's; this slice is the API, and it adds no column and no migration.
+
+**Two endpoints, both `Business.Manage`, both on the trusted current business.** `GET /api/business/settings` returns `{ name, contactEmail, abn, gstRegistered, timeZoneId }` and `PUT /api/business/settings` accepts the same five and answers with what was stored. Neither takes a route, query, body or header value naming a business: the business is resolved from the authenticated actor's membership through the issue #64 current-business abstraction, so there is no surface a caller could aim at another business — which is also why the response carries no business id. The capability is declared on each action rather than on `BusinessController`, because the controller's other action is the shell read `GET /api/business/current`, which every role holds `Dashboard.View` for; the settings **read** is restricted with the write rather than following it, because it reports the business's own contact address, ABN and GST registration rather than anything a page needs to render. See [Capability authorization on the Manager and Owner endpoints](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526) for the matrix row.
+
+**A save is the whole set, validated before anything is stored.** `Inventory.Domain.Tenancy.BusinessSettingsPolicy` is the one rule: a name is required and bounded at 200 characters, a contact address must be a single well-formed address (`Inventory.Domain.Tenancy.BusinessContactEmail`, a format check that never claims the mailbox exists), the ABN is optional but checksum-validated whenever it is present, and the GST registration must be *stated* — an absent `gstRegistered` is a `400` and never `false`, because "registered", "not registered" and "not recorded" are three different facts and a missing form field must not record a tax one. The three profile columns stay nullable in the schema for the business that predates the application form, so the read reports "not recorded" honestly, while a save is narrower: it may leave the ABN unrecorded (`null`, its single representation of absence — a blank string is refused) and may not leave the address or the registration unstated. A refusal stores nothing at all, so the five settings move together.
+
+**The time zone's resolvability is still decided centrally.** The policy checks only that an id was submitted; whether the host's time-zone database can keep a calendar in it is answered by `Inventory.Infrastructure.Data.BusinessTimeZoneEnforcer` on `SaveChanges`, exactly as it is for the bootstrap and any other write path (see [Per-business time zone](#per-business-time-zone-issue-499)). Both refusals are a `DomainValidationException` and so the same `400`. That is also why `EfBusinessSettingsStore` writes through a tracked entity and `SaveChanges` rather than an `ExecuteUpdate`: a set-based update would write straight past that enforcer and past `BusinessAbnEnforcer`. The row is read, compared and written inside one transaction, so the audit trail's change set describes the state the write actually replaced.
+
+**Changing the zone re-derives every business day, and rewrites nothing.** This is the decision recorded on issue #499 and now reachable: the zone is resolved per request from the business's own record, so from the next request onwards *all* business days and report boundaries — past data as much as future — are derived in the new zone, including that zone's own daylight-saving transitions. **On the next request, and not during the saving one:** `BusinessScopeMiddleware` publishes the zone into the request's `BusinessTimeZoneScope` before the action runs, and that scope can only move forward once, so a `PUT` that changes the zone still *runs* in the old one. That is deliberate rather than incidental — a request deriving two different business dates depending on how far through itself it was would be worse than a change that lands cleanly at a request boundary — and it is why the submitted zone is a value this endpoint *stores*, never the zone the request itself reports in. The repository rule that a business's reporting timezone is never taken from route, query, body or header input is therefore unchanged: resolution still reads the business record and nothing else. No stored instant, sale, purchase, expense, commission, costing row or document changes, because nothing stored is a business date: a business date is derived from a stored UTC instant through `IBusinessCalendar` every time it is needed. The visible consequence is that a figure already printed for a Sydney business day may fall on the adjacent day once the business is in another zone, which is why the page that will call this endpoint (#549) is the one that has to show the warning #499 asked for - the API refuses nothing on that account, because the re-derivation is the agreed behaviour rather than an accident to be guarded against. `BusinessSettingsPersistenceTests` proves both halves on a relational database: an already-stored sale's business date and its business day's UTC boundaries move with the saved zone, the stored instant is unchanged, and a past transition day becomes 23 hours long in the new zone while the other business in the same database is untouched.
+
+**Every change is audited, and the audit carries no values.** `Inventory.Application.Businesses.IBusinessSettingsAudit` takes one entry per stored change — the actor's Entra `(tid, oid)` pair, the business id, the instant from `IClock`, and which settings changed as the closed `BusinessSettingsField` vocabulary — and `InventoryApi.Adapters.Businesses.LoggingBusinessSettingsAudit` emits it as one structured `ILogger` event with the request's correlation id. It is a log port rather than a table for the reason the diagnostics audit is (see [Platform diagnostics](#platform-diagnostics-issue-336)); destination and retention are platform configuration a human verifies. The event deliberately names fields and never values: no contact address, no ABN, no business name and no before-or-after of anything, so the audit trail cannot become a second, unprotected copy of the business's contact and tax detail. A save that changed nothing is not audited, because the event is evidence about a change rather than about an attempt; a rejected save and a save against a business row that has gone are not audited either, for the same reason. The actor is read **before** the write, so a change that could not be attributed is refused rather than stored with an anonymous event.
+
+**What this slice does not do.** It writes no lifecycle status (approve, reject and deactivate are #509's), touches no membership, no role and no Nayax setting, and deletes or transfers nothing. It does not change what a GST report does with `GstRegistered` — still nothing reads that flag, which stays the deliberate follow-up issue #540 described.
+
+**What proves this slice.** `BusinessSettingsPolicyTests` and `BusinessContactEmailTests` (the validation and change-set rules, including that a present zone id is deliberately *not* resolved there, and that a refusal never echoes the submitted address or ABN), `BusinessSettingsUseCaseTests` (the business coming from the membership and never the submission, validation before any write, the audit entry's contents, and nothing audited for an unchanged save, a refused one, a missing business or an unattributable actor), `BusinessSettingsPersistenceTests` (the relational read and write with two businesses present: the other business untouched, both central enforcers still refusing and storing nothing, the change set, and the zone re-derivation above), `BusinessSettingsApiTests` (the whole pipeline: an Owner's read and save, a Manager and an Operator refused on both, `401` and the missing-scope `403`, every validation rule answering `400` and storing nothing, the ABN cleared, the saved zone visible in `/api/me/access` and `/api/business/current` on the next request, and the audit event's contents including the two values it must never carry) and `EndpointAuthorizationClassificationTests`/`CapabilityAuthorizationApiTests` (the capability on each endpoint, and the role matrix).
 
 ### Platform diagnostics (issue #336)
 
@@ -2053,6 +2100,177 @@ request is in flight* leaving the new revision's status alone, and an existing c
 `409` contract and its log; `NayaxLynxClientDependencyInjectionTests` pins the base address, that
 registration needs no credential and registers none, and that the registered client is built from the
 provider.
+
+### Nayax connection checks and the Test endpoint (issue #536)
+
+Issue #536 — one slice of #506, under the contract of #328 — is how an Owner finds out whether a
+Nayax token works *before* it becomes the business's connection. The problem it solves is specific:
+new Lynx app tokens frequently authenticate perfectly and lack one or more of the permissions this
+application needs, and until now the only way to discover that was for a feature to fail in
+production. So the server runs the reads the application actually makes, reports each one on its own
+line, and holds the tested credentials as a short-lived **encrypted draft** that nothing has
+accepted yet.
+
+**The checks are the endpoints the application already calls, and they are all reads.**
+`Inventory.Domain.Nayax.NayaxConnectionCheck` is the complete, declared list, and there is one check
+per endpoint rather than one per feature — a token missing one permission is the ordinary case, and
+collapsing two endpoints into one line would hide which of them was refused:
+
+| Check | Endpoint | Scope |
+| --- | --- | --- |
+| `SignIn` | `GET devices` | Proves the token authenticates at all |
+| `Machines` | `GET machines` | Also decides whether the machine checks run |
+| `Machine` | `GET machines/{id}` | Machine-scoped |
+| `ProductCatalogue` | `GET operators/{operatorId}/products` | Operator-scoped |
+| `ProductGroups` | `GET operators/{operatorId}/productGroups` | Operator-scoped |
+| `MachineProducts` | `GET machines/{id}/machineProducts` | Machine-scoped |
+| `MachineLastSales` | `GET machines/{id}/lastSales` | Machine-scoped |
+| `MachineLastAlerts` | `GET machines/{id}/lastAlerts` | Machine-scoped |
+
+**`POST machines/{id}/machineProducts` is never called**, and it is absent from the vocabulary rather
+than merely unused: testing a connection must not change an operator's Nayax data.
+`NayaxConnectionCheckRunnerTests.No_check_ever_makes_a_write_call` asserts that over the wire for a
+success, a `401`, a `403` and a `5xx` alike.
+
+**With no machines, the machine lines read `NotChecked`.** A business connecting Nayax before its
+first machine exists has nothing to run `GET machines/{id}` against, and the same is true when the
+machine list itself could not be read. That is reported as its own status — never as a pass, because
+an untested permission must not look like a granted one, and never as a failure, because the
+credentials did nothing wrong. `NayaxConnectionCheckReport.NothingFailed` is therefore `true` while
+the only non-passing lines are unchecked ones, so the wizard of #538 can let such a business finish.
+The machine checks also run against the **first** machine only: a token either carries the machine
+permissions or it does not, and walking the estate would turn a connection test into a load test of
+somebody else's API.
+
+**What a Nayax answer means is one Domain table.**
+`Inventory.Domain.Nayax.NayaxConnectionCheckPolicy.Classify` is the only place it is decided, for the
+same reason `NayaxConnectionStatusGate` is: "lacks a permission" and "token expired" need completely
+different actions from an operator, and a second opinion written inline in an adapter is how the
+wrong one ends up on somebody's screen. The mapping is Nayax's own documented vocabulary
+([App tokens troubleshooting](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/app-tokens)):
+
+- **`401` → `InvalidOrExpiredToken`.** The documented "token is invalid or has expired".
+- **`403` → `PermissionNotGranted`.** The documented "Insufficient permissions to perform this
+  action" — a verdict on one endpoint, not on the token.
+- **`404` on an operator-scoped check → `OperatorIdMismatch`.** Only `.../operators/{operatorId}/...`
+  carries the submitted operator id, so only those two checks can answer "that operator is not one
+  this token covers". A `404` anywhere else is **not** reported as a mismatch: it would send an
+  operator to re-check a correct operator id.
+- **`5xx`, a timeout, a dropped connection or an open circuit → `NayaxUnavailable`.** Nothing was
+  learned about the credentials, so nothing is concluded about them.
+- **Anything else → `UnexpectedResponse`.** A `400`, the documented `429` rate limit, a `404` on a
+  check that carries no operator id, or a body that is not the documented shape. An answer nobody
+  has interpreted is never presented as one that has been.
+
+**The checks go through `NayaxLynxClient`, with the one thing that differs swapped.** That client is
+the single place a Nayax request is built, authenticated, sent and then accepted or rejected, and the
+runner needs exactly that — the same relative endpoints, the same `Authorization: Bearer` header, the
+same operator-id path parameter built from the same credential, the same rule that an upstream body
+is never read or logged. What differs is **only** where the credential comes from, so only the
+credential provider differs: `Inventory.Infrastructure.Nayax.NayaxConnectionCheckRunner` constructs
+the client over a private `INayaxRequestCredentialProvider` that answers with the pasted pair. Its
+status is `PendingPermissions` — the truth about a token nothing has stored or tested, and what makes
+the client report a `403` as the per-feature permission answer the test needs per line — and its
+`ReportUnauthorizedAsync` is a **no-op**: a `401` here is a verdict on credentials that have never
+been stored, so there is no revision it belongs to and no row it may touch. **A test of a bad token
+therefore cannot move a working stored connection to `NeedsAttention`**, and cannot change its
+operator id, status, revision or last-tested instant either. It gets its own `HttpClient` from the
+same base address with the same `NayaxResilienceHandler`, because "Nayax is unavailable" has to mean
+the same thing on a test as on a sync. This is **not** the gate-free re-test read of
+[issue #520](#per-business-nayax-credentials-issue-520): nothing here reads the stored connection at
+all.
+
+**The draft: encrypted, tenant-owned, actor-bound, one per business, fifteen minutes.**
+`POST /api/settings/nayax-connection/test` takes `{ operatorId, token }`, runs the checks, and stores
+the pair in the additive `NayaxConnectionTestDrafts` table through
+`Inventory.Application.Nayax.INayaxConnectionTestDraftStore`. It is deliberately **not**
+`BusinessNayaxConnections`: a draft holds credentials nothing has accepted, no Nayax call may resolve
+one, it carries no `NayaxConnectionStatus` and no credential revision, and promoting one into the
+connection is issue #537's separate, reviewed step.
+
+- **The token is stored only as ciphertext**, through #518's `INayaxTokenProtector`, with the key id
+  beside it. Holding a plaintext token for fifteen minutes to achieve a pre-flight check would defeat
+  the point of the check. The response body carries the operator id's draft but never the token, and
+  neither do the stored results, a log line or an exception.
+- **It is tenant-owned by the central mechanism.** The entity implements `IBusinessOwned`, so the
+  `AppDbContext` query filters scope every read and `BusinessOwnershipEnforcer` stamps the insert; the
+  adapter adds no business predicate of its own and refuses to run at all without a single resolved
+  business, because the replacing `DELETE` executes in the database without passing through
+  `SaveChanges`.
+- **It is bound to the Owner who created it**, by the validated Entra `(tid, oid)` pair. A draft id
+  naming another business's draft, another member's draft, or an expired one all read as *there is no
+  such draft*: distinguishing them would tell a caller that somebody else's draft exists.
+- **One draft per business, replaced by the next test.** A unique index on the ownership column makes
+  that a schema guarantee rather than a convention, so a second decryptable token cannot exist for a
+  business however the write path is called, and a superseded ciphertext is not left behind. The
+  delete and the insert are one transaction, so a failed replacement leaves the previous draft in
+  place rather than leaving the business with none.
+- **It expires after fifteen minutes** (`TestNayaxConnection.DraftLifetime`) — long enough to read
+  eight result lines and decide, short enough that an abandoned browser tab does not leave a
+  decryptable token in the database for the rest of the day. Expiry is a **read** rule, not a sweep:
+  past the instant the draft stops existing for every caller, and the row goes when the next test
+  replaces it.
+- **The returned `draftId` is opaque.** A random GUID carrying nothing about the business, the actor
+  or the credentials.
+- **It is excluded from platform diagnostics**, like `BusinessNayaxConnections` and for the same
+  reason. `PlatformDiagnosticsDataSurface` is an allow-list of table/column pairs, so a new table is
+  denied automatically until a separately reviewed change adds it — and this one must never be added.
+
+**Owner only, through the ordinary capability mechanism.** `NayaxConnectionController` declares
+`[RequireCapability(Capability.IntegrationManage)]`, which #328's table grants to an Owner alone, the
+same capability `api/settings/nayax-processing-fee-rates` carries and for the same reason. The action
+is a `POST`: it submits a secret in a body rather than a URL, it calls out to Nayax, it writes the
+draft, and a cached `GET` response would hand a caller a verdict about credentials it never tested.
+
+**The rate limit is per business, and spent before anything is sent.**
+`Inventory.Application.Nayax.NayaxConnectionTestRateLimiter` allows five runs per business per rolling
+ten minutes. The bucket is the **business**, not the actor: one run is eight calls against somebody
+else's API, a Test button is trivially clickable in a loop, and rate-limiting the actor would let a
+second Owner start again from zero against the same operator account. The window **slides**, because
+a fixed ten-minute bucket would allow five runs at the end of one and five at the start of the next.
+The allowance is claimed *before* the runner, so a refused request makes no Nayax call and stores
+nothing, and a failing run is not refunded — a failing test is exactly the run that gets repeated.
+The refusal is `429` with a `Retry-After` in seconds and a fixed sentence that names neither the
+count, the window nor the token. The window lives in memory rather than in a column, like
+`MemberProfileRefreshThrottle`'s hour: what the record of a connection holds is the connection, not
+how often somebody pressed Test, and on a single instance
+([SQLite operating assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)) in-process
+state is the whole truth.
+
+**Nothing is logged that should not be.** The runner logs nothing itself; the underlying client's one
+`Error` line for an ordinary upstream failure carries the operation, method, relative endpoint and
+status code and never the token, the authorization header or the upstream body, exactly as before.
+`NayaxConnectionCheckRunnerTests.The_token_and_the_upstream_body_never_reach_the_report_or_a_log`
+sweeps both for a success and for each refusal.
+
+**What is deliberately not here.** Saving a draft and re-testing stored credentials (#537), the
+wizard UI (#538), the connection banners (#539), the permanent credential store and provider (#500's
+own slices), and anything that creates a Nayax token or requests a permission automatically.
+
+**What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionCheckPolicyTests` — every
+documented status on every check, the two `404` readings, no answer at all, and the vocabulary itself,
+so a check, status or cause added later has to make a decision there.
+`Inventory.UnitTests/Application/Nayax/NayaxConnectionTestRateLimiterTests` — the fifth run allowed
+and the sixth refused, the sliding boundary and its `Retry-After`, a clock that moved backwards not
+reopening a slot, and one business not spending another's allowance.
+`TestNayaxConnectionTests` — the submitted credentials reaching the runner, pasted whitespace trimmed,
+a blank field refused before any call or allowance, no token in the result or the stored results,
+the fifteen-minute expiry, the opaque id, replacement, actor binding, and a rate-limited request
+calling Nayax not at all. `Inventory.IntegrationTests/Infrastructure/Nayax/NayaxConnectionCheckRunnerTests`
+— the eight endpoints called once each with the submitted bearer token, no write call ever, each
+status mapping over a fake handler, zero machines, the first machine only, a transport failure, an
+unreadable body, caller cancellation, and the token/body log sweep.
+`Adapters/Persistence/EfNayaxConnectionTestDraftStoreTests` — relational SQLite with two businesses:
+ciphertext at rest and no plaintext in any column, replacement, expiry, actor binding, cross-business
+isolation in both directions, an unscoped write refused, and a protector that cannot encrypt leaving
+the previous draft alone. `Adapters/Persistence/AddNayaxConnectionTestDraftsMigrationTests` — the
+table and its unique index arrive, a second draft per business is refused by SQLite, the stored
+connection is byte-for-byte unchanged, and nothing is backfilled.
+`Controllers/NayaxConnectionTestApiTests` — the published response shape through the real pipeline and
+the real migration history, the token never echoed, the draft encrypted and bound, a second test
+replacing the first, the stored connection untouched, `400` for a missing field, and the `429` with
+its `Retry-After`. `CapabilityAuthorizationApiTests` and
+`EndpointAuthorizationClassificationTests` carry the endpoint's capability row.
 
 ### Document storage
 
@@ -3477,6 +3695,14 @@ actor's membership, and every read it makes is scoped by the central `AppDbConte
 Issue #460 renders it; before it existed, `DashboardComponent` aggregated machine rows and totalled
 product quantities in TypeScript, which is exactly the duplication this endpoint removes.
 
+The contract described below is the one a caller whose role grants `Dashboard.ViewFinancials` - a
+Manager or an Owner - receives, and it is unchanged. Since issue #527 a caller without that
+capability is answered the same response **without** the `salesThisWeek` object and without
+`inventory.inventoryValueAtCost`, and those figures are not calculated for them at all; both
+properties are absent from the JSON rather than `null` or `0`. See
+[Dashboard financial redaction](#dashboard-financial-redaction-issue-527) for the exact two shapes
+and why absence is the chosen representation.
+
 `Inventory.Application.Dashboard.GetDashboardSummary` is the use case. It owns no formula of its
 own: every figure comes from an authority that already existed.
 
@@ -3567,7 +3793,10 @@ Products/Units In Stock/Inventory Value tiles and the permanent Admin tools bann
 reachable from the existing sidebar `Admin` group; issue #460 added no replacement alert system).
 `DashboardService.getSummary()` is the one HTTP call behind all four; a request failure clears the
 summary, so every card shows "Unavailable" rather than a fabricated zero, and the page shows a
-warning banner alongside the existing sales-sync-failure one. Angular performs no revenue,
+warning banner alongside the existing sales-sync-failure one. These four cards still assume the full
+API contract: a caller without `Dashboard.ViewFinancials` is no longer sent the sales figures or the
+valuation (issue #527, [Dashboard financial redaction](#dashboard-financial-redaction-issue-527)),
+and teaching the page not to ask for or render them is issue #503. Angular performs no revenue,
 percentage, refill, reorder or valuation calculation anywhere in this card section - every value
 and completeness flag is the backend's, read and displayed as returned (`DashboardComponent.money`
 is the one exception, formatting an already-known amount via `components/reports/report-formatting`'s
@@ -3704,7 +3933,7 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **It fails closed.** A request with no resolved business, or a business whose stored id the host's time-zone database cannot resolve, gets `Inventory.Application.Time.BusinessTimeZoneUnavailableException` from every member of the port - never `Australia/Sydney`, never the host's zone, never UTC. A substituted zone would move sales, fees, commissions and profit between business days with nothing looking wrong. The exception is not mapped to a caller-facing status: it falls through to `GlobalExceptionHandler`, which logs it and answers a generic `500`. The middleware does not refuse the whole request when a business has no usable zone (most endpoints derive no business date at all); it logs the condition, and any business-date derivation in that request fails.
 - **Maintenance commands have no business calendar, and need none.** The human-invoked `bootstrap-business`, `migrate-database` and database-backup commands run outside a request, so no business is resolved and no zone is published: resolving `IBusinessCalendar` there succeeds but every member fails closed. None of them derives a business date. `BusinessBootstrapper` creates its business with `Australia/Sydney` stated explicitly - the zone the pre-tenancy data it adopts has always been reported in - rather than relying on a default. A maintenance command that ever does need a business date must construct a `ZonedBusinessCalendar` with the zone it means, explicitly.
 - **The frontend gets the zone from the API.** `GET /api/business/current` returns `{ name, timeZoneId }` for the trusted current business, carrying the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and no identifier in either direction. It replaced the frontend's hard-coded `BUSINESS_TIME_ZONE` constant: `BusinessService` reads it once sign-in has settled and publishes the zone into `BusinessTimeZoneService`, which `BusinessDateTimePipe` and the calendar-input components read. The shell holds the routed page back until that lookup has settled, so a page on screen is one whose business context is known; a lookup that failed renders the application with dates unavailable rather than in a guessed zone. Issue #521 also surfaces the same name and zone in `GET /api/me/access` alongside the caller's role and capabilities (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)); that endpoint does not replace this one, and the frontend still reads the zone from here.
-- **A zone change applies to all history.** The owner's decision (recorded on issue #499) is that changing a business's zone later - the Owner business-settings page of issue #511 - re-derives every historical business day in the new zone, with a warning. Nothing stored is rewritten; the boundaries simply move.
+- **A zone change applies to all history.** The owner's decision (recorded on issue #499) is that changing a business's zone later re-derives every historical business day in the new zone, with a warning. Nothing stored is rewritten; the boundaries simply move. Since issue #548 that change is reachable: `PUT /api/business/settings` saves the zone, the next request resolves it from the business's own record, and every business date - for data already stored as much as for new data - is derived in the new zone, including its daylight-saving transitions. See [Business settings API](#business-settings-api-issue-548); the page that shows the warning is issue #549.
 - **Testing.** Two-business relational tests prove isolated boundaries for `Australia/Sydney` and `America/New_York`, including each zone's daylight-saving transition days in both directions (a 23-hour and a 25-hour business day), the write-path refusal, and the fail-closed read for a zone corrupted directly in the database (`PerBusinessTimeZonePersistenceTests`, `ZonedBusinessCalendarTests`, `CurrentBusinessCalendarTests`, `BusinessTimeZonesTests`, `BusinessTimeZoneMigrationTests`, `CurrentBusinessApiTests`).
 
 **No host clock inside Domain or Application (issue #310).** `Inventory.Domain` and `Inventory.Application` acquire the current time only through those two ports; the architecture test `InventoryApi.Tests.Architecture.TimeAcquisitionTests` fails if either project's source reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` (see [Testing architecture](#backend-tests)). The last six such reads were removed with the guard:
