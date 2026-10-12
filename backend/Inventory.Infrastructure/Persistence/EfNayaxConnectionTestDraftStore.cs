@@ -132,10 +132,16 @@ public sealed class EfNayaxConnectionTestDraftStore : INayaxConnectionTestDraftS
     /// database without passing through <c>BusinessOwnershipEnforcer</c>, so an unscoped statement
     /// would carry no business predicate and reach every business's draft.
     /// </summary>
-    private int RequireCurrentBusinessId() =>
-        _db.CurrentBusinessId
-            ?? throw new CrossBusinessAccessException(
-                "A Nayax connection test draft cannot be stored without a single resolved current "
-                    + "business. The caller has no business membership, or the context was "
-                    + "constructed unscoped, so the write is refused.");
+    private void RequireCurrentBusinessId()
+    {
+        if (_db.CurrentBusinessId is not null)
+        {
+            return;
+        }
+
+        throw new CrossBusinessAccessException(
+            "A Nayax connection test draft cannot be stored without a single resolved current "
+                + "business. The caller has no business membership, or the context was "
+                + "constructed unscoped, so the write is refused.");
+    }
 }

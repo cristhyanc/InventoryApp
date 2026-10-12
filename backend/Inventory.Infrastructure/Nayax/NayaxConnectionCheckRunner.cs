@@ -35,12 +35,12 @@ namespace Inventory.Infrastructure.Nayax;
 public sealed class NayaxConnectionCheckRunner : INayaxConnectionCheckRunner
 {
     private readonly HttpClient _http;
-    private readonly ILogger<NayaxLynxClient> _clientLogger;
+    private readonly ILogger<NayaxLynxClient> _logger;
 
-    public NayaxConnectionCheckRunner(HttpClient http, ILogger<NayaxLynxClient> clientLogger)
+    public NayaxConnectionCheckRunner(HttpClient http, ILogger<NayaxLynxClient> logger)
     {
         _http = http;
-        _clientLogger = clientLogger;
+        _logger = logger;
     }
 
     /// <inheritdoc />
@@ -50,7 +50,7 @@ public sealed class NayaxConnectionCheckRunner : INayaxConnectionCheckRunner
     {
         ArgumentNullException.ThrowIfNull(candidate);
 
-        var client = new NayaxLynxClient(_http, new CandidateCredentialProvider(candidate), _clientLogger);
+        var client = new NayaxLynxClient(_http, new CandidateCredentialProvider(candidate), _logger);
         var lines = new Dictionary<NayaxConnectionCheck, NayaxConnectionCheckLine>();
 
         lines[NayaxConnectionCheck.SignIn] = (await RunCheckAsync(
