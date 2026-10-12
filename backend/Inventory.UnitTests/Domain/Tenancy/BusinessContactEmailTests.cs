@@ -16,6 +16,9 @@ public class BusinessContactEmailTests
     [InlineData("owner+vending@example.com.au")]
     [InlineData("o@e.co")]
     [InlineData("Owner@Example.com")]
+    [InlineData("owner_name@example.com")]
+    [InlineData("owner-name@ex-ample.co.uk")]
+    [InlineData("owner@sub.example.com")]
     public void A_well_formed_address_is_accepted_unchanged(string submitted)
     {
         Assert.True(BusinessContactEmail.TryNormalize(submitted, out var normalized));
@@ -50,6 +53,37 @@ public class BusinessContactEmailTests
     [InlineData("owner@exa mple.com")]
     [InlineData("owner@exam\nple.com")]
     public void Anything_that_cannot_be_a_single_address_is_refused(string? submitted)
+    {
+        Assert.False(BusinessContactEmail.TryNormalize(submitted, out var normalized));
+        Assert.Null(normalized);
+    }
+
+    /// <summary>
+    /// The two addresses issue #593 reports, and the family each one belongs to. Dot-separated
+    /// labels being non-empty was never enough: <c>owner@!.com</c> has a label a host name cannot
+    /// contain, and <c>owner@example.com&gt;</c> is a mailbox that somebody pasted its delimiters
+    /// along with. Both would have been stored as the business's published contact address.
+    /// </summary>
+    [Theory]
+    [InlineData("owner@!.com")]
+    [InlineData("owner@example.com>")]
+    [InlineData("<owner@example.com>")]
+    [InlineData("owner@exa*mple.com")]
+    [InlineData("owner@exa_mple.com")]
+    [InlineData("owner@exa(mple).com")]
+    [InlineData("owner@-example.com")]
+    [InlineData("owner@example-.com")]
+    [InlineData("owner@example.c0m")]
+    [InlineData("owner@example.c")]
+    [InlineData("owner;second@example.com")]
+    [InlineData("owner,second@example.com")]
+    [InlineData("\"owner\"@example.com")]
+    [InlineData("owner(comment)@example.com")]
+    [InlineData("owner[1]@example.com")]
+    [InlineData(".owner@example.com")]
+    [InlineData("owner.@example.com")]
+    [InlineData("owner..name@example.com")]
+    public void A_malformed_domain_or_a_stray_mailbox_delimiter_is_refused(string submitted)
     {
         Assert.False(BusinessContactEmail.TryNormalize(submitted, out var normalized));
         Assert.Null(normalized);
