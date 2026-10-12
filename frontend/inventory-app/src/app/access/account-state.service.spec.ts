@@ -1,32 +1,27 @@
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
-import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
-import { BehaviorSubject, Subject, filter, firstValueFrom, of, throwError } from 'rxjs';
-import { ConfigService } from '../services/config.service';
+import { HttpErrorResponse } from '@angular/common/http';
+import { EventType, InteractionStatus } from '@azure/msal-browser';
+import { Subject, filter, firstValueFrom, of, throwError } from 'rxjs';
 import { AccountStateAnswer, AccountStateService } from './account-state.service';
-
-function account(homeAccountId: string): AccountInfo {
-  return { homeAccountId, username: `${homeAccountId}@example.test` } as unknown as AccountInfo;
-}
+import {
+  IdentityCacheHarness,
+  apiConfig,
+  describeIdentityChange,
+  queuedReads,
+  readingHttp,
+  signedInIdentity
+} from './identity-cache.spec-helpers';
 
 const MEMBER_RESPONSE = { state: 'Member', onboardingEnabled: false, rejectionReason: null };
 const REVOKED_RESPONSE = { state: 'MembershipRevoked', onboardingEnabled: true, rejectionReason: null };
 
-interface Harness {
-  service: AccountStateService;
-  get: jest.Mock;
-  inProgress$: BehaviorSubject<InteractionStatus>;
-  signIn(accountId: string | null): void;
-  raise(eventType: EventType): void;
-  observe(): AccountStateAnswer[];
-}
+type Harness = IdentityCacheHarness<AccountStateService, AccountStateAnswer>;
 
 /**
  * The service is constructed directly, with only its one `GET` doubled, for the same reason
  * `access.service.spec.ts` does: a stub that re-implemented the account-state answer would be
  * testing itself. This is a sibling cache to `AccessService`, built and invalidated the same way
  * (issue #529), so these tests mirror `access.service.spec.ts`'s rather than re-deriving each
- * trigger's rationale, which is documented there.
+ * trigger's rationale, which is documented there, and both specs share the same doubles.
  */
 function configure(
   options: {
@@ -35,35 +30,16 @@ function configure(
     responses?: (() => unknown)[];
   } = {}
 ): Harness {
-  let signedIn = options.signedIn === undefined ? 'member-1' : options.signedIn;
-  const responses = [...(options.responses ?? [])];
-  const get = jest.fn(() => {
-    const next = responses.shift();
-    return next === undefined ? of(MEMBER_RESPONSE) : next();
-  });
-  const inProgress$ = new BehaviorSubject(options.interaction ?? InteractionStatus.None);
-  const msalSubject$ = new Subject<EventMessage>();
-
-  const service = new AccountStateService(
-    { get } as unknown as HttpClient,
-    { apiBaseUrl: '/api' } as unknown as ConfigService,
-    {
-      instance: {
-        getActiveAccount: () => (signedIn === null ? null : account(signedIn)),
-        getAllAccounts: () => (signedIn === null ? [] : [account(signedIn)])
-      }
-    } as unknown as MsalService,
-    { inProgress$, msalSubject$ } as unknown as MsalBroadcastService
-  );
+  const identity = signedInIdentity(options);
+  const get = queuedReads(options.responses ?? [], MEMBER_RESPONSE);
+  const service = new AccountStateService(readingHttp(get), apiConfig(), identity.msal, identity.broadcast);
 
   return {
     service,
     get,
-    inProgress$,
-    signIn: (accountId) => {
-      signedIn = accountId;
-    },
-    raise: (eventType) => msalSubject$.next({ eventType } as EventMessage),
+    inProgress$: identity.inProgress$,
+    signIn: identity.signIn,
+    raise: identity.raise,
     observe: () => {
       const observed: AccountStateAnswer[] = [];
       service.state$.subscribe((answer) => observed.push(answer));
@@ -295,132 +271,21 @@ describe('AccountStateService refresh triggers (issue #529)', () => {
 
 /**
  * An actual change of signed-in identity owns the answer from the moment it happens (issue #603) -
- * the same rule, for the same reason, as `access.service.spec.ts`'s identity-change suite: the
- * previous person's account state is not a weaker answer for the new one, and routing anybody on
- * it, even for a moment, routes them as somebody else.
+ * the same rule, for the same reason, as `AccessService`: the previous person's account state is
+ * not a weaker answer for the new one, and routing anybody on it, even for a moment, routes them
+ * as somebody else. The suite both caches are asserted against lives in
+ * `identity-cache.spec-helpers.ts`.
  */
-describe('AccountStateService identity change (issue #603)', () => {
-  it('drops the previous identity’s answer before the new identity’s read answers', () => {
-    const pending = new Subject<unknown>();
-    const { signIn, raise, observe } = configure({ responses: [() => of(MEMBER_RESPONSE), () => pending] });
-    const observed = observe();
-    expect(statuses(observed)).toEqual(['known']);
-
-    signIn('member-2');
-    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
-
-    expect(statuses(observed)).toEqual(['known', 'unread']);
-
-    pending.next(REVOKED_RESPONSE);
-    pending.complete();
-
-    expect(statuses(observed)).toEqual(['known', 'unread', 'known']);
-  });
-
-  it('answers a subscriber that arrives while the new read is pending from the new identity', async () => {
-    const pending = new Subject<unknown>();
-    const { service, signIn, raise, observe } = configure({
-      responses: [() => of(MEMBER_RESPONSE), () => pending]
-    });
-    observe();
-
-    signIn('member-2');
-    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
-    // What `accountStateGuard` subscribes to: the first answer that is not "nothing asked yet".
-    const answered = firstValueFrom(service.state$.pipe(filter((answer) => answer.status !== 'unread')));
-
-    pending.next(REVOKED_RESPONSE);
-    pending.complete();
-
-    const answer = await answered;
+describeIdentityChange<AccountStateService, AccountStateAnswer>({
+  subject: 'AccountStateService',
+  answered: 'known',
+  firstResponse: MEMBER_RESPONSE,
+  secondResponse: REVOKED_RESPONSE,
+  configure: (responses) => configure({ responses }),
+  // What `accountStateGuard` subscribes to: the first answer that is not "nothing asked yet".
+  guardAnswer: async ({ service }) => {
+    const published = service.state$.pipe(filter((answer) => answer.status !== 'unread'));
+    const answer = await firstValueFrom(published);
     expect(answer.status === 'known' && answer.accountState.state).toBe('MembershipRevoked');
-  });
-
-  it('publishes nothing for an identity two switches ago, and reads each switch once', async () => {
-    const first = new Subject<unknown>();
-    const second = new Subject<unknown>();
-    const { service, get, signIn, raise, observe } = configure({
-      responses: [() => first, () => second, () => of(REVOKED_RESPONSE)]
-    });
-    const observed = observe();
-
-    signIn('member-2');
-    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
-    signIn('member-3');
-    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
-    expect(get).toHaveBeenCalledTimes(3);
-
-    first.next(MEMBER_RESPONSE);
-    first.complete();
-    second.next(MEMBER_RESPONSE);
-    second.complete();
-
-    expect(statuses(observed)).toEqual(['unread', 'known']);
-    const answer = await firstValueFrom(service.state$);
-    expect(answer.status === 'known' && answer.accountState.state).toBe('MembershipRevoked');
-  });
-
-  it('leaves the new identity’s read pending when the previous identity answers last', () => {
-    const stale = new Subject<unknown>();
-    const current = new Subject<unknown>();
-    const { service, get, signIn, raise, observe } = configure({ responses: [() => stale, () => current] });
-    const observed = observe();
-
-    signIn('member-2');
-    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
-    expect(get).toHaveBeenCalledTimes(2);
-
-    stale.next(MEMBER_RESPONSE);
-    stale.complete();
-    service.refreshUnlessReading();
-
-    expect(get).toHaveBeenCalledTimes(2);
-    expect(statuses(observed)).toEqual(['unread']);
-  });
-
-  it('issues one read when an account event and the settling interaction report one change', () => {
-    const { get, inProgress$, signIn, raise, observe } = configure();
-    observe();
-    expect(get).toHaveBeenCalledTimes(1);
-
-    inProgress$.next(InteractionStatus.HandleRedirect);
-    signIn('member-2');
-    raise(EventType.ACTIVE_ACCOUNT_CHANGED);
-    expect(get).toHaveBeenCalledTimes(1);
-
-    inProgress$.next(InteractionStatus.None);
-
-    expect(get).toHaveBeenCalledTimes(2);
-  });
-
-  it('clears the answer and the pending read on a sign-out, without reading again', () => {
-    const pending = new Subject<unknown>();
-    const { service, get, signIn, raise, observe } = configure({
-      responses: [() => of(MEMBER_RESPONSE), () => pending]
-    });
-    const observed = observe();
-    service.refresh();
-
-    signIn(null);
-    raise(EventType.LOGOUT_SUCCESS);
-    pending.next(REVOKED_RESPONSE);
-    pending.complete();
-
-    expect(get).toHaveBeenCalledTimes(2);
-    expect(statuses(observed)).toEqual(['known', 'unread']);
-  });
-
-  it('keeps its own answer published while a same-identity refresh is in flight', () => {
-    const pending = new Subject<unknown>();
-    const { service, observe } = configure({ responses: [() => of(MEMBER_RESPONSE), () => pending] });
-    const observed = observe();
-
-    service.refresh();
-    expect(statuses(observed)).toEqual(['known']);
-
-    pending.next(REVOKED_RESPONSE);
-    pending.complete();
-
-    expect(statuses(observed)).toEqual(['known', 'known']);
-  });
+  }
 });

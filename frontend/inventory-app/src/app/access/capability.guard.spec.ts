@@ -1,15 +1,13 @@
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
 import { Subject, of, throwError } from 'rxjs';
-import { ConfigService } from '../services/config.service';
 import { AccessNotAllowedComponent } from './access-not-allowed.component';
 import { AccessService } from './access.service';
 import { CAPABILITIES } from './capabilities';
 import { ACCESS_NOT_ALLOWED_PATH, requireCapability } from './capability.guard';
+import { apiConfig, readingHttp, signedInIdentity } from './identity-cache.spec-helpers';
 
 @Component({ standalone: true, template: 'reports' })
 class ReportsPageComponent {}
@@ -19,10 +17,6 @@ class AdminPageComponent {}
 
 @Component({ standalone: true, template: 'dashboard' })
 class DashboardPageComponent {}
-
-function account(homeAccountId: string): AccountInfo {
-  return { homeAccountId } as unknown as AccountInfo;
-}
 
 /** The Operator and Owner rows of #328's table, written out rather than derived. */
 const OPERATOR_CAPABILITIES = ['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate'];
@@ -39,23 +33,13 @@ interface Guarded {
 }
 
 /**
- * The guard is exercised against the real `AccessService`, with only its one `GET` doubled: a stub
- * that re-implemented the capability answer would be testing itself.
+ * The guard is exercised against the real `AccessService`, with only its one `GET` and MSAL's two
+ * signals doubled (`identity-cache.spec-helpers`): a stub that re-implemented the capability
+ * answer would be testing itself.
  */
 async function withGuards(read: () => unknown): Promise<Guarded> {
-  let signedIn = 'member-1';
-  const msalSubject$ = new Subject<EventMessage>();
-  const access = new AccessService(
-    { get: read } as unknown as HttpClient,
-    { apiBaseUrl: '/api' } as unknown as ConfigService,
-    {
-      instance: {
-        getActiveAccount: () => account(signedIn),
-        getAllAccounts: () => [account(signedIn)]
-      }
-    } as unknown as MsalService,
-    { inProgress$: of(InteractionStatus.None), msalSubject$ } as unknown as MsalBroadcastService
-  );
+  const identity = signedInIdentity();
+  const access = new AccessService(readingHttp(read), apiConfig(), identity.msal, identity.broadcast);
 
   await TestBed.configureTestingModule({
     providers: [
@@ -73,14 +57,7 @@ async function withGuards(read: () => unknown): Promise<Guarded> {
     ]
   }).compileComponents();
 
-  return {
-    router: TestBed.inject(Router),
-    access,
-    switchAccount: (accountId) => {
-      signedIn = accountId;
-      msalSubject$.next({ eventType: EventType.ACTIVE_ACCOUNT_CHANGED } as EventMessage);
-    }
-  };
+  return { router: TestBed.inject(Router), access, switchAccount: identity.switchAccount };
 }
 
 async function renderAccessNotAllowed(): Promise<HTMLElement> {

@@ -2985,6 +2985,9 @@ there is no window in which the previous account's capabilities are still the pu
   identity's own answer, because `unread` ("nothing has been asked yet") stays deliberately
   different from `unavailable` ("asked, and could not be answered"), and only the second one is the
   documented fail-open case;
+- a subscriber that is *already* holding an answer is told the grant is withdrawn rather than left
+  with the previous member's `true`, which is what takes the supplier GST editor's Save control
+  away the moment the account changes;
 - the sidebar's long-lived subscription re-renders with no destination at all for that window,
   rather than keeping the previous member's menu — the same empty menu it renders before the first
   answer, and for the same reason;
@@ -2998,12 +3001,24 @@ there is no window in which the previous account's capabilities are still the pu
   unchanged and keeps its own answer published while it runs: it is re-reading the same person's
   capabilities, and blanking the menu on a routine refresh would help nobody.
 
-A live `allows(...)` answer is filtered rather than reset while the new read is pending — a
-subscriber that already holds a boolean keeps it until the new identity answers, which is bounded
-by that one read and resolves to the new member's answer (the alternative, emitting the fail-open
-`true` for a pending read, would let a guard decide a navigation from an answer nobody has given
-yet). The one capability-gated control, the supplier GST defaults editor, therefore behaves in that
-window exactly as it does on an unanswered read.
+**A live `allows(...)` answer is withdrawn, never left standing.** The two consumers of that
+boolean need opposite things from a pending read, and `allowsAny` gives each of them theirs:
+
+- a subscriber that has **never** had an answer receives nothing while the read is pending. That is
+  what lets `requireCapability` wait for the new identity instead of deciding a navigation from an
+  answer nobody has given yet, and it is why emitting the fail-open `true` for a pending read would
+  be wrong.
+- a subscriber that has **already** received `true` is corrected. Once an answer has been
+  published, a return to `unread` reports `false` until the new identity's own answer arrives,
+  because another answer is the only way to tell a control that is already rendered that the grant
+  it was given belonged to somebody else. The one capability-gated control, the supplier GST
+  defaults editor, therefore loses its Save control the moment the signed-in account changes, and
+  gets it back only if the new member's own capability set holds `Suppliers.ManageGstDefaults`; a
+  late answer for the superseded identity restores nothing, and `save()` issues no `PUT` in the
+  meantime.
+
+The fail-open rule is unchanged, and it belongs to the identity signed in now: an `unavailable`
+answer for *that* identity reports `true` again, exactly as it always has.
 
 **A read that cannot be answered hides nothing.** `unavailable` — nobody signed in, a refusal, a
 failed request — leaves every menu entry, route and action exactly as it was before capabilities
@@ -3070,10 +3085,15 @@ knowing a figure yet is a different thing from having been told it is not this m
 **What proves this slice.** `access.service.spec.ts` (the cached read, the fifteen-name vocabulary,
 an undeclared name dropped, the MSAL wait, every refresh trigger including the five-minute focus
 boundary either side, the refusal trigger coalescing, a superseded answer discarded, the fail-open
-answer for every unreadable case, and issue #603's identity change: the previous answer dropped
-before the new read answers, a subscriber arriving mid-read answered from the new identity, rapid
-A→B→C switches, a previous identity answering last, one read for the duplicated MSAL notifications,
-a sign-out with a read in flight, and a same-identity refresh keeping its own answer),
+answer for every unreadable case, and — for issue #603 — the withdrawal a long-lived `allows(...)`
+subscriber is told about: the permission cleared while the new identity's read is still pending, a
+late answer for the previous identity unable to restore it, the fail-open `true` returning for the
+new identity's own unreadable read, and a subscriber arriving in the window still waiting),
+`identity-cache.spec-helpers.ts` (the identity-change suite both caches are asserted against,
+written once because they are siblings: the previous answer dropped before the new read answers, a
+subscriber arriving mid-read answered from the new identity, rapid A→B→C switches, a previous
+identity answering last, one read for the duplicated MSAL notifications, a sign-out with a read in
+flight, and a same-identity refresh keeping its own answer),
 `navigation.spec.ts` (the per-role menus, written out literally from #328's table, a partly-allowed
 group, the empty and unknown capability sets, and the diagnostics link's independence),
 `sidebar-nav.component.spec.ts` (the rendered menu per role, no destination before the first answer,
@@ -3084,8 +3104,11 @@ capabilities, and the page naming no capability or role), `app.routes.spec.ts` (
 route guarded, the two exceptions, and `MsalGuard` first),
 `access-forbidden.interceptor.spec.ts` (the `403`
 trigger, the excluded access read and assets, and every other status ignored),
-`supplier-gst-defaults.component.spec.ts` (the hidden Save, the read-only pickers, no `PUT`, and the
-control returning on a refresh) and `dashboard.component.spec.ts` (the redacted summary rendering
+`supplier-gst-defaults.component.spec.ts` (the hidden Save, the read-only pickers, no `PUT`, the
+control returning on a refresh, and — against the real service — the Save control taken away the
+moment the signed-in account changes, no `PUT` issued in that window, a late answer for the
+previous account restoring nothing, and the control returning only on the new account's own
+answer) and `dashboard.component.spec.ts` (the redacted summary rendering
 the two non-financial cards, with no `$0.00` and no withheld figure anywhere).
 
 ### Account-state routing, the access-unavailable page and the global 403 handler (issue #529)
@@ -3182,10 +3205,11 @@ lookup, for the same fail-open reason the guard does: the endpoint itself remain
 
 **What proves this slice.** `account-state.service.spec.ts` (mirroring `access.service.spec.ts`:
 the cached read, every refresh trigger, the unknown-state fallback, a superseded answer discarded,
-and issue #603's identity-change suite - the previous answer dropped before the new read answers, a
-subscriber arriving mid-read answered from the new identity, rapid switches, a previous identity
-answering last, one read for the duplicated MSAL notifications, a sign-out with a read in flight,
-and a same-identity refresh keeping its own answer), `account-state.guard.spec.ts` (routing for
+and issue #603's shared identity-change suite from `identity-cache.spec-helpers.ts`, asserted
+against this cache too - the previous answer dropped before the new read answers, a subscriber
+arriving mid-read answered from the new identity, rapid switches, a previous identity answering
+last, one read for the duplicated MSAL notifications, a sign-out with a read in flight, and a
+same-identity refresh keeping its own answer), `account-state.guard.spec.ts` (routing for
 every state, the fail-open answer, reading once for several navigations, and waiting for the new
 account instead of routing on the previous account's state),
 `access-unavailable.component.spec.ts` (the per-state

@@ -14,6 +14,7 @@ import {
   merge,
   of,
   shareReplay,
+  skipWhile,
   switchMap,
   take,
   takeUntil,
@@ -54,6 +55,23 @@ export type MemberAccessState =
 const UNREAD: MemberAccessState = { status: 'unread' };
 const UNAVAILABLE: MemberAccessState = { status: 'unavailable' };
 
+/**
+ * Whether `state` grants at least one of `capabilities`, or `undefined` while nothing has been
+ * read: "not known yet" is not the same answer as "not granted", and only the caller knows which
+ * of the two it can act on. An unreadable capability set grants it - the fail-open rule documented
+ * on {@link AccessService}.
+ */
+function grantedBy(state: MemberAccessState, capabilities: readonly Capability[]): boolean | undefined {
+  switch (state.status) {
+    case 'unread':
+      return undefined;
+    case 'granted':
+      return capabilities.some((capability) => state.access.capabilities.has(capability));
+    default:
+      return true;
+  }
+}
+
 /** The MSAL events that mean the signed-in identity may have changed. */
 const ACCOUNT_EVENTS: ReadonlySet<string> = new Set<string>([
   EventType.LOGIN_SUCCESS,
@@ -86,14 +104,16 @@ const ACCOUNT_EVENTS: ReadonlySet<string> = new Set<string>([
  *   **A changed identity owns the answer from the moment it changes** (issue #603). The previous
  *   identity's capabilities are dropped before the new read is issued or even waited for, so the
  *   published answer goes back to `unread` and stays there until the new identity's own answer
- *   arrives: a guard activated in that window waits for it, and the shell renders no capability
- *   at all rather than the previous member's. The cache then belongs to no identity until the new
- *   read reaches one, which is what makes the account event and the settling interaction that
- *   both report one change read it once. An answer from the superseded read is discarded whenever
- *   it arrives - including after rapid switches - and cannot clear the current read's pending
- *   state either. A same-identity re-read (an explicit {@link refresh}, a `403`, a stale window)
- *   keeps its own answer published while it runs, because it is re-reading the same person's
- *   capabilities;
+ *   arrives: a guard activated in that window waits for it, the shell renders no capability at
+ *   all rather than the previous member's, and a page already rendering an action is told the
+ *   grant is withdrawn - {@link allowsAny} reports `false` for the window, because a subscriber
+ *   that received `true` can be corrected only by another answer. The cache then belongs to no
+ *   identity until the new read reaches one, which is what makes the account event and the
+ *   settling interaction that both report one change read it once. An answer from the superseded
+ *   read is discarded whenever it arrives - including after rapid switches - and cannot clear the
+ *   current read's pending state either. A same-identity re-read (an explicit {@link refresh}, a
+ *   `403`, a stale window) keeps its own answer published while it runs, because it is re-reading
+ *   the same person's capabilities;
  * - **any `403` from a member endpoint** - the member's role may have changed since the cache was
  *   filled, so `accessForbiddenInterceptor` calls {@link refreshUnlessReading}. A `403` from
  *   `GET /api/me/access` itself is excluded there, so a refusal can never drive a refresh loop;
@@ -172,15 +192,21 @@ export class AccessService implements OnDestroy {
   /**
    * Whether the member's role grants at least one of `capabilities` - what a page reachable
    * through several of them (the Admin hub) needs. An empty list is granted by nothing.
+   *
+   * **It waits for the first answer, and withdraws a grant the identity change takes away**
+   * (issue #603). Nothing is emitted while the capabilities have never been read, so a guard
+   * activating then waits for the answer instead of being refused a page their own role may well
+   * allow. Once an answer has been published, a return to `unread` is an identity change: the
+   * answer belonged to somebody else, so the grant is reported as withdrawn until the new
+   * identity's own answer arrives. A subscriber that is already rendering the action cannot be
+   * told any other way, and leaving the previous member's `true` as the last thing it heard is
+   * what kept the supplier GST editor's Save control enabled for the next member's role.
    */
   allowsAny(capabilities: readonly Capability[]): Observable<boolean> {
     return this.access$.pipe(
-      filter((state) => state.status !== 'unread'),
-      map((state) =>
-        state.status === 'granted'
-          ? capabilities.some((capability) => state.access.capabilities.has(capability))
-          : true
-      ),
+      map((state) => grantedBy(state, capabilities)),
+      skipWhile((granted) => granted === undefined),
+      map((granted) => granted ?? false),
       distinctUntilChanged()
     );
   }

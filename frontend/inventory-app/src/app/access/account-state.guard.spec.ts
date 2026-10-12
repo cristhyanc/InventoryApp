@@ -1,13 +1,11 @@
-import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { HttpErrorResponse } from '@angular/common/http';
 import { Component } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
 import { Subject, of, throwError } from 'rxjs';
-import { ConfigService } from '../services/config.service';
 import { AccountState, AccountStateName, AccountStateService } from './account-state.service';
 import { ACCOUNT_STATE_ROUTE, accountStateGuard } from './account-state.guard';
+import { apiConfig, readingHttp, signedInIdentity } from './identity-cache.spec-helpers';
 
 @Component({ standalone: true, template: 'dashboard' })
 class DashboardPageComponent {}
@@ -23,10 +21,6 @@ class RejectedPageComponent {}
 
 @Component({ standalone: true, template: 'unavailable' })
 class UnavailablePageComponent {}
-
-function account(homeAccountId: string): AccountInfo {
-  return { homeAccountId } as unknown as AccountInfo;
-}
 
 function response(state: AccountStateName, onboardingEnabled = false): unknown {
   return { state, onboardingEnabled, rejectionReason: null };
@@ -45,19 +39,8 @@ interface Guarded {
  * re-implemented the account-state answer would be testing itself.
  */
 async function withGuard(read: () => unknown): Promise<Guarded> {
-  let signedIn = 'member-1';
-  const msalSubject$ = new Subject<EventMessage>();
-  const accountState = new AccountStateService(
-    { get: read } as unknown as HttpClient,
-    { apiBaseUrl: '/api' } as unknown as ConfigService,
-    {
-      instance: {
-        getActiveAccount: () => account(signedIn),
-        getAllAccounts: () => [account(signedIn)]
-      }
-    } as unknown as MsalService,
-    { inProgress$: of(InteractionStatus.None), msalSubject$ } as unknown as MsalBroadcastService
-  );
+  const identity = signedInIdentity();
+  const accountState = new AccountStateService(readingHttp(read), apiConfig(), identity.msal, identity.broadcast);
 
   await TestBed.configureTestingModule({
     providers: [
@@ -72,14 +55,7 @@ async function withGuard(read: () => unknown): Promise<Guarded> {
     ]
   }).compileComponents();
 
-  return {
-    router: TestBed.inject(Router),
-    accountState,
-    switchAccount: (accountId) => {
-      signedIn = accountId;
-      msalSubject$.next({ eventType: EventType.ACTIVE_ACCOUNT_CHANGED } as EventMessage);
-    }
-  };
+  return { router: TestBed.inject(Router), accountState, switchAccount: identity.switchAccount };
 }
 
 /**

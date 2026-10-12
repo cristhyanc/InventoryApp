@@ -1,14 +1,11 @@
-import { HttpClient } from '@angular/common/http';
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
 import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService, MemberAccess, MemberAccessState } from '../access/access.service';
 import { CAPABILITIES, Capability, capabilitySet } from '../access/capabilities';
+import { apiConfig, queuedReads, readingHttp, signedInIdentity } from '../access/identity-cache.spec-helpers';
 import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
-import { ConfigService } from '../services/config.service';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './sidebar-nav.component';
 import { NavGroup, navLinks, primaryNavigation } from './navigation';
@@ -425,33 +422,13 @@ describe('SidebarNavComponent menu across an account change (issue #603)', () =>
     timeZoneId: 'Australia/Sydney'
   };
 
-  function account(homeAccountId: string): AccountInfo {
-    return { homeAccountId } as unknown as AccountInfo;
-  }
-
   /** The real service, with only its one `GET` and MSAL's two signals doubled. */
   function accessWithSwitch(reads: (() => unknown)[]): { access: AccessService; switchAccount(id: string): void } {
-    let signedIn = 'member-1';
-    const msalSubject$ = new Subject<EventMessage>();
-    const access = new AccessService(
-      { get: () => (reads.shift() as () => unknown)() } as unknown as HttpClient,
-      { apiBaseUrl: '/api' } as unknown as ConfigService,
-      {
-        instance: {
-          getActiveAccount: () => account(signedIn),
-          getAllAccounts: () => [account(signedIn)]
-        }
-      } as unknown as MsalService,
-      { inProgress$: of(InteractionStatus.None), msalSubject$ } as unknown as MsalBroadcastService
-    );
+    const identity = signedInIdentity();
+    const read = queuedReads(reads, OPERATOR_RESPONSE);
+    const access = new AccessService(readingHttp(read), apiConfig(), identity.msal, identity.broadcast);
 
-    return {
-      access,
-      switchAccount: (id) => {
-        signedIn = id;
-        msalSubject$.next({ eventType: EventType.ACTIVE_ACCOUNT_CHANGED } as EventMessage);
-      }
-    };
+    return { access, switchAccount: identity.switchAccount };
   }
 
   it('offers no destination while the new account’s capabilities are still being read', async () => {
