@@ -5,6 +5,7 @@ import { accountStateGuard } from './access/account-state.guard';
 import { platformAdminGuard } from './access/platform-admin.guard';
 import { AccessNotAllowedComponent } from './access/access-not-allowed.component';
 import { AccessUnavailableComponent } from './access/access-unavailable.component';
+import { InviteAcceptanceComponent } from './access/invite-acceptance.component';
 import { OnboardingPlaceholderComponent } from './access/onboarding-placeholder.component';
 import { routes } from './app.routes';
 import { StockHistoryPageComponent } from './components/stock/stock-history-page.component';
@@ -225,8 +226,9 @@ describe('account-state routing (issue #529)', () => {
     expect(route('application-rejected').component).toBe(OnboardingPlaceholderComponent);
   });
 
-  it('serves the invite placeholder behind authentication alone', () => {
-    expect(route('invite/:token').component).toBe(OnboardingPlaceholderComponent);
+  it('serves the invite acceptance page behind authentication alone (issue #535)', async () => {
+    expect(route('invite/:token').canActivate).toEqual([MsalGuard]);
+    await expect(loadedComponent('invite/:token')).resolves.toBe(InviteAcceptanceComponent);
   });
 
   it('serves the real access-unavailable page, behind authentication alone', () => {

@@ -659,14 +659,15 @@ token undecryptable.
   issue #506 now exists as well — test a pasted operator id and token (#536), save the tested pair
   and re-test the stored one (#537; see
   [docs/architecture.md § Saving a tested connection and re-testing it](architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)).
-  Since issue #541 the *application* side of onboarding exists too, behind a flag that is off by
-  default and gated as
-  [Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541) describes. What is
-  still missing is the rest of the journey: approving or rejecting an application is #509's, the
-  application and approval pages are #508's and #509's, and the Nayax endpoints above have no user
-  interface yet (the wizard is #538 and the banners #539), so in practice a credential still reaches
-  the database through that human-run command. Do not add a second live business until the flow is
-  complete.
+  Issue #538 added the Owner-facing wizard over those endpoints on Admin → Nayax Settings (see
+  [docs/architecture.md § The Nayax connection wizard](architecture.md#the-nayax-connection-wizard-issue-538)),
+  so an Owner can now connect, save and re-test their own account from the application. Since
+  issue #541 the *application* side of onboarding exists too, behind a flag that is off by default
+  and gated as [Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541)
+  describes. What is still missing is the rest of the journey: approving or rejecting an
+  application is #509's, the application and approval pages are #508's and #509's, and the
+  connection banners are #539's; the business that is live today had its credential moved in by
+  that human-run command. Do not add a second live business until the flow is complete.
 - **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred, and still
   **required**. This is an outstanding integrity step, not a decision that the constraint is
   unnecessary.
