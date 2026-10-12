@@ -162,10 +162,12 @@ stored value.
 Give each member their own `Role` key (`Members:1:Role`, and so on); one entry's role never carries
 onto another. Re-running the command never changes the role an existing member already holds, for
 the same reason it never resurrects a revoked approval — so a role cannot be corrected by editing
-this configuration and running again. Today a role is set when the membership row is created and
-changed only by a human directly in the database; the members page that will change one is issue
-#524. A signed-in member can see their own role and capabilities at `GET /api/me/access`, and a
-change applies on their next request.
+this configuration and running again. A role is set when the membership row is created and changed
+afterwards through the Owner-only `PUT /api/members/{membershipId}/role` (issue #533), which also
+revokes and reinstates a membership and always keeps the business at least one active Owner — see
+[docs/architecture.md § Member management](architecture.md#member-management-list-role-revoke-and-reinstate-issue-533).
+The Users page that will drive it is issue #505. A signed-in member can see their own role and
+capabilities at `GET /api/me/access`, and a change applies on their next request.
 
 Since issues #525 and #526 the role a member is given decides what the API lets them call, rather
 than only describing them: every endpoint requires the capability its caller's role must grant and
@@ -379,8 +381,10 @@ business's ledger, and neither is a decision a migration may make unattended.
    it again rather than applying with the problem still present.
 
 Note that until the duplicate exists the index never fires: the application's single live business
-cannot produce this state through any supported path, and no request path creates, revokes or
-reactivates a membership today. A database that has it, has it from a hand-written change.
+cannot produce this state through any supported path. No request path creates a membership today,
+and the one path that revokes or reinstates one — the Owner-only member management of issue #533 —
+re-checks this exact rule inside the write transaction the index backs up, so it refuses rather than
+creates the state. A database that has it, has it from a hand-written change.
 
 ## Migrating the Nayax connection into the business (issue #519)
 

@@ -242,7 +242,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
 | **Operator** | Day-to-day work only: the dashboard without financial figures, the pick list, inventory (products, take inventory, categories, stock history, machines including Sync Restock, sites) and purchasing (purchases, supplier orders, suppliers) |
 
 - A signed-in member reads their own role and the capability names it grants from `GET /api/me/access`, which also returns their business's name and time zone. It describes the caller alone — never another member or another business — and a role change applies on their next request.
-- A role is set when the membership is created, by `bootstrap-business` (its `Role` option is optional and defaults to `Owner`; see [docs/tenant-rollout.md](docs/tenant-rollout.md#the-members-role-issue-521)). Existing memberships were backfilled to `Owner`, so no one's access changed when roles arrived, and nothing accepts a role from client input.
+- A role is first set when the membership is created, by `bootstrap-business` (its `Role` option is optional and defaults to `Owner`; see [docs/tenant-rollout.md](docs/tenant-rollout.md#the-members-role-issue-521)). Existing memberships were backfilled to `Owner`, so no one's access changed when roles arrived. Changing a role afterwards is the Owner-only member management below; nothing else accepts a role from client input, and no endpoint accepts a stored role value, only its published name.
 - A stored role the application does not recognise **denies access** rather than falling back to the least privileged role.
 - **Every endpoint is enforced by capability** (issues #525 and #526). The capability a role must grant is checked before the request reaches the endpoint, and a refusal is a plain `403` that describes neither the capability nor the role. What each role can reach:
   - **Operator** — the Dashboard (including its sales refresh) and the Pick List; inventory: products, take inventory, categories, stock and stock history, machines including Sync Restock, and sites; purchasing: purchases, supplier orders and suppliers. They may record a purchase but not change a supplier's GST defaults (`Suppliers.ManageGstDefaults`), and they reach no report, expense, import, site commission, setting or maintenance tool at all.
@@ -252,6 +252,27 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
   - Since every current member is an Owner, nothing changed for anybody using the application today, and the Angular menu still shows entries a role cannot reach — the API is the boundary, and hiding an entry is separate work.
   - The capability vocabulary and the one role → capability table are described in [docs/architecture.md](docs/architecture.md#membership-roles-and-capabilities-issue-521), how they are enforced in [docs/architecture.md § Capability authorization](docs/architecture.md#capability-authorization-issue-525), and the full matrix by page and endpoint in [docs/architecture.md § Capability authorization on the Manager and Owner endpoints](docs/architecture.md#capability-authorization-on-the-manager-and-owner-endpoints-issue-526).
 
+### Managing members: changing a role and revoking access
+
+An Owner manages their own business's members through four endpoints (issue #533). They require `Members.Manage`, which only an Owner holds, so a Manager and an Operator get a plain `403` — the list included, because it is the roster the changes are made from and it shows every member's name and email address. No Angular page calls them yet; the Users page is separate work.
+
+```text
+GET  /api/members                              display name, email, role, active, joined
+PUT  /api/members/{membershipId}/role          { "role": "Owner" | "Manager" | "Operator" }
+POST /api/members/{membershipId}/revoke
+POST /api/members/{membershipId}/reinstate
+```
+
+- **Everything is scoped to the caller's own business.** No endpoint takes a business id, and a membership id belonging to another business is simply **not found** — an Owner holds every capability there is and still reaches nothing of another business's.
+- **Changes apply on that member's next request.** A demoted member's next call is answered with their new role, a revoked member's next call is refused, and a reinstated member's next call works again. There is nothing to wait for and no sign-out to force.
+- **Revoking keeps the row**, marked inactive, so the revoked approval stays visible on the list, can be reinstated, and no longer occupies that person's one active membership — which is what lets them join another business.
+- **The business always keeps at least one active Owner.** Revoking or demoting the last active one is refused with `409` and "A business must keep at least one active Owner. Give another member the Owner role first." — including when the Owner is acting on themselves. An Owner *may* step down or revoke themselves while another active Owner remains. The rule exists because only an Owner may manage members, roles, the integration and the business record, so a business that lost its last Owner could not be repaired from inside the application at all.
+- **Reinstating is refused with `409` if that person has since joined another business** ("This person is already a member of a business."), because a second active membership would deny them both. The message names no business, member or role.
+- **A revoked membership's role is not edited.** Reinstating restores the role the row still holds, so an Owner reinstates first and then changes the role; both steps are audited.
+- **Every change is audited.** One structured log event records who made it, the business, the membership, which change it was, and the old → new role and active flag. It contains **no name and no email address**, and it is written only after the change is committed — a refused change, or a request asking for the state a member already has, writes nothing and is audited as nothing.
+- An unsupported role name (including a bare number such as `40`) is rejected with `400` and stores nothing. A declared name is accepted case-insensitively.
+- See [docs/architecture.md § Member management](docs/architecture.md#member-management-list-role-revoke-and-reinstate-issue-533) for the design, the write transaction and the concurrency guarantees.
+
 ## Privacy: the personal data this application stores
 
 The application stores almost no personal data. It holds a vending business's own trading records — products, purchases, sales, expenses and reports — and the only people it records are the business's own members.
@@ -260,7 +281,7 @@ The application stores almost no personal data. It holds a vending business's ow
 - **A member's display name and email address are stored for display** (issue #524). Both are nullable columns on that membership row, refreshed from the `name` and `preferred_username`/`email` claims of the member's own validated sign-in token, at most once an hour and never more than the latest values. They exist so an Owner can see who their members are instead of a list of object ids.
 - **They decide nothing.** No authorization, membership, role, capability or invitation decision reads either value; a name and an email address are mutable, reassignable and not unique across Entra directories. Changing them in Entra changes what is displayed on the member's next request and nothing else.
 - **They are never logged.** Neither value appears in a log message, a log property or an error, and neither is reachable through the [platform diagnostics API](#platform-diagnostics-api), whose allowlist excludes the membership table entirely. A request made in a support session (`X-Support-Session`) refreshes nothing, so a supporter's own details can never be written into a member's row.
-- **A member who has never signed in has neither value stored**, and no migration, deployment or startup step ever fills them in: the only thing that writes them is that member's own token. Nothing in this repository shows them anywhere yet — the members list is separate work.
+- **A member who has never signed in has neither value stored**, and no migration, deployment or startup step ever fills them in: the only thing that writes them is that member's own token. Exactly one surface reads them: the Owner-only members list above (issue #533), which shows them to that business's own Owner and reports an explicit `null` for a member who has never signed in. No other API response carries either value, and the audit event for a member change deliberately carries neither.
 - **Uploaded business documents** (purchase and expense attachments) may contain whatever the supplier's paperwork contains. They are stored outside the API web root, are readable only through authenticated endpoints, and are never committed to this repository.
 
 See [docs/architecture.md § Member display name and email](docs/architecture.md#member-display-name-and-email-issue-524) for the design and the exact write path.

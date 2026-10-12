@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
 using Inventory.Application.Access;
+using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
@@ -10,6 +11,7 @@ using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Application.Businesses;
 using InventoryApi.Adapters.Businesses;
+using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
 using InventoryApi.Adapters.PlatformDiagnostics;
 using InventoryApi.Bootstrap;
@@ -197,6 +199,10 @@ builder.Services.AddPlatformDiagnostics(new SqliteDiagnosticsOptions
 
 builder.Services.AddScoped<IPlatformDiagnosticsAudit, LoggingPlatformDiagnosticsAudit>();
 
+// The member management audit trail (issue #533), on the same terms as the diagnostics one above:
+// a structured log event at the boundary, which is the only layer that knows the request's
+// correlation id, and never a row in the database the change was made in.
+builder.Services.AddScoped<IMemberManagementAudit, LoggingMemberManagementAudit>();
 // The Owner's business-settings audit trail (issue #548). The port is satisfied in this layer for
 // the reason the diagnostics audit's is: the event carries the request's correlation id, which is a
 // transport fact. The event names the fields that changed and never a value - see
