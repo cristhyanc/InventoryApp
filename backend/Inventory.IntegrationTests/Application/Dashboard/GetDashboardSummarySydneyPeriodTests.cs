@@ -3,6 +3,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.Dashboard;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
@@ -39,7 +40,13 @@ public class GetDashboardSummarySydneyPeriodTests : IDisposable
 
         using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
-        setup.Businesses.Add(new Business { Id = BusinessId, Name = "Vending", CreatedAtUtc = DateTime.UtcNow });
+        setup.Businesses.Add(new Business
+        {
+            Id = BusinessId,
+            Name = "Vending",
+            Status = BusinessStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+        });
         setup.SaveChanges();
     }
 

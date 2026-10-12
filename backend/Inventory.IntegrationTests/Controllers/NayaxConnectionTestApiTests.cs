@@ -467,6 +467,7 @@ public sealed class NayaxConnectionTestApiTests : IClassFixture<NayaxConnectionT
                 Id = SeededBusinessId,
                 Name = "Vending Co",
                 TimeZoneId = "Australia/Sydney",
+                Status = BusinessStatus.Active,
                 CreatedAtUtc = CreatedAt,
             });
 

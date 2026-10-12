@@ -547,6 +547,7 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
                 Id = id,
                 Name = name,
                 TimeZoneId = timeZoneId,
+                Status = BusinessStatus.Active,
                 CreatedAtUtc = CreatedAt,
             };
 

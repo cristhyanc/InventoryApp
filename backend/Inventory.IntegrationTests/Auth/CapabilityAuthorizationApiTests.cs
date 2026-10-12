@@ -648,6 +648,7 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
                     Id = SeededBusinessId,
                     Name = "Vending Co",
                     TimeZoneId = "Australia/Sydney",
+                    Status = BusinessStatus.Active,
                     CreatedAtUtc = CreatedAt,
                 },
                 // The second business exists throughout, so every row of the matrix runs with
@@ -657,6 +658,7 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
                     Id = OtherBusinessId,
                     Name = "Other Vending Co",
                     TimeZoneId = "Australia/Sydney",
+                    Status = BusinessStatus.Active,
                     CreatedAtUtc = CreatedAt,
                 });
 
