@@ -34,7 +34,7 @@ public sealed class EfMemberProfileWriteStore : IMemberProfileWriteStore
     /// mistake, and no membership entity is tracked, which keeps a cosmetic refresh from saving
     /// anything else a context in its scope happened to be holding.
     ///
-    /// <c>BusinessMembership</c> carries no tenant query filter - it is one of the three structural
+    /// <c>BusinessMembership</c> carries no tenant query filter - it is one of the four structural
     /// non-tenant-owned tables (docs/architecture.md § Tenant ownership) - so this update works in
     /// the drain's own scope, which has no business resolved. What stops it reaching another
     /// business's member is not a tenant filter but the identity in the <c>WHERE</c> clause: it is

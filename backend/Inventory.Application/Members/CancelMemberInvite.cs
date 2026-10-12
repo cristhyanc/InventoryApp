@@ -87,7 +87,8 @@ public sealed class CancelMemberInvite
         var businessId = await _currentBusiness.RequireBusinessIdAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var existing = await _store.FindAsync(inviteId, cancellationToken).ConfigureAwait(false);
+        var existing = await _store.FindAsync(businessId, inviteId, cancellationToken)
+            .ConfigureAwait(false);
         if (existing is null)
         {
             return null;
@@ -98,12 +99,13 @@ public sealed class CancelMemberInvite
         var cancelledAtUtc = _clock.UtcNow;
 
         var cancelled = await _store
-            .CancelAsync(inviteId, cancelledAtUtc, cancellationToken)
+            .CancelAsync(businessId, inviteId, cancelledAtUtc, cancellationToken)
             .ConfigureAwait(false);
 
         if (!cancelled)
         {
-            return await ExplainAsync(inviteId, cancelledAtUtc, cancellationToken).ConfigureAwait(false);
+            return await ExplainAsync(businessId, inviteId, cancelledAtUtc, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         var actor = _actorAccessor.GetCurrentActor().Actor
@@ -138,11 +140,13 @@ public sealed class CancelMemberInvite
     /// the authoritative one - the state at the moment the conditional write declined.
     /// </summary>
     private async Task<MemberInvite?> ExplainAsync(
+        BusinessId businessId,
         int inviteId,
         DateTime nowUtc,
         CancellationToken cancellationToken)
     {
-        var current = await _store.FindAsync(inviteId, cancellationToken).ConfigureAwait(false);
+        var current = await _store.FindAsync(businessId, inviteId, cancellationToken)
+            .ConfigureAwait(false);
         if (current is null)
         {
             // There is no path that deletes an invite, so this is unreachable in practice;

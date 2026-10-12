@@ -88,6 +88,13 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ListMemberInvites>();
         services.AddScoped<CancelMemberInvite>();
 
+        // Redeeming an invite (issue #532). Scoped like every other use case, and it has to be: the
+        // membership it creates and the invite it closes are written through the request's own
+        // AppDbContext, inside the write transaction MembershipWriteGuard opens on that same
+        // context. It is the one use case here reached by a caller with no resolved business, so it
+        // takes no ICurrentBusinessProvider at all.
+        services.AddScoped<RedeemMemberInvite>();
+
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
         // state about the process rather than about one request: "this membership was refreshed

@@ -22,7 +22,17 @@ namespace InventoryApi.Tests.Application.Members;
 /// </summary>
 public class MemberInviteTests
 {
-    private const int BusinessIdValue = 7;
+    /// <summary>
+    /// The business these fixtures resolve for their caller, and the one a seeded invite belongs to
+    /// by default. It is taken from the fake rather than declared twice, because since issue #532
+    /// the store is keyed by business and the two have to be the same value for the ordinary case to
+    /// read anything at all.
+    /// </summary>
+    private const int BusinessIdValue = FakeMemberInviteStore.OwningBusinessId;
+
+    /// <summary>Another business, to prove a use case reads and writes only its caller's own.</summary>
+    private const int OtherBusinessIdValue = 8;
+
     private const string Tid = "11111111-1111-1111-1111-111111111111";
     private const string ActorOid = "22222222-2222-2222-2222-222222222222";
 
@@ -67,6 +77,22 @@ public class MemberInviteTests
 
         Assert.Equal(MemberInviteToken.Hash(created.Token), fixture.Store.LastTokenHash);
         Assert.NotEqual(created.Token, fixture.Store.LastTokenHash);
+    }
+
+    /// <summary>
+    /// The store is handed the business the caller's own membership resolved, and the invite is
+    /// stored under it. Since issue #532 the invite table carries no central ownership stamp, so
+    /// this is the owner being written - not a redundant assertion about one.
+    /// </summary>
+    [Fact]
+    public async Task The_store_receives_the_business_the_callers_membership_resolved()
+    {
+        var fixture = new Fixture();
+
+        var created = await fixture.Create().Handle("Manager", null, CancellationToken.None);
+
+        Assert.Equal(BusinessIdValue, fixture.Store.LastCreatedForBusinessId);
+        Assert.Equal(BusinessIdValue, fixture.Store.OwnerOf(created.Invite.InviteId));
     }
 
     /// <summary>
@@ -204,6 +230,27 @@ public class MemberInviteTests
             fixture.List().Handle(CancellationToken.None));
 
         Assert.Empty(fixture.Operations);
+    }
+
+    /// <summary>
+    /// The list is the caller's own business's, and another business's invite is neither listed nor
+    /// cancellable - "not found" rather than refused in a way that confirms it exists. Since issue
+    /// #532 that separation is the business id the use case passes rather than a central query
+    /// filter, which is why it is asserted at this level and not only against the real database.
+    /// </summary>
+    [Fact]
+    public async Task Another_businesss_invite_is_neither_listed_nor_cancellable()
+    {
+        var fixture = new Fixture();
+        fixture.Store.Add(Invite(1));
+        fixture.Store.Add(Invite(2), OtherBusinessIdValue);
+
+        var invites = await fixture.List().Handle(CancellationToken.None);
+        Assert.Equal([1], invites.Select(invite => invite.InviteId));
+
+        Assert.Null(await fixture.Cancel().Handle(2, CancellationToken.None));
+        Assert.Equal(MemberInviteStatus.Pending, fixture.Store.Row(2).StoredStatus);
+        Assert.Empty(fixture.Audit.Entries);
     }
 
     #endregion
@@ -386,10 +433,17 @@ public class MemberInviteTests
         store.Add(Invite(3, status: MemberInviteStatus.Used, usedAtUtc: closedAt, redeemedByMembershipId: 42));
         store.Add(Invite(4, status: MemberInviteStatus.Cancelled, cancelledAtUtc: closedAt));
         store.Add(Invite(5, expiresAtUtc: Now.AddTicks(-1)));
+        // Another business's live invite, which the bulk cancellation must leave alone: #509's
+        // deactivation closes the invites of the business being deactivated and no other.
+        store.Add(Invite(6), OtherBusinessIdValue);
 
-        var cancelled = await store.CancelAllLiveAsync(Now, CancellationToken.None);
+        var cancelled = await store.CancelAllLiveAsync(
+            BusinessId.From(BusinessIdValue),
+            Now,
+            CancellationToken.None);
 
         Assert.Equal(2, cancelled);
+        Assert.Equal(MemberInviteStatus.Pending, store.Row(6).StoredStatus);
         Assert.Equal(MemberInviteStatus.Cancelled, store.Row(1).StoredStatus);
         Assert.Equal(Now, store.Row(1).CancelledAtUtc);
         Assert.Equal(MemberInviteStatus.Cancelled, store.Row(2).StoredStatus);
@@ -400,7 +454,12 @@ public class MemberInviteTests
         Assert.Null(store.Row(5).CancelledAtUtc);
 
         // Idempotent: a second call finds nothing live and changes nothing.
-        Assert.Equal(0, await store.CancelAllLiveAsync(Now.AddMinutes(1), CancellationToken.None));
+        Assert.Equal(
+            0,
+            await store.CancelAllLiveAsync(
+                BusinessId.From(BusinessIdValue),
+                Now.AddMinutes(1),
+                CancellationToken.None));
         Assert.Equal(Now, store.Row(1).CancelledAtUtc);
     }
 

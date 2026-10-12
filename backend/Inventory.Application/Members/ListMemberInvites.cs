@@ -6,12 +6,11 @@ namespace Inventory.Application.Members;
 /// <summary>
 /// The current business's invites, for the Owner who manages them (issue #531).
 ///
-/// It takes no identifier at all: the invites are read through the <c>AppDbContext</c> tenant query
-/// filters, and the business those filters apply comes from the authenticated actor's membership, so
-/// no route, query, body or header value can choose whose invites are listed. It still resolves the
-/// business explicitly first, so a caller whose membership does not resolve is <em>refused</em>
-/// rather than told their business has no invites - "nothing to show" and "you may not look" must
-/// not be the same answer.
+/// It takes no identifier at all: the business whose invites are listed is resolved from the
+/// authenticated actor's membership and handed to the store, so no route, query, body or header
+/// value can choose whose invites are listed. Resolving it is also what refuses a caller whose
+/// membership does not resolve, rather than telling them their business has no invites - "nothing to
+/// show" and "you may not look" must not be the same answer.
 ///
 /// <para>Every state is listed, including used, cancelled and expired invites: the list is the
 /// record of who was invited and what became of it, and hiding the closed ones would leave an Owner
@@ -38,9 +37,10 @@ public sealed class ListMemberInvites
     /// </exception>
     public async Task<IReadOnlyList<MemberInvite>> Handle(CancellationToken cancellationToken)
     {
-        _ = await _currentBusiness.RequireBusinessIdAsync(cancellationToken).ConfigureAwait(false);
+        var businessId = await _currentBusiness.RequireBusinessIdAsync(cancellationToken)
+            .ConfigureAwait(false);
 
-        var rows = await _store.ListAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await _store.ListAsync(businessId, cancellationToken).ConfigureAwait(false);
 
         // One instant for the whole list, so two invites that expire a tick apart are not judged
         // against two different "nows" within one response (MemberInvitePolicy owns the rule).

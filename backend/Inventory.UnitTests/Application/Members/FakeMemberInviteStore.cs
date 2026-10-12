@@ -4,13 +4,16 @@ using Inventory.Domain.Tenancy;
 namespace InventoryApi.Tests.Application.Members;
 
 /// <summary>
-/// In-memory fake of the invite port (issue #531).
+/// In-memory fake of the Owner-facing invite port (issue #531, re-keyed by the ownership decision
+/// on issue #532).
 ///
-/// It is deliberately <em>not</em> keyed by business: the real adapter adds no business predicate
-/// either, because an invite is ordinary tenant-owned data whose owner the <c>AppDbContext</c>
-/// query filters apply centrally. A fake that filtered by a business id would be modelling a
-/// mechanism the adapter does not have, and the tenant isolation it stands for is proved where it
-/// actually lives - <c>EfMemberInviteStoreTests</c> and <c>MemberInvitesApiTests</c>.
+/// It is keyed by business, because the real adapter now names the business in every statement:
+/// <c>MemberInvite</c> is one of the four structural non-tenant-owned tables, so there is no central
+/// query filter for it to defer to. A fake that ignored the business id would be modelling a
+/// mechanism the adapter does not have, and would let a use case that passed the wrong business - or
+/// none - still pass its tests. The relational proof stays where it belongs
+/// (<c>EfMemberInviteStoreTests</c> and <c>MemberInvitesApiTests</c>); what this models is that each
+/// use case hands the store the business its own caller resolved.
 ///
 /// Its cancellation reproduces the one property that matters about the real statement: it cancels
 /// only while the invite is live at the instant it is given, and reports whether it did. That is
@@ -19,6 +22,12 @@ namespace InventoryApi.Tests.Application.Members;
 /// </summary>
 public sealed class FakeMemberInviteStore : IMemberInviteStore
 {
+    /// <summary>
+    /// The business a seeded invite belongs to unless a test says otherwise - the same one the test
+    /// fixtures resolve for their caller, so the ordinary case reads without repeating it.
+    /// </summary>
+    public const int OwningBusinessId = 7;
+
     public const string Create = "invite-create";
     public const string List = "invite-list";
     public const string Find = "invite-find";
@@ -26,6 +35,7 @@ public sealed class FakeMemberInviteStore : IMemberInviteStore
     public const string CancelAll = "invite-cancel-all";
 
     private readonly Dictionary<int, StoredMemberInvite> _rows = [];
+    private readonly Dictionary<int, int> _owners = [];
 
     private int _nextId = 1;
 
@@ -41,15 +51,22 @@ public sealed class FakeMemberInviteStore : IMemberInviteStore
     /// <summary>The hash the last created invite was stored with.</summary>
     public string? LastTokenHash { get; private set; }
 
+    /// <summary>The business the last created invite was stored under.</summary>
+    public int? LastCreatedForBusinessId { get; private set; }
+
     /// <summary>The row as it stands now, for asserting what a write did or did not do.</summary>
     public StoredMemberInvite Row(int inviteId) => _rows[inviteId];
 
+    /// <summary>The business a stored row belongs to, for asserting the owner a creation wrote.</summary>
+    public int OwnerOf(int inviteId) => _owners[inviteId];
+
     public IReadOnlyList<StoredMemberInvite> Rows => [.. _rows.Values.OrderBy(row => row.InviteId)];
 
-    public int Add(StoredMemberInvite invite)
+    public int Add(StoredMemberInvite invite, int businessId = OwningBusinessId)
     {
         ArgumentNullException.ThrowIfNull(invite);
         _rows[invite.InviteId] = invite;
+        _owners[invite.InviteId] = businessId;
         _nextId = Math.Max(_nextId, invite.InviteId + 1);
         return invite.InviteId;
     }
@@ -64,11 +81,15 @@ public sealed class FakeMemberInviteStore : IMemberInviteStore
         _rows[inviteId] = change(_rows[inviteId]);
     }
 
-    public Task<StoredMemberInvite> CreateAsync(NewMemberInvite invite, CancellationToken cancellationToken)
+    public Task<StoredMemberInvite> CreateAsync(
+        BusinessId businessId,
+        NewMemberInvite invite,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(invite);
         Observer?.Invoke(Create);
         LastTokenHash = invite.TokenHash;
+        LastCreatedForBusinessId = businessId.Value;
 
         var stored = new StoredMemberInvite(
             _nextId++,
@@ -81,20 +102,33 @@ public sealed class FakeMemberInviteStore : IMemberInviteStore
             null,
             null);
         _rows[stored.InviteId] = stored;
+        _owners[stored.InviteId] = businessId.Value;
 
         return Task.FromResult(stored);
     }
 
-    public Task<IReadOnlyList<StoredMemberInvite>> ListAsync(CancellationToken cancellationToken)
+    public Task<IReadOnlyList<StoredMemberInvite>> ListAsync(
+        BusinessId businessId,
+        CancellationToken cancellationToken)
     {
         Observer?.Invoke(List);
-        return Task.FromResult(Rows);
+
+        return Task.FromResult<IReadOnlyList<StoredMemberInvite>>(
+            [.. Rows.Where(row => Owns(businessId, row.InviteId))]);
     }
 
-    public Task<StoredMemberInvite?> FindAsync(int inviteId, CancellationToken cancellationToken)
+    public Task<StoredMemberInvite?> FindAsync(
+        BusinessId businessId,
+        int inviteId,
+        CancellationToken cancellationToken)
     {
         Observer?.Invoke(Find);
-        var answer = _rows.TryGetValue(inviteId, out var row) ? row : null;
+
+        // Another business's invite key is the same answer as one that exists nowhere, exactly as
+        // the real statement's WHERE clause makes it.
+        var answer = Owns(businessId, inviteId) && _rows.TryGetValue(inviteId, out var row)
+            ? row
+            : null;
 
         var staged = OnceAfterFind;
         OnceAfterFind = null;
@@ -103,11 +137,16 @@ public sealed class FakeMemberInviteStore : IMemberInviteStore
         return Task.FromResult(answer);
     }
 
-    public Task<bool> CancelAsync(int inviteId, DateTime cancelledAtUtc, CancellationToken cancellationToken)
+    public Task<bool> CancelAsync(
+        BusinessId businessId,
+        int inviteId,
+        DateTime cancelledAtUtc,
+        CancellationToken cancellationToken)
     {
         Observer?.Invoke(Cancel);
 
-        if (!_rows.TryGetValue(inviteId, out var row)
+        if (!Owns(businessId, inviteId)
+            || !_rows.TryGetValue(inviteId, out var row)
             || !MemberInvitePolicy.IsLive(row.StoredStatus, row.ExpiresAtUtc, cancelledAtUtc))
         {
             return Task.FromResult(false);
@@ -122,11 +161,15 @@ public sealed class FakeMemberInviteStore : IMemberInviteStore
         return Task.FromResult(true);
     }
 
-    public Task<int> CancelAllLiveAsync(DateTime cancelledAtUtc, CancellationToken cancellationToken)
+    public Task<int> CancelAllLiveAsync(
+        BusinessId businessId,
+        DateTime cancelledAtUtc,
+        CancellationToken cancellationToken)
     {
         Observer?.Invoke(CancelAll);
 
         var live = _rows.Values
+            .Where(row => Owns(businessId, row.InviteId))
             .Where(row => MemberInvitePolicy.IsLive(row.StoredStatus, row.ExpiresAtUtc, cancelledAtUtc))
             .ToArray();
 
@@ -141,4 +184,7 @@ public sealed class FakeMemberInviteStore : IMemberInviteStore
 
         return Task.FromResult(live.Length);
     }
+
+    private bool Owns(BusinessId businessId, int inviteId) =>
+        _owners.TryGetValue(inviteId, out var owner) && owner == businessId.Value;
 }

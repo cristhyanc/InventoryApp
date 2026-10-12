@@ -25,7 +25,7 @@ public enum MemberProfileRefreshOutcome
 /// It runs outside the request that scheduled it, in its own service scope, so the
 /// <c>AppDbContext</c> it writes through carries a <em>denied</em> business scope: the tenant query
 /// filters and <c>BusinessOwnershipEnforcer</c> are fully in force, and this use case reads and
-/// writes nothing that belongs to a business. <c>BusinessMembership</c> is one of the three
+/// writes nothing that belongs to a business. <c>BusinessMembership</c> is one of the four
 /// structural non-tenant-owned tables (docs/architecture.md § Tenant ownership), which is what lets
 /// the refresh happen without a current business at all - and that is deliberate, because a
 /// cosmetic write must not be the thing that needs a resolved tenant.

@@ -8,7 +8,7 @@ namespace Inventory.Application.Members;
 /// Every method takes the owning <see cref="BusinessId"/>, and it is only ever one that tenancy
 /// resolution produced from the authenticated actor's membership - never a value a request
 /// supplied. It is passed explicitly rather than left to the <c>AppDbContext</c> tenant query
-/// filters because <c>BusinessMembership</c> is one of the three structural non-tenant-owned
+/// filters because <c>BusinessMembership</c> is one of the four structural non-tenant-owned
 /// tables (docs/architecture.md § Tenant ownership): filtering the table that resolves the tenant
 /// boundary would be circular, so the boundary for this one table is the business id in the
 /// statement. Pairing it with the membership key in every lookup is what makes another business's

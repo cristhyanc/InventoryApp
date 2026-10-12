@@ -56,10 +56,23 @@ public class EndpointAuthorizationClassificationTests
     /// and the reviewed allowlist issue #523 introduced. Adding a line here is the exemption
     /// itself: the marker is what makes an authenticated caller stop being the caller of
     /// <em>one</em> business's API, so it may only ever be given to an endpoint that answers a fact
-    /// about the caller's own identity and no business data at all. Issue #504's invite redemption
-    /// and issue #507's application endpoints are the ones expected to join it.
+    /// about the caller's own identity and no business data at all. Issue #507's application
+    /// endpoints are the one addition still expected.
+    ///
+    /// <para><c>api/me/account-state</c> (issue #523) reports the caller's own account state and
+    /// never another business's name or id.</para>
+    ///
+    /// <para><c>api/invites/redeem</c> (issue #532) is the reviewed second entry, and the first one
+    /// that <em>writes</em>. What it writes is the caller's own membership and the invite that
+    /// granted it, and it serves no business data in either direction: the request carries only the
+    /// invite token, the response carries only the role the caller now holds, and every refusal is
+    /// one of two fixed sentences that name no business. The business it writes in is taken from the
+    /// invite row the token identified - never from the request - which is why the invite table is
+    /// structurally non-tenant-owned (docs/architecture.md § Invite redemption). It is still a
+    /// denied-scope request: it reads nothing tenant-owned through <c>AppDbContext</c>.</para>
     /// </summary>
-    internal static readonly string[] MembershipNotRequiredAllowlist = ["api/me/account-state"];
+    internal static readonly string[] MembershipNotRequiredAllowlist =
+        ["api/me/account-state", "api/invites/redeem"];
 
     /// <summary>
     /// Class 4: the one endpoint that is its own class. It is named rather than marked, because a
