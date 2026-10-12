@@ -145,6 +145,10 @@ public static class InfrastructureServiceCollectionExtensions
         // means and takes none of that path's write lock.
         services.AddScoped<IMemberProfileWriteStore, EfMemberProfileWriteStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
+        // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
+        // the profile read above: that one answers every request, this one is a rare write that has
+        // to go through SaveChanges so the central business enforcers validate it.
+        services.AddScoped<IBusinessSettingsStore, EfBusinessSettingsStore>();
         services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
         // The per-business Nayax connection (issue #518). Its INayaxTokenProtector dependency comes
         // from AddNayaxTokenProtection below rather than from this method, for the same reason the

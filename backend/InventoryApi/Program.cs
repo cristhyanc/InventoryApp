@@ -8,6 +8,8 @@ using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
+using Inventory.Application.Businesses;
+using InventoryApi.Adapters.Businesses;
 using InventoryApi.Adapters.Nayax;
 using InventoryApi.Adapters.PlatformDiagnostics;
 using InventoryApi.Bootstrap;
@@ -194,6 +196,12 @@ builder.Services.AddPlatformDiagnostics(new SqliteDiagnosticsOptions
 });
 
 builder.Services.AddScoped<IPlatformDiagnosticsAudit, LoggingPlatformDiagnosticsAudit>();
+
+// The Owner's business-settings audit trail (issue #548). The port is satisfied in this layer for
+// the reason the diagnostics audit's is: the event carries the request's correlation id, which is a
+// transport fact. The event names the fields that changed and never a value - see
+// LoggingBusinessSettingsAudit.
+builder.Services.AddScoped<IBusinessSettingsAudit, LoggingBusinessSettingsAudit>();
 
 builder.Services.AddCors(options =>
 {
