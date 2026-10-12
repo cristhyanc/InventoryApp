@@ -211,6 +211,11 @@ public sealed class EfMemberInviteRedemptionStore : IMemberInviteRedemptionStore
             .Where(invite => invite.BusinessId == businessId.Value && invite.Id == inviteId)
             // The liveness condition of MemberInvitePolicy.IsLive, in SQL, so the check and the
             // write are one operation: a second redemption of the same link matches nothing here.
+            // The expiry half is only a real check because usedAtUtc is sampled immediately before
+            // this statement (issue #608) - compared against an instant from before the caller
+            // waited for the write lock it would compare the row to a time that has passed, and a
+            // link that expired during the wait would still match. The comparison is strict, which
+            // is MemberInvitePolicy's inclusive boundary: an invite is expired *at* its expiry.
             .Where(invite =>
                 invite.Status == MemberInviteStatus.Pending && invite.ExpiresAtUtc > usedAtUtc)
             .ExecuteUpdateAsync(
