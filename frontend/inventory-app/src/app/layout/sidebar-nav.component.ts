@@ -92,7 +92,12 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
     // a different question, on its own schedule, and an unanswerable probe must leave the menu
     // the member's capabilities already decided. Both failures are silent - a navigation menu is
     // not the place to report that an access check could not be made.
-    const hasDiagnosticsAccess = this.diagnosticsAccess.isGranted().pipe(
+    //
+    // `granted$` keeps following the signed-in identity (issue #605) rather than answering once:
+    // it reports `false` again the moment the identity changes, so a previous identity's granted
+    // `Super Admin` group is removed on the switch itself and reappears only if the new identity's
+    // own probe confirms access.
+    const hasDiagnosticsAccess = this.diagnosticsAccess.granted$.pipe(
       catchError(() => of(false)),
       startWith(false)
     );

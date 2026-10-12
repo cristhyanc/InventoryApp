@@ -1,11 +1,14 @@
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { BehaviorSubject, NEVER, Observable, of, throwError } from 'rxjs';
+import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
+import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
+import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService, MemberAccess, MemberAccessState } from '../access/access.service';
 import { CAPABILITIES, Capability, capabilitySet } from '../access/capabilities';
 import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
+import { PlatformDiagnosticsAccess, PlatformDiagnosticsService } from '../services/platform-diagnostics.service';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './sidebar-nav.component';
 import { NavGroup, navLinks, primaryNavigation } from './navigation';
 
@@ -56,7 +59,7 @@ async function render(
       },
       {
         provide: PlatformDiagnosticsAccessService,
-        useValue: { isGranted: () => options.diagnosticsAccess ?? of(false) }
+        useValue: { granted$: options.diagnosticsAccess ?? of(false) }
       }
     ]
   }).compileComponents();
@@ -307,6 +310,114 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
       ...navLinks(primaryNavigation).map((entry) => entry.route),
       '/super-admin/diagnostics'
     ]);
+  });
+});
+
+/**
+ * The Super Admin group follows the signed-in identity (issue #605). The real
+ * `PlatformDiagnosticsAccessService` is used here, with MSAL and the diagnostics HTTP call under
+ * the test's control, because the regression this covers is not in the sidebar's rendering but in
+ * what the cached probe answers after an account switch.
+ */
+describe('SidebarNavComponent Super Admin group across an identity change (issue #605)', () => {
+  const administrator = { name: 'A', homeAccountId: 'a-home-id' } as unknown as AccountInfo;
+  const ordinaryMember = { name: 'B', homeAccountId: 'b-home-id' } as unknown as AccountInfo;
+
+  const authorizedResponse: PlatformDiagnosticsAccess = {
+    authorized: true,
+    crossBusinessScope: true,
+    limits: { maxSqlBytes: 16384, maxRows: 500, maxResponseBytes: 1048576, maxDurationSeconds: 5 }
+  };
+
+  interface ProbedRender extends Rendered {
+    switchTo(next: AccountInfo): void;
+  }
+
+  /** One diagnostics response per probe, in order; the last one answers every further probe. */
+  function queued(...responses: readonly (() => Observable<PlatformDiagnosticsAccess>)[]) {
+    let call = 0;
+    return () => (responses[call++] ?? responses[responses.length - 1])();
+  }
+
+  async function renderWithRealProbe(
+    signedIn: AccountInfo,
+    access: () => Observable<PlatformDiagnosticsAccess>
+  ): Promise<ProbedRender> {
+    let activeAccount = signedIn;
+    const events = new Subject<EventMessage>();
+
+    await TestBed.configureTestingModule({
+      imports: [SidebarNavComponent],
+      providers: [
+        provideRouter([{ path: '**', component: BlankPageComponent }]),
+        { provide: AccessService, useValue: { access$: of(EVERY_CAPABILITY) } },
+        { provide: PlatformDiagnosticsService, useValue: { access, query: jest.fn() } },
+        {
+          provide: MsalService,
+          useValue: {
+            instance: { getActiveAccount: () => activeAccount, getAllAccounts: () => [activeAccount] }
+          }
+        },
+        {
+          provide: MsalBroadcastService,
+          useValue: {
+            inProgress$: new BehaviorSubject<InteractionStatus>(InteractionStatus.None),
+            msalSubject$: events
+          }
+        }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(SidebarNavComponent);
+    fixture.componentRef.setInput('expanded', true);
+    fixture.detectChanges();
+
+    return {
+      fixture,
+      component: fixture.componentInstance,
+      host: fixture.nativeElement as HTMLElement,
+      switchTo(next: AccountInfo): void {
+        activeAccount = next;
+        events.next({ eventType: EventType.ACTIVE_ACCOUNT_CHANGED } as EventMessage);
+        fixture.detectChanges();
+      }
+    };
+  }
+
+  it('removes a granted group the moment the identity changes, before the new probe answers', async () => {
+    const pending = new Subject<PlatformDiagnosticsAccess>();
+    const rendered = await renderWithRealProbe(
+      administrator,
+      queued(
+        () => of(authorizedResponse),
+        () => pending
+      )
+    );
+    expect(rendered.host.textContent).toContain('Super Admin');
+
+    rendered.switchTo(ordinaryMember);
+
+    expect(rendered.host.textContent).not.toContain('Super Admin');
+
+    pending.next({ ...authorizedResponse, authorized: false });
+    rendered.fixture.detectChanges();
+
+    expect(rendered.host.textContent).not.toContain('Super Admin');
+  });
+
+  it('offers the group to a newly active identity whose own probe confirms access', async () => {
+    const rendered = await renderWithRealProbe(
+      ordinaryMember,
+      queued(
+        () => throwError(() => ({ status: 403, error: null })),
+        () => of(authorizedResponse)
+      )
+    );
+    expect(rendered.host.textContent).not.toContain('Super Admin');
+
+    rendered.switchTo(administrator);
+
+    expect(rendered.host.textContent).toContain('Super Admin');
   });
 });
 
