@@ -124,7 +124,7 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
   }
 
   isGroupActive(group: NavGroup): boolean {
-    return group.children.some((child) => this.isLinkActive(child));
+    return group.children.some((child) => child.kind === 'link' && this.isLinkActive(child));
   }
 
   isGroupOpen(group: NavGroup): boolean {

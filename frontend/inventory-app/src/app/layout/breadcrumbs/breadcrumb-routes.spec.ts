@@ -63,7 +63,7 @@ describe('breadcrumbRoutes (issue #457 route inventory)', () => {
       '/admin/costing-repair',
       '/admin/historical-gst-classification',
       '/admin/nayax-sale-timestamp-repair',
-      '/admin/diagnostics',
+      '/super-admin/diagnostics',
       '/admin/nayax-settings',
       '/admin/site-commission-agreements'
     ]);
@@ -89,6 +89,18 @@ describe('buildBreadcrumbTrail', () => {
     expect(buildBreadcrumbTrail('/admin/historical-gst-classification', null)).toEqual([
       { label: 'Admin', path: '/admin', current: false },
       { label: 'Historical GST Classification', current: true }
+    ]);
+  });
+
+  /**
+   * Super Admin (issue #546) is a sidebar heading with no landing page, so its parent renders as
+   * plain text rather than a link - the same non-routable-group behaviour `buildTrailFrom`'s own
+   * describe block below documents.
+   */
+  it('builds Super Admin > Platform Diagnostics, with no link for the non-routable parent', () => {
+    expect(buildBreadcrumbTrail('/super-admin/diagnostics', null)).toEqual([
+      { label: 'Super Admin', path: undefined, current: false },
+      { label: 'Platform Diagnostics', current: true }
     ]);
   });
 

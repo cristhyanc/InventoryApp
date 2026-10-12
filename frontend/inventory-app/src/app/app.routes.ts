@@ -2,6 +2,7 @@ import { Routes } from '@angular/router';
 import { MsalGuard } from '@azure/msal-angular';
 import { ACCESS_NOT_ALLOWED_PATH, requireCapability } from './access/capability.guard';
 import { accountStateGuard } from './access/account-state.guard';
+import { platformAdminGuard } from './access/platform-admin.guard';
 import { AccessUnavailableComponent } from './access/access-unavailable.component';
 import { OnboardingPlaceholderComponent } from './access/onboarding-placeholder.component';
 import { AuthCallbackComponent } from './auth/auth-callback.component';
@@ -19,8 +20,11 @@ import { designSystemRoutes } from './design-system/design-system.routes';
  * protects nothing either way. The routes that deliberately carry no `accountStateGuard` are the
  * ones it would otherwise send somebody *to* - `/welcome`, `/application-pending`,
  * `/application-rejected`, `/access-unavailable` and `/invite/:token` - because a person already
- * sent to one of them must not be sent away from it; `/access-not-allowed` and `/admin/diagnostics`
- * carry no capability for the reasons already documented beside them.
+ * sent to one of them must not be sent away from it; `/access-not-allowed` carries no capability
+ * for the reason already documented beside it, and `/super-admin/diagnostics` (issue #546) carries
+ * neither guard: its authority is the platform-admin check, not a business role or membership, so
+ * it carries `platformAdminGuard` instead and sends a refusal to the dashboard rather than to any
+ * membership-handling destination (see `access/platform-admin.guard.ts`).
  */
 export const routes: Routes = [
   // Public: the Entra redirect callback must be reachable without authentication.
@@ -285,14 +289,21 @@ export const routes: Routes = [
       )
   },
   {
-    // The super-admin diagnostics page (issue #335). `MsalGuard` only requires a signed-in
-    // actor, exactly as every other route does: platform-admin access is decided by the
-    // diagnostics API on every request, so entering this URL directly is safe and the page shows
-    // a refusal rather than a query form.
-    path: 'admin/diagnostics',
-    canActivate: [MsalGuard],
+    // The super-admin diagnostics page (issue #335), moved under /super-admin in issue #546.
+    // `platformAdminGuard` asks the same platform-admin check the page itself asks on arrival and
+    // redirects a refusal to the dashboard; entering this URL directly is still safe either way,
+    // because the diagnostics API decides authority per request regardless of what the guard did.
+    path: 'super-admin/diagnostics',
+    canActivate: [MsalGuard, platformAdminGuard],
     loadComponent: () =>
       import('./components/admin/diagnostics/platform-diagnostics.component').then((m) => m.PlatformDiagnosticsComponent)
+  },
+  {
+    // The old address (issue #335) redirects to its new home (issue #546) so existing bookmarks
+    // and links keep working.
+    path: 'admin/diagnostics',
+    pathMatch: 'full',
+    redirectTo: '/super-admin/diagnostics'
   },
   {
     path: 'admin/nayax-settings',
