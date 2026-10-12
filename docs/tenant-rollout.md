@@ -516,11 +516,13 @@ token undecryptable.
 
 - **Onboarding a second business.** The Nayax *credential* is now per business: issue #519's
   `migrate-nayax-connection` moves the existing business's credential into its own record, and since
-  issue #520 the client reads each business's own with no global fallback. What is still missing is
-  the self-service side — a credential reaches the database only through that human-run command, so
-  there is no supported way for a second business to connect its own Nayax account (the Owner
-  connection wizard and re-test endpoints of issue #506). Do not add a second business until it
-  exists.
+  issue #520 the client reads each business's own with no global fallback. The Owner-facing API of
+  issue #506 now exists as well — test a pasted operator id and token (#536), save the tested pair
+  and re-test the stored one (#537; see
+  [docs/architecture.md § Saving a tested connection and re-testing it](architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)).
+  What is still missing is the rest of the self-service side: those endpoints have no user interface
+  yet (the wizard is #538 and the banners #539), so in practice a credential still reaches the
+  database through that human-run command. Do not add a second business until the flow is complete.
 - **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred, and still
   **required**. This is an outstanding integrity step, not a decision that the constraint is
   unnecessary.
