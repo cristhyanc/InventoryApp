@@ -121,9 +121,15 @@ run_step "Verify C# formatting" \
 run_step "Build backend (${configuration})" \
     dotnet build "${backend_solution}" --configuration "${configuration}" --no-restore
 
+# A test that runs past the hang timeout is a hang, not a slow test: no single backend test comes
+# near it. The run then stops with a full memory dump of the test host and a sequence file naming
+# the tests in flight, both under the test project's TestResults folder, so the stuck stacks can be
+# read instead of inferred from an HttpClient timeout. The timeout is below HttpClient's default
+# 100 seconds so the dump is taken while the request is still stuck.
 run_step "Test backend with coverage (${configuration})" \
     dotnet test "${backend_solution}" --configuration "${configuration}" --no-build --no-restore \
-    --collect:"XPlat Code Coverage"
+    --collect:"XPlat Code Coverage" \
+    --blame-hang --blame-hang-timeout 90s --blame-hang-dump-type full
 
 run_step "Check vulnerable NuGet packages" \
     check_vulnerable_packages

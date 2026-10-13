@@ -121,7 +121,7 @@ Backend solution:
 dotnet restore backend/InventoryApi/InventoryApi.slnx
 dotnet format backend/InventoryApi/InventoryApi.slnx --verify-no-changes --no-restore --exclude backend/Inventory.Infrastructure/Migrations
 dotnet build backend/InventoryApi/InventoryApi.slnx --configuration Release --no-restore
-dotnet test backend/InventoryApi/InventoryApi.slnx --configuration Release --no-build --no-restore --collect:"XPlat Code Coverage"
+dotnet test backend/InventoryApi/InventoryApi.slnx --configuration Release --no-build --no-restore --collect:"XPlat Code Coverage" --blame-hang --blame-hang-timeout 90s --blame-hang-dump-type full
 dotnet package list --project backend/InventoryApi/InventoryApi.slnx --vulnerable --include-transitive
 ```
 
@@ -149,6 +149,7 @@ Both validation scripts run exactly this pipeline; run the script rather than th
 - The solution holds two test projects (issue #311), and `dotnet test` on it runs both: `backend/Inventory.UnitTests` references only `Inventory.Domain` and `Inventory.Application` and holds the pure Domain/Application tests; `backend/Inventory.IntegrationTests` holds everything that touches Infrastructure, `InventoryApi`, EF Core or a database, including the architecture tests. A test belongs in the unit project only if it and every helper it uses compile against those two projects alone; never add an Infrastructure or API reference to it. Test doubles both projects need live in the unit project and are compiled into the integration project as linked source files, so neither test project references the other. To run one suite: `dotnet test backend/Inventory.UnitTests/Inventory.UnitTests.csproj` or `dotnet test backend/Inventory.IntegrationTests/Inventory.IntegrationTests.csproj`.
 - `dotnet format` excludes `backend/Inventory.Infrastructure/Migrations` because an applied migration must not be rewritten. Both validation scripts hold that path in one variable (`migrations_dir` / `$MigrationsRelativePath`); keep them in step if the migrations ever move again.
 - Coverage is collected on every test run but has no minimum threshold yet. Coverage output is git-ignored; never commit it.
+- `backend/Inventory.IntegrationTests/xunit.runner.json` runs that project's test collections one at a time, and the test step stops any test that runs past 90 seconds with a dump of the test host (CI uploads it as the `hung-test-diagnostics-*` artifact). Do not turn collection parallelism back on, or raise an `HttpClient` timeout, to make a slow or hanging test pass; see `docs/architecture.md` § Test projects.
 - The frontend has a configured `lint` script (`ng lint`) and a `test` script (`jest`, via `jest-preset-angular`). `npm run lint` must report zero **errors**; warnings are visible but non-blocking. `npm run test` runs the Jest suite once (no watch mode) and must exit zero.
 - `npm audit` is reported, not enforced: the outstanding high/critical advisories are in the Angular 19 build toolchain and clear only with a major Angular upgrade. Never run `npm audit fix --force`.
 - `dotnet package list --vulnerable` always exits 0, so the scripts parse its output. A vulnerable package fails validation; an unreachable nuget.org only warns.
