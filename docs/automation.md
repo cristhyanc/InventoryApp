@@ -78,7 +78,7 @@ an eval case relies on: either update the affected case(s)/`policyReferences` in
 request because the guardrail is intentionally changing (and say so, per `AGENTS.md` § Tests
 required by change type), or treat the failure as a regression and fix the guardrail file instead.
 
-## Optional isolated Windows/Hyper-V runner pilot (issue #635)
+## Optional isolated Ubuntu VM runner pilot on Hyper-V (issue #635)
 
 The repository was switched to **private** on 14 October 2026. That reduces exposure
 to untrusted outside contributors, but **private visibility is not a runner sandbox**:
@@ -102,7 +102,10 @@ The first stage supports only two low-privilege checks:
    or any other value, it continues to use `ubuntu-latest`. This job checks out the
    reviewed `develop` branch and reads an issue's documentation-impact declaration with
    read-only GitHub permissions; it does not run an AI model or PR code. If the VM is offline,
-   a self-hosted job will remain queued rather than automatically falling back to GitHub.
+   a self-hosted job will remain queued rather than automatically falling back to GitHub, and
+   the issue keeps its readiness label with nothing running. To recover, cancel the queued
+   **Agent implementation** run, either bring the VM back online or set the variable to
+   `false` (see Rollback below), then remove and re-apply the readiness label.
 
 **Manual setup:** register the Ubuntu VM runner with label `inventory-agent` in
 Repository Settings → Actions → Runners; confirm it shows Online/Idle. Keep the VM dedicated
