@@ -17,7 +17,9 @@ type PendingMemberAction =
  * `MemberService` is the sole authority for every rule a change might refuse: a last-Owner change
  * and a reinstatement of someone who has since joined another business are both `409` refusals
  * whose sentence this component shows exactly as the API phrases it, rather than reinterpreting or
- * duplicating the rule.
+ * duplicating the rule. That authority is also why the role control is displayed from this
+ * component's own `selectedRoles` state rather than straight from `member.role`: see
+ * `displayedRole`.
  */
 @Component({
   selector: 'app-member-management',
@@ -54,7 +56,7 @@ type PendingMemberAction =
                   <td class="table-cell">
                     <select
                       #roleSelect
-                      [value]="member.role ?? ''"
+                      [value]="displayedRole(member)"
                       [disabled]="!member.isActive"
                       [attr.aria-label]="'Role for ' + memberLabel(member)"
                       (change)="requestRoleChange(member, roleSelect.value)"
@@ -109,6 +111,19 @@ export class MemberManagementComponent implements OnInit {
   loadError = false;
   pendingAction: PendingMemberAction | null = null;
 
+  /**
+   * The role each row's `<select>` is currently displaying, keyed by membership id.
+   *
+   * The native control moves to the chosen option before anything is confirmed, so the displayed
+   * role is this component's state and not `member.role`. A one-way `[value]="member.role"`
+   * binding could not put the control back after a cancelled confirmation or a refused change,
+   * because the bound expression never changed, and the control would keep showing a role the
+   * server never accepted - next to the toast refusing it - and would not even raise a `change`
+   * event if the Owner tried the same selection again. Holding the displayed role here means a
+   * rollback is a real value change that Angular writes back to the DOM.
+   */
+  private readonly selectedRoles = new Map<number, string>();
+
   constructor(
     private readonly memberService: MemberService,
     private readonly toast: ToastService
@@ -124,6 +139,7 @@ export class MemberManagementComponent implements OnInit {
     this.memberService.list().subscribe({
       next: (members) => {
         this.members = members;
+        this.selectedRoles.clear();
         this.loading = false;
       },
       error: () => {
@@ -133,7 +149,13 @@ export class MemberManagementComponent implements OnInit {
     });
   }
 
+  /** The role the member's row shows: the one proposed in this session, or the server-confirmed one. */
+  displayedRole(member: BusinessMember): string {
+    return this.selectedRoles.get(member.membershipId) ?? member.role ?? '';
+  }
+
   requestRoleChange(member: BusinessMember, role: string): void {
+    this.selectedRoles.set(member.membershipId, role);
     if (!role || role === member.role) {
       return;
     }
@@ -149,7 +171,11 @@ export class MemberManagementComponent implements OnInit {
   }
 
   cancelPendingAction(): void {
+    const action = this.pendingAction;
     this.pendingAction = null;
+    if (action?.kind === 'role') {
+      this.restoreDisplayedRole(action.member);
+    }
   }
 
   confirmPendingAction(): void {
@@ -163,7 +189,10 @@ export class MemberManagementComponent implements OnInit {
       case 'role':
         this.memberService.changeRole(action.member.membershipId, action.role).subscribe({
           next: (updated) => this.replaceMember(updated),
-          error: (err) => this.toast.error(this.extractErrorMessage(err, "Unable to change this member's role."))
+          error: (err) => {
+            this.restoreDisplayedRole(action.member);
+            this.toast.error(this.extractErrorMessage(err, "Unable to change this member's role."));
+          }
         });
         break;
       case 'revoke':
@@ -216,8 +245,14 @@ export class MemberManagementComponent implements OnInit {
     return member.displayName ?? member.email ?? `member ${member.membershipId}`;
   }
 
+  /** Puts the row's control back on the role the server last confirmed, discarding an unsaved choice. */
+  private restoreDisplayedRole(member: BusinessMember): void {
+    this.selectedRoles.set(member.membershipId, member.role ?? '');
+  }
+
   private replaceMember(updated: BusinessMember): void {
     this.members = this.members.map((candidate) => (candidate.membershipId === updated.membershipId ? updated : candidate));
+    this.restoreDisplayedRole(updated);
   }
 
   private extractErrorMessage(err: unknown, fallback: string): string {

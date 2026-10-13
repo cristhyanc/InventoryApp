@@ -36,6 +36,18 @@ function buttonWithText(host: HTMLElement, text: string): HTMLButtonElement {
   return match!;
 }
 
+/** The role the row's `<select>` is actually displaying: its value and the selected option's label. */
+function displayedRole(select: HTMLSelectElement): { readonly value: string; readonly label: string } {
+  return { value: select.value, label: select.options[select.selectedIndex]?.textContent?.trim() ?? '' };
+}
+
+/** Chooses a role in the native control the way a person does: the DOM moves before anything is confirmed. */
+function chooseRole(fixture: { detectChanges(): void }, select: HTMLSelectElement, role: string): void {
+  select.value = role;
+  select.dispatchEvent(new Event('change'));
+  fixture.detectChanges();
+}
+
 /**
  * The Members section of the Admin → Users page (issue #534), over issue #533's four endpoints.
  */
@@ -107,6 +119,62 @@ describe('MemberManagementComponent (issue #534)', () => {
     fixture.detectChanges();
 
     expect(error).toHaveBeenCalledWith(message);
+  });
+
+  it('restores the selector to the stored role when a proposed role change is cancelled, and allows the same retry', async () => {
+    const changeRole = jest.fn();
+    const { fixture, host } = await render({ list: () => of([member()]), changeRole });
+    const select = host.querySelector('select') as HTMLSelectElement;
+
+    chooseRole(fixture, select, 'Owner');
+    expect(displayedRole(select)).toEqual({ value: 'Owner', label: 'Owner' });
+
+    buttonWithText(host, 'Cancel').click();
+    fixture.detectChanges();
+
+    expect(changeRole).not.toHaveBeenCalled();
+    expect(displayedRole(select)).toEqual({ value: 'Manager', label: 'Manager' });
+    expect(host.textContent).not.toContain('Change role');
+
+    chooseRole(fixture, select, 'Owner');
+
+    expect(host.textContent).toContain("Change Dana Lee's role to Owner?");
+  });
+
+  it('restores the selector to the stored role when the API refuses a role change, keeps the refusal toast, and allows the same retry', async () => {
+    const error = jest.fn();
+    const message = 'A business must keep at least one active Owner. Give another member the Owner role first.';
+    const changeRole = jest.fn(() => throwError(() => ({ error: { message } })));
+    const { fixture, host } = await render({ list: () => of([member({ role: 'Owner' })]), changeRole }, { error });
+    const select = host.querySelector('select') as HTMLSelectElement;
+
+    chooseRole(fixture, select, 'Manager');
+    buttonWithText(host, 'Confirm').click();
+    fixture.detectChanges();
+
+    expect(changeRole).toHaveBeenCalledWith(1, 'Manager');
+    expect(error).toHaveBeenCalledWith(message);
+    expect(displayedRole(select)).toEqual({ value: 'Owner', label: 'Owner' });
+
+    chooseRole(fixture, select, 'Manager');
+
+    expect(host.textContent).toContain("Change Dana Lee's role to Manager?");
+    buttonWithText(host, 'Confirm').click();
+    fixture.detectChanges();
+
+    expect(changeRole).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the new role selected once the API confirms the change', async () => {
+    const changeRole = jest.fn(() => of(member({ role: 'Owner' })));
+    const { fixture, host } = await render({ list: () => of([member()]), changeRole });
+    const select = host.querySelector('select') as HTMLSelectElement;
+
+    chooseRole(fixture, select, 'Owner');
+    buttonWithText(host, 'Confirm').click();
+    fixture.detectChanges();
+
+    expect(displayedRole(select)).toEqual({ value: 'Owner', label: 'Owner' });
   });
 
   it('revokes a member after confirmation and flips their status to show Reinstate instead', async () => {
