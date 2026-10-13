@@ -320,12 +320,6 @@ export const routes: Routes = [
       )
   },
   {
-    // The Admin → Users page (issue #534): members and invite links, Owner-only.
-    path: 'admin/users',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Members.Manage')],
-    loadComponent: () => import('./components/admin/users/admin-users.component').then((m) => m.AdminUsersComponent)
-  },
-  {
     path: 'expenses',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
     loadComponent: () => import('./components/expenses/operating-expense.component').then((m) => m.OperatingExpenseComponent)
