@@ -51,12 +51,25 @@ namespace Inventory.Application.Dashboard;
 /// set for a support session (issue #551), which grants <c>Dashboard.ViewFinancials</c>. So it
 /// cannot disagree with the capability the endpoint itself enforces, or with what
 /// <c>GET /api/me/access</c> reported. No role name appears in it.</para>
+///
+/// <para><b>The fleet sections are degraded in a support view (issue #552).</b> A support session
+/// resolves no Nayax credentials at all (issue #551), so the one live fleet read behind the refill
+/// and ordering cards cannot be made - and the rest of the summary is local data the session was
+/// opened to look at. Such a request is therefore answered
+/// <see cref="SupportViewDashboardSummaryDto"/>: the local sections as any member of that business
+/// is given them, with those two replaced by <see cref="UnavailableDashboardSectionDto"/>, and
+/// <see cref="CalculateReorderNeeds"/> is not called at all. The decision is taken from
+/// <see cref="IBusinessScope.State"/>, which is the very state
+/// <c>NayaxRequestCredentialProvider</c> refuses in, so "the dashboard degrades" and "Nayax is
+/// blocked" cannot come to mean different things; it is not a second rule about who the caller
+/// is.</para>
 /// </summary>
 public sealed class GetDashboardSummary
 {
     private readonly IClock _clock;
     private readonly IBusinessCalendar _businessCalendar;
     private readonly CurrentCapabilities _capabilities;
+    private readonly IBusinessScope _businessScope;
     private readonly IDashboardSummarySalesFactsProvider _salesFacts;
     private readonly IProductCatalogStore _catalog;
     private readonly CalculateReorderNeeds _calculateReorderNeeds;
@@ -65,6 +78,7 @@ public sealed class GetDashboardSummary
         IClock clock,
         IBusinessCalendar businessCalendar,
         CurrentCapabilities capabilities,
+        IBusinessScope businessScope,
         IDashboardSummarySalesFactsProvider salesFacts,
         IProductCatalogStore catalog,
         CalculateReorderNeeds calculateReorderNeeds)
@@ -72,6 +86,7 @@ public sealed class GetDashboardSummary
         _clock = clock;
         _businessCalendar = businessCalendar;
         _capabilities = capabilities;
+        _businessScope = businessScope;
         _salesFacts = salesFacts;
         _catalog = catalog;
         _calculateReorderNeeds = calculateReorderNeeds;
@@ -103,6 +118,15 @@ public sealed class GetDashboardSummary
                 window.CurrentWeek, window.PreviousComparableWeek, cancellationToken)
             : null;
         var products = await _catalog.ListUnorderedAsync(ProductCatalogFilter.None, cancellationToken);
+
+        // Everything above is a read of the business's own database, so a support request makes it
+        // exactly as a member's does. The fleet read below is the one Nayax-backed read behind this
+        // summary, and in a support view it is not started at all (issue #552).
+        if (_businessScope.State == BusinessScopeState.SupportReadOnly)
+        {
+            return SupportView(window, salesFacts, products);
+        }
+
         var reorderNeeds = await _calculateReorderNeeds.Handle(cancellationToken);
 
         var needsRefill = NeedsRefill(reorderNeeds, products);
@@ -122,6 +146,39 @@ public sealed class GetDashboardSummary
                 needsRefill,
                 needsOrdering,
                 RedactedInventory(products));
+    }
+
+    /// <summary>
+    /// The summary a support session is answered (issue #552): the local sections, and the two the
+    /// live fleet feeds reported as unavailable with the reason rather than counted from a fleet
+    /// read that was never made.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The session's capability set did not grant <c>Dashboard.ViewFinancials</c>, so the week's
+    /// figures were not read and there is no support-view shape to answer with. A request cannot
+    /// reach this - <c>SupportSessionAccessPolicy</c>'s written-out set grants that capability, and
+    /// its own tests pin the set literally - and it fails rather than publishing a shape nobody
+    /// agreed if that ever changes without this use case being revisited.
+    /// </exception>
+    private static SupportViewDashboardSummaryDto SupportView(
+        MachineDashboardWindow window,
+        DashboardSummarySalesFacts? salesFacts,
+        IReadOnlyList<ProductRecord> products)
+    {
+        if (salesFacts is not { } facts)
+        {
+            throw new InvalidOperationException(
+                "A support session grants Dashboard.ViewFinancials, so the Dashboard summary's "
+                    + "week-to-date figures must have been read for it.");
+        }
+
+        return new SupportViewDashboardSummaryDto(
+            window.NowUtc,
+            window.BusinessToday,
+            SalesThisWeek(window, facts),
+            UnavailableDashboardSectionDto.SupportView,
+            UnavailableDashboardSectionDto.SupportView,
+            Inventory(products));
     }
 
     private static DashboardSalesThisWeekDto SalesThisWeek(

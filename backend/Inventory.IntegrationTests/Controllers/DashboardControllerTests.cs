@@ -51,6 +51,9 @@ public class DashboardControllerTests
             new CurrentCapabilities(
                 new FakeSupportSessionAccessor(),
                 new FakeCurrentBusinessProvider(businessId: 1)),
+            // A member's own resolved scope, so the whole summary is computed; the support view's
+            // degraded shape (issue #552) is SupportSessionRequestApiTests.
+            TestAppDbContext.ScopeFor(businessId: 1),
             salesFacts.Object,
             catalog.Object,
             new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object)));

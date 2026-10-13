@@ -95,6 +95,9 @@ public class GetDashboardSummarySydneyPeriodTests : IDisposable
                 new CurrentCapabilities(
                     new FakeSupportSessionAccessor(),
                     new FakeCurrentBusinessProvider(BusinessId)),
+                // A member's own resolved scope: these tests are about the business week, and none
+                // of them is a support view (issue #552).
+                TestAppDbContext.ScopeFor(BusinessId),
                 new EfDashboardSummarySalesFactsProvider(db),
                 new EfProductCatalogStore(db),
                 new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object))

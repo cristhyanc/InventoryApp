@@ -2008,7 +2008,7 @@ POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release   w
 
 The two slices above decide whether a business may trade and whether it is switched on. This one, the first slice of [#512](https://github.com/cristhyanc/InventoryApp/issues/512) under #328, is how the Super Admin gets to *look at* one: a business reports an error nobody can reproduce from the outside, and the administrator opens a time-limited, audited, read-only **support session** on it. The session is the record that the access was granted, and this slice is that record plus the three endpoints that manage it; what a request then *does* with one is [#551](#support-sessions-in-the-request-pipeline-issue-551).
 
-**What this slice deliberately did not do, and why that order.** #550 shipped the record before anything acted on it: it resolved no business from a session, and [#551](#support-sessions-in-the-request-pipeline-issue-551) is what added the reading of the `X-Support-Session` header, the `SupportReadOnly` scope state, the read-only enforcement and the Nayax block (#552 is still the degraded dashboard summary). Building the audited record first was the fail-closed order: the alternative would have been a slice where access existed and the record of it was still being designed. What survives from it is the narrower claim an API test still pins — *holding* a session grants nothing, because a request that does not present the id runs as the administrator's own (non-existent) membership.
+**What this slice deliberately did not do, and why that order.** #550 shipped the record before anything acted on it: it resolved no business from a session, and [#551](#support-sessions-in-the-request-pipeline-issue-551) is what added the reading of the `X-Support-Session` header, the `SupportReadOnly` scope state, the read-only enforcement and the Nayax block (#552 then degraded the dashboard summary, below). Building the audited record first was the fail-closed order: the alternative would have been a slice where access existed and the record of it was still being designed. What survives from it is the narrower claim an API test still pins — *holding* a session grants nothing, because a request that does not present the id runs as the administrator's own (non-existent) membership.
 
 ```text
 POST /api/super-admin/support-sessions/{businessId}   { "reason": "..." } (required) -> the session id, name, expiry
@@ -2138,9 +2138,33 @@ ordinary Nayax call — read and write alike — fails with `403` and code
 to add to the next controller. The reason it exists at all is that the operator id and token are the
 *business's* credential: nobody outside the business has agreed to its Nayax account being used on
 their behalf, and a call made in a support view would be indistinguishable, at Nayax, from one the
-business made itself. Until issue #552 gives the dashboard a degraded shape,
-`GET /api/dashboard/summary` therefore fails in a support view, because its reorder section needs the
-live fleet — it fails closed with this code, which is the accepted outcome rather than a defect.
+business made itself. Every Nayax-backed screen therefore fails closed with this code in a support
+view, which is the accepted outcome rather than a defect — except the home dashboard, which issue
+#552 degraded instead, below.
+
+**The dashboard degrades rather than fails (issue #552).** `GET /api/dashboard/summary` is the
+landing page of the application, and its refill and ordering cards are the only part of it that needs
+the live fleet; the week's sales, the catalogue, the storage units and the valuation are reads of the
+business's own database. So in a support view it is answered `200` with
+`Inventory.Application.Dashboard.SupportViewDashboardSummaryDto`: every local section exactly as a
+member of that business is given it, and `needsRefill` and `needsOrdering` replaced by
+`{ "available": false, "reason": "SupportView" }`. The whole section is replaced rather than
+zeroed or nulled, because `machinesNeedingRefill: 0` reads as a fact about the business's machines.
+That is the same shape issue #329 publishes with `reason: "NayaxNotConnected"` for a business whose
+connection is unusable, and deliberately one shape rather than two: a client maps a stable reason
+code to its own wording, and the reason is never a sentence to display. The UI messages are #513's
+work.
+
+**And the fleet read is not attempted.** `GetDashboardSummary` branches on
+`IBusinessScope.State == SupportReadOnly` and never calls `CalculateReorderNeeds` at all, so there is
+no refused Nayax call, no resolved credential and nothing to swallow — which is why the decision is
+taken from the published scope rather than from a second rule about who the caller is: it is the very
+state `NayaxRequestCredentialProvider` refuses in, so "the dashboard degrades" and "Nayax is blocked"
+cannot come to mean different things. The week's figures are in the response because the support set
+grants `Dashboard.ViewFinancials`, and that capability is still read through `CurrentCapabilities` on
+the request rather than assumed, which is why there is one support-view shape and not a redacted pair
+(see [Dashboard financial redaction](#dashboard-financial-redaction-issue-527) for the member
+shapes). No other degraded screen is part of #552; the rest are #329's.
 
 **The capability set is written out, not derived.** `Inventory.Application.Access.SupportSessionAccessPolicy`
 holds exactly thirteen capabilities — `Dashboard.View`, `Dashboard.ViewFinancials`, `PickList.View`,
@@ -2183,7 +2207,11 @@ lookup, no resolution and no role, and a member's own resolution unchanged.
 `NayaxRequestCredentialProviderTests` covers the block with the connection in each usable status, and
 asserts the connection was never read at all. `GetCurrentAccessTests` covers the reported set, the
 absent role and the session block. `GetDashboardSummaryRedactionTests` covers the financial figures
-being decided from the support set rather than from a role.
+being decided from the support set rather than from a role, and
+`GetDashboardSummarySupportViewTests` the degraded shape of issue #552: the two sections reported
+unavailable with their reason, not one fleet call attempted, the local sections identical to the ones
+a member of that business is given, a member's own request still reading the fleet and keeping its
+shape, and a denied scope refused rather than degraded.
 `Inventory.IntegrationTests/Auth/BusinessScopeMiddlewareSupportSessionTests` is the middleware's own
 decision: the published read-only scope and the supported business's time zone, the refusal with its
 code before any business is resolved, the refusal *despite* a usable membership, a presented-nothing
@@ -2208,7 +2236,10 @@ recording a call — which is what makes "no Nayax call" mean something: only th
 visible in both directions, every read in the set answered `200`, every write `403` with
 `read_only_support_session`, both exclusions refused for a read with no member's name or address in
 the body, the Nayax-backed reads `403` with `unavailable_in_support_view` and zero calls *beside* the
-control that the same endpoints really do call Nayax for a member, an expired/ended/unknown/another
+control that the same endpoints really do call Nayax for a member, the dashboard summary's degraded
+shape asserted as its exact property sets with zero calls, its local sections still describing the
+supported business, and the same summary keeping its normal shape and its real fleet call for that
+business's Owner, an expired/ended/unknown/another
 administrator's id refused, a deactivation mid-session closing the next request, the no-header request
 falling to the administrator's own (absent) membership, a member unaffected with and without the
 header, no membership written, the `/api/me/access` contract, and the audit event's fields and
@@ -5101,6 +5132,13 @@ capability is answered the same response **without** the `salesThisWeek` object 
 properties are absent from the JSON rather than `null` or `0`. See
 [Dashboard financial redaction](#dashboard-financial-redaction-issue-527) for the exact two shapes
 and why absence is the chosen representation.
+
+Since issue #552 there is a third shape, for a request inside a platform administrator's support
+session: the same contract with `needsRefill` and `needsOrdering` replaced by
+`{ "available": false, "reason": "SupportView" }`, because a support session resolves no Nayax
+credentials and those two cards are the only part of this summary the live fleet feeds. The fleet
+read is not attempted at all in that state, and every other section is the real local figure. See
+[Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
 
 `Inventory.Application.Dashboard.GetDashboardSummary` is the use case. It owns no formula of its
 own: every figure comes from an authority that already existed.

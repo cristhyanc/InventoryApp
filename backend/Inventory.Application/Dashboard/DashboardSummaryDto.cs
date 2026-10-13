@@ -68,6 +68,40 @@ public sealed record DashboardOrderingSummaryDto(
     int ProductsEvaluated);
 
 /// <summary>
+/// A summary section the server deliberately did not compute for this request, published as
+/// <c>{ "available": false, "reason": "..." }</c> (issue #552).
+///
+/// <para>It replaces a whole section rather than blanking figures inside one, because a count is
+/// not something a caller can be shown as partially missing: a <c>0</c> or a <c>null</c>
+/// <c>machinesNeedingRefill</c> reads as a fact about the business's machines. <c>Available</c> is
+/// a constant <c>false</c> - this type exists only for the unavailable case, so there is no
+/// combination of properties that could describe an available section unavailably.</para>
+///
+/// <para>The <see cref="Reason"/> is a stable code a client maps to its own wording, never a
+/// sentence to display. Issue #552 publishes exactly one, <see cref="SupportView"/>; issue #329
+/// adds <c>NayaxNotConnected</c> for a business whose connection is unusable, which is the same
+/// shape and deliberately not a second one.</para>
+/// </summary>
+public sealed record UnavailableDashboardSectionDto(string Reason)
+{
+    /// <summary>
+    /// The reason code for a section withheld because the request is a support session's
+    /// read-only view of the business (issue #551): the business's Nayax credentials are not
+    /// resolved in that state, so the live fleet this section needs is not read at all.
+    /// </summary>
+    public const string SupportViewReason = "SupportView";
+
+    /// <summary>
+    /// Always <see langword="false"/>. The property is published so a client branches on a stated
+    /// flag rather than on the absence of the figures it expected.
+    /// </summary>
+    public bool Available => false;
+
+    /// <summary>The section as a support view publishes it.</summary>
+    public static UnavailableDashboardSectionDto SupportView { get; } = new(SupportViewReason);
+}
+
+/// <summary>
 /// The "Inventory" card. The three figures have deliberately different scopes and are not
 /// interchangeable:
 /// <list type="bullet">
@@ -106,17 +140,22 @@ public sealed record RedactedDashboardInventorySummaryDto(
     int UnitsInStorage);
 
 /// <summary>
-/// What every caller of <c>GET /api/dashboard/summary</c> is told, whatever their role (issue
-/// #527): the instant the figures were resolved at and the two non-financial cards.
+/// What every caller of <c>GET /api/dashboard/summary</c> is told, whatever their role and however
+/// their request resolved its business (issues #527 and #552): the instant the figures were
+/// resolved at and the business date it falls on.
 ///
-/// The summary publishes exactly two shapes - <see cref="DashboardSummaryDto"/> for a caller whose
-/// role grants <c>Dashboard.ViewFinancials</c> and <see cref="RedactedDashboardSummaryDto"/> for one
-/// whose role does not - and this is the part they have in common. They are two types rather than
-/// one type with nullable properties because a redacted figure must be <em>absent</em> from the
-/// JSON: <c>null</c> is already a meaningful answer for <c>inventoryValueAtCost</c> ("the valuation
-/// is incomplete"), <c>0</c> would read as a known zero week, and a property a type does not have
-/// cannot be reintroduced by a later change to a serializer option, a converter or an attribute.
-/// The inventory card is deliberately not on this interface: its two shapes differ.
+/// The summary publishes exactly three shapes - <see cref="DashboardSummaryDto"/> for a caller
+/// whose role grants <c>Dashboard.ViewFinancials</c>, <see cref="RedactedDashboardSummaryDto"/> for
+/// one whose role does not, and <see cref="SupportViewDashboardSummaryDto"/> for a request inside a
+/// support session - and this is the part all three have in common. They are separate types rather
+/// than one type with nullable properties because a withheld figure must be <em>absent</em> from
+/// the JSON: <c>null</c> is already a meaningful answer for <c>inventoryValueAtCost</c> ("the
+/// valuation is incomplete"), <c>0</c> would read as a known zero week, and a property a type does
+/// not have cannot be reintroduced by a later change to a serializer option, a converter or an
+/// attribute. Which shape was built is what the response is serialized from, so the same reasoning
+/// keeps each card on its own type: the inventory card is deliberately not on this interface
+/// because its two shapes differ, and since issue #552 the refill and ordering cards are not
+/// either.
 /// </summary>
 public interface IDashboardSummaryDto
 {
@@ -125,10 +164,6 @@ public interface IDashboardSummaryDto
 
     /// <summary>The business date that instant falls on, in the business's own time zone.</summary>
     DateTime BusinessDate { get; }
-
-    DashboardRefillSummaryDto NeedsRefill { get; }
-
-    DashboardOrderingSummaryDto NeedsOrdering { get; }
 }
 
 /// <summary>
@@ -171,3 +206,28 @@ public sealed record RedactedDashboardSummaryDto(
     DashboardRefillSummaryDto NeedsRefill,
     DashboardOrderingSummaryDto NeedsOrdering,
     RedactedDashboardInventorySummaryDto Inventory) : IDashboardSummaryDto;
+
+/// <summary>
+/// The summary as a request inside a support session receives it (issue #552): every local section
+/// exactly as a member of the business is given it, and the two sections the live Nayax fleet feeds
+/// replaced by <see cref="UnavailableDashboardSectionDto"/> with
+/// <see cref="UnavailableDashboardSectionDto.SupportViewReason"/>.
+///
+/// <para>Nothing is degraded that did not have to be. A support session resolves no Nayax
+/// credentials at all (issue #551), so the refill and ordering cards cannot be counted - but the
+/// week's sales, the catalogue and the valuation are read from the business's own database exactly
+/// as they always are, and withholding them too would hide the information the session was opened
+/// to look at.</para>
+///
+/// <para>The week's figures are present because a support session's fixed capability set grants
+/// <c>Dashboard.ViewFinancials</c> (<see cref="Inventory.Application.Access.SupportSessionAccessPolicy"/>),
+/// which is why this is one shape rather than a redacted pair: the capability is still read through
+/// <c>CurrentCapabilities</c> on the request, not assumed here.</para>
+/// </summary>
+public sealed record SupportViewDashboardSummaryDto(
+    DateTime AsOfUtc,
+    DateTime BusinessDate,
+    DashboardSalesThisWeekDto SalesThisWeek,
+    UnavailableDashboardSectionDto NeedsRefill,
+    UnavailableDashboardSectionDto NeedsOrdering,
+    DashboardInventorySummaryDto Inventory) : IDashboardSummaryDto;

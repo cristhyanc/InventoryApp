@@ -4,7 +4,9 @@ using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
+using Inventory.Application.Tenancy;
 using Inventory.Domain.Reporting.Dashboard;
+using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Products;
 using InventoryApi.Tests.Application.SupportSessions;
@@ -67,9 +69,19 @@ public class GetDashboardSummaryTests
             new CurrentCapabilities(
                 new FakeSupportSessionAccessor(),
                 new FakeCurrentBusinessProvider(businessId: 1)),
+            // A member's own request, so the whole summary is computed; the support view's degraded
+            // shape (issue #552) is GetDashboardSummarySupportViewTests.
+            MemberScope(),
             salesFacts,
             catalog,
             new CalculateReorderNeeds(nayax, outstandingOrders));
+
+    private static BusinessScope MemberScope()
+    {
+        var scope = new BusinessScope();
+        scope.Resolve(BusinessId.From(1));
+        return scope;
+    }
 
     private static GetDashboardSummary UseCase(
         IDashboardSummarySalesFactsProvider? salesFacts = null,
