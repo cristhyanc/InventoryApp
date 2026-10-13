@@ -45,16 +45,31 @@ namespace Inventory.Application.Dashboard;
 /// has no such properties, and <see cref="IDashboardSummarySalesFactsProvider"/> is not called at
 /// all for them - the figures are withheld because they were never calculated, not stripped on the
 /// way out. The decision is made here rather than at the HTTP boundary because it decides what is
-/// <em>read</em>, and it is made from <see cref="RoleCapabilities"/>, the one role → capability
-/// table <c>GET /api/me/access</c> also reports, through the request's memoised membership
-/// resolution - so it cannot disagree with the capability the endpoint itself enforces. No role name
-/// appears in it.</para>
+/// <em>read</em>, and it is made through <see cref="CurrentCapabilities"/>, the one place that
+/// answers "what may this request do" - <see cref="RoleCapabilities"/> for a member, from the
+/// request's memoised membership resolution, and <see cref="SupportSessionAccessPolicy"/>'s fixed
+/// set for a support session (issue #551), which grants <c>Dashboard.ViewFinancials</c>. So it
+/// cannot disagree with the capability the endpoint itself enforces, or with what
+/// <c>GET /api/me/access</c> reported. No role name appears in it.</para>
+///
+/// <para><b>The fleet sections are degraded in a support view (issue #552).</b> A support session
+/// resolves no Nayax credentials at all (issue #551), so the one live fleet read behind the refill
+/// and ordering cards cannot be made - and the rest of the summary is local data the session was
+/// opened to look at. Such a request is therefore answered
+/// <see cref="SupportViewDashboardSummaryDto"/>: the local sections as any member of that business
+/// is given them, with those two replaced by <see cref="UnavailableDashboardSectionDto"/>, and
+/// <see cref="CalculateReorderNeeds"/> is not called at all. The decision is taken from
+/// <see cref="IBusinessScope.State"/>, which is the very state
+/// <c>NayaxRequestCredentialProvider</c> refuses in, so "the dashboard degrades" and "Nayax is
+/// blocked" cannot come to mean different things; it is not a second rule about who the caller
+/// is.</para>
 /// </summary>
 public sealed class GetDashboardSummary
 {
     private readonly IClock _clock;
     private readonly IBusinessCalendar _businessCalendar;
-    private readonly ICurrentBusinessProvider _currentBusiness;
+    private readonly CurrentCapabilities _capabilities;
+    private readonly IBusinessScope _businessScope;
     private readonly IDashboardSummarySalesFactsProvider _salesFacts;
     private readonly IProductCatalogStore _catalog;
     private readonly CalculateReorderNeeds _calculateReorderNeeds;
@@ -62,30 +77,33 @@ public sealed class GetDashboardSummary
     public GetDashboardSummary(
         IClock clock,
         IBusinessCalendar businessCalendar,
-        ICurrentBusinessProvider currentBusiness,
+        CurrentCapabilities capabilities,
+        IBusinessScope businessScope,
         IDashboardSummarySalesFactsProvider salesFacts,
         IProductCatalogStore catalog,
         CalculateReorderNeeds calculateReorderNeeds)
     {
         _clock = clock;
         _businessCalendar = businessCalendar;
-        _currentBusiness = currentBusiness;
+        _capabilities = capabilities;
+        _businessScope = businessScope;
         _salesFacts = salesFacts;
         _catalog = catalog;
         _calculateReorderNeeds = calculateReorderNeeds;
     }
 
     /// <exception cref="BusinessAccessDeniedException">
-    /// The caller has no usable membership, so there is no role to decide the response shape from.
-    /// Nothing is read: an unresolved membership is a refusal, never a fall back to the
-    /// least-privileged role. A request cannot reach this - the endpoint's <c>Dashboard.View</c>
-    /// policy refuses such a caller first - and it fails closed if one ever could.
+    /// The caller has neither a usable membership nor a support session, so there is nothing to
+    /// decide the response shape from. Nothing is read: an unresolved membership is a refusal, never
+    /// a fall back to the least-privileged role. A request cannot reach this - the endpoint's
+    /// <c>Dashboard.View</c> policy refuses such a caller first - and it fails closed if one ever
+    /// could.
     /// </exception>
     public async Task<IDashboardSummaryDto> Handle(CancellationToken cancellationToken)
     {
-        var mayViewFinancials = RoleCapabilities.Allows(
-            await _currentBusiness.RequireRoleAsync(cancellationToken).ConfigureAwait(false),
-            Capability.DashboardViewFinancials);
+        var mayViewFinancials = await _capabilities
+            .AllowsAsync(Capability.DashboardViewFinancials, cancellationToken)
+            .ConfigureAwait(false);
 
         // Resolved once, before anything is read, so every card describes the same instant and the
         // same business week rather than whichever moment its own read happened to start at.
@@ -100,6 +118,15 @@ public sealed class GetDashboardSummary
                 window.CurrentWeek, window.PreviousComparableWeek, cancellationToken)
             : null;
         var products = await _catalog.ListUnorderedAsync(ProductCatalogFilter.None, cancellationToken);
+
+        // Everything above is a read of the business's own database, so a support request makes it
+        // exactly as a member's does. The fleet read below is the one Nayax-backed read behind this
+        // summary, and in a support view it is not started at all (issue #552).
+        if (_businessScope.State == BusinessScopeState.SupportReadOnly)
+        {
+            return SupportView(window, salesFacts, products);
+        }
+
         var reorderNeeds = await _calculateReorderNeeds.Handle(cancellationToken);
 
         var needsRefill = NeedsRefill(reorderNeeds, products);
@@ -119,6 +146,39 @@ public sealed class GetDashboardSummary
                 needsRefill,
                 needsOrdering,
                 RedactedInventory(products));
+    }
+
+    /// <summary>
+    /// The summary a support session is answered (issue #552): the local sections, and the two the
+    /// live fleet feeds reported as unavailable with the reason rather than counted from a fleet
+    /// read that was never made.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// The session's capability set did not grant <c>Dashboard.ViewFinancials</c>, so the week's
+    /// figures were not read and there is no support-view shape to answer with. A request cannot
+    /// reach this - <c>SupportSessionAccessPolicy</c>'s written-out set grants that capability, and
+    /// its own tests pin the set literally - and it fails rather than publishing a shape nobody
+    /// agreed if that ever changes without this use case being revisited.
+    /// </exception>
+    private static SupportViewDashboardSummaryDto SupportView(
+        MachineDashboardWindow window,
+        DashboardSummarySalesFacts? salesFacts,
+        IReadOnlyList<ProductRecord> products)
+    {
+        if (salesFacts is not { } facts)
+        {
+            throw new InvalidOperationException(
+                "A support session grants Dashboard.ViewFinancials, so the Dashboard summary's "
+                    + "week-to-date figures must have been read for it.");
+        }
+
+        return new SupportViewDashboardSummaryDto(
+            window.NowUtc,
+            window.BusinessToday,
+            SalesThisWeek(window, facts),
+            UnavailableDashboardSectionDto.SupportView,
+            UnavailableDashboardSectionDto.SupportView,
+            Inventory(products));
     }
 
     private static DashboardSalesThisWeekDto SalesThisWeek(

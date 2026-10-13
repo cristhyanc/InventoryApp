@@ -43,11 +43,27 @@ internal static class TestAppDbContext
     public static AppDbContext Denied(DbContextOptions<AppDbContext> options) =>
         new(options, DeniedScope());
 
+    /// <summary>
+    /// A context reading one business through a platform administrator's support session (issue
+    /// #551), exactly as such a request would: the same business every tenant-owned read is filtered
+    /// to, and every write refused.
+    /// </summary>
+    public static AppDbContext SupportSession(DbContextOptions<AppDbContext> options, int businessId) =>
+        new(options, SupportSessionScopeFor(businessId));
+
     /// <summary>The scope a successful request would carry, for asserting on it directly.</summary>
     public static IBusinessScope ScopeFor(int businessId)
     {
         var scope = new BusinessScope();
         scope.Resolve(BusinessId.From(businessId));
+        return scope;
+    }
+
+    /// <summary>The scope a support request carries (issue #551).</summary>
+    public static IBusinessScope SupportSessionScopeFor(int businessId)
+    {
+        var scope = new BusinessScope();
+        scope.ResolveForSupportSession(BusinessId.From(businessId));
         return scope;
     }
 

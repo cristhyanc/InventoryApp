@@ -35,6 +35,10 @@ public interface INayaxRequestCredentialProvider
     /// <exception cref="NayaxNotConnectedException">
     /// The current business has no usable Nayax connection.
     /// </exception>
+    /// <exception cref="SupportSessions.SupportSessionNayaxUnavailableException">
+    /// The request is running in a support session (issue #551), which never authenticates to Nayax
+    /// as the business it is reading. Nothing is read and no token is decrypted.
+    /// </exception>
     Task<NayaxRequestCredential> GetForOperationAsync(CancellationToken cancellationToken);
 
     /// <summary>

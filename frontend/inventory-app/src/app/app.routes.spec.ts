@@ -5,6 +5,7 @@ import { accountStateGuard } from './access/account-state.guard';
 import { platformAdminGuard } from './access/platform-admin.guard';
 import { AccessNotAllowedComponent } from './access/access-not-allowed.component';
 import { AccessUnavailableComponent } from './access/access-unavailable.component';
+import { BusinessApplicationComponent } from './access/business-application.component';
 import { InviteAcceptanceComponent } from './access/invite-acceptance.component';
 import { WelcomeComponent } from './access/welcome.component';
 import { ApplicationPendingComponent } from './access/application-pending.component';
@@ -19,6 +20,7 @@ import { HistoricalGstClassificationComponent } from './components/admin/histori
 import { NayaxSaleTimestampRepairComponent } from './components/admin/nayax-sale-timestamp-repair/nayax-sale-timestamp-repair.component';
 import { PlatformDiagnosticsComponent } from './components/admin/diagnostics/platform-diagnostics.component';
 import { AdminUsersComponent } from './components/admin/users/admin-users.component';
+import { RolesComponent } from './components/admin/roles/roles.component';
 import { PurchaseEditPageComponent } from './components/purchases/purchase-edit/purchase-edit-page.component';
 import { PurchaseListComponent } from './components/purchases/purchase-list.component';
 import { PurchaseUploadComponent } from './components/purchases/purchase-upload.component';
@@ -82,6 +84,13 @@ describe('Admin Users route (issue #534)', () => {
   it('serves the dedicated Admin Users page at /admin/users, behind authentication', async () => {
     expect(route('admin/users').canActivate).toContain(MsalGuard);
     await expect(loadedComponent('admin/users')).resolves.toBe(AdminUsersComponent);
+  });
+});
+
+describe('Admin Roles route (issue #530)', () => {
+  it('serves the dedicated Admin Roles page at /admin/roles, behind authentication and Roles.View', async () => {
+    expect(route('admin/roles').canActivate).toContain(MsalGuard);
+    await expect(loadedComponent('admin/roles')).resolves.toBe(RolesComponent);
   });
 });
 
@@ -165,7 +174,8 @@ describe('capability route guards (issue #528)', () => {
   /**
    * `/access-not-allowed` is where a capability guard *sends* a member, so guarding it by one
    * would send them away from their own explanation. The account-state routing destinations and
-   * the invite route (issue #529) are the other exceptions, for the same reason `accountStateGuard`
+   * the invite route (issue #529) are the other exceptions, with the business application form
+   * (issue #543) that those destinations link to, for the same reason `accountStateGuard`
    * is absent from them - see the `account-state routing and the global 403 handler` describe
    * block below. `/super-admin/diagnostics` is decided by the diagnostics API per request rather
    * than by any business role (issue #335) and carries `platformAdminGuard` instead (issue #546,
@@ -183,6 +193,7 @@ describe('capability route guards (issue #528)', () => {
       'application-pending',
       'application-rejected',
       'access-unavailable',
+      'apply',
       'invite/:token'
     ]);
   });
@@ -213,7 +224,14 @@ describe('account-state routing (issue #529)', () => {
     return routes.filter((candidate) => (candidate.canActivate ?? []).length >= 3);
   }
 
-  const bypassPaths = ['welcome', 'application-pending', 'application-rejected', 'access-unavailable', 'invite/:token'];
+  const bypassPaths = [
+    'welcome',
+    'application-pending',
+    'application-rejected',
+    'access-unavailable',
+    'apply',
+    'invite/:token'
+  ];
 
   it('puts accountStateGuard second, after MsalGuard and before the capability guard, on every business route', () => {
     for (const candidate of capabilityGuardedRoutes()) {
@@ -241,6 +259,11 @@ describe('account-state routing (issue #529)', () => {
   it('serves the invite acceptance page behind authentication alone (issue #535)', async () => {
     expect(route('invite/:token').canActivate).toEqual([MsalGuard]);
     await expect(loadedComponent('invite/:token')).resolves.toBe(InviteAcceptanceComponent);
+  });
+
+  it('serves the business application form at /apply, behind authentication alone (issue #543)', () => {
+    expect(route('apply').canActivate).toEqual([MsalGuard]);
+    expect(route('apply').component).toBe(BusinessApplicationComponent);
   });
 
   it('serves the real access-unavailable page, behind authentication alone', () => {

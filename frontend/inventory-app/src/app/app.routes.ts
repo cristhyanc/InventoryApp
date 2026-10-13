@@ -1,12 +1,13 @@
 import { Routes } from '@angular/router';
 import { MsalGuard } from '@azure/msal-angular';
 import { ACCESS_NOT_ALLOWED_PATH, requireCapability } from './access/capability.guard';
-import { accountStateGuard } from './access/account-state.guard';
+import { BUSINESS_APPLICATION_ROUTE, accountStateGuard } from './access/account-state.guard';
 import { platformAdminGuard } from './access/platform-admin.guard';
 import { AccessUnavailableComponent } from './access/access-unavailable.component';
 import { WelcomeComponent } from './access/welcome.component';
 import { ApplicationPendingComponent } from './access/application-pending.component';
 import { ApplicationRejectedComponent } from './access/application-rejected.component';
+import { BusinessApplicationComponent } from './access/business-application.component';
 import { AuthCallbackComponent } from './auth/auth-callback.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
 
@@ -21,7 +22,7 @@ import { designSystemRoutes } from './design-system/design-system.routes';
  * `Member` to the route that state calls for before the page's own business calls ever run, and
  * protects nothing either way. The routes that deliberately carry no `accountStateGuard` are the
  * ones it would otherwise send somebody *to* - `/welcome`, `/application-pending`,
- * `/application-rejected`, `/access-unavailable` and `/invite/:token` - because a person already
+ * `/application-rejected`, `/access-unavailable`, `/apply` and `/invite/:token` - because a person already
  * sent to one of them must not be sent away from it; `/access-not-allowed` carries no capability
  * for the reason already documented beside it, and `/super-admin/diagnostics` (issue #546) carries
  * neither guard: its authority is the platform-admin check, not a business role or membership, so
@@ -63,6 +64,15 @@ export const routes: Routes = [
     path: 'access-unavailable',
     canActivate: [MsalGuard],
     component: AccessUnavailableComponent
+  },
+  {
+    // The business application form (issue #543), linked from the welcome, rejected and
+    // access-unavailable pages. It carries no `accountStateGuard` for the same reason they do not:
+    // it is where those pages send a person whose state is not `Member`, and the form itself sends
+    // anyone it is not for to the page their state calls for.
+    path: BUSINESS_APPLICATION_ROUTE,
+    canActivate: [MsalGuard],
+    component: BusinessApplicationComponent
   },
   {
     // The invite acceptance page (issue #535): reads the token, strips it from the address bar,
@@ -325,6 +335,13 @@ export const routes: Routes = [
     path: 'admin/users',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Members.Manage')],
     loadComponent: () => import('./components/admin/users/admin-users.component').then((m) => m.AdminUsersComponent)
+  },
+  {
+    // The Admin → Roles page (issue #530): a read-only explanation of what each role can access,
+    // Owner-only.
+    path: 'admin/roles',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Roles.View')],
+    loadComponent: () => import('./components/admin/roles/roles.component').then((m) => m.RolesComponent)
   },
   {
     path: 'expenses',

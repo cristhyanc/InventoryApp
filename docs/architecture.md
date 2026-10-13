@@ -838,7 +838,7 @@ InventoryApp/
 │   ├── InventoryApi/                HTTP boundary and composition root only; the folder set is frozen by ApiLayerOwnershipTests (issue #154)
 │   │   ├── Adapters/Mapping/        Response-DTO projections only; no persistence adapter since issue #309
 │   │   ├── Adapters/Nayax/          E2ETestNayaxLynxClient, the test double the E2ETest host registers (issue #46)
-│   │   ├── Adapters/PlatformAdmin/  The ILogger audit adapter for the Super Admin's business decisions, here for the same reason (issue #544)
+│   │   ├── Adapters/PlatformAdmin/  The ILogger audit adapters for the Super Admin's business decisions and lifecycle actions (issues #544, #545) and for support sessions (issue #550), here for the same reason
 │   │   ├── Adapters/PlatformDiagnostics/  The ILogger audit adapter, here because the event carries the request correlation id (issue #336)
 │   │   ├── App_Data/jobs/           The App Service WebJob that triggers the backup command (issue #333)
 │   │   ├── Auth/                    Authentication, the capability policies (issue #525), BusinessScopeMiddleware, the E2E test host's scheme and fixture
@@ -1439,21 +1439,23 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Per-request resolution.** `BusinessScopeMiddleware` runs after authentication and authorization and before the endpoint, resolves membership once, and publishes the answer into the request-scoped `BusinessScope`. The resolution is memoised in the request's own scope, so the capability policies that run earlier in the pipeline (see [Capability authorization](#capability-authorization-issue-525)) and this middleware read one membership lookup between them and cannot disagree about the caller's role. An authenticated caller with no usable membership gets `403` and never reaches an action; the response carries no detail about why, because telling an unrecognised caller whether a business exists is information they have not earned. `IBusinessScope` exists as a separate synchronous port because query filters and `SaveChanges` cannot await a membership lookup. Two endpoint markers, and only two, are eligible to proceed without a membership — the platform diagnostics surface of issue #336 and the account-state family of issue #523 — and a request that does carries the same *denied* scope, so neither reads business data; see [Platform diagnostics](#platform-diagnostics-issue-336) and [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523).
 
-**Fail closed.** `BusinessScope` starts denied and can only move forward to a resolved business, once. A denied scope yields a `null` business ID, and the filters compare with `==`, so an unresolved caller matches no row. "No current business" must never be read as "no filter" — that would convert a resolution bug into a cross-business leak. A scope cannot be repointed mid-request.
+**One other way a business is resolved, and it is not a membership.** Since issue #551 a platform administrator who presents an active support session's id in the `X-Support-Session` header has that session's business published as `BusinessScopeState.SupportReadOnly` — the same business key the filters compare against, and nothing writable. It is the third documented exception to "the business comes only from the caller's membership", and it is not an exception to "never from request input": the header carries a session id, which is a credential, and the business is the one the server stored when the session started. Everything about it — how a request joins one, the read-only enforcement in three layers, the fixed capability set and the Nayax block — is in [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
 
-**Tenant-owned versus global.** Everything persisted is tenant-owned — products, categories, suppliers, purchases and items, stock adjustments, supplier orders and allocations, sales, imports and their children, expenses, commissions, fee rates, costing transition records, each business's own Nayax credentials (issue #518) and report facts — except **four** structural exceptions: `Business` (the boundary itself), `BusinessMembership` (what resolves the boundary, so filtering it would be circular), `BusinessBackfillAudit` (operational evidence about the rollout, which must stay readable precisely when a run assigned rows to the wrong business), and `MemberInvite` (the reviewed decision on issue #532: the redemption has to find an invite by the token a caller with no membership presents, and under the denied scope such a request carries a filtered read matches no row at all — see [Invite redemption](#invite-redemption-issue-532)). There is no "global reference data": the enum-like constants live in code as C# enums, not tables. `BusinessOwnershipCoverageTests` enforces this — a new entity with no ownership fails the build rather than quietly arriving unfiltered — and it asserts the exemption list itself, so a fifth table is a visible edit rather than an addition nobody reviewed.
+**Fail closed.** `BusinessScope` starts denied and can only move forward to a resolved business, once — either an ordinary `Resolved` one or a support session's `SupportReadOnly` one, and never across from one to the other. A denied scope yields a `null` business ID, and the filters compare with `==`, so an unresolved caller matches no row. "No current business" must never be read as "no filter" — that would convert a resolution bug into a cross-business leak. A scope cannot be repointed mid-request.
 
-**"Not tenant-owned" never means "not owned".** Each of the three exempt tables that is not the `Business` itself carries a `BusinessId`, and the boundary for it is that column named in **every** statement over it, by the adapter rather than by the central filter: `EfBusinessMemberStore` and `EfMemberProfileWriteStore` for memberships, `EfMemberInviteStore` and `EfMemberInviteRedemptionStore` for invites. The id is only ever one tenancy resolution produced from the authenticated actor's membership, or — for the redemption alone — the one the invite row itself reports; it never comes from a route, query, body or header. That is deliberately *not* the per-controller `Where` clause this section warns against: those adapters have no central mechanism to defer to, and each keeps its statements behind one private helper so the owner cannot be omitted on one method.
+**Tenant-owned versus global.** Everything persisted is tenant-owned — products, categories, suppliers, purchases and items, stock adjustments, supplier orders and allocations, sales, imports and their children, expenses, commissions, fee rates, costing transition records, each business's own Nayax credentials (issue #518) and report facts — except **five** structural exceptions: `Business` (the boundary itself), `BusinessMembership` (what resolves the boundary, so filtering it would be circular), `BusinessBackfillAudit` (operational evidence about the rollout, which must stay readable precisely when a run assigned rows to the wrong business), `MemberInvite` (the reviewed decision on issue #532: the redemption has to find an invite by the token a caller with no membership presents, and under the denied scope such a request carries a filtered read matches no row at all — see [Invite redemption](#invite-redemption-issue-532)), and `SupportSession` (the reviewed decision on issue #550: every request that reaches it is a platform-admin request, and a platform administrator is a member of no business, so such a request resolves nothing — a filter would match none of its rows and the ownership stamp would have no business to stamp — see [Support sessions](#support-sessions-the-store-and-the-control-endpoints-issue-550)). There is no "global reference data": the enum-like constants live in code as C# enums, not tables. `BusinessOwnershipCoverageTests` enforces this — a new entity with no ownership fails the build rather than quietly arriving unfiltered — and it asserts the exemption list itself, so a sixth table is a visible edit rather than an addition nobody reviewed.
+
+**"Not tenant-owned" never means "not owned".** Each of the four exempt tables that is not the `Business` itself carries a `BusinessId`, and the boundary for it is that column named in **every** statement over it, by the adapter rather than by the central filter: `EfBusinessMemberStore` and `EfMemberProfileWriteStore` for memberships, `EfMemberInviteStore` and `EfMemberInviteRedemptionStore` for invites, `EfSupportSessionStore` for support sessions. The id is only ever one tenancy resolution produced from the authenticated actor's membership, or — for the redemption alone — the one the invite row itself reports, or — for a support session — the business row the session's own write transaction read; it never comes from a route, query, body or header. (A support session additionally carries the Entra `(tid, oid)` pair it was granted to, and every "my session" statement names that pair, which is the authenticated actor and never a request value.) That is deliberately *not* the per-controller `Where` clause this section warns against: those adapters have no central mechanism to defer to, and each keeps its statements behind one private helper so the owner cannot be omitted on one method.
 
 **Central read enforcement.** `AppDbContext.ConfigureBusinessOwnership` walks the model rather than naming entities: every `IBusinessOwned` type gets a required business key, an index leading with it, and a global query filter. A new tenant-owned entity is protected the day it implements the interface. There is no per-entity list to forget and no controller `Where` clause that could be omitted on one endpoint — which is why adding redundant filters in controllers or services is discouraged rather than merely unnecessary.
 
-**Central write enforcement.** Query filters protect reads only. `BusinessOwnershipEnforcer` runs on both `SaveChanges` overloads and enforces four rules: new rows are **stamped** with the caller's business (callers never supply it); inserts, updates, and deletes of another business's row are **rejected**, which is what stops a detached entity attached by ID from slipping through to an `UPDATE`; the business key is **immutable**, so a record cannot be moved between businesses; and every foreign key between tenant-owned entities must **stay inside one business**. The relationship rule is driven by EF model metadata, not a hand-written list, so a new foreign key is covered as soon as it is mapped. Resolving a principal's owner deliberately uses `IgnoreQueryFilters`, because a principal in another business must be reported as a boundary violation rather than mistaken for "does not exist".
+**Central write enforcement.** Query filters protect reads only. `BusinessOwnershipEnforcer` runs on both `SaveChanges` overloads. Since issue #551 it enforces one rule before the other four: a request in `BusinessScopeState.SupportReadOnly` may write **nothing at all** — every table, not only the tenant-owned ones — because in that state there is no write this application wants. The other four rules are about ownership: new rows are **stamped** with the caller's business (callers never supply it); inserts, updates, and deletes of another business's row are **rejected**, which is what stops a detached entity attached by ID from slipping through to an `UPDATE`; the business key is **immutable**, so a record cannot be moved between businesses; and every foreign key between tenant-owned entities must **stay inside one business**. The relationship rule is driven by EF model metadata, not a hand-written list, so a new foreign key is covered as soon as it is mapped. Resolving a principal's owner deliberately uses `IgnoreQueryFilters`, because a principal in another business must be reported as a boundary violation rather than mistaken for "does not exist".
 
-**Tenant-scoped uniqueness.** Constraints over externally supplied values are scoped by business, because two businesses may legitimately hold the same external value: Nayax transaction IDs, import file hashes, site commission agreements, fee effective dates, and costing baselines. `NayaxSales` consequently has its own local key with `TransactionID` unique *per business* — a remote identifier is an external identity, not a primary key. This also keeps import de-duplication correct: one business must never be told its own import is a duplicate because another imported the same bytes first, and a shared remote ID must never cause one business's import to update another's row. The one-active-membership index of issue #522 is deliberately *not* scoped this way, and is not an exception to this rule: `BusinessMembership` is one of the four structural non-tenant-owned tables above, and the value it constrains is an Entra identity that must mean the same person everywhere rather than an externally supplied value two businesses may legitimately share. The invite token hash *is* scoped this way — `(BusinessId, TokenHash)` — even though the invite table is now non-tenant-owned too, because that value is not an identity: a global constraint over it would let one business's row deny another's, and 256 bits of cryptographic randomness is what makes a token unambiguous.
+**Tenant-scoped uniqueness.** Constraints over externally supplied values are scoped by business, because two businesses may legitimately hold the same external value: Nayax transaction IDs, import file hashes, site commission agreements, fee effective dates, and costing baselines. `NayaxSales` consequently has its own local key with `TransactionID` unique *per business* — a remote identifier is an external identity, not a primary key. This also keeps import de-duplication correct: one business must never be told its own import is a duplicate because another imported the same bytes first, and a shared remote ID must never cause one business's import to update another's row. The one-active-membership index of issue #522 is deliberately *not* scoped this way, and is not an exception to this rule: `BusinessMembership` is one of the five structural non-tenant-owned tables above, and the value it constrains is an Entra identity that must mean the same person everywhere rather than an externally supplied value two businesses may legitimately share. The invite token hash *is* scoped this way — `(BusinessId, TokenHash)` — even though the invite table is now non-tenant-owned too, because that value is not an identity: a global constraint over it would let one business's row deny another's, and 256 bits of cryptographic randomness is what makes a token unambiguous. The support-session id hash of issue #550 is deliberately the other way round — unique across the whole table — and that is not an exception either: the rule is about values a *business* supplies, and a session id is generated by this server, supplied by nobody, and matched by a request that carries no business to narrow the lookup with, so global uniqueness is what makes "which session is this?" have one answer.
 
 **Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. No endpoint accepts a file name or path as input, and `FileSystemDocumentStorage` reduces any stored name with `Path.GetFileName` and then proves the result is inside the category folder, so a crafted value cannot escape it. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
 
-**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). Being a human-invoked command is not what grants it: `migrate-nayax-connection` (issue #519) is a fourth such command and constructs no unrestricted context at all, because it needs none — the tenancy tables it reads to resolve the target business carry no tenant filter, and the credential itself is read and written through a context scoped to that one business (see [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context, and issue #544 extended that test to the platform-admin store below — it is registered scoped and its only constructor dependency is the request's own `AppDbContext`, so nothing can hand it anything else. The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
+**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). Being a human-invoked command is not what grants it: `migrate-nayax-connection` (issue #519) is a fourth such command and constructs no unrestricted context at all, because it needs none — the tenancy tables it reads to resolve the target business carry no tenant filter, and the credential itself is read and written through a context scoped to that one business (see [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context, and issue #544 extended that test to the platform-admin store below — it is registered scoped and its only constructor dependency is the request's own `AppDbContext`, so nothing can hand it anything else. Issue #550's support-session store is held to the same three things, for the same reason: it is the second adapter a platform administrator's denied-scope request reaches. **A support session is not unrestricted either, and is narrower than a membership rather than wider** (issue #551): `BusinessScopeState.SupportReadOnly` names exactly one business and is compared by the same filter expression as `Resolved`, so such a request reads that one business and — because `BusinessOwnershipEnforcer` refuses every `SaveChanges` in that state — writes nothing at all. See [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551). The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
 
 **The one reviewed `IgnoreQueryFilters` in a request path (issue #544).** The Super Admin's business directory reports whether each business has stored Nayax credentials, `BusinessNayaxConnection` is tenant-owned, and the request carries a denied scope — so the central filter matches none of its rows and the fact is otherwise unreadable. `EfPlatformBusinessDirectoryStore` makes exactly one `IgnoreQueryFilters` statement, projecting `BusinessId` alone, and the rest of the adapter is ordinary reads and writes of the structurally non-tenant-owned tables. It is a *narrowed* exception rather than a loosened rule: the column it reads is the ownership key, not business data, and the alternatives — an unscoped request context, a second read-only cross-business connection, or resolving each business into the request scope in turn — were each strictly worse. See [Super Admin businesses API](#super-admin-businesses-api-issue-544).
 
@@ -1489,7 +1491,9 @@ A role that nothing checks is a label. Issue #525 is where the capability table 
 
 **The role comes from the request's memoised membership resolution.** The handler resolves it through `ICurrentBusinessProvider` — the same per-request scoped provider `BusinessScopeMiddleware` uses — so the capability decision and the business the request then acts in come from one membership lookup and cannot disagree, and a role change applies on the member's next request exactly as it already did. Resolving it in the handler rather than reading a `BusinessScope` the middleware published is deliberate: `UseAuthorization()` runs **before** `UseMiddleware<BusinessScopeMiddleware>()`, so a policy that waited for the published scope would be able to pass before any membership had been checked. This is the same reasoning the diagnostics bypass follows in re-evaluating its own policy instead of inferring one from pipeline position. The order is stated in `Program.cs` and pinned by `CapabilityAuthorizationApiTests`; the handler's independence from it is pinned by `BusinessCapabilityAuthorizationHandlerTests`.
 
-**A refusal is a bare `403`.** It names no capability, no role, and none of the roles that would have been allowed; the reason — which capability, which role, or that the membership did not resolve — is logged for an operator instead. Because authorization runs first, a caller with no usable membership gets that bare `403` on a capability endpoint rather than `BusinessScopeMiddleware`'s "not associated with a business" sentence, which is strictly less than they were told before; endpoints that declare no capability yet are unchanged, and `GET /api/me/account-state` remains the only place a caller learns their own account state. The handler fails closed in every direction: an unauthenticated caller, a membership that does not resolve for any reason (missing, revoked, ambiguous, a business whose lifecycle status is not `Active`, a stored role this deployment does not declare) and a member whose role simply does not grant the capability all leave the requirement unmet, and an unmet requirement is a refusal rather than a fallback to the least-privileged role.
+**A support session is the second source of a capability, and the handler is read-only for it** (issue #551). Since #551 the handler asks `Inventory.Application.Access.CurrentCapabilities`, which is the one place that chooses between `RoleCapabilities` for a member and `SupportSessionAccessPolicy`'s fixed set for a platform administrator inside a support session; the support state itself comes from `ISupportSessionAccessor`, for the same ordering reason the role does not come from the published scope. In that state the handler additionally requires the request's method to be `GET` or `HEAD`, and that rule is checked first and independently: a write is refused as a write — `403` with `read_only_support_session`, whatever capability it carried — rather than as a missing capability. See [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
+
+**A refusal is a bare `403`.** It names no capability, no role, and none of the roles that would have been allowed; the reason — which capability, which role, or that the membership did not resolve — is logged for an operator instead. The two support-session refusals of issue #551 are the single exception and are not an exception to the principle: `SupportSessionAuthorizationResultHandler` gives *only* a failure carrying one of those two codes a body, and that body carries the code and a fixed sentence and nothing else. Because authorization runs first, a caller with no usable membership gets that bare `403` on a capability endpoint rather than `BusinessScopeMiddleware`'s "not associated with a business" sentence, which is strictly less than they were told before; endpoints that declare no capability yet are unchanged, and `GET /api/me/account-state` remains the only place a caller learns their own account state. The handler fails closed in every direction: an unauthenticated caller, a membership that does not resolve for any reason (missing, revoked, ambiguous, a business whose lifecycle status is not `Active`, a stored role this deployment does not declare) and a member whose role simply does not grant the capability all leave the requirement unmet, and an unmet requirement is a refusal rather than a fallback to the least-privileged role.
 
 **Requirements accumulate, so narrowing one action is additive.** A controller-level capability plus an action-level one means that action needs both. `SuppliersController` is the shape: every action needs `Purchasing.Operate`, and `PUT /api/suppliers/{id}/gst-defaults` additionally needs `Suppliers.ManageGstDefaults`, because a supplier default decides how later purchases are classified. Reading the defaults stays on `Purchasing.Operate` so an Operator recording a purchase can see which classification it will be given. Every role holding `Suppliers.ManageGstDefaults` holds `Purchasing.Operate` too, so the combination is the GST capability in effect and strictly narrower than either alone.
 
@@ -1498,7 +1502,7 @@ A role that nothing checks is a label. Issue #525 is where the capability table 
 **Four endpoint classes, and nothing else.** `EndpointAuthorizationClassificationTests` (`backend/Inventory.IntegrationTests/Architecture/`) walks every action on every controller and recognises exactly four ways an endpoint may be authorized:
 
 1. **A capability policy** — `[RequireCapability(...)]` on the action or its controller. This is what a business endpoint normally is.
-2. **The platform diagnostics surface** — `PlatformAdminPolicy` *and* `PlatformDiagnosticsEndpointAttribute` together (issue #336). Both halves are required, and such an endpoint declares no capability: `PlatformAdminPolicy` is satisfied by a configured Entra `(tid, oid)` pair that is deliberately not a membership row, so a capability there would be unsatisfiable for the only caller it exists for — and a diagnostics endpoint that declared one would be inviting a business role into a cross-business path. The test asserts both directions, and `CapabilityPolicyCompositionTests` asserts the policies themselves: `PlatformAdminPolicy` holds no capability requirement and no capability policy holds a platform-admin requirement.
+2. **The platform-admin surface** — `PlatformAdminPolicy` *and* `PlatformDiagnosticsEndpointAttribute` together (issue #336 for the read-only diagnostics API, #544 and #545 for the Super Admin businesses API, #550 for the support-session control endpoints: one class, one marker and one policy for all of them). Both halves are required, and such an endpoint declares no capability: `PlatformAdminPolicy` is satisfied by a configured Entra `(tid, oid)` pair that is deliberately not a membership row, so a capability there would be unsatisfiable for the only caller it exists for — and a diagnostics endpoint that declared one would be inviting a business role into a cross-business path. The test asserts both directions, and `CapabilityPolicyCompositionTests` asserts the policies themselves: `PlatformAdminPolicy` holds no capability requirement and no capability policy holds a platform-admin requirement.
 3. **The membership-not-required family** — `MembershipNotRequiredEndpointAttribute` on an endpoint named in the allowlist the test now owns (issue #523; today `api/me/account-state`, `api/invites/redeem` and `api/onboarding/business-applications`, each added by its own reviewed change). `MembershipNotRequiredEndpointAllowlistTests` reads that same single list and keeps the assertions about what the marker may never remove.
 4. **`GET /api/me/access`** — one endpoint, named explicitly rather than marked, because a marker would be a mechanism somebody could reuse. A member must be able to ask what they may do whatever role they hold.
 
@@ -1519,7 +1523,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
-| Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines`, `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
+| Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Purchases, Supplier Orders, Suppliers | `api/purchases`, `api/supplierorders`, `api/suppliers` | `Purchasing.Operate` | ✔ | ✔ | ✔ |
 | Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
@@ -1629,7 +1633,7 @@ The ordering is the whole rule: a person's history may hold any number of revoke
 
 **The state describes; it grants nothing.** `BusinessMembershipResolutionPolicy` remains the only rule that decides access, and no account state is consulted by it. That is also why a current membership whose stored role this code does not declare is still `Member` here while every business endpoint refuses it (`RoleUnrecognised`, see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)): the account exists and the undeclared role is an operator's problem, not a different account state. `GetAccountState` (Application) reads the caller's membership records through `IBusinessMembershipStore` rather than through `ICurrentBusinessProvider`, because a resolution is one access decision while this precedence is about the records themselves, including the inactive ones a resolution has no use for. A caller whose token identifies nobody — no authenticated actor, or no usable `(tid, oid)` pair — is reported as `NoMembership` without any lookup, which is their situation exactly: an identity nothing can be recorded against has no membership.
 
-**The marker is eligibility, not permission.** `MembershipNotRequiredEndpointAttribute` (`InventoryApi/Auth/`) is honoured by `BusinessScopeMiddleware` only on the endpoint carrying it, and a marked request keeps the `[Authorize]` requirement and the delegated `access_as_user` scope — "membership not required" is not "anonymous", and an unauthenticated request is still left to the authentication middleware's `401`. The request runs with a **denied** `BusinessScope` and no business time zone, exactly as a diagnostics request does, so the tenant query filters and `BusinessOwnershipEnforcer` stay fully in force and a marked endpoint reads no business data at all through `AppDbContext`; the membership table it does read is one of the four structural non-tenant-owned tables above. Membership is not resolved for a marked endpoint at all, rather than resolved and ignored, so there is no business for anything downstream to pick up. Unlike the diagnostics marker it evaluates no policy, because the only thing such an endpoint may answer is a fact about the caller's own identity; an endpoint carrying both markers stays a diagnostics endpoint, decided by `PlatformAdminPolicy`.
+**The marker is eligibility, not permission.** `MembershipNotRequiredEndpointAttribute` (`InventoryApi/Auth/`) is honoured by `BusinessScopeMiddleware` only on the endpoint carrying it, and a marked request keeps the `[Authorize]` requirement and the delegated `access_as_user` scope — "membership not required" is not "anonymous", and an unauthenticated request is still left to the authentication middleware's `401`. The request runs with a **denied** `BusinessScope` and no business time zone, exactly as a diagnostics request does, so the tenant query filters and `BusinessOwnershipEnforcer` stay fully in force and a marked endpoint reads no business data at all through `AppDbContext`; the membership table it does read is one of the five structural non-tenant-owned tables above. Membership is not resolved for a marked endpoint at all, rather than resolved and ignored, so there is no business for anything downstream to pick up. Unlike the diagnostics marker it evaluates no policy, because the only thing such an endpoint may answer is a fact about the caller's own identity; an endpoint carrying both markers stays a diagnostics endpoint, decided by `PlatformAdminPolicy`.
 
 **Which endpoints may carry it is reviewed.** The build fails when the marker appears on an endpoint that is not on its allowlist, and every marked endpoint is also asserted to require authentication and the delegated scope and to carry no `[AllowAnonymous]`. Issue #525 folded that allowlist into `EndpointAuthorizationClassificationTests` as class 3 of the four endpoint classes, which is where it now lives; `MembershipNotRequiredEndpointAllowlistTests` reads that same single list and keeps the assertions about the marker itself. It holds three endpoints: `api/me/account-state` above; `api/invites/redeem` (issue #532, the reviewed second entry and the first that writes — see [Invite redemption](#invite-redemption-issue-532)); and `api/onboarding/business-applications` (issue #541, the reviewed third entry and the one behind a deployment flag — see [Self-service business application](#self-service-business-application-issue-541)). Do not mark an endpoint that serves business data, and do not add a third bypass to the middleware.
 
@@ -1643,13 +1647,13 @@ Everything above is about what decides access. This subsection is about the one 
 
 **Refreshed from the sign-in token, not entered.** Both values come from the claims the caller's own validated token carried — `name` for the display name, and `preferred_username` or, where a tenant issues that instead, `email` for the address — read at the API boundary by `EntraActorProfileAccessor` (`InventoryApi/Auth/`). It is a second, deliberately separate claims adapter: it takes the identity half of its answer from `EntraActorIdentityAccessor`, so there is one implementation of "who is calling" and no possibility of two that disagree, and a token whose `(tid, oid)` pair identifies nobody yields no profile at all. Both claim spellings a host with inbound claim mapping on or off produces are accepted, the first spelling present wins (they are two spellings of one fact), a blank claim is the same as an absent one, and a value longer than `MemberProfile.MaxLength` (256) is dropped rather than truncated — a cut-off email address is a wrong email address, and half a name presented as somebody's name is wrong in the same way. A membership whose member has never signed in simply has both columns `null`, which is why they are nullable; `bootstrap-business` sets neither.
 
-**A dedicated narrow write path, outside the request.** `BusinessScopeMiddleware` *schedules* a refresh after `await _next(context)` — after the response has been decided — and writes nothing itself. `ScheduleMemberProfileRefresh` (Application) decides whether to queue one, and `MemberProfileRefreshQueue` is a bounded (64) in-process channel whose only write is a synchronous `TryEnqueue` that never blocks and never throws: a full queue drops the newest refresh and says so. `MemberProfileRefreshWorker` (`InventoryApi/Auth/`, the one hosted service this application runs) drains it, one refresh at a time, and opens a **new service scope** per refresh to invoke the `RefreshMemberProfile` use case in it. That new scope is what "outside the request's business scope" means concretely: its `BusinessScope` is a fresh, *denied* one, so the tenant query filters and `BusinessOwnershipEnforcer` are fully in force over an `AppDbContext` that can read no business's data at all, and the request's own scope and context are gone by then. The refresh works under a denied scope because `BusinessMembership` is one of the four structural non-tenant-owned tables above — a cosmetic write must not be the thing that needs a resolved tenant — and what keeps it to the caller's own row is the identity in the `WHERE` clause, which is the pair the request authenticated as and which nothing a request supplies can choose.
+**A dedicated narrow write path, outside the request.** `BusinessScopeMiddleware` *schedules* a refresh after `await _next(context)` — after the response has been decided — and writes nothing itself. `ScheduleMemberProfileRefresh` (Application) decides whether to queue one, and `MemberProfileRefreshQueue` is a bounded (64) in-process channel whose only write is a synchronous `TryEnqueue` that never blocks and never throws: a full queue drops the newest refresh and says so. `MemberProfileRefreshWorker` (`InventoryApi/Auth/`, the one hosted service this application runs) drains it, one refresh at a time, and opens a **new service scope** per refresh to invoke the `RefreshMemberProfile` use case in it. That new scope is what "outside the request's business scope" means concretely: its `BusinessScope` is a fresh, *denied* one, so the tenant query filters and `BusinessOwnershipEnforcer` are fully in force over an `AppDbContext` that can read no business's data at all, and the request's own scope and context are gone by then. The refresh works under a denied scope because `BusinessMembership` is one of the five structural non-tenant-owned tables above — a cosmetic write must not be the thing that needs a resolved tenant — and what keeps it to the caller's own row is the identity in the `WHERE` clause, which is the pair the request authenticated as and which nothing a request supplies can choose.
 
 **It cannot delay, change or fail a request.** Scheduling is a dictionary read and a non-blocking queue write; anything unexpected in that path is swallowed and logged rather than turned into a failed response, because a display value is never worth that. One refresh at a time rather than a task per sign-in is a consequence of the store: the production database is a single SQLite file with one writer ([SQLite operating assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)), so cosmetic writes must not contend with interactive ones.
 
 **At most once an hour per membership.** `MemberProfileRefreshThrottle` claims the slot *before* the write is queued, so several simultaneous requests from one member produce one refresh rather than several, and a member working in the application queues one write an hour rather than one per request. The slot is keyed by `ActorIdentity`, which since issue #522 has at most one active membership, so "per identity" and "per membership" are the same set. It is in-process state rather than a third column: the two columns say what is stored, not when it was last checked, and a restart costing one extra refresh per member is a better trade than a column plus a write on every request to maintain it. A token carrying neither claim queues nothing and does **not** consume the slot, so the next token that does carry a claim is stored immediately. A clock that moves backwards leaves the slot closed — the fail-safe direction for this rule is not to refresh.
 
-**Never on a support session.** A request carrying the `X-Support-Session` header (`InventoryApi.Auth.SupportSessionHeader`, the name defined here for issue #512) schedules no refresh at all. A support session is somebody from outside the business looking at the business's data to help with a problem, and their token's name and email address are not the member's: refreshing from it would quietly overwrite the row. The header's *presence* decides it and its value is not read, which is safe in this one direction because the only thing it can do is stop a cosmetic write; when #512 defines what a support session is and how it is authorised, that authorisation goes there and the header name stays here as the one spelling both sides use.
+**Never on a support session.** A request carrying the `X-Support-Session` header (`InventoryApi.Auth.SupportSessionHeader`, the name defined here for issue #512) schedules no refresh at all. A support session is somebody from outside the business looking at the business's data to help with a problem, and their token's name and email address are not the member's: refreshing from it would quietly overwrite the row. The header's *presence* decides it and its value is not read, which is safe in this one direction because the only thing it can do is stop a cosmetic write. Issue #550 defines what a support session *is* — the stored, audited grant and the endpoints that manage it (see [Support sessions](#support-sessions-the-store-and-the-control-endpoints-issue-550)) — and deliberately did not change this; issue #551 is what reads the header's **value**, hashing it and matching it against an active session of the same platform administrator to resolve a business (see [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551)). The two readers are deliberately different in kind, and this one is still the presence: a request inside a resolved session schedules no refresh because that path never reaches the scheduler at all, and a request from anybody else that merely *sets* the header is skipped on presence alone — which stays the fail-safe direction, because the only thing it can do is stop a cosmetic write. The header name stays here as the one spelling both sides use.
 
 **Never logged, and not on the diagnostics surface.** Neither value appears in a log message, a structured log property or an exception: `RefreshMemberProfile` returns an outcome (`Refreshed`, `NoRowChanged`, `NothingToStore`) and the drain logs that outcome, never the member or the values, and the failure path logs the failure alone. `PlatformDiagnosticsDataSurface` excludes `BusinessMemberships` entirely, so neither column is reachable there either — see [Platform diagnostics](#platform-diagnostics-issue-336).
 
@@ -1678,7 +1682,7 @@ POST /api/members/{membershipId}/reinstate
 
 **No endpoint takes a business identifier, and no response carries one.** The business is resolved from the authenticated actor's membership through `ICurrentBusinessProvider`, exactly as everywhere else. The membership key each change takes is looked up by **business and key together**, so another business's key is "not found" rather than refused in a way that confirms it exists — the boundary's `404`, which an Owner holding every capability there is still receives for a member of any other business. The response carries the membership key and never the member's Entra `(tid, oid)` pair: that pair is what every access decision is made from, and publishing it would put the one value that matters into a response a later request could try to send back.
 
-**`BusinessMembership` has no tenant query filter, so the business id is in every statement.** It is one of the four structural non-tenant-owned tables above — filtering the table that resolves the boundary would be circular — so `EfBusinessMemberStore` is deliberately the kind of adapter that names the owner in its `WHERE` clause. That is not the per-controller `Where` clause § Tenant ownership warns against: there is no central mechanism for this one table to defer to, and the id it names only ever came from tenancy resolution. Since issue #532 the invite adapters are the same kind of adapter, for the same reason.
+**`BusinessMembership` has no tenant query filter, so the business id is in every statement.** It is one of the five structural non-tenant-owned tables above — filtering the table that resolves the boundary would be circular — so `EfBusinessMemberStore` is deliberately the kind of adapter that names the owner in its `WHERE` clause. That is not the per-controller `Where` clause § Tenant ownership warns against: there is no central mechanism for this one table to defer to, and the id it names only ever came from tenancy resolution. Since issue #532 the invite adapters are the same kind of adapter, for the same reason.
 
 **Every change runs in issue #522's shared write transaction**, and the authoritative read is *inside* it. `MemberChangeWriter` is the one place that is arranged: it resolves the business, reads the target once outside the transaction for two **immutable** facts only (whether this business holds that membership, and the Entra identity the eligibility rule is re-checked for), then opens `MembershipWriteGuard`, **re-reads the role and the active flag inside the write lock**, compares, writes, and lets the guard judge the resulting state before anything commits. The comparison and the mutation are therefore one operation: a membership revoked between the two reads refuses the role change it was about to get, rather than receiving it.
 
@@ -1846,7 +1850,7 @@ Until this slice a business existed in exactly one way: a human ran `bootstrap-b
 
 **An application *is* the business.** There is no separate application entity, and deliberately so: a `Pending` business row carries the submitted details, `AppliedAtUtc`, and the applicant's own active Owner membership from the moment it is created, so approving it later changes a status rather than copying anything anywhere. `Inventory.Application.Onboarding.BusinessApplication` is what the Application layer reports about one — the business id, the stored `BusinessSettings`, the status and the submission instant — and `Inventory.Application.Onboarding.IBusinessApplicationStore` is the narrow port it runs on, implemented by `Inventory.Infrastructure.Persistence.EfBusinessApplicationStore`.
 
-**`POST /api/onboarding/business-applications`, class 3, denied scope.** `InventoryApi.Controllers.OnboardingController`'s one action carries `MembershipNotRequiredEndpointAttribute` and is the reviewed third entry on that marker's allowlist (see [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523)). It is its own controller for the reason the invite redemption is: `BusinessController` declares capabilities a person with no membership could not possibly hold, so an endpoint with the opposite authorization shape gets its own story rather than an exception inside somebody else's. The request still requires authentication and the delegated `access_as_user` scope — "membership not required" is not "anonymous" — and still runs with a **denied** `BusinessScope`, so the tenant query filters and `BusinessOwnershipEnforcer` stay fully in force and it reads no business data at all. The two tables it writes, `Businesses` and `BusinessMemberships`, are two of the four structurally non-tenant-owned ones (see [Tenant ownership](#tenant-ownership-issue-64)), and the business id in every statement comes from the server's own side of the operation: the key the database assigns the row being created, or — for a resubmission — the id the caller's *own* membership row reported. Never from the request, which carries no identifier of any kind.
+**`POST /api/onboarding/business-applications`, class 3, denied scope.** `InventoryApi.Controllers.OnboardingController`'s one action carries `MembershipNotRequiredEndpointAttribute` and is the reviewed third entry on that marker's allowlist (see [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523)). It is its own controller for the reason the invite redemption is: `BusinessController` declares capabilities a person with no membership could not possibly hold, so an endpoint with the opposite authorization shape gets its own story rather than an exception inside somebody else's. The request still requires authentication and the delegated `access_as_user` scope — "membership not required" is not "anonymous" — and still runs with a **denied** `BusinessScope`, so the tenant query filters and `BusinessOwnershipEnforcer` stay fully in force and it reads no business data at all. The two tables it writes, `Businesses` and `BusinessMemberships`, are two of the five structurally non-tenant-owned ones (see [Tenant ownership](#tenant-ownership-issue-64)), and the business id in every statement comes from the server's own side of the operation: the key the database assigns the row being created, or — for a resubmission — the id the caller's *own* membership row reported. Never from the request, which carries no identifier of any kind.
 
 **The request carries the business's details and nothing else.** `name`, `contactEmail`, `abn`, `gstRegistered` and `timeZoneId`: the same five an Owner can later edit through `PUT /api/business/settings`, validated by the same rule. `Inventory.Domain.Tenancy.BusinessApplicationPolicy.Validate` delegates to `BusinessSettingsPolicy.Validate` rather than restating it, because a second validation would eventually disagree with the first about what a business may record about itself — so a missing or over-long name, an address that cannot be an address, an unstated `gstRegistered`, a malformed ABN and a missing time zone are refused with that policy's own `400` sentences, and the zone's resolvability is still decided centrally on the way into the database by `BusinessTimeZoneEnforcer`. Everything else is the server's: the identifier, the `Pending` status (stated explicitly, as issue #584 requires), the Owner role, and who the applicant is — the validated `(tid, oid)` claim pair, with the display name and email address from the same token (issue #524).
 
@@ -1862,7 +1866,7 @@ Until this slice a business existed in exactly one way: a human ran `bootstrap-b
 
 **Rate-limited per applicant, and audited.** `Inventory.Application.Onboarding.BusinessApplicationRateLimiter` is a sliding window — five submissions per identity per ten minutes — claimed *before* the membership read and the write, so simultaneous submissions cost one allowance each rather than all passing a count nothing has incremented yet. The identity is the bucket because there is no business to rate-limit by and the validated `(tid, oid)` pair is the only thing a request cannot choose; validation failures are deliberately *not* counted, so correcting a typo in a form is not what runs somebody out of attempts. It is in-process state, like `NayaxConnectionTestRateLimiter` and `MemberProfileRefreshThrottle`, and holds one lock over the whole table because this endpoint is called a handful of times per person in a lifetime and an indivisible "expire, decide, record, clear out" is worth more than concurrency here. The refusal is `429` with `Retry-After` and a fixed sentence naming no count, no window and no business. `Inventory.Application.Onboarding.IBusinessApplicationAudit`, emitted by `InventoryApi.Adapters.Onboarding.LoggingBusinessApplicationAudit` as one structured `ILogger` event with the request's correlation id, records one committed application: the actor's `(tid, oid)` pair, the new business id and the instant — and structurally **no business name, contact address, ABN, GST registration, display name or email address**, because the entry type has no field for any of them. A refused submission and a resubmission are audited as nothing, since neither created a business.
 
-**What this slice does not do.** Approving or rejecting an application (#509) and the application form itself (#543 — nothing in `frontend/inventory-app/src` calls this route yet; #542 built the welcome, pending-approval and rejected pages around where that form will go), email notifications, billing and tenant switching are all out of scope. It changes no existing business, no membership but the applicant's own new one, and no schema.
+**What this slice does not do.** Approving or rejecting an application (#509) and the application form itself (#543 now calls this route from the form at `/apply`; see [Business application form](#business-application-form-issue-543)), email notifications, billing and tenant switching are all out of scope. It changes no existing business, no membership but the applicant's own new one, and no schema.
 
 **What proves this slice.** `BusinessApplicationPolicyTests` (the delegation to the settings policy including its own length bound, the resubmission comparison over validated values, and the refusal wording for every account state — none of which names a business, a role or a member), `ApplyForBusinessTests` (the decisions over fakes with the real write guard: the flag checked before anything is read or validated, validation before an allowance is spent, the creation happening inside the transaction in the order `begin → eligibility read → create → commit`, the application instant sampled after the write lock was granted, one audit event after the commit, every refusal and its sentence, the pending-business row missing or no longer `Pending` refused rather than reported back, and the rate limit refusing without reading or writing anything), `BusinessApplicationRateLimiterTests` (the window, its edge, the per-identity bucket including two GUID spellings of one identity, a clock that moved backwards, and the clear-out never resetting a live allowance), `EfBusinessApplicationStoreTests` (the relational adapter under the denied scope every application carries: the created columns and instants, the applicant's display values stored and absent ones left absent, no Nayax connection and no business data created, the existing business untouched, the filtered one-active-membership index still refusing, both central enforcers refusing and storing nothing, the read reporting a business that never applied and an undeclared status exactly as stored, and the denied context still reading and writing no business data), `BusinessApplicationConcurrencyTests` (two real writers on a real SQLite file through the shared `MembershipWriteRaceHarness`: an invite and an application by one identity leaving exactly one active membership with the loser leaving nothing behind, the same race for a revoked identity, two applications by one identity creating exactly one business whichever way they interleave — with every attempt answered either by that one application or by the membership conflict, and the conflicting interleaving itself proved deterministically by an application whose eligibility read missed a committed one, which is refused and leaves no business row behind — two applications by two identities both succeeding, and the sequential resubmission changing nothing), `BusinessApplicationApiTests` (the whole pipeline on a host with the flag on: the first-sign-in workflow end to end with the account state before and after, the response naming no business id or contact detail, the applicant's own display values on the new membership, every validation rule answering `400` and writing nothing, the same unbindable bodies still answering `[ApiController]`'s `400` (and `401`/`403` without authentication or scope) with the flag on, each refusal with its sentence and the existing member keeping their own access, the released and the rejected applicant both admitted with the rejected application kept, the resubmission answered with the waiting application and the differing one refused, `401`, the missing-scope `403`, the same business-less caller refused by every other endpoint, a pending applicant refused by every normal endpoint, the `429` with `Retry-After`, and the audit event carrying no name or email address while a refusal and a resubmission are audited as nothing), `BusinessApplicationDisabledApiTests` (the shipped default on its own host: the generic `404` for a well-formed, a malformed and an ineligible submission alike, and for every body MVC cannot bind — truncated JSON, a wrongly typed field, an empty body and one with no media type — with nothing written, authentication and the scope still required and still `401`/`403` for those unbindable bodies, `onboardingEnabled` reported as `false`, and the existing business unaffected) and `EndpointAuthorizationClassificationTests`/`MembershipNotRequiredEndpointAllowlistTests` (the reviewed allowlist entry and the marker's own rules).
 
@@ -1951,7 +1955,7 @@ POST /api/super-admin/businesses/{businessId}/reject    Pending -> Rejected, + r
 
 **The business id in a route is the subject of a decision, not a tenancy scope.** Every other endpoint in this application resolves its business from the authenticated actor's membership and accepts no owner from a request ([Tenant ownership](#tenant-ownership-issue-64)). A platform decision has to name the application it is about, so these two routes carry the id — and that is the whole of what it does: it resolves no business for the request, which still runs with a **denied** `BusinessScope`; it is never stamped on a row; it cannot reach a tenant-owned table; and it is checked against the stored rows on every call, so an unknown id is `404` and an already-decided one is `409`. The directory response carries the id for the same reason, and it is the only response in the application that carries a tenant key. Neither shape may be copied onto a business endpoint.
 
-**A deliberately tiny persistence surface — this is what bounds the write.** `IPlatformBusinessDirectoryStore` (`Inventory.Application/PlatformAdmin/`) is nine methods — five for this slice, four more for the lifecycle transitions of [#545](#deactivating-reactivating-and-releasing-members-issue-545) — and `EfPlatformBusinessDirectoryStore` is the whole of what a platform administrator can reach through `AppDbContext`: a fixed set of `Businesses` columns, the count of active `BusinessMemberships` per business, a yes/no for whether a `BusinessNayaxConnection` row exists, the memberships of one named business, and writes that reach nothing but the business's `Status`/`DecidedAtUtc`/`RejectionReason` and one membership's `IsActive`/`StatusChangedAtUtc`. No method takes a table name, a predicate, a column list, a filter, a page or a statement, and the list deliberately takes no caller-supplied filter, sort or search at all: a caller-supplied predicate over a cross-business read is how a fixed list stops being a list and becomes a query engine. Nothing tenant-owned is readable or writable through it — an adapter test asserts that the same denied context still reads no `Products` or `Categories` row and still has a tenant-owned write refused with `CrossBusinessAccessException`. Both writes go through `SaveChanges` on tracked entities on purpose, so `BusinessStatusEnforcer`, `BusinessTimeZoneEnforcer`, `BusinessAbnEnforcer` and `BusinessOwnershipEnforcer` all run; a set-based `ExecuteUpdate` would write past all four.
+**A deliberately tiny persistence surface — this is what bounds the write.** `IPlatformBusinessDirectoryStore` (`Inventory.Application/PlatformAdmin/`) is nine methods — five for this slice, four more for the lifecycle transitions of [#545](#deactivating-reactivating-and-releasing-members-issue-545), and none added by [#550](#support-sessions-the-store-and-the-control-endpoints-issue-550), which reuses this port's existing read rather than opening a second one — and `EfPlatformBusinessDirectoryStore` is the whole of what a platform administrator can reach of a *business* through `AppDbContext`: a fixed set of `Businesses` columns, the count of active `BusinessMemberships` per business, a yes/no for whether a `BusinessNayaxConnection` row exists, the memberships of one named business, and writes that reach nothing but the business's `Status`/`DecidedAtUtc`/`RejectionReason` and one membership's `IsActive`/`StatusChangedAtUtc`. No method takes a table name, a predicate, a column list, a filter, a page or a statement, and the list deliberately takes no caller-supplied filter, sort or search at all: a caller-supplied predicate over a cross-business read is how a fixed list stops being a list and becomes a query engine. Nothing tenant-owned is readable or writable through it — an adapter test asserts that the same denied context still reads no `Products` or `Categories` row and still has a tenant-owned write refused with `CrossBusinessAccessException`. Both writes go through `SaveChanges` on tracked entities on purpose, so `BusinessStatusEnforcer`, `BusinessTimeZoneEnforcer`, `BusinessAbnEnforcer` and `BusinessOwnershipEnforcer` all run; a set-based `ExecuteUpdate` would write past all four.
 
 **The one bypass, and why it is a single column.** The Nayax yes/no is the only fact here that lives on a tenant-owned table, so under the denied scope the central filter `!TenantFilteringEnabled || e.BusinessId == CurrentBusinessId` hides every row of it. The adapter therefore makes exactly one `IgnoreQueryFilters` statement, projecting `BusinessId` and nothing else — the ownership key itself, which is not business data. The credential columns are not in the projection, are not materialised and do not appear in the generated SQL; no operator id, connection status, key id or ciphertext can reach a response. The rejected alternatives are recorded in [Tenant ownership](#tenant-ownership-issue-64) § The unrestricted-context rule. A second `IgnoreQueryFilters`, a wider projection or any predicate over a tenant-owned table in this adapter is a boundary change needing its own reviewed issue.
 
@@ -1969,7 +1973,7 @@ POST /api/super-admin/businesses/{businessId}/reject    Pending -> Rejected, + r
 
 **No schema change.** Issue #540's lifecycle status, `DecidedAtUtc` and `RejectionReason` are the columns this writes; nothing is added, and there is no migration in this slice.
 
-**What proves it.** `Inventory.UnitTests/Domain/Tenancy/BusinessDecisionPolicyTests` covers the decidable statuses, the reason bounds and the refusal wording. `Inventory.UnitTests/Application/PlatformAdmin/BusinessApplicationDecisionTests` runs both decisions over the real `MembershipWriteGuard`: the exclusion that makes an approval possible, the refusals for an applicant who joined elsewhere or cannot be identified, the status and applicant changing while the write lock is awaited, and what each refusal leaves unwritten and unaudited. `Inventory.IntegrationTests/Adapters/Persistence/EfPlatformBusinessDirectoryStoreTests` is the relational half over two businesses and a denied scope: the cross-business list, the active-member counts, the Nayax flag beside the proof that the ordinary read of that table still sees nothing, the tenant-owned read and write still refused, and a membership of another business that cannot be released by a decision on this one. `PlatformBusinessDecisionConcurrencyTests` is the race. `Inventory.IntegrationTests/Controllers/SuperAdminBusinessesApiTests` is the HTTP boundary: every endpoint refused for an Owner, a Manager, the applicant, a stranger, an anonymous caller and a caller without the delegated scope; the administrator still refused by every business endpoint; the applicant reaching their own business only once it is approved; the response carrying exactly the ten declared properties and neither a product name nor a token ciphertext; and the unconfigured host refusing everyone. `BusinessScopeCompositionTests` pins the store's registration and dependencies, and `EndpointAuthorizationClassificationTests` pins all ten platform-admin endpoints as class 2 with no capability.
+**What proves it.** `Inventory.UnitTests/Domain/Tenancy/BusinessDecisionPolicyTests` covers the decidable statuses, the reason bounds and the refusal wording. `Inventory.UnitTests/Application/PlatformAdmin/BusinessApplicationDecisionTests` runs both decisions over the real `MembershipWriteGuard`: the exclusion that makes an approval possible, the refusals for an applicant who joined elsewhere or cannot be identified, the status and applicant changing while the write lock is awaited, and what each refusal leaves unwritten and unaudited. `Inventory.IntegrationTests/Adapters/Persistence/EfPlatformBusinessDirectoryStoreTests` is the relational half over two businesses and a denied scope: the cross-business list, the active-member counts, the Nayax flag beside the proof that the ordinary read of that table still sees nothing, the tenant-owned read and write still refused, and a membership of another business that cannot be released by a decision on this one. `PlatformBusinessDecisionConcurrencyTests` is the race. `Inventory.IntegrationTests/Controllers/SuperAdminBusinessesApiTests` is the HTTP boundary: every endpoint refused for an Owner, a Manager, the applicant, a stranger, an anonymous caller and a caller without the delegated scope; the administrator still refused by every business endpoint; the applicant reaching their own business only once it is approved; the response carrying exactly the ten declared properties and neither a product name nor a token ciphertext; and the unconfigured host refusing everyone. `BusinessScopeCompositionTests` pins the store's registration and dependencies, and `EndpointAuthorizationClassificationTests` pins all thirteen platform-admin endpoints — the two diagnostics ones, these eight, and the three support-session ones of #550 — as class 2 with no capability.
 
 #### Deactivating, reactivating and releasing members (issue #545)
 
@@ -1984,9 +1988,9 @@ POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release   w
 
 **Each transition starts from exactly one status, and the deny direction is the default.** `Inventory.Domain.Tenancy.BusinessLifecyclePolicy` is the rule: only an `Active` business may be deactivated, only a `Deactivated` one may be reactivated, and the members of a business may be listed or released only while it is `Deactivated`. A `Pending` application, a `Rejected` one and a stored value this code does not declare are refused in every direction, so a business whose state nobody decided is never the subject of a transition. Unlike `BusinessDecisionPolicy`'s refusals these sentences may name the state the business is in: those are read back by an *applicant* through their account state, while these reach the platform administrator alone, whose own directory already reports every business's status.
 
-**Deactivating is one transaction: the status, the invites, and the hook.** `Businesses.Status` becomes `Deactivated`, which is not `Active`, so `BusinessMembershipResolutionPolicy` resolves nothing and every member of the business gets the ordinary `403` on their very next request — membership resolution is memoised per request only, so there is no cache to wait for and no sign-out to force. **No data is deleted and no membership is touched**, flag and `StatusChangedAtUtc` alike: the members are refused because the business no longer resolves, not because their rows were changed, which is exactly what lets a reactivation put the business back. In the same transaction every invite of that business that is still live is cancelled permanently through issue #531's `IMemberInviteStore.CancelAllLiveAsync` — a deactivated business whose outstanding links still worked would be a way back in after the door was closed, and an invite cancelled by a deactivation that then rolled back would have been withdrawn for nothing. Already-used, already-cancelled and expired invites are left exactly as they are, which also makes a repeated deactivation idempotent, and the response reports how many were cancelled because that is the one part of the transition the business row does not show afterwards. That cancellation is the **one statement this feature makes outside its own port**: `MemberInvite` is one of the four structural non-tenant-owned tables, and `BusinessLifecycleWriter` passes it the business id of the row it has just read *inside* the transaction, never the route value. A second implementation of the same cancellation in the platform store would be two statements that could drift apart.
+**Deactivating is one transaction: the status, the invites, and the hook.** `Businesses.Status` becomes `Deactivated`, which is not `Active`, so `BusinessMembershipResolutionPolicy` resolves nothing and every member of the business gets the ordinary `403` on their very next request — membership resolution is memoised per request only, so there is no cache to wait for and no sign-out to force. **No data is deleted and no membership is touched**, flag and `StatusChangedAtUtc` alike: the members are refused because the business no longer resolves, not because their rows were changed, which is exactly what lets a reactivation put the business back. In the same transaction every invite of that business that is still live is cancelled permanently through issue #531's `IMemberInviteStore.CancelAllLiveAsync` — a deactivated business whose outstanding links still worked would be a way back in after the door was closed, and an invite cancelled by a deactivation that then rolled back would have been withdrawn for nothing. Already-used, already-cancelled and expired invites are left exactly as they are, which also makes a repeated deactivation idempotent, and the response reports how many were cancelled because that is the one part of the transition the business row does not show afterwards. That cancellation is the **one statement this feature makes outside its own port**: `MemberInvite` is one of the five structural non-tenant-owned tables, and `BusinessLifecycleWriter` passes it the business id of the row it has just read *inside* the transaction, never the route value. A second implementation of the same cancellation in the platform store would be two statements that could drift apart.
 
-**The hook point is declared now, with nothing behind it (the fourth criterion).** `IBusinessDeactivationHook` is called last inside the deactivation's transaction, after the status and the invites, and the shipped implementation `NoBusinessDeactivationHook` does nothing. It exists because issue #512's support sessions have to end when the business they are inside is deactivated, and the only safe place for that is inside this transaction: a session ended by a deactivation that rolled back would have been ended for nothing, and a session left running by a deactivation that committed would be exactly the access the deactivation exists to stop. A hook that throws therefore refuses the whole deactivation rather than leaving a half-finished one. The composition root registers exactly one implementation, so #512 replaces that single line rather than editing this transition; **no session logic is in this slice**.
+**The hook point was declared here, and issue #550 is what is behind it (the fourth criterion).** `IBusinessDeactivationHook` is called last inside the deactivation's transaction, after the status and the invites. It exists because issue #512's support sessions have to end when the business they are inside is deactivated, and the only safe place for that is inside this transaction: a session ended by a deactivation that rolled back would have been ended for nothing, and a session left running by a deactivation that committed would be exactly the access the deactivation exists to stop. A hook that throws therefore refuses the whole deactivation rather than leaving a half-finished one. The composition root registers exactly one implementation: #545 shipped a no-op, and [#550](#support-sessions-the-store-and-the-control-endpoints-issue-550) replaced that single line with `EndSupportSessionsOnBusinessDeactivation` rather than editing this transition — **no session logic is in this transition**, then or now.
 
 **Reactivating requires an active Owner, and that refusal is part of the write.** The rule is `BusinessOwnerRetention`'s — the same one the member management of #533 is bound by — re-read inside the transaction over the memberships the business actually holds, so a released Owner, a Manager who is active and a stored role this code cannot read are all "not an Owner" here exactly as they are everywhere else. A business that fails it is refused with `409` and `BusinessLifecyclePolicy.NoActiveOwnerMessage`, having changed nothing. The message is deliberately **not** `BusinessOwnerRetention.LastActiveOwnerMessage`: that one tells the reader to give another member the Owner role first, which only an Owner inside the business can do, and a business that is still deactivated has no reachable Owner at all. Only an Owner may manage members, roles, the integration and the business record, so a trading business without one cannot be administered by anybody inside it and has no repair path short of a human editing the database — which is why this is checked as part of the write rather than reported afterwards. **A reactivation restores only the business**: a membership released while it was off, or revoked by its Owner before that, stays inactive, and a cancelled invite stays cancelled. Both are deliberate decisions about a person, and a business returning is not a reason to undo one — a released person may by now hold an active membership somewhere else, and reviving their old one would deny them *both* businesses (`MembershipEligibility`).
 
@@ -1998,7 +2002,249 @@ POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release   w
 
 **Audit: one structured log event per committed action, and no table.** `LoggingPlatformBusinessLifecycleAudit` writes one `ILogger` `Information` event carrying the acting administrator's `(tid, oid)`, the business id, which action it was, the old → new status, the membership id where one applies, how many invites were cancelled where that applies, the instant and the request/correlation id. It never carries the business name, the released member's display name or email address, or their Entra identity — `PlatformBusinessLifecycleAuditEntry` has no field for a name of any kind, so even a sink that printed the whole entry could not emit one. A refused action is not audited, and neither is one that changed nothing. It is a separate port from the decision audit because a lifecycle action records a membership id and an invite count and has no rejection reason; **the log destination and retention period are platform configuration a human must verify**, exactly as for the other two platform trails.
 
-**What proves it.** `Inventory.UnitTests/Domain/Tenancy/BusinessLifecyclePolicyTests` covers the three status gates, including `0` and an undeclared value, and the refusal wording. `Inventory.UnitTests/Application/PlatformAdmin/BusinessLifecycleTests` runs all four over the real `MembershipWriteGuard`: the order the status write, the invite cancellation and the hook happen in inside one transaction, a hook that refuses rolling the whole deactivation back, the status and the Owner list changing while the write lock is awaited, releasing the last active Owner succeeding while the reactivation that follows is refused, the release asking neither of the guard's two questions, and what each refusal leaves unwritten and unaudited. `Inventory.IntegrationTests/Adapters/Persistence/EfPlatformBusinessDirectoryStoreTests` is the relational half: the lifecycle read's memberships, each write touching only its own column, and another business's membership that cannot be released by naming its key here. `Inventory.IntegrationTests/Controllers/SuperAdminBusinessLifecycleApiTests` is the HTTP boundary over the real migration history: the members of a deactivated business refused by their own endpoints while nothing in their rows changed, the live invite cancelled and the closed ones untouched, the reactivation restoring only still-active memberships, every Owner released then the reactivation refused, the members list carrying exactly the four declared properties and neither an email address nor an Entra id, and — end to end — a released person redeeming an invite into another business and staying released when their original business comes back, with `GET /api/me/account-state` reporting `Member` of the new one. `SuperAdminBusinessesApiTests` calls all ten endpoints of the surface for every caller who is not the configured administrator.
+**What proves it.** `Inventory.UnitTests/Domain/Tenancy/BusinessLifecyclePolicyTests` covers the three status gates, including `0` and an undeclared value, and the refusal wording. `Inventory.UnitTests/Application/PlatformAdmin/BusinessLifecycleTests` runs all four over the real `MembershipWriteGuard`: the order the status write, the invite cancellation and the hook happen in inside one transaction, a hook that refuses rolling the whole deactivation back, the status and the Owner list changing while the write lock is awaited, releasing the last active Owner succeeding while the reactivation that follows is refused, the release asking neither of the guard's two questions, and what each refusal leaves unwritten and unaudited. `Inventory.IntegrationTests/Adapters/Persistence/EfPlatformBusinessDirectoryStoreTests` is the relational half: the lifecycle read's memberships, each write touching only its own column, and another business's membership that cannot be released by naming its key here. `Inventory.IntegrationTests/Controllers/SuperAdminBusinessLifecycleApiTests` is the HTTP boundary over the real migration history: the members of a deactivated business refused by their own endpoints while nothing in their rows changed, the live invite cancelled and the closed ones untouched, the reactivation restoring only still-active memberships, every Owner released then the reactivation refused, the members list carrying exactly the four declared properties and neither an email address nor an Entra id, and — end to end — a released person redeeming an invite into another business and staying released when their original business comes back, with `GET /api/me/account-state` reporting `Member` of the new one. `SuperAdminBusinessesApiTests` calls all eleven endpoints of the platform-admin business surface — the eight on this controller and the three support-session ones of #550 — for every caller who is not the configured administrator.
+
+#### Support sessions: the store and the control endpoints (issue #550)
+
+The two slices above decide whether a business may trade and whether it is switched on. This one, the first slice of [#512](https://github.com/cristhyanc/InventoryApp/issues/512) under #328, is how the Super Admin gets to *look at* one: a business reports an error nobody can reproduce from the outside, and the administrator opens a time-limited, audited, read-only **support session** on it. The session is the record that the access was granted, and this slice is that record plus the three endpoints that manage it; what a request then *does* with one is [#551](#support-sessions-in-the-request-pipeline-issue-551).
+
+**What this slice deliberately did not do, and why that order.** #550 shipped the record before anything acted on it: it resolved no business from a session, and [#551](#support-sessions-in-the-request-pipeline-issue-551) is what added the reading of the `X-Support-Session` header, the `SupportReadOnly` scope state, the read-only enforcement and the Nayax block (#552 then degraded the dashboard summary, below). Building the audited record first was the fail-closed order: the alternative would have been a slice where access existed and the record of it was still being designed. What survives from it is the narrower claim an API test still pins — *holding* a session grants nothing, because a request that does not present the id runs as the administrator's own (non-existent) membership.
+
+```text
+POST /api/super-admin/support-sessions/{businessId}   { "reason": "..." } (required) -> the session id, name, expiry
+GET  /api/super-admin/support-sessions/active         the caller's own session, or 204
+POST /api/super-admin/support-sessions/active/end     ends it, or 204 when there is none
+```
+
+**Class 2, the same marker and the same policy, and no header.** `SuperAdminSupportSessionsController` carries `[Authorize]`, `[Authorize(Policy = PlatformAdminPolicy.Name)]`, `[RequiredScope("access_as_user")]` and `PlatformDiagnosticsEndpointAttribute` — the diagnostics surface's authorization, reused rather than re-invented, and class 2 of the four [endpoint authorization classes](#capability-authorization-issue-525). These three endpoints are the *control* surface and are reached as the administrator themselves, so they neither need nor accept the support-session header: the session they act on is the one belonging to the authenticated actor, found server-side. An Owner is refused here exactly as any other member is, and with no administrator configured — the shipped state — nobody reaches the controller at all.
+
+**The business id in the route is the subject of the session, not a tenancy scope.** It is the same reviewed shape as the lifecycle routes above: the request still carries a **denied** `BusinessScope`, the id resolves no business for it, nothing is stamped with it, it cannot reach a tenant-owned table, and it is checked against the stored rows on every call (`404` for an unknown business, `409` for one that is not `Active`). It is in the route rather than in a body because no DTO in this application carries a business id inwards.
+
+**What a session is, as a row.** `SupportSessions` is an additive table and the **fifth** structural non-tenant-owned one ([Tenant ownership](#tenant-ownership-issue-64)): the business id, the administrator's Entra `(tid, oid)` pair, the reason, the started and expiry instants, a nullable ended instant, and the session id's hash. The structural reason for the exemption is who writes it — every request that reaches this table is a platform-admin request, and a platform administrator is a member of no business, so the request resolves nothing: a tenant query filter would match none of its rows and `BusinessOwnershipEnforcer`'s stamp would have no business to stamp. The boundary is instead the business id, or the actor pair, named in every statement of `EfSupportSessionStore` — and both only ever come from the server's own side of the operation.
+
+**The session id is a credential, and is stored only as a hash.** It is `SupportSessionId.EntropyBytes` (32) bytes from the platform's cryptographic generator, rendered URL-safe, and returned **once** — in the response to the start that created it. The row holds `SupportSessionId.Hash`'s SHA-256 digest, so a copy of the database yields no usable session id; the active-session read deliberately does not re-issue it, and no log or audit event carries it in either form. A lost id means starting a new session, which is audited like the first. The uniqueness of that hash is global rather than per business, which is the deliberate opposite of the invite token's constraint and is explained in [Tenant ownership](#tenant-ownership-issue-64) § Tenant-scoped uniqueness.
+
+**Sixty minutes, fixed by the server.** `SupportSessionPolicy.Lifetime` is both the default and the maximum, and the start request carries **no duration at all**: a caller-supplied one — even a capped one — would make "how long was this business readable?" a property of the request instead of a fact about the feature. The only way to hold access open longer is to start another session, which is audited as a new one.
+
+**A session is active until it is ended or it expires, and expiry is derived.** `SupportSessionPolicy.IsActive` is the one rule — not ended, and `nowUtc < ExpiresAtUtc`, inclusive of the expiry instant exactly as an invite's is — so a session stops being usable at the instant it runs out, on every path at once, with no sweep to run and no row left claiming otherwise. `EndedAtUtc` therefore means "somebody decided to end this" and never "this is over": an expired session keeps it null for the rest of its row's life, and nothing reads that column to mean "still usable".
+
+**Three ways a session ends.** *Expiry*, as above. *The administrator's own end call*, which takes no session id — the session is the authenticated actor's, so there is nothing a request could present and no way to end somebody else's — and which is a success that writes and audits nothing when there is nothing active, including for a session that had already expired. And *the caller no longer passing `PlatformAdminPolicy`*: authority is the configured Entra `(tid, oid)` pair, every read and write of a session names the actor pair it belongs to, and a session is only ever visible, usable and endable by that one actor. Change the configured administrator and the previous pair cannot reach any of these endpoints at all while the new pair's own reads never see the old row — so the session it granted is unreachable to everybody, and #551's middleware re-evaluates the same policy on every request that presents a session id.
+
+**One active session per administrator.** A second start while one is still active is `409` and writes nothing; the first session is untouched. The reason is attribution: two live sessions make "which business was this administrator reading?" unanswerable for every request that names neither, and they double the data readable at one moment for no case anybody asked for. Ending the first is a single call. There is deliberately **no filtered unique index** behind this rule, because "active" is partly derived from the clock and an index cannot express it — an expired session would otherwise occupy the slot forever. What makes the rule hold instead is the write lock: the check and the insert are one operation inside the transaction below.
+
+**The authoritative read, both rules and the write are one operation.** The start runs inside issue #522's shared [`MembershipWriteGuard`](#one-active-membership-per-identity-issue-522) transaction — SQLite `BEGIN IMMEDIATE`, so the write lock is held before anything is decided — and re-reads the business's status and the administrator's active session **inside** it. A deactivation that commits while a start waits for the lock refuses that start, and two simultaneous starts resolve to one session and one `409`. The read before the transaction opens decides nothing: it answers "no such business" with a `404` and refuses a stale view before a write lock is taken on the caller's behalf. The explicit end runs in the same transaction for the same reason, and both store methods are a read followed by one conditional statement over the same "only while active" predicate, so the rows they return are the rows they wrote. Neither asks the guard its membership questions — a session grants no membership — so the intent handed to it is the empty one.
+
+**A business deactivation ends every session for that business, in the same transaction.** This is what [#545's](#deactivating-reactivating-and-releasing-members-issue-545) `IBusinessDeactivationHook` was declared for: `EndSupportSessionsOnBusinessDeactivation` is the single registration that replaces its shipped no-op, it is called last inside the deactivation's own write transaction, and it ends every session of the business the transition read — never a value from the request — at the instant the deactivation recorded. A session that survived the business being switched off would be exactly the access the deactivation exists to stop, and a session ended by a deactivation that then rolled back would have been cut off for nothing. **A reactivation does not revive one**: the ended instant is never rewritten, so a business coming back is not a reason to restore somebody else's access to it, and an administrator who still needs to look starts a new session. Another business's session is untouched, and an already-ended or expired one is left exactly as it is, which is what makes a repeated deactivation idempotent.
+
+**Audit: one structured log event per session started and per session ended, and no table.** `LoggingSupportSessionAudit` writes one `ILogger` `Information` event carrying the administrator's `(tid, oid)`, the business id, the session row's own key (so a start and its end read as one session), which event it is, **the reason**, both instants, and for an end the ended instant and why it ended — `EndedByAdministrator` or `BusinessDeactivated`. The reason is the one free-text value any platform trail here carries, and it is the point: a support session is somebody outside a business reading its data, so "why" is what makes the access reviewable. It never carries the session id in either form — a trail is read by more people than a response is — nor the business's name, nor anybody else's identity; `SupportSessionAuditEntry` has no field for any of them. A refused start is not audited, and neither is an end that closed nothing. There is deliberately no audit table, and **the log destination and retention period are platform configuration a human must verify**, exactly as for the three platform trails beside it.
+
+**The one place an event is not strictly post-commit, stated plainly.** Every other platform audit event in this application is emitted after its transaction commits. The ends a *deactivation* causes are emitted inside that transaction, because the hook has no post-commit callback — the only step left after it is the commit itself — and the alternative, a deactivation that ended somebody's access and recorded nothing about whose, is the worse gap. A failed commit therefore leaves an event about an end that did not happen, in a request that also failed: the business is still active, the session is still live, and the administrator sees the error rather than a silent partial result. The start and the explicit end are both audited after their commit as usual.
+
+**Expiry is not an event.** Nothing happens when a session runs out — the rule simply stops answering "active" — so there is no end event to emit and nothing that could claim one. When the session would have ended is already in the trail: the start event carries the expiry instant.
+
+**What proves it.** `Inventory.UnitTests/Domain/Tenancy/SupportSessionPolicyTests` covers the fixed lifetime, the status gate including `0` and an undeclared value, the inclusive expiry boundary, the reason's bounds and the id hash's two properties. `Inventory.UnitTests/Application/SupportSessions/SupportSessionTests` runs the three use cases and the hook over the real `MembershipWriteGuard`: the order the reads, the write, the commit and the audit event happen in; the refusals for a non-active business, a second session and a missing or over-long reason, and what each leaves unwritten; a status or a session that changes while the write lock is awaited; another administrator's session being neither read nor ended; and — through #545's real `DeactivateBusiness` with this hook registered — the session ending inside the deactivation's transaction, a refused deactivation leaving it running, and a reactivation not reviving it. `Inventory.IntegrationTests/Adapters/Persistence/EfSupportSessionStoreTests` is the relational half over two businesses and two administrators under a denied scope: what a start stores, the per-actor read, the derived expiry with nothing written, each end naming one column and nobody else's rows, the globally unique hash the database enforces, and the proof that the same denied context still reads no `Products` row and still has a tenant-owned write refused. `Inventory.IntegrationTests/Controllers/SuperAdminSupportSessionsApiTests` is the HTTP boundary over the real migration history: the stored row and the audit event a start produces (and what neither contains), every refusal, the active read never re-issuing the id, the end and its idempotent repeat, and the deactivation ending two administrators' sessions with one audited end each while another business's keeps running. What a started session then *grants* is [#551's](#support-sessions-in-the-request-pipeline-issue-551) half, proved separately. `BusinessOwnershipCoverageTests` pins the fifth structural exemption, the absent query filter and the index shape; `BusinessScopeCompositionTests` pins the store's registration and dependencies and that the deactivation hook is this one; and `EndpointAuthorizationClassificationTests` pins the three endpoints as class 2 with no capability.
+
+#### Support sessions in the request pipeline (issue #551)
+
+Issue #550 made a support session a stored, audited fact and deliberately gave it no effect. Issue
+#551 — the other half of the same slice of #512, under #328 — is what a session now *does*: a
+request presents its id, resolves the chosen business, reads that business and nothing else, and
+cannot change anything or touch its Nayax account.
+
+**How a request joins a session.** `InventoryApi.Auth.RequestSupportSessionAccessor` is the only
+thing in the application that reads the value of the `X-Support-Session` header. It is the boundary
+implementation of one narrow Application port, `ISupportSessionAccessor`, so the inner layers get the
+answer — which business, its name, when the session runs out, and the session row's key — and never
+the header. It is registered per request and memoised: the capability authorization handler asks
+before the endpoint is chosen, `BusinessScopeMiddleware` asks to publish the scope, and the use cases
+ask again through `CurrentCapabilities` and `GET /api/me/access`, and all of them get one answer from
+one lookup.
+
+Both halves are required and both are this request's own. `PlatformAdminPolicy` is re-evaluated here,
+on this request, rather than inferred from the fact that the authorization middleware ran earlier —
+the same reasoning as the diagnostics membership bypass of [#336](#platform-diagnostics-issue-336),
+and for the same reason: an access decision that depended on pipeline position would be one edit away
+from applying to somebody nobody authorised. Then the presented id is hashed with
+`SupportSessionId.Hash` and matched by `ISupportSessionStore.FindActiveForActorByIdHashAsync`, the one
+lookup #551 adds to that port. The actor pair is part of the `WHERE` clause beside the hash, so a
+leaked id is not a session somebody else is *refused* — it is a session they cannot find. "Still
+active" is in the clause too (`SupportSessionPolicy.IsActive`), so an ended or expired row is not
+something the store can hand back and somebody then has to remember to reject. Finally the business
+row is read **now** rather than trusted from when the session started, and must still be
+`Active` by the same `SupportSessionPolicy.CanStartFor` rule a start is judged by: a business a
+session could not have been started for is not one it may go on reading.
+
+**Fail closed, with one code and one sentence.** Four things make a presented session unusable — it
+was never this caller's, it was ended, it expired, or its business is no longer active — and all four
+answer `403` with `support_session_ended`. The differences between them are facts about somebody
+else's session or about a business this caller is no longer entitled to anything about; which one it
+was is logged for an operator and never returned. The refusal happens in two places because the
+pipeline notices it in two places: the capability authorization handler runs before
+`BusinessScopeMiddleware`, so it refuses there first for an endpoint that declares a capability, and
+the middleware refuses for the rest — the same code, the same sentence, the same shape, so a client
+sees one answer wherever it was decided. Neither falls back to the administrator's own membership.
+They have none, and a silent fallback would turn "your session ended" into "you are not a member of
+anything".
+
+**A request that presents nothing is untouched, and so is a member who presents something.** No
+header means the ordinary membership path, unchanged. A caller the platform-admin policy refuses has
+the value not read at all, which is what keeps a member who sets the header an ordinary member: it
+can still only do the one thing it has done since [#524](#member-display-name-and-email-issue-524) —
+suppress the cosmetic profile refresh.
+
+**The scope it publishes.** `BusinessScopeState.SupportReadOnly` is the third state a request can
+carry (after `Denied` and `Resolved`; `Unscoped` is not a request state at all). For every
+tenant-owned read it is exactly `Resolved`: `AppDbContext`'s global filters compare against the same
+`CurrentBusinessId`, so a support request sees the chosen business and nothing else, by the existing
+central mechanism rather than a second one. The business id is the one stored on the matched session
+row, which the start transaction took from the business row it read — never a request value. The
+request's business time zone is published from that same business, so business dates are derived in
+*its* calendar (issue #499) rather than in anything belonging to the administrator, who has none.
+`ICurrentBusinessProvider.RequireBusinessIdAsync` answers with it too, so a use case that has to hand
+a business id to a port acts in the business its reads are already filtered to; `ResolveAsync` and
+`RequireRoleAsync` deliberately keep failing closed, because a support session is not a membership
+and the administrator holds no role.
+
+**Read-only is enforced three times, in three layers, and none of them is per controller.** That
+repetition is the design, not redundancy: the first layer decides what a request may *ask for*, and
+the other two decide what the database and the filesystem will *accept*.
+
+1. **The capability handler.** `BusinessCapabilityAuthorizationHandler`, in `SupportReadOnly`,
+   succeeds only when the capability is in the support set **and** the method is `GET` or `HEAD`. The
+   method rule is checked first and independently, so a write is refused as a write — `403` with
+   `read_only_support_session`, whatever capability it carried — rather than as a missing capability,
+   which is the difference a support banner has to be able to show. It is an allowlist of two
+   methods, so a verb nobody thought of is refused by construction. ASP.NET Core's default answer to
+   a failed policy is a bare `403` with no body, which is right for a capability refusal and wrong
+   for these two, so `SupportSessionAuthorizationResultHandler` gives *only* the failures carrying
+   one of these codes an RFC 7807 body and leaves every other authorization failure exactly as it
+   was.
+2. **The persistence boundary.** `BusinessOwnershipEnforcer` refuses every `SaveChanges` in
+   `SupportReadOnly` with `SupportSessionReadOnlyException`, before its stamping and ownership rules
+   are even considered. It covers every entity rather than only the tenant-owned ones, because in
+   this state there is no write this application wants: not a tenant-owned row, not a membership, not
+   an invite, not a business. A `SaveChanges` with nothing tracked is not a write and is left alone.
+3. **Document storage.** `SupportSessionReadOnlyDocumentStorage` wraps whichever provider is
+   configured and refuses every save and delete in this state. A document's bytes live outside the
+   database, so a transaction that never commits does not un-write a file — and a deleted receipt is
+   not recoverable by rolling one back. Reads pass straight through: a supporter looking at a
+   purchase is looking at its receipt too.
+
+**Nayax is blocked in the same change, in the provider.** `NayaxRequestCredentialProvider` refuses in
+`SupportReadOnly` before it reads the connection and before any token could be decrypted, so every
+ordinary Nayax call — read and write alike — fails with `403` and code
+`unavailable_in_support_view`, and no request leaves the API. It is there rather than in each of the
+~27 consumers for the reason the status gate is: a per-controller check is a check somebody forgets
+to add to the next controller. The reason it exists at all is that the operator id and token are the
+*business's* credential: nobody outside the business has agreed to its Nayax account being used on
+their behalf, and a call made in a support view would be indistinguishable, at Nayax, from one the
+business made itself. Every Nayax-backed screen therefore fails closed with this code in a support
+view, which is the accepted outcome rather than a defect — except the home dashboard, which issue
+#552 degraded instead, below.
+
+**The dashboard degrades rather than fails (issue #552).** `GET /api/dashboard/summary` is the
+landing page of the application, and its refill and ordering cards are the only part of it that needs
+the live fleet; the week's sales, the catalogue, the storage units and the valuation are reads of the
+business's own database. So in a support view it is answered `200` with
+`Inventory.Application.Dashboard.SupportViewDashboardSummaryDto`: every local section exactly as a
+member of that business is given it, and `needsRefill` and `needsOrdering` replaced by
+`{ "available": false, "reason": "SupportView" }`. The whole section is replaced rather than
+zeroed or nulled, because `machinesNeedingRefill: 0` reads as a fact about the business's machines.
+That is the same shape issue #329 publishes with `reason: "NayaxNotConnected"` for a business whose
+connection is unusable, and deliberately one shape rather than two: a client maps a stable reason
+code to its own wording, and the reason is never a sentence to display. The UI messages are #513's
+work.
+
+**And the fleet read is not attempted.** `GetDashboardSummary` branches on
+`IBusinessScope.State == SupportReadOnly` and never calls `CalculateReorderNeeds` at all, so there is
+no refused Nayax call, no resolved credential and nothing to swallow — which is why the decision is
+taken from the published scope rather than from a second rule about who the caller is: it is the very
+state `NayaxRequestCredentialProvider` refuses in, so "the dashboard degrades" and "Nayax is blocked"
+cannot come to mean different things. The week's figures are in the response because the support set
+grants `Dashboard.ViewFinancials`, and that capability is still read through `CurrentCapabilities` on
+the request rather than assumed, which is why there is one support-view shape and not a redacted pair
+(see [Dashboard financial redaction](#dashboard-financial-redaction-issue-527) for the member
+shapes). No other degraded screen is part of #552; the rest are #329's.
+
+**The capability set is written out, not derived.** `Inventory.Application.Access.SupportSessionAccessPolicy`
+holds exactly thirteen capabilities — `Dashboard.View`, `Dashboard.ViewFinancials`, `PickList.View`,
+`Inventory.Operate`, `Purchasing.Operate`, `Expenses.Manage`, `Reports.View`, `Imports.Run`,
+`SiteCommissions.Manage`, `Integration.Manage`, `Data.Repair`, `Roles.View`, `Business.Manage` — and
+records the two it excludes beside them with their reasons: `Suppliers.ManageGstDefaults` guards
+nothing but an edit, which is already refused, so granting it would be a grant with no effect; and
+`Members.Manage` is the one capability whose *reads* are themselves private, because the members list
+carries people's names and email addresses, which a supporter from outside the business does not see
+in v1. It is deliberately not "every capability minus two": a capability a later deployment declares
+must be added here by somebody who decided it belonged, rather than granted to a reader from outside
+the business on the day it is invented. `CurrentCapabilities` is the one place that chooses between
+this set and `RoleCapabilities`, so the capability an endpoint enforces, the one the dashboard decides
+its shape from, and the list `GET /api/me/access` reports cannot come from different tables.
+
+**What the caller is told.** `GET /api/me/access` in a session reports that set, a `null` role — the
+administrator holds none, and reporting one would describe access nobody granted — and
+`supportSession: { businessName, expiresAtUtc, readOnly: true }`. `readOnly` is stated rather than
+implied so a client never has to infer that a support session means a read-only one, and the block
+carries no session id, no business id and no actor. For an ordinary member the field is an explicit
+`null`, so the shape is stable.
+
+**One audit event per request.** `BusinessScopeMiddleware` emits a structured `ILogger` event for
+every request made in a session, carrying the route **template**, the method, the status it was
+answered with, the business id and the session row's own key — so a trail of requests reads as one
+session, tied to the start event #550 recorded under that same key, which is where the
+administrator's identity and their stated reason are. The template rather than the path is the point:
+`api/Products/{id}` says which endpoint was reached without recording which record. It carries no
+response body, no count, no query string and never the session id in either form, and it is written
+in a `finally`, so a request that failed is recorded with the status it actually got rather than
+quietly left out. As for the three platform trails beside it, **the log destination and retention
+period are platform configuration a human must verify**.
+
+**What proves it.** `Inventory.UnitTests/Application/Access/SupportSessionAccessPolicyTests` pins the
+thirteen capabilities literally from the agreed list, the two exclusions as exclusions, that the two
+lists together are the whole vocabulary — so a capability declared later fails until somebody decides
+which list it belongs in — and the read-method allowlist including a blank and an unknown verb.
+`CurrentBusinessProviderTests` covers the support branch: the business answered without a membership
+lookup, no resolution and no role, and a member's own resolution unchanged.
+`NayaxRequestCredentialProviderTests` covers the block with the connection in each usable status, and
+asserts the connection was never read at all. `GetCurrentAccessTests` covers the reported set, the
+absent role and the session block. `GetDashboardSummaryRedactionTests` covers the financial figures
+being decided from the support set rather than from a role, and
+`GetDashboardSummarySupportViewTests` the degraded shape of issue #552: the two sections reported
+unavailable with their reason, not one fleet call attempted, the local sections identical to the ones
+a member of that business is given, a member's own request still reading the fleet and keeping its
+shape, and a denied scope refused rather than degraded.
+`Inventory.IntegrationTests/Auth/BusinessScopeMiddlewareSupportSessionTests` is the middleware's own
+decision: the published read-only scope and the supported business's time zone, the refusal with its
+code before any business is resolved, the refusal *despite* a usable membership, a presented-nothing
+request resolving its own membership, the refusal body naming nothing, and no profile refresh
+scheduled. `BusinessCapabilityAuthorizationHandlerTests` is the complete per-capability matrix,
+including the capabilities no endpoint declares yet: a read succeeding for each of the thirteen, both
+exclusions refused even for a read, every non-read method refused with `read_only_support_session`,
+`HEAD` allowed, a dead session refused with `support_session_ended` without touching the caller's own
+membership, and a member's own decisions unchanged.
+`Inventory.IntegrationTests/Adapters/Persistence/SupportSessionReadOnlyPersistenceTests` is the
+relational half over two businesses: the chosen business's rows and only those, another business's row
+unreachable by its key, an insert, an update and a delete of the business's *own* data all refused, a
+non-tenant-owned write refused too, an empty `SaveChanges` left alone, and a member's write
+unaffected. `EfSupportSessionStoreTests` covers the new lookup: the caller's own active session found,
+and nothing found for another administrator holding the same id, after expiry, after an end, for an id
+nothing issued, or for a blank hash.
+`Inventory.IntegrationTests/Infrastructure/Documents/SupportSessionReadOnlyDocumentStorageTests`
+covers the document guard in both directions and under every other scope.
+`Inventory.IntegrationTests/Controllers/SupportSessionRequestApiTests` is the HTTP boundary over the
+real migration history, with two businesses and a Nayax client that resolves credentials before
+recording a call — which is what makes "no Nayax call" mean something: only the chosen business
+visible in both directions, every read in the set answered `200`, every write `403` with
+`read_only_support_session`, both exclusions refused for a read with no member's name or address in
+the body, the Nayax-backed reads `403` with `unavailable_in_support_view` and zero calls *beside* the
+control that the same endpoints really do call Nayax for a member, the dashboard summary's degraded
+shape asserted as its exact property sets with zero calls, its local sections still describing the
+supported business, and the same summary keeping its normal shape and its real fleet call for that
+business's Owner, an expired/ended/unknown/another
+administrator's id refused, a deactivation mid-session closing the next request, the no-header request
+falling to the administrator's own (absent) membership, a member unaffected with and without the
+header, no membership written, the `/api/me/access` contract, and the audit event's fields and
+absences. `DocumentStorageProviderSelectionTests` pins that both providers are reached through the
+guard.
 
 ### Per-business Nayax connection (issue #518)
 
@@ -2201,6 +2447,17 @@ business's token to outlive its request. `NayaxLynxClient` queries no EF Core; t
 (`NayaxRequestCredentialProvider`, in `Inventory.Application`, scoped per request) reads #518's
 `INayaxConnectionStore`, which reads the business the `AppDbContext` tenant filters already resolved.
 A caller with no resolved business reads nothing and therefore calls nothing.
+
+**And a support session resolves nothing at all** (issue #551). The provider's first act is to refuse
+when the request carries `BusinessScopeState.SupportReadOnly`: before the connection is read, before
+the gate is applied and before any token could be decrypted, with `403` and the stable code
+`unavailable_in_support_view`. A support session is somebody from outside the business reading its
+data to help with a problem, and the operator id and token are the *business's* own credential —
+nobody outside it has agreed to its Nayax account being spent on their behalf, and a call made in a
+support view would be indistinguishable, at Nayax, from one the business made itself. Being in the
+provider is what makes it hold for every Nayax read and write at once, for the same reason the status
+gate is there rather than in each of the ~27 consumers. See
+[Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
 
 **The status gate is a Domain rule, and it is an allow-list.**
 `Inventory.Domain.Nayax.NayaxConnectionStatusGate.AllowsOrdinaryOperations` is the one place that
@@ -3431,6 +3688,48 @@ previous account restoring nothing, and the control returning only on the new ac
 answer) and `dashboard.component.spec.ts` (the redacted summary rendering
 the two non-financial cards, with no `$0.00` and no withheld figure anywhere).
 
+### The Roles page (issue #530)
+
+Admin → Roles (`/admin/roles`, `components/admin/roles/`) is a read-only page, on `Roles.View`
+which only an Owner holds, explaining what Owner, Manager and Operator can each access. It is one
+slice of #503, which keeps the full agreed contract for this area under #328. It edits nothing —
+no role, no permission and no member, which stays #530's and #505's member-management work — and
+it is guarded exactly like every other page above: `requireCapability('Roles.View')` on its route
+and the matching `Capability.RolesView` an Owner alone holds in `RoleCapabilities`, so a hidden
+`Roles` entry and a redirected route hide a page rather than protect one.
+
+**This is a deliberate, bounded exception to "no second role source".** The paragraph above says
+there is deliberately no frontend role source for a navigation or authorization decision, because
+a second copy of `RoleCapabilities` could only diverge from it — true for every decision on this
+page otherwise, since nothing here decides what anybody may do. But explaining the *whole* matrix
+needs the matrix, and no endpoint reports it: `GET /api/me/access` reports only the caller's own
+capabilities, and building a new endpoint to report somebody else's was explicitly out of scope
+(migration, data and deployment impact: none, frontend only). `components/admin/roles/role-definitions.ts`
+is therefore one written-out table — each role's capability list, written out in full in the
+published vocabulary's order rather than derived, the same convention `RoleCapabilities` itself and
+this frontend's own `navigation.spec.ts` already use — plus one human-readable sentence for every
+published capability, independent of which role holds it.
+
+**Kept from drifting by a test, not by a shared source.** `role-definitions.spec.ts` fails the
+build the moment this file and the published vocabulary (`access/capabilities.ts`, itself mirrored
+from `Inventory.Application.Access.Capabilities`) disagree: every published capability must have a
+description and nothing else may; the union of what Owner, Manager and Operator each hold must be
+exactly the published vocabulary, so a capability added to the vocabulary with no role granted to
+it fails here; and the hierarchy (Operator's set a subset of Manager's, Manager's of Owner's, and
+Owner holding every capability) is pinned literally, the same way `navigation.spec.ts` pins the
+per-role menus, so a role that quietly gains or loses a capability on the frontend disagrees with
+this test instead of agreeing with itself. TypeScript's own excess-property check on the
+`Record<Capability, string>` description map catches an invented capability at compile time too,
+but the test is what explains the failure and what catches a capability silently *removed* from a
+role's list, which the compiler alone would not.
+
+**What proves this slice.** `role-definitions.spec.ts` (the vocabulary-sync assertions above),
+`roles.component.spec.ts` (the three sections in order, each role's own capabilities rendered and
+no other role's, no form control or action anywhere on the page, and the link back to Admin), and
+`navigation.spec.ts` / `app.routes.spec.ts` (the `Roles` destination offered to an Owner and
+withheld from a Manager and an Operator, and the route guarded by `MsalGuard`, `accountStateGuard`
+and `requireCapability('Roles.View')` like every other business route).
+
 ### Account-state routing, the access-unavailable page and the global 403 handler (issue #529)
 
 Until issue #529 the app called no endpoint that could tell a signed-in person apart from a
@@ -3687,8 +3986,8 @@ alone).
 `/welcome`, `/application-pending` and `/application-rejected` - the three remaining
 account-state routing destinations `accountStateGuard` carries (issue #529) - each carried
 `OnboardingPlaceholderComponent` until this slice of #508 (under #328) replaced it with its own
-page. The application form behind "Start a new business" and "Apply again" is #543's task, which
-this slice depends on and does not build.
+page. The application form behind "Start a new business" and "Apply again" is #543's, described in
+[Business application form](#business-application-form-issue-543).
 
 | File | Responsibility |
 | --- | --- |
@@ -3704,12 +4003,11 @@ still the one caller of the redemption endpoint and the one place that decides w
 actually usable. Opening the link directly, from an email or elsewhere, reaches that same route
 without ever landing on either of these pages, so nothing further is needed for that case.
 
-**Start a new business and Apply again are shown, not yet wired.** Both are gated on the same
+**Start a new business and Apply again are gated on onboarding.** Both are gated on the same
 `onboardingEnabled` flag `GET /api/me/account-state` reports, matching the deployment's own
 eligibility rule rather than a frontend guess - the same rule `AccessUnavailableComponent` already
-follows for a `MembershipRevoked` caller - but neither has a destination yet: the application form
-is #543's task, which also makes both reachable. Until then, each page states the choice exists
-without a control behind it.
+follows for a `MembershipRevoked` caller. This slice shipped them without a destination; #543 made
+each a link to the application form at `/apply`.
 
 **Check again re-reads the account state, never assumes an outcome.**
 `ApplicationPendingComponent`'s button calls `AccountStateService.refresh()`: a still-
@@ -3728,7 +4026,7 @@ cache would still be holding if the navigation ran first.
 (issue #523); a submission with none recorded falls back to one generic sentence this page owns
 instead of inventing a reason the API never gave.
 
-**What this slice does not do.** The application form itself (#543's task) and its wiring from
+**What this slice does not do.** The application form itself (#543's, below) and its wiring from
 these pages, and anything backend - this is a frontend-only slice over the existing
 `GET /api/me/account-state` and `/invite/:token` routes.
 
@@ -3742,6 +4040,59 @@ message, the fail-open retry message for an unreadable re-read, navigation to ev
 own page, and the access-cache refresh awaited before the dashboard navigation once approved), and
 `app.routes.spec.ts` (each route now loading its own component instead of
 `OnboardingPlaceholderComponent`, still behind `MsalGuard` alone).
+
+### Business application form (issue #543)
+
+`/apply` is the form a signed-in person with no active membership fills in to apply to start a
+business, over `POST /api/onboarding/business-applications` (issue #541). The welcome page's
+"Start a new business", the rejected page's "Apply again" and the access-unavailable page's
+"Start a new business" for a revoked member all link to it, each only when `onboardingEnabled` is
+true.
+
+| File | Responsibility |
+| --- | --- |
+| `access/business-application.component.ts` | `BusinessApplicationComponent`: the form, who may see it, the submit flow and how each refusal is shown |
+| `access/business-application-rules.ts` | The inline validation: the API's rules and sentences for the name, contact email, ABN, GST registration and time zone, and the request body built from a valid draft |
+| `access/business-application.service.ts` | `BusinessApplicationService`: the one `POST`, interpreting no refusal itself |
+
+**Who may see it follows the API's eligibility rule.** The route carries `MsalGuard` alone and no
+`accountStateGuard`, for the reason every account-state destination does, and
+`ACCOUNT_STATE_BYPASS_PATHS` includes it so a stray member `403` shows no toast there. The page
+itself reads the account state once: `REDEEMABLE_ACCOUNT_STATES` (`NoMembership`,
+`MembershipRevoked`, `ApplicationRejected` - the API's `MembershipEligibility.AllowsActiveMembership`)
+see the form while `onboardingEnabled` is true, and any other known answer is sent to
+`nonRedeemableAccountStateDestination`'s page. An unreadable account state shows the form, the same
+fail-open rule as `accountStateGuard`: the endpoint re-checks eligibility and its answer counts.
+
+**The form's rules are copies of the API's, and the API stays authoritative.**
+`business-application-rules.ts` mirrors `BusinessSettingsPolicy`, `AustralianBusinessNumber` and
+`BusinessContactEmail` and reuses their sentences word for word, so the form and the `400` it
+guards against never describe one rule two ways. The one difference is the time zone: the API
+requires a non-blank IANA id, and the form also asks the browser's `Intl` whether it knows the id,
+so a typo is caught before submitting. The ABN is optional and a blank one is sent as `null`;
+GST registration has no default and must be answered yes or no. A field's message shows once it
+has been left or a submit was attempted. The contact address starts as the signed-in account's own,
+from the first sign-in claim (`preferred_username`, `email`, then the account's username) that is a
+valid address, and stays editable.
+
+**A recorded application lands on the pending page only after the account state is re-read.**
+`AccountStateService.refresh()` runs before navigating to `/application-pending`, so the routes
+behind it see `ApplicationPending` rather than the state the person applied from. A refusal stays
+on the form: the API's own sentence for a `400` or `409` (`message`) and a `429` (`detail`), one
+sentence of the page's own for the bare `404` a disabled deployment returns, and a generic one for
+anything else.
+
+**What this slice does not do.** Anything backend, the approval page (#510) and the approval
+decision (#509).
+
+**What proves this slice.** `business-application-rules.spec.ts` (each rule's accepted and refused
+values, the API's sentences, and the request body), `business-application.service.spec.ts` (the
+URL and body), `business-application.component.spec.ts` (the form for each eligible state and for
+an unreadable state, the redirect for each ineligible state and for onboarding off, the email
+prefill, when field errors appear, a successful submit refreshing the account state before landing
+on the pending page, and each refusal's message), the welcome, rejected and access-unavailable
+specs (each link pointing at `/apply`), `member-forbidden-notice.interceptor.spec.ts` (`/apply` is a
+bypass route) and `app.routes.spec.ts` (`/apply` behind `MsalGuard` alone).
 
 ### Breadcrumbs (issue #457)
 
@@ -4520,7 +4871,9 @@ Physical storage stock and costing inventory answer different questions:
 - `CostingQuantity`: total business-owned quantity still carrying inventory value.
 - `InventoryValue`: remaining value used with `CostingQuantity` to derive AVCO.
 
-A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. Completed sales and explicit cost-bearing write-offs consume costing inventory. Costing inventory the business held but never recorded is restored only by an explicit [costing repair](#costing-repairs-issue-359), which changes costing quantity and value alone - never physical stock.
+A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. The reverse transfer - units returned from a machine to storage - is the same movement with the opposite sign and is equally costing-neutral. Completed sales and explicit cost-bearing write-offs consume costing inventory. Costing inventory the business held but never recorded is restored only by an explicit [costing repair](#costing-repairs-issue-359), which changes costing quantity and value alone - never physical stock.
+
+Physical stock inside a machine is a third quantity again, and it has its own ledger: the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) derives it from the refill movements, the completed sales and the operator's counts, and compares it with what the machine reports. It reads those facts and writes no cost of any kind, so a machine's physical position is auditable without a second source of costing truth.
 
 Historical sale cost precedence is:
 
@@ -4823,6 +5176,13 @@ capability is answered the same response **without** the `salesThisWeek` object 
 properties are absent from the JSON rather than `null` or `0`. See
 [Dashboard financial redaction](#dashboard-financial-redaction-issue-527) for the exact two shapes
 and why absence is the chosen representation.
+
+Since issue #552 there is a third shape, for a request inside a platform administrator's support
+session: the same contract with `needsRefill` and `needsOrdering` replaced by
+`{ "available": false, "reason": "SupportView" }`, because a support session resolves no Nayax
+credentials and those two cards are the only part of this summary the live fleet feeds. The fleet
+read is not attempted at all in that state, and every other section is the real local figure. See
+[Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
 
 `Inventory.Application.Dashboard.GetDashboardSummary` is the use case. It owns no formula of its
 own: every figure comes from an authority that already existed.
@@ -6145,6 +6505,117 @@ change needing its own issue, ideally combined with the rest of the Purchasing a
    is what keeps them distinguishable in the audit trail. Manual restocking remains the supported
    fallback for when Nayax is unavailable or a machine/MDB is not yet mapped; Sync Restock is the
    preferred path when a Nayax stock-adjustment alert already reports the physical event.
+5. The reverse transfer - units taken back **out of** a machine and returned to storage - is the
+   same `MachineRefill` movement with a **positive** quantity change and the machine recorded on it.
+   `StockAdjustment.QuantityChange` is signed from storage's point of view throughout the
+   application, so a refill is negative and a return is positive, and both are equally
+   costing-neutral: the business owns the units in either location. A cost-bearing disposal is not
+   this movement - discarding units from a machine follows the existing Damaged/Expired write-off
+   semantics, which do consume costing inventory.
+6. What a machine is then expected to be holding, and how that compares with what the machine
+   reports, is the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56)
+   below.
+
+### Machine stock ledger and shrinkage reconciliation (issue #56)
+
+The machine-stock ledger answers one question storage inventory and costing inventory cannot:
+**how many units should be in this machine right now, how many are, and what is the difference?**
+It is a *physical* ledger for one location. It changes no costing value, creates no COGS, and
+proposes no correction - identifying shrinkage is the point, so writing it away would defeat it.
+
+**It is derived, not duplicated.** Every movement it needs is already a persisted fact:
+
+| Movement | Where the fact lives | Machine stock | Business costing inventory |
+| --- | --- | --- | --- |
+| Refill | `StockAdjustment`, reason `MachineRefill`, negative quantity, machine recorded | `+n` | unchanged |
+| Return to storage | the same movement with a positive quantity | `-n` | unchanged |
+| Completed sale | `NayaxSales` with status `12` for that machine | `-1` per transaction | reduced once, by the sale-costing path |
+| Counted reconciliation | `MachineStockCount` (the one table this feature adds) | sets the level | unchanged |
+
+`Inventory.Domain.MachineStock.MachineStockMovementPolicy` is the single place a fact becomes a
+movement and the single statement of which kinds consume costing inventory (only a completed sale -
+and the ledger never performs that consumption itself). Because the ledger *reads* the refill
+movements and the completed sales rather than writing its own copies, a refill cannot be counted
+twice and a sale cannot create COGS twice: there is only one record of each event to begin with, and
+nothing to keep in step. One completed transaction dispenses one unit, which is exactly the quantity
+`WeightedAverageCostReplay` consumes from costing inventory for that sale, so the physical and
+costing ledgers cannot disagree about quantity.
+
+**Nothing is inferred from incomplete inputs.** `Inventory.Domain.MachineStock.MachineStockLedger`
+replays a machine's movements in effective-instant order (ties: refills, returns, sales, then the
+count, which is the authority on its own instant, then source id) on top of a baseline:
+
+1. the most recent **counted reconciliation** for that machine and product; otherwise
+2. the **opening machine stock the inventory-cost transition recorded** for it
+   (`InventoryCostTransitionMachineStock`, issue #298) at that transition's cutoff, with only
+   movements strictly after the cutoff replayed on top - the same boundary the costing replay
+   applies to its own baseline; otherwise
+3. **nothing**, in which case expected stock is `null` and the product is reported as
+   `AwaitingOpeningCount`. The refilled, returned and sold quantities are still reported, because
+   they are facts; what cannot be derived from them is a physical level.
+
+A count supersedes rather than corrects: it sets the level from its own instant onward, resets the
+movement totals to "since the baseline", and reports the difference it absorbed as
+`unexplainedChangeAtLastCount` (positive means units were missing). That figure is **derived on
+every read**, never stored, so there is one authoritative number rather than a stored copy that
+could drift. An expected stock that replays below zero is reported as the negative value it is, with
+`ExpectedStockNegative`, instead of being clamped - a clamp would hide a missing refill or a sale
+attributed to the wrong machine.
+
+**The observed side keeps its own uncertainty.** `MachineStockObservationPolicy` resolves the
+quantity the machine reports as the sum over the product's slots of `PAR - MissingStockByMDB` - the
+same arithmetic the Pick List, the site dashboard and the inventory-cost transition use, with both
+fields confirmed as nullable `int32` in the published Nayax `machineProducts` contract. It returns
+`null` - unknown, never zero - when the product occupies no slot, when any slot is missing either
+value, or when any slot's quantity falls outside `0..PAR`. Deliberately *not* the
+`(PAR - MissingStockByMDB) ?? 0` coercion the machine product list applies: a zero that means "Nayax
+did not say" would read as an empty machine and invent a shrinkage. It is also deliberately separate
+from `InventoryCostTransitionPolicy.MachineQuantity`, which performs the same arithmetic and
+*refuses* incomplete data - a one-time costing cutover must be exact or not happen, while this report
+must stay readable and say what it could not confirm.
+
+`MachineStockReconciliationPolicy` then compares the two: `discrepancy = observed - expected`, with
+`shrinkageQuantity`/`overageQuantity` as its one-sided views and a
+`Balanced`/`Shortage`/`Overage`/`Unknown` status. All four are `null` whenever either side is
+unknown.
+
+**The data-quality states are the feature, not an afterthought** (`MachineStockDataQualityIssueCodes`):
+`AwaitingOpeningCount` and `ExpectedStockNegative` per product on the ledger side,
+`ObservedStockUnavailable` per product on the observed side, and three machine-level states -
+`ObservationSourceUnavailable` when the machine's own report could not be read at all,
+`PendingNayaxStockEvents` when Sync Restock still holds unprocessed events for that machine (so a
+shortage may be an unapplied refill rather than shrinkage), and `UnattributedCompletedSales` when
+completed sales on the machine match no catalogue product (so their units are missing from every
+product's expected stock). A sale is attributed with the same
+`Inventory.Domain.Reporting.ProductMatching.ProductMatcher` the costing ledger uses, so the two
+always agree about which product a transaction dispensed.
+
+**The layers.** `Inventory.Application.MachineStock.GetMachineStockReconciliation` orchestrates and
+decides nothing: it reads the machine's report through the narrow `IMachineStockObservationSource`
+port (implemented by `Inventory.Infrastructure.Nayax.NayaxMachineStockObservationSource` over the
+existing `INayaxLynxClient.GetMachineProductsAsync`), reads the persisted facts through
+`IMachineStockLedgerStore` (`Inventory.Infrastructure.Persistence.EfMachineStockLedgerStore`), and
+hands both to the Domain. `RecordMachineStockCount` appends a count at the server's instant from the
+`IClock` port - the request carries no instant, no expected quantity and no discrepancy, because the
+server derives all of them. `MachinesController`'s `GET /api/machines/{id}/stock-ledger` and
+`POST /api/machines/{id}/stock-ledger/counts` are thin and inherit the controller's
+`Inventory.Operate` capability: reconciling a machine is the refill work an Operator does.
+
+Two Nayax conditions are reported as data quality rather than as a failed request, because both mean
+"this business has no usable connection" while the expected stock is local and still available:
+`NayaxNotConnectedException` and `NayaxPermissionNotGrantedException`. Everything else propagates
+unchanged - a transport failure must not be presented as an unreadable machine, and a support
+session's Nayax refusal (issue #551) applies here exactly as it does to every other Nayax read.
+
+Tenant isolation is the central query filter's: the adapter adds no `BusinessId` predicate, which is
+also what makes the observed product ids safe to pass into it - a machine id is a remote Nayax
+identity, so two businesses can be told about the same machine number, and an observed slot resolves
+to a product only if the caller's own catalogue holds it. Unresolvable slots are dropped, the same
+exclusion the Pick List applies.
+
+**Not in this slice.** There is no Angular page yet (the API is the exposure), no back-dated count,
+no machine-level write-off, and no automatic correction of a discrepancy - by design, since
+"automatically writing corrections to hide shrinkage" is explicitly out of scope.
 
 ### Global Stock History (issue #384)
 
@@ -6267,6 +6738,13 @@ Sales reach the application two ways, and both follow those five rules: the oper
 transaction export (`POST api/imports/nayax-sales`, below), and the home dashboard synchronises each
 machine's latest transactions (see [Home dashboard coordinated Sites/Machines sales
 sync](#home-dashboard-coordinated-sitesmachines-sales-sync-issue-187)).
+
+A completed sale reduces business-owned costing inventory exactly once, here, and nowhere else. The
+[machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) also
+deducts that sale from the machine's *physical* expected stock - one unit per completed transaction,
+the same quantity this path consumes from costing inventory - by reading the same completed-sale row.
+It records no movement and no cost of its own, so a machine's physical ledger can never become a
+second deduction of COGS.
 
 #### Uploaded transaction export import (issue #301)
 

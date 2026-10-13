@@ -32,6 +32,10 @@
     <PackageReference Include="Microsoft.Identity.Web" Version="4.15.0" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="[2.1.12-pre20260709125052, )" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="7.2.0" />
+    <!-- Transitive security pin: the package graph otherwise resolves 10.0.10, which has high-severity
+         advisories (GHSA-846f-f764-76mx, GHSA-2fmv-rv2c-59x7). Remove once a direct dependency
+         brings a patched version itself. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
   </ItemGroup>
 
   <ItemGroup>

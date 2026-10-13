@@ -1,3 +1,5 @@
+using Inventory.Application.SupportSessions;
+using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Nayax;
 
@@ -27,21 +29,43 @@ namespace Inventory.Application.Nayax;
 /// ordinary Nayax call therefore re-reads the connection, which is what makes the gate close
 /// immediately: the call after a 401 sees <see cref="NayaxConnectionStatus.NeedsAttention"/> and
 /// fails closed rather than reusing a credential snapshot the same request took earlier.
+///
+/// <para><strong>A support session resolves no credentials at all (issue #551).</strong> The
+/// business's operator id and access token are the business's own, and a platform administrator
+/// reading its data to help with a problem is not a reason to spend them: nobody outside the
+/// business has agreed to its Nayax account being used on their behalf, and a call made in a
+/// support view would be indistinguishable, at Nayax, from one the business made itself. The
+/// refusal is made here, before the stored connection is read and before any token could be
+/// decrypted, so it holds for every ordinary Nayax call - read and write alike - and no request
+/// leaves the API. Being here rather than in each of the ~27 consumers is the whole point: a
+/// per-controller check is a check somebody can forget to add to the next controller.</para>
 /// </summary>
 public sealed class NayaxRequestCredentialProvider : INayaxRequestCredentialProvider
 {
     private readonly INayaxConnectionStore _store;
+    private readonly IBusinessScope _businessScope;
     private readonly IClock _clock;
 
-    public NayaxRequestCredentialProvider(INayaxConnectionStore store, IClock clock)
+    public NayaxRequestCredentialProvider(
+        INayaxConnectionStore store,
+        IBusinessScope businessScope,
+        IClock clock)
     {
         _store = store;
+        _businessScope = businessScope;
         _clock = clock;
     }
 
     /// <inheritdoc />
     public async Task<NayaxRequestCredential> GetForOperationAsync(CancellationToken cancellationToken)
     {
+        if (_businessScope.State == BusinessScopeState.SupportReadOnly)
+        {
+            // First, and before anything is read: a support session never authenticates to Nayax as
+            // the business it is looking at.
+            throw new SupportSessionNayaxUnavailableException();
+        }
+
         // The gate travels into the read, so the status it decides on and the token that is
         // decrypted come from the same snapshot of the same row.
         var snapshot = await _store

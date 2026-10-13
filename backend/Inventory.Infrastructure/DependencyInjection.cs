@@ -12,6 +12,7 @@ using Inventory.Application.Gst;
 using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.Machines;
+using Inventory.Application.MachineStock;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
@@ -38,6 +39,7 @@ using Inventory.Application.Sites;
 using Inventory.Application.Stock;
 using Inventory.Application.SupplierOrders;
 using Inventory.Application.Suppliers;
+using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Infrastructure.Clock;
@@ -175,6 +177,14 @@ public static class InfrastructureServiceCollectionExtensions
         // adapter here, so it runs on the request's own denied-scope context and inside
         // MembershipWriteGuard's transaction on it; nothing hands it an unscoped context.
         services.AddScoped<IPlatformBusinessDirectoryStore, EfPlatformBusinessDirectoryStore>();
+        // The platform administrator's read-only support sessions (issue #550). A separate,
+        // deliberately tiny adapter again, over one table and no other: it names the authenticated
+        // actor or the business its caller's transaction read in every statement, because the session
+        // table is structurally non-tenant-owned too - a platform-admin request resolves no business,
+        // so no central query filter can match these rows. Scoped like every adapter here, so the
+        // start, the end and the deactivation hook all run on the request's own denied-scope context
+        // and inside MembershipWriteGuard's transaction on it.
+        services.AddScoped<ISupportSessionStore, EfSupportSessionStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has
@@ -216,6 +226,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
         services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
         services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
+        services.AddScoped<IMachineStockLedgerStore, EfMachineStockLedgerStore>();
+        // What the machine itself reports it is holding (issue #56). Scoped because reading it spends
+        // the current business's own Nayax credentials, which are resolved per request.
+        services.AddScoped<IMachineStockObservationSource, NayaxMachineStockObservationSource>();
         services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
         services.AddScoped<IPickListStorageStockStore, EfPickListStorageStockStore>();
         services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
@@ -292,7 +306,11 @@ public static class InfrastructureServiceCollectionExtensions
         switch (configuration.Provider)
         {
             case DocumentStorageProvider.FileSystem:
-                services.AddSingleton<IDocumentStorage>(sp => sp.GetRequiredService<FileSystemDocumentStorage>());
+                // Scoped rather than singleton since issue #551, because the read-only guard reads
+                // the request's own business scope. The filesystem adapter it wraps is still the one
+                // singleton it always was.
+                services.AddScoped<IDocumentStorage>(sp => ReadOnlyInSupportSession(
+                    sp, sp.GetRequiredService<FileSystemDocumentStorage>()));
                 break;
 
             case DocumentStorageProvider.AzureBlob:
@@ -324,9 +342,25 @@ public static class InfrastructureServiceCollectionExtensions
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(configuration.ContainerName)));
 
         // Scoped, unlike the filesystem adapter: it reads the current request's business scope,
-        // which is what decides the tenant prefix every blob name is built from.
-        services.AddScoped<IDocumentStorage, AzureBlobDocumentStorage>();
+        // which is what decides the tenant prefix every blob name is built from. Registered as the
+        // concrete type and reached through the read-only guard of issue #551, exactly as the
+        // filesystem provider is.
+        services.AddScoped<AzureBlobDocumentStorage>();
+        services.AddScoped<IDocumentStorage>(sp => ReadOnlyInSupportSession(
+            sp, sp.GetRequiredService<AzureBlobDocumentStorage>()));
     }
+
+    /// <summary>
+    /// Wraps whichever document-storage provider was selected in the support-session read-only
+    /// guard (issue #551), so the rule is registered once rather than repeated per provider - and so
+    /// a provider added later inherits it by being registered through here.
+    /// </summary>
+    private static IDocumentStorage ReadOnlyInSupportSession(
+        IServiceProvider serviceProvider,
+        IDocumentStorage storage) =>
+        new SupportSessionReadOnlyDocumentStorage(
+            storage,
+            serviceProvider.GetRequiredService<IBusinessScope>());
 
     /// <summary>
     /// Registers the Nayax Lynx HTTP client behind <see cref="INayaxLynxClient"/> (issue #49), with

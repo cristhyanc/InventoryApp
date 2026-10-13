@@ -5,6 +5,7 @@ using Inventory.Application.Time;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Auth;
 using InventoryApi.Auth.PlatformAdmin;
+using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Tenancy;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -193,6 +194,7 @@ public class BusinessScopeMiddlewareMembershipNotRequiredTests
             timeZoneScope ?? new BusinessTimeZoneScope(),
             new StubBusinessProfileStore(),
             authorizationService ?? new RecordingAuthorizationService(),
+            new FakeSupportSessionAccessor(),
             TestMemberProfileRefresh.RequestScheduler(FakeActorProfileAccessor.Unidentifiable()));
 
         return reached;
@@ -248,7 +250,8 @@ public class BusinessScopeMiddlewareMembershipNotRequiredTests
     private sealed class StubBusinessProfileStore : IBusinessProfileStore
     {
         public Task<BusinessProfile?> FindAsync(BusinessId businessId, CancellationToken cancellationToken) =>
-            Task.FromResult<BusinessProfile?>(new BusinessProfile("Stub business", "Australia/Sydney"));
+            Task.FromResult<BusinessProfile?>(
+                new BusinessProfile("Stub business", "Australia/Sydney", BusinessStatus.Active));
     }
 
     /// <summary>

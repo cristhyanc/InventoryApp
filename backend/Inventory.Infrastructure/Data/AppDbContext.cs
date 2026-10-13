@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Inventory.Application.Tenancy;
+using Inventory.Domain.MachineStock;
 using Inventory.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Inventory.Infrastructure.Models;
@@ -66,6 +67,13 @@ public class AppDbContext : DbContext
     /// hash; see <see cref="MemberInvite"/>.
     /// </summary>
     public DbSet<MemberInvite> MemberInvites => Set<MemberInvite>();
+
+    /// <summary>
+    /// The platform administrator's time-limited, audited read-only support sessions (issue #550).
+    /// Structurally non-tenant-owned like the two tables above, and the session id is stored only as
+    /// a hash; see <see cref="SupportSession"/>.
+    /// </summary>
+    public DbSet<SupportSession> SupportSessions => Set<SupportSession>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
     public DbSet<Product> Products => Set<Product>();
@@ -73,6 +81,14 @@ public class AppDbContext : DbContext
     public DbSet<Purchase> Receipts => Set<Purchase>();
     public DbSet<NayaxSales> NayaxSales => Set<NayaxSales>();
     public DbSet<NayaxMachineStockEvent> NayaxMachineStockEvents => Set<NayaxMachineStockEvent>();
+
+    /// <summary>
+    /// Append-only physical counts of what is in a vending machine (issue #56), the baseline the
+    /// machine-stock ledger counts forward from. Ordinary tenant-owned data; nothing in the
+    /// application updates or deletes a row in this set, and recording one changes nothing else -
+    /// see <see cref="MachineStockCount"/>.
+    /// </summary>
+    public DbSet<MachineStockCount> MachineStockCounts => Set<MachineStockCount>();
     public DbSet<ImportedFile> ImportedFiles => Set<ImportedFile>();
     public DbSet<ImportedReimbursement> ImportedReimbursements => Set<ImportedReimbursement>();
     public DbSet<ImportedReimbursementDevice> ImportedReimbursementDevices => Set<ImportedReimbursementDevice>();
@@ -164,6 +180,7 @@ public class AppDbContext : DbContext
     {
         ConfigureTenancy(modelBuilder);
         ConfigureMemberInvites(modelBuilder);
+        ConfigureSupportSessions(modelBuilder);
 
         modelBuilder.Entity<Product>()
             .Property(p => p.UnitPrice)
@@ -440,6 +457,32 @@ public class AppDbContext : DbContext
             .HasForeignKey(e => e.MatchedManualStockAdjustmentId)
             .OnDelete(DeleteBehavior.SetNull);
 
+        // A machine-stock count is read by machine, then by product, in count order (issue #56), and
+        // the tenant column leads the index because every query is filtered by it first.
+        modelBuilder.Entity<MachineStockCount>()
+            .HasIndex(count => new { count.BusinessId, count.MachineId, count.ProductId, count.CountedAtUtc });
+
+        // CountedAtUtc is written from the IClock port as a UTC instant, and the SQLite provider does
+        // not round-trip DateTimeKind - see the StockAdjustment.CreatedAt comment below for the
+        // complete explanation - so it is marked UTC on every read. Without this the recorded instant
+        // serialises with no "Z" and the frontend would parse the ledger's baseline instant as
+        // browser-local time.
+        modelBuilder.Entity<MachineStockCount>()
+            .Property(count => count.CountedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        modelBuilder.Entity<MachineStockCount>()
+            .Property(count => count.Notes)
+            .HasMaxLength(MachineStockCountPolicy.MaxNotesLength);
+
+        modelBuilder.Entity<MachineStockCount>()
+            .HasOne(count => count.Product)
+            .WithMany()
+            .HasForeignKey(count => count.ProductId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         modelBuilder.Entity<Product>()
             .HasOne(p => p.Category)
             .WithMany(c => c.Products)
@@ -625,6 +668,9 @@ public class AppDbContext : DbContext
     /// <see cref="MemberInvite"/> is excluded for a related structural reason (issue #532): the
     /// redemption has to find an invite by the token a caller with no membership presents, under a
     /// denied scope that matches no filtered row. See <see cref="ConfigureMemberInvites"/>.
+    /// <see cref="SupportSession"/> is excluded for the same kind of reason (issue #550): every
+    /// request that reaches it is a platform-admin request, which resolves no business at all. See
+    /// <see cref="ConfigureSupportSessions"/>.
     /// </summary>
     private void ConfigureBusinessOwnership(ModelBuilder modelBuilder)
     {
@@ -689,7 +735,7 @@ public class AppDbContext : DbContext
     /// <summary>
     /// Maps the single-use member invite links of issue #531.
     ///
-    /// The invite is one of the four structural non-tenant-owned tables (the reviewed decision on
+    /// The invite is one of the five structural non-tenant-owned tables (the reviewed decision on
     /// issue #532, see <see cref="MemberInvite"/>), so <see cref="ConfigureBusinessOwnership"/>
     /// does not reach it: its business key, its <c>BusinessId</c> index and the absence of a global
     /// query filter are declared here instead. Everything else this method adds is specific to an
@@ -773,6 +819,73 @@ public class AppDbContext : DbContext
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                 : fromProvider);
         invite.Property(x => x.CancelledAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+    }
+
+    /// <summary>
+    /// Maps the platform administrator's support sessions of issue #550.
+    ///
+    /// The session is the fifth structural non-tenant-owned table (see <see cref="SupportSession"/>),
+    /// so <see cref="ConfigureBusinessOwnership"/> does not reach it: its business key, its
+    /// <c>BusinessId</c> index and the absence of a global query filter are declared here instead.
+    /// Everything else this method adds is specific to a session: the bounds on its columns, the
+    /// uniqueness of the session-id hash, and the index the per-administrator read seeks on.
+    /// </summary>
+    private static void ConfigureSupportSessions(ModelBuilder modelBuilder)
+    {
+        var session = modelBuilder.Entity<SupportSession>();
+
+        // The business being read, declared explicitly because no central mechanism declares it for
+        // this table. Required: a session into nothing would be a grant of access to nothing, and
+        // every statement over this table names either this column or the actor pair below. There is
+        // deliberately no query filter - a platform-admin request resolves no business, so a filter
+        // comparing the current business would match none of these rows at all.
+        session.Property(x => x.BusinessId).IsRequired();
+
+        // The deactivation hook's statement is "every active session of this business", so the
+        // business leads an index of its own.
+        session.HasIndex(x => x.BusinessId);
+
+        // The id's digest. Required and fixed-width, because the row exists only once an id has been
+        // generated for it: an empty hash would be a session nothing could ever present.
+        session.Property(x => x.SessionIdHash).IsRequired().HasMaxLength(SupportSessionId.HashLength);
+
+        // Unique globally rather than per business, which is the opposite of the invite token's
+        // constraint - and deliberately so. The repository-wide rule is about uniqueness over values
+        // a *business* supplies, where a global constraint would let one business's row deny
+        // another's; a session id is generated by this server from 256 bits of cryptographic
+        // randomness, is never supplied by anybody, and is looked up (under issue #551) by a request
+        // that has no business and therefore cannot narrow the lookup. The index is what makes that
+        // lookup a seek, and the uniqueness is what makes "which session is this?" have one answer.
+        session.HasIndex(x => x.SessionIdHash).IsUnique();
+
+        // The administrator the session belongs to. Required - a session nobody can be held to is
+        // not a session - and indexed as a pair, because "do I already have an active session?",
+        // "what is my session?" and "end my session" all start with exactly this comparison.
+        session.Property(x => x.ActorDirectoryTenantId).IsRequired();
+        session.Property(x => x.ActorObjectId).IsRequired();
+        session.HasIndex(x => new { x.ActorDirectoryTenantId, x.ActorObjectId });
+
+        // Why the administrator looked. Required in the schema as well as in SupportSessionPolicy,
+        // and bounded there: a session with no recorded reason would be unreviewable access, which is
+        // the one thing this record exists to prevent.
+        session.Property(x => x.Reason).IsRequired().HasMaxLength(SupportSessionPolicy.MaxReasonLength);
+
+        // All three instants are persisted UTC and all three are reported by this feature's API, so
+        // each is marked UTC on the way out - see the StockAdjustment.CreatedAt comment below for why
+        // the SQLite provider makes that necessary. The conversion changes no stored byte and no
+        // comparison, so the expiry and ended conditions in the stores' WHERE clauses are unaffected:
+        // a DateTime comparison looks at ticks, not Kind.
+        session.Property(x => x.StartedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        session.Property(x => x.ExpiresAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        session.Property(x => x.EndedAtUtc).HasConversion(
             toProvider => toProvider,
             fromProvider => fromProvider.HasValue
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)

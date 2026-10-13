@@ -768,6 +768,42 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("InventoryCostTransitionPreviewDrafts");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.MachineStockCount", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CountedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("CountedQuantity")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("MachineId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("ProductId");
+
+                    b.HasIndex("BusinessId", "MachineId", "ProductId", "CountedAtUtc");
+
+                    b.ToTable("MachineStockCounts");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.MemberInvite", b =>
                 {
                     b.Property<int>("Id")
@@ -1665,6 +1701,54 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("SupplierOrderReceiptAllocations");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.SupportSession", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ActorDirectoryTenantId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorObjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("EndedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SessionIdHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("StartedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("SessionIdHash")
+                        .IsUnique();
+
+                    b.HasIndex("ActorDirectoryTenantId", "ActorObjectId");
+
+                    b.ToTable("SupportSessions");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessMembership", b =>
                 {
                     b.HasOne("Inventory.Infrastructure.Models.Business", "Business")
@@ -1762,6 +1846,17 @@ namespace Inventory.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("InventoryCostTransitionBaseline");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.MachineStockCount", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.MemberInvite", b =>

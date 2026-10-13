@@ -9,7 +9,7 @@ namespace Inventory.Application.Members;
 /// <para><strong>Every method takes the owning <see cref="BusinessId"/>, and it is only ever one
 /// tenancy resolution produced from the authenticated actor's membership</strong> - never a value a
 /// request supplied. It is passed explicitly rather than left to the <c>AppDbContext</c> tenant
-/// query filters because <c>MemberInvite</c> is one of the four structural non-tenant-owned tables
+/// query filters because <c>MemberInvite</c> is one of the five structural non-tenant-owned tables
 /// (docs/architecture.md § Tenant ownership): the redemption of issue #532 has to find an invite by
 /// the token a caller with no membership presents, which a filter keyed to a resolved business can
 /// never match. The boundary for this table is therefore the business id in the statement, exactly

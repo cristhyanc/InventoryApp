@@ -1,3 +1,4 @@
+using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -50,12 +51,34 @@ public sealed class CrossBusinessAccessException : Exception
 ///
 /// Rule 4 is driven by EF model metadata rather than a hand-written list of relationships, so a
 /// new foreign key between tenant-owned entities is covered the day it is mapped.
+///
+/// Since issue #551 it enforces a fifth, earlier rule: a request running in a support session
+/// (<see cref="BusinessScopeState.SupportReadOnly"/>) may write <em>nothing at all</em>. That is
+/// what makes "read-only" a property of this boundary rather than of each endpoint - the HTTP
+/// method rule in the capability authorization handler already refuses every non-<c>GET</c> call in
+/// a session, and this is what catches a <c>GET</c> that turns out to have a side effect. It covers
+/// every entity rather than only the tenant-owned ones, because in this state there is no write
+/// this application wants: not a tenant-owned row, not a membership, not an invite, not a business.
 /// </summary>
 internal static class BusinessOwnershipEnforcer
 {
     public static void Enforce(AppDbContext context)
     {
         var scope = context.BusinessScope;
+
+        if (scope.State == BusinessScopeState.SupportReadOnly)
+        {
+            // Refused before the stamping and ownership rules below are even considered: those
+            // decide which business a write belongs to, and the answer here is that there is no
+            // such write. A SaveChanges with nothing tracked is not a write and is left alone, so a
+            // read path that happens to call it is not turned into a failure.
+            if (HasPendingWrite(context))
+            {
+                throw new SupportSessionReadOnlyException();
+            }
+
+            return;
+        }
 
         if (scope.State == BusinessScopeState.Unscoped)
         {
@@ -102,6 +125,16 @@ internal static class BusinessOwnershipEnforcer
 
         EnforceRelationships(context, businessId);
     }
+
+    /// <summary>
+    /// Whether this <c>SaveChanges</c> would write anything at all - any entity type, any of the
+    /// three write states. Deliberately not limited to <see cref="IBusinessOwned"/>: the support
+    /// session's rule is about writing, not about ownership.
+    /// </summary>
+    private static bool HasPendingWrite(AppDbContext context) =>
+        context.ChangeTracker
+            .Entries()
+            .Any(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted);
 
     private static void StampOrVerifyNewRow(EntityEntry<IBusinessOwned> entry, int businessId)
     {

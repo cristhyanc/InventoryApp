@@ -1,8 +1,10 @@
 using Inventory.Application.Machines;
+using Inventory.Application.MachineStock;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Sites;
+using Inventory.Domain.MachineStock;
 using Inventory.Domain.Machines;
 using Inventory.Domain.Nayax;
 using InventoryApi.Controllers;
@@ -37,10 +39,14 @@ public class MachinesControllerTests
         IMachineStockEventStore store,
         INayaxLynxClient? nayax = null,
         IMachineDashboardFactsStore? dashboardFacts = null,
-        IProductCatalogStore? catalog = null)
+        IProductCatalogStore? catalog = null,
+        IMachineStockLedgerStore? ledger = null,
+        IMachineStockObservationSource? observations = null)
     {
         var nayaxClient = nayax ?? Mock.Of<INayaxLynxClient>();
         var facts = dashboardFacts ?? Mock.Of<IMachineDashboardFactsStore>();
+        var ledgerStore = ledger ?? EmptyLedger();
+        var observationSource = observations ?? NoObservedSlots();
         return new(
             new GetMachineDashboard(nayaxClient, facts, Time.Clock, Time.Calendar),
             new ListMachineDashboard(nayaxClient, facts, Time.Clock, Time.Calendar),
@@ -51,7 +57,27 @@ public class MachinesControllerTests
             new SyncMachineStockFromNayax(nayaxClient, store),
             new ApplyMachineStockSync(store),
             new ResolveMachineStockDuplicate(store),
-            new ResolveMachineStockEventsAsAlreadyRecorded(store));
+            new ResolveMachineStockEventsAsAlreadyRecorded(store),
+            new GetMachineStockReconciliation(ledgerStore, observationSource, Time.Clock),
+            new RecordMachineStockCount(ledgerStore, Time.Clock));
+    }
+
+    /// <summary>A ledger with no refill, sale, count or baseline for the machine (issue #56).</summary>
+    private static IMachineStockLedgerStore EmptyLedger()
+    {
+        var ledger = new Mock<IMachineStockLedgerStore>();
+        ledger.Setup(x => x.GetLedgerFactsAsync(
+                It.IsAny<long>(), It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MachineStockLedgerFacts([], [], [], [], new Dictionary<long, string>(), 0, 0));
+        return ledger.Object;
+    }
+
+    private static IMachineStockObservationSource NoObservedSlots()
+    {
+        var observations = new Mock<IMachineStockObservationSource>();
+        observations.Setup(x => x.GetObservationAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MachineStockObservation(Time.Clock.UtcNow, []));
+        return observations.Object;
     }
 
     [Fact]
@@ -292,6 +318,76 @@ public class MachinesControllerTests
 
         // The slot's stock (PAR 6 less 4 missing), not the storage product's 40.
         Assert.Equal(2, product.QuantityInStock);
+    }
+
+    /// <summary>
+    /// The machine-stock ledger endpoint (issue #56) is the same thin shape: it binds the route id,
+    /// invokes the use case and returns its result, with no second machine-stock calculation of its
+    /// own.
+    /// </summary>
+    [Fact]
+    public async Task GetStockLedger_answers_the_reconciliation_use_case_result()
+    {
+        var countedAt = Time.NowUtc.AddDays(-1);
+        var ledger = new Mock<IMachineStockLedgerStore>();
+        ledger.Setup(x => x.GetLedgerFactsAsync(
+                MachineId, It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MachineStockLedgerFacts(
+                [],
+                [],
+                [new MachineStockCountFact(1, 200, 10, countedAt)],
+                [],
+                new Dictionary<long, string> { [200] = "Coke" },
+                0,
+                0));
+        var observations = new Mock<IMachineStockObservationSource>();
+        observations.Setup(x => x.GetObservationAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MachineStockObservation(
+                Time.NowUtc, [new MachineStockObservationSlot(200, 12, 5)]));
+
+        var result = await Controller(
+                Mock.Of<IMachineStockEventStore>(), ledger: ledger.Object, observations: observations.Object)
+            .GetStockLedger(MachineId, CancellationToken.None);
+
+        var reconciliation = Assert.IsType<MachineStockReconciliationDto>(
+            Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal(MachineId, reconciliation.MachineId);
+        var row = Assert.Single(reconciliation.Products);
+        Assert.Equal("Coke", row.ProductName);
+        Assert.Equal(10, row.ExpectedQuantity);
+        Assert.Equal(7, row.ObservedQuantity);
+        Assert.Equal(3, row.ShrinkageQuantity);
+    }
+
+    [Fact]
+    public async Task RecordStockCount_returns_the_recorded_count()
+    {
+        var ledger = new Mock<IMachineStockLedgerStore>();
+        ledger.Setup(x => x.RecordCountAsync(
+                MachineId, 200, 9, It.IsAny<DateTime>(), "Counted", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MachineStockCountRecord(5, MachineId, 200, "Coke", 9, Time.NowUtc, "Counted"));
+
+        var result = await Controller(Mock.Of<IMachineStockEventStore>(), ledger: ledger.Object)
+            .RecordStockCount(MachineId, new MachineStockCountRequestDto(200, 9, "Counted"), CancellationToken.None);
+
+        var count = Assert.IsType<MachineStockCountResultDto>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal(5, count.CountId);
+        Assert.Equal(9, count.CountedQuantity);
+        Assert.Equal("Coke", count.ProductName);
+    }
+
+    [Fact]
+    public async Task RecordStockCount_answers_not_found_for_a_product_the_business_does_not_have()
+    {
+        var ledger = new Mock<IMachineStockLedgerStore>();
+        ledger.Setup(x => x.RecordCountAsync(
+                MachineId, 200, 9, It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((MachineStockCountRecord?)null);
+
+        var result = await Controller(Mock.Of<IMachineStockEventStore>(), ledger: ledger.Object)
+            .RecordStockCount(MachineId, new MachineStockCountRequestDto(200, 9, null), CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result.Result);
     }
 
     /// <summary>

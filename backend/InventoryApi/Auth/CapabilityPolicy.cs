@@ -1,6 +1,6 @@
 using Inventory.Application.Access;
+using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
-using Inventory.Domain.Tenancy;
 using Microsoft.AspNetCore.Authorization;
 
 namespace InventoryApi.Auth;
@@ -99,19 +99,40 @@ public sealed class BusinessCapabilityRequirement : IAuthorizationRequirement
 /// to the least-privileged role, and the <c>403</c> that follows carries no detail about the
 /// capability, the caller's role or the roles that would have been allowed. The reason is logged for
 /// an operator instead.</para>
+///
+/// <para><strong>A support session is the second source of a capability, and it is read-only (issue
+/// #551).</strong> When <see cref="ISupportSessionAccessor"/> reports an active session, the
+/// decision is made from <see cref="SupportSessionAccessPolicy"/>'s fixed set instead of a role -
+/// the administrator holds none - and <em>additionally</em> from the request's HTTP method: a
+/// <c>GET</c> or <c>HEAD</c> may proceed if the capability is in that set, and anything else is
+/// refused whatever capability it carried. The two rules are checked in that order, so a write is
+/// refused as a write rather than as a missing capability, which is the difference a support banner
+/// has to be able to show. A presented session that is no longer usable is refused here too, rather
+/// than being allowed to fall through to the administrator's own (non-existent) membership: this
+/// handler runs before <see cref="BusinessScopeMiddleware"/>, so without that the first answer the
+/// caller got would be a bare membership refusal instead of
+/// <see cref="SupportSessionErrorCodes.SessionEnded"/>.</para>
+///
+/// <para>The support-session state is read from the accessor rather than from the business scope for
+/// the same reason the role is resolved here rather than read from it: the authorization middleware
+/// runs <em>before</em> the middleware that publishes that scope, and a policy that read it would be
+/// one pipeline edit away from passing before anything had been checked.</para>
 /// </summary>
 public sealed class BusinessCapabilityAuthorizationHandler : AuthorizationHandler<BusinessCapabilityRequirement>
 {
-    private readonly ICurrentBusinessProvider _currentBusiness;
+    private readonly CurrentCapabilities _capabilities;
+    private readonly ISupportSessionAccessor _supportSession;
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly ILogger<BusinessCapabilityAuthorizationHandler> _logger;
 
     public BusinessCapabilityAuthorizationHandler(
-        ICurrentBusinessProvider currentBusiness,
+        CurrentCapabilities capabilities,
+        ISupportSessionAccessor supportSession,
         IHttpContextAccessor httpContextAccessor,
         ILogger<BusinessCapabilityAuthorizationHandler> logger)
     {
-        _currentBusiness = currentBusiness;
+        _capabilities = capabilities;
+        _supportSession = supportSession;
         _httpContextAccessor = httpContextAccessor;
         _logger = logger;
     }
@@ -125,37 +146,111 @@ public sealed class BusinessCapabilityAuthorizationHandler : AuthorizationHandle
 
         if (context.User.Identity is not { IsAuthenticated: true })
         {
-            // No membership lookup for a caller nothing can be recorded against: the authentication
-            // middleware answers them 401, and the requirement stays unmet either way.
+            // No membership or session lookup for a caller nothing can be recorded against: the
+            // authentication middleware answers them 401, and the requirement stays unmet either
+            // way.
             return;
         }
 
-        var resolution = await _currentBusiness
-            .ResolveAsync(_httpContextAccessor.HttpContext?.RequestAborted ?? CancellationToken.None)
-            .ConfigureAwait(false);
+        var httpContext = _httpContextAccessor.HttpContext;
+        var cancellationToken = httpContext?.RequestAborted ?? CancellationToken.None;
+        var support = await _supportSession.ResolveAsync(cancellationToken).ConfigureAwait(false);
 
-        if (resolution.ResolvedRole is not { } role)
+        if (support.State == SupportSessionAccessState.Ended)
         {
-            _logger.LogWarning(
-                "Capability {Capability} denied: the caller's business membership did not resolve. "
-                    + "Reason: {DenialReason}.",
-                Capabilities.Name(requirement.Capability),
-                resolution.DenialReason ?? BusinessAccessDenialReason.NotAuthenticated);
+            // Refused as a dead session, not as a missing membership, and refused outright rather
+            // than left merely unmet: a caller who presented a session the server will not honour is
+            // told to start another one.
+            context.Fail(SupportSessionAuthorizationFailure.Reason(
+                this, SupportSessionErrorCodes.SessionEnded));
             return;
         }
 
-        if (RoleCapabilities.Allows(role, requirement.Capability))
+        if (support.IsActive && !SupportSessionAccessPolicy.IsReadMethod(httpContext?.Request.Method))
+        {
+            // Before the capability is even consulted: in a support session no method other than a
+            // read is allowed, whatever the endpoint required.
+            _logger.LogWarning(
+                "Capability {Capability} denied: a support session is read-only and this request's "
+                    + "method is not a read.",
+                Capabilities.Name(requirement.Capability));
+
+            context.Fail(SupportSessionAuthorizationFailure.Reason(
+                this, SupportSessionErrorCodes.ReadOnly));
+            return;
+        }
+
+        if (await Allows(requirement.Capability, cancellationToken).ConfigureAwait(false))
         {
             context.Succeed(requirement);
             return;
         }
 
-        // The role is worth logging and the actor is not: which member it was belongs with the
-        // request's own correlation id, while an operator reading this needs to know which role was
-        // refused what. The caller is told none of it.
+        // Which capability was refused is worth logging and the actor is not: which caller it was
+        // belongs with the request's own correlation id, while an operator reading this needs to know
+        // what was refused. The caller is told none of it.
         _logger.LogWarning(
-            "Capability {Capability} denied: the caller's role {Role} does not grant it.",
-            Capabilities.Name(requirement.Capability),
-            role);
+            "Capability {Capability} denied: the caller does not hold it.",
+            Capabilities.Name(requirement.Capability));
     }
+
+    /// <summary>
+    /// Whether this request holds the capability, with the membership refusals that
+    /// <see cref="CurrentCapabilities"/> raises turned back into an unmet requirement.
+    ///
+    /// A caller whose membership does not resolve - missing, revoked, ambiguous, an inactive
+    /// business, or a stored role this deployment does not declare - is exactly the caller this
+    /// policy exists to refuse, and an exception thrown out of an authorization handler would become
+    /// a <c>500</c> rather than the <c>403</c> they have earned.
+    /// </summary>
+    private async Task<bool> Allows(Capability capability, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _capabilities.AllowsAsync(capability, cancellationToken).ConfigureAwait(false);
+        }
+        catch (BusinessAccessDeniedException denied)
+        {
+            _logger.LogWarning(
+                denied,
+                "Capability {Capability} denied: the caller's business membership did not resolve. "
+                    + "Reason: {DenialReason}.",
+                Capabilities.Name(capability),
+                denied.Reason);
+
+            return false;
+        }
+    }
+}
+
+/// <summary>
+/// The stable support-session error code carried out of a failed authorization decision (issue
+/// #551), and the one way to read it back.
+///
+/// <para>ASP.NET Core's authorization middleware answers a failed policy with a bare <c>403</c> and
+/// no body, which is right for a capability refusal - a caller is told nothing about the role matrix
+/// - but wrong for the two support-session refusals, where the code is the whole point: a client has
+/// to tell "your session is over" from "this view is read-only". The handler therefore attaches the
+/// code as an <see cref="AuthorizationFailureReason"/>, and
+/// <see cref="SupportSessionAuthorizationResultHandler"/> turns it into a problem response. A
+/// failure with no such reason is left exactly as it was.</para>
+///
+/// <para>The code is the <em>whole</em> message, so nothing else can leak through it, and the
+/// reason object never leaves the server as-is.</para>
+/// </summary>
+public static class SupportSessionAuthorizationFailure
+{
+    /// <summary>Builds the failure reason carrying <paramref name="code"/>.</summary>
+    public static AuthorizationFailureReason Reason(IAuthorizationHandler handler, string code) =>
+        new(handler, code);
+
+    /// <summary>
+    /// The support-session code <paramref name="failure"/> carries, or <see langword="null"/> when
+    /// it carries none - which is every other authorization failure in the application.
+    /// </summary>
+    public static string? TryGetCode(AuthorizationFailure? failure) =>
+        failure?.FailureReasons.Select(reason => reason.Message).FirstOrDefault(IsSupportSessionCode);
+
+    private static bool IsSupportSessionCode(string? message) =>
+        message is SupportSessionErrorCodes.SessionEnded or SupportSessionErrorCodes.ReadOnly;
 }

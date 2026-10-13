@@ -9,6 +9,7 @@ using Inventory.Application.Expenses;
 using Inventory.Application.Gst;
 using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
+using Inventory.Application.MachineStock;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
 using Inventory.Application.Members;
@@ -37,6 +38,7 @@ using Inventory.Application.Sites;
 using Inventory.Application.Stock;
 using Inventory.Application.Suppliers;
 using Inventory.Application.SupplierOrders;
+using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -58,6 +60,11 @@ public static class ApplicationServiceCollectionExtensions
         // take effect on the next request rather than being held in a cache.
         services.AddScoped<GetBusinessSettings>();
         services.AddScoped<UpdateBusinessSettings>();
+
+        // What the current request may do (issue #551). Scoped because both of its sources are
+        // per-request facts: the caller's membership role, and the support session they presented.
+        // Registered before its consumers below for no reason other than reading order.
+        services.AddScoped<CurrentCapabilities>();
 
         // The signed-in member's role and capabilities (issue #521). Per request for the same
         // reason, and so a role change applies on the next request rather than being cached.
@@ -131,6 +138,16 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ReactivateBusiness>();
         services.AddScoped<ListDeactivatedBusinessMembers>();
         services.AddScoped<ReleaseBusinessMember>();
+
+        // The Super Admin's read-only support sessions (issue #550). Scoped for the same reasons
+        // again: the business read, the session write and the rule re-checks run on the request's own
+        // AppDbContext, inside MembershipWriteGuard's transaction on that same context, and the
+        // business a session is started for is named by the route - the subject of the session rather
+        // than a tenancy scope. The deactivation hook that ends a business's sessions is registered by
+        // the composition root, where issue #545's single hook registration lives.
+        services.AddScoped<StartSupportSession>();
+        services.AddScoped<GetActiveSupportSession>();
+        services.AddScoped<EndSupportSession>();
 
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
@@ -207,6 +224,12 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ApplyMachineStockSync>();
         services.AddScoped<ResolveMachineStockDuplicate>();
         services.AddScoped<ResolveMachineStockEventsAsAlreadyRecorded>();
+
+        // The machine-stock ledger (issue #56). Scoped like every other use case: the reconciliation
+        // reads one caller's resolved business through the request's own AppDbContext, and a recorded
+        // count is written through that same context.
+        services.AddScoped<GetMachineStockReconciliation>();
+        services.AddScoped<RecordMachineStockCount>();
         services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<ComputePurchaseGstSummary>();

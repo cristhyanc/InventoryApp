@@ -18,6 +18,7 @@ using InventoryApi.Adapters.Onboarding;
 using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.SupportSessions;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using InventoryApi.Auth.E2ETesting;
@@ -110,6 +111,12 @@ var configuredPlatformAdmin = ConfiguredPlatformAdmin.From(
 builder.Services.AddSingleton(configuredPlatformAdmin);
 builder.Services.AddScoped<IAuthorizationHandler, PlatformAdminAuthorizationHandler>();
 builder.Services.AddScoped<IAuthorizationHandler, BusinessCapabilityAuthorizationHandler>();
+
+// Gives the two support-session authorization refusals a body carrying their stable code (issue
+// #551), and leaves every other authorization failure exactly as the framework answers it - a bare
+// 403 that tells a caller nothing about the role matrix. A singleton, because it holds no
+// per-request state and delegates to the framework's own stateless default.
+builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, SupportSessionAuthorizationResultHandler>();
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy(PlatformAdminPolicy.Name, policy =>
@@ -176,6 +183,10 @@ builder.Services.AddPendingReimbursementXmlSource(new PendingReimbursementXmlOpt
 // Controlled RFC 7807 responses for Nayax upstream failures, and for the current business's own
 // Nayax connection being unusable (issue #520).
 builder.Services.AddProblemDetails();
+// The two support-session refusals that are raised rather than decided (issue #551): a write that
+// reached the persistence boundary or document storage, and a Nayax call whose credentials were
+// never resolved. Registered first because it claims only its own two Application-owned types.
+builder.Services.AddExceptionHandler<SupportSessionExceptionHandler>();
 builder.Services.AddExceptionHandler<NayaxConnectionExceptionHandler>();
 builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
 builder.Services.AddExceptionHandler<DomainExceptionHandler>();
@@ -234,12 +245,21 @@ builder.Services.AddScoped<IPlatformBusinessDecisionAudit, LoggingPlatformBusine
 // membership id and an invite count and no rejection reason, and because its entry type has no
 // field for a name of any kind - not the business's, and not the released member's.
 builder.Services.AddScoped<IPlatformBusinessLifecycleAudit, LoggingPlatformBusinessLifecycleAudit>();
-// What else happens when a business is deactivated (issue #545's hook point). Nothing does today,
-// and this is the one registration issue #512's support sessions replace: the hook runs inside the
+// The support-session audit trail (issue #550): one event when a session starts and one per session
+// ended. A separate port again, on the same terms as the three above, because a session is a
+// different event with different fields - and because this is the one platform trail that carries the
+// administrator's typed reason, which is the fact that makes read access to somebody else's business
+// reviewable. Its entry type still has no field for a session id, a business name or anybody else's
+// identity, which is what keeps all three out of the trail structurally rather than by a sink's
+// discretion.
+builder.Services.AddScoped<ISupportSessionAudit, LoggingSupportSessionAudit>();
+// What else happens when a business is deactivated (issue #545's hook point): since issue #550, every
+// active support session for that business ends. It is the single registration #545 declared this
+// hook for, replaced here rather than by editing that transition - the hook runs inside the
 // deactivation's own transaction, so a session ended by a deactivation that rolled back never
-// happened and a committed deactivation cannot leave one running. A single registration rather than
-// a collection, so "what runs here?" has exactly one answer, visible in this file.
-builder.Services.AddScoped<IBusinessDeactivationHook, NoBusinessDeactivationHook>();
+// happened and a committed deactivation cannot leave one running. A single registration rather than a
+// collection, so "what runs here?" has exactly one answer, visible in this file.
+builder.Services.AddScoped<IBusinessDeactivationHook, EndSupportSessionsOnBusinessDeactivation>();
 
 // Whether self-service onboarding is switched on at all (issue #541). Read once here, because only
 // the composition root reads configuration, and published as the Application layer's narrow flag
@@ -304,6 +324,14 @@ builder.Services.AddScoped<IAuthenticatedActorAccessor, EntraActorIdentityAccess
 // takes the identity half of its answer from the accessor above so there is one implementation of
 // "who is calling", and nothing it returns takes part in an access decision.
 builder.Services.AddScoped<IActorProfileAccessor, EntraActorProfileAccessor>();
+
+// Whether this request is inside a support session, and which business it reads (issue #551). The
+// implementation is in this layer because joining a session is a transport fact - the session id
+// arrives in the X-Support-Session header, and whether the caller is the platform administrator is
+// this layer's own policy - and it is the only thing in the application that reads that header's
+// value. Scoped and memoised, so the authorization handler, the business-scope middleware and the
+// use cases all act on one answer.
+builder.Services.AddScoped<ISupportSessionAccessor, RequestSupportSessionAccessor>();
 
 // The host-side half of that refresh: one background drain that runs each queued write in its own
 // new service scope, after the request that scheduled it has finished and with no business

@@ -513,9 +513,11 @@ public class EndpointAuthorizationClassificationTests
     }
 
     /// <summary>
-    /// The class-2 surface, endpoint by endpoint, as the three issues that created it list them: the
+    /// The class-2 surface, endpoint by endpoint, as the four issues that created it list them: the
     /// read-only diagnostics API of #336, the Super Admin's business directory and decisions of
-    /// #544, and its lifecycle transitions and member release of #545. It is kept beside the rule
+    /// #544, its lifecycle transitions and member release of #545, and the support-session control
+    /// endpoints of #550 - which are class 2 for the same reasons and are reached as the
+    /// administrator themselves, never through the support-session header. It is kept beside the rule
     /// above because the rule would still pass if one of these routes quietly moved to a capability
     /// policy - and a platform-admin endpoint on a business capability would be unsatisfiable for the
     /// only caller it exists for, while a business role would have become a second way into a
@@ -532,6 +534,9 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/super-admin/businesses/{businessId:int}/reactivate", "POST")]
     [InlineData("api/super-admin/businesses/{businessId:int}/members", "GET")]
     [InlineData("api/super-admin/businesses/{businessId:int}/members/{membershipId:int}/release", "POST")]
+    [InlineData("api/super-admin/support-sessions/{businessId:int}", "POST")]
+    [InlineData("api/super-admin/support-sessions/active", "GET")]
+    [InlineData("api/super-admin/support-sessions/active/end", "POST")]
     public void The_platform_admin_endpoints_are_class_two_and_nothing_else(string route, string httpMethod)
     {
         var endpoint = Endpoint(route, httpMethod);

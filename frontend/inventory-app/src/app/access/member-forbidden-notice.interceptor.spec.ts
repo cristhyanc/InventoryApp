@@ -131,6 +131,10 @@ describe('isAccountStateBypassRoute', () => {
     expect(isAccountStateBypassRoute('/access-unavailable')).toBe(true);
   });
 
+  it('matches the business application form (issue #543)', () => {
+    expect(isAccountStateBypassRoute('/apply')).toBe(true);
+  });
+
   it('matches any invite token by prefix', () => {
     expect(isAccountStateBypassRoute('/invite/abc123')).toBe(true);
     expect(isAccountStateBypassRoute('/invite/abc123?x=1')).toBe(true);

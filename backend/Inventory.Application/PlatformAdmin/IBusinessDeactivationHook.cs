@@ -15,13 +15,16 @@ public sealed record BusinessDeactivated(int BusinessId, DateTime DeactivatedAtU
 /// The hook point on the deactivate transition (issue #545's fourth criterion): anything that has to
 /// happen when a business is switched off, and that is not the business's own status or its invites.
 ///
-/// <para><strong>Why it exists now, with nothing behind it.</strong> Issue #512's support sessions
+/// <para><strong>Why it exists, and what is behind it now.</strong> Issue #512's support sessions
 /// have to end when the business they are inside is deactivated, and the only safe place for that is
 /// inside the transaction that deactivates it: a session ended by a deactivation that then rolled
 /// back would have been ended for nothing, and a session left running by a deactivation that
 /// committed would be exactly the access the deactivation exists to stop. That ordering is a
-/// property of this transition, so it is declared here, once, rather than left for a later task to
-/// find a place for. No session logic is in this slice, and none belongs here.</para>
+/// property of this transition, so it was declared here, once, by issue #545 - with nothing behind
+/// it - rather than left for a later task to find a place for. Issue #550 is that later task:
+/// <c>Inventory.Application.SupportSessions.EndSupportSessionsOnBusinessDeactivation</c> is the
+/// implementation the composition root registers, and it ends every active support session of the
+/// deactivated business. No session logic is in this transition, and none belongs here.</para>
 ///
 /// <para><strong>Called inside the write transaction, after the status and the invites.</strong>
 /// Whatever it writes commits or rolls back with the deactivation, and an implementation that throws
@@ -30,27 +33,13 @@ public sealed record BusinessDeactivated(int BusinessId, DateTime DeactivatedAtU
 /// on a remote call, and anything that may fail independently belongs behind its own port with its
 /// own retry story.</para>
 ///
-/// <para>The shipped implementation is <see cref="NoBusinessDeactivationHook"/>, which does nothing.
-/// The composition root registers exactly one implementation, so #512 replaces that single
-/// registration rather than editing this transition.</para>
+/// <para><strong>Exactly one implementation is registered</strong>, as a real dependency rather than
+/// a nullable one. A nullable hook would make "is anything registered?" a question every caller has to
+/// ask and one caller will forget, and an optional dependency is how a hook that was supposed to end
+/// sessions comes to be silently absent. Issue #545 shipped a no-op here; issue #550 replaced that one
+/// registration with the support-session end, which is what the hook was declared for.</para>
 /// </summary>
 public interface IBusinessDeactivationHook
 {
     Task OnBusinessDeactivatedAsync(BusinessDeactivated deactivated, CancellationToken cancellationToken);
-}
-
-/// <summary>
-/// The hook as it ships: nothing happens when a business is deactivated beyond the status write and
-/// the invite cancellation (issue #545).
-///
-/// <para>It is a real registered implementation rather than a nullable dependency on purpose. A
-/// nullable hook would make "is anything registered?" a question every caller has to ask and one
-/// caller will forget, and an optional dependency is how a hook that was supposed to end sessions
-/// comes to be silently absent.</para>
-/// </summary>
-public sealed class NoBusinessDeactivationHook : IBusinessDeactivationHook
-{
-    public Task OnBusinessDeactivatedAsync(
-        BusinessDeactivated deactivated,
-        CancellationToken cancellationToken) => Task.CompletedTask;
 }

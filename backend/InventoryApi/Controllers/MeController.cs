@@ -21,6 +21,12 @@ namespace InventoryApi.Controllers;
 /// requirement of its own: a member has to be able to ask what they may do, whatever role they
 /// hold. Enforcing capabilities on the other endpoints is issue #502's work.
 ///
+/// Since issue #551 the same action also answers a platform administrator reading this business
+/// through a support session - the one caller here who holds no role - with that session's own
+/// read-only capability set and a <c>supportSession</c> block saying whose data it is and when the
+/// session runs out. It still has no capability requirement of its own, for the same reason: a
+/// supporter has to be able to ask what this view permits.
+///
 /// <c>GET account-state</c> (issue #523) is the one action here that a person without a usable
 /// membership may reach, through <see cref="MembershipNotRequiredEndpointAttribute"/>. That
 /// exemption is per action and is not a property of this controller: every other action on it,
@@ -48,10 +54,16 @@ public sealed class MeController : ControllerBase
         var access = await _getCurrentAccess.Handle(cancellationToken);
 
         return Ok(new MeAccessResponse(
-            access.Role.ToString(),
+            access.Role?.ToString(),
             [.. access.Capabilities.Select(Capabilities.Name)],
             access.BusinessName,
-            access.TimeZoneId));
+            access.TimeZoneId,
+            access.SupportSession is { } session
+                ? new MeSupportSessionResponse(
+                    session.BusinessName,
+                    session.ExpiresAtUtc,
+                    session.ReadOnly)
+                : null));
     }
 
     /// <summary>

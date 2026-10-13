@@ -22,12 +22,21 @@ export const ACCOUNT_STATE_ROUTE: Readonly<Record<Exclude<AccountStateName, 'Mem
 export const INVITE_ROUTE_PREFIX = 'invite/';
 
 /**
- * Every route a signed-in person without a usable membership may legitimately be on: the three
- * {@link ACCOUNT_STATE_ROUTE} destinations and the invite route #505 builds. None of them carries
- * `accountStateGuard`, for the reason documented on it, and `memberForbiddenNoticeInterceptor`
- * bypasses every one of them too (issue #529).
+ * `/apply`, the business application form (issue #543), named here rather than invented twice: it
+ * is a page a person without a usable membership is sent to, like the destinations above.
  */
-export const ACCOUNT_STATE_BYPASS_PATHS: ReadonlySet<string> = new Set<string>(Object.values(ACCOUNT_STATE_ROUTE));
+export const BUSINESS_APPLICATION_ROUTE = 'apply';
+
+/**
+ * Every route a signed-in person without a usable membership may legitimately be on: the
+ * {@link ACCOUNT_STATE_ROUTE} destinations, the business application form (issue #543) and the
+ * invite route #505 builds. None of them carries `accountStateGuard`, for the reason documented on
+ * it, and `memberForbiddenNoticeInterceptor` bypasses every one of them too (issue #529).
+ */
+export const ACCOUNT_STATE_BYPASS_PATHS: ReadonlySet<string> = new Set<string>([
+  ...Object.values(ACCOUNT_STATE_ROUTE),
+  BUSINESS_APPLICATION_ROUTE
+]);
 
 /**
  * The account states #532's redemption endpoint admits - `NoMembership`, `MembershipRevoked` and

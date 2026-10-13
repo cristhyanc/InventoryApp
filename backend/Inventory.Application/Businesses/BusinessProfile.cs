@@ -1,3 +1,5 @@
+using Inventory.Domain.Tenancy;
+
 namespace Inventory.Application.Businesses;
 
 /// <summary>
@@ -11,4 +13,15 @@ namespace Inventory.Application.Businesses;
 /// <param name="TimeZoneId">
 /// The IANA time-zone id business dates are derived in, for example <c>Australia/Sydney</c>.
 /// </param>
-public sealed record BusinessProfile(string Name, string TimeZoneId);
+/// <param name="Status">
+/// The business's stored lifecycle status, exactly as stored - including a value no deployment
+/// declares (issue #540).
+///
+/// It is here for the one caller that has to ask the question of a business it did not resolve from
+/// a membership: a support session (issue #551) names a business the session row recorded, and that
+/// business must still be <see cref="BusinessStatus.Active"/> for the session to be usable. The
+/// ordinary membership path asks the same question earlier, in
+/// <see cref="BusinessMembershipResolutionPolicy"/>, so nothing on that path reads this. It is
+/// deliberately not reported to a member: no response built from this record carries it.
+/// </param>
+public sealed record BusinessProfile(string Name, string TimeZoneId, BusinessStatus Status);

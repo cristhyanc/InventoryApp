@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Application.Nayax;
+using Inventory.Application.Tenancy;
 using Inventory.Domain.Nayax;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
@@ -350,7 +351,22 @@ public class NayaxLynxClientPerBusinessCredentialTests
             await StoreFor(businessId).SaveCredentialAsync(operatorId, accessToken, CancellationToken.None);
 
         public INayaxLynxClient ClientFor(int businessId, HttpMessageHandler handler) =>
-            CreateClient(new NayaxRequestCredentialProvider(StoreFor(businessId), new FakeClock(Now)), handler);
+            CreateClient(
+                new NayaxRequestCredentialProvider(
+                    StoreFor(businessId), ResolvedScope(businessId), new FakeClock(Now)),
+                handler);
+
+        /// <summary>
+        /// An ordinary member's request scope for one business. Every client here but
+        /// <see cref="DeniedClient"/> runs in one: a support session is a different state entirely,
+        /// and the provider's refusal of it is unit-tested where that decision is made.
+        /// </summary>
+        private static BusinessScope ResolvedScope(int businessId)
+        {
+            var scope = new BusinessScope();
+            scope.Resolve(BusinessId.From(businessId));
+            return scope;
+        }
 
         /// <summary>
         /// A client whose store replaces the stored credential as soon as the connection has been
@@ -363,12 +379,16 @@ public class NayaxLynxClientPerBusinessCredentialTests
                     new ReplacingAfterFirstReadStore(
                         StoreFor(businessId),
                         () => SaveCredentialAsync(businessId, operatorId, accessToken)),
+                    ResolvedScope(businessId),
                     new FakeClock(Now)),
                 handler);
 
         public INayaxLynxClient DeniedClient(HttpMessageHandler handler) =>
             CreateClient(
-                new NayaxRequestCredentialProvider(StoreForContext(TestAppDbContext.Denied(_options)), new FakeClock(Now)),
+                new NayaxRequestCredentialProvider(
+                    StoreForContext(TestAppDbContext.Denied(_options)),
+                    new BusinessScope(),
+                    new FakeClock(Now)),
                 handler);
 
         public async Task<BusinessNayaxConnection> ReadRowAsync(int businessId)
