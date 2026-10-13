@@ -23,6 +23,8 @@ public class MachineAndSiteRouteTests
     [InlineData("POST", "api/Machines/{id}/sync-restock/apply")]
     [InlineData("POST", "api/Machines/{id}/sync-restock/resolve-duplicate")]
     [InlineData("POST", "api/Machines/{id}/sync-restock/resolve-manual")]
+    [InlineData("GET", "api/Machines/{id}/stock-ledger")]
+    [InlineData("POST", "api/Machines/{id}/stock-ledger/counts")]
     public void Machine_endpoint_is_available(string httpMethod, string relativePath) =>
         AssertEndpoint<MachinesController>(httpMethod, relativePath);
 
@@ -34,12 +36,14 @@ public class MachineAndSiteRouteTests
 
     /// <summary>
     /// The complete surface, so an action cannot be added or dropped silently either: adding or
-    /// removing an endpoint is an API contract change issue #302 excludes.
+    /// removing an endpoint is an API contract change issue #302 excludes. The machine count rose
+    /// from seven to nine with issue #56's two machine-stock-ledger endpoints, which are listed
+    /// individually above; the lock is what made that addition a deliberate, reviewed change.
     /// </summary>
     [Fact]
     public void Machine_and_site_controllers_expose_no_other_endpoint()
     {
-        Assert.Equal(7, ApiContractTestHost.GetApiDescriptionsFor<MachinesController>().Count);
+        Assert.Equal(9, ApiContractTestHost.GetApiDescriptionsFor<MachinesController>().Count);
         Assert.Equal(2, ApiContractTestHost.GetApiDescriptionsFor<SitesController>().Count);
     }
 
