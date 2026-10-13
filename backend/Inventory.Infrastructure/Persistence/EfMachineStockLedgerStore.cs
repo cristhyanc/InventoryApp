@@ -91,7 +91,7 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
             .Select(machineStock => new MachineStockOpeningBaselineFact(
                 machineStock.InventoryCostTransitionBaseline!.ProductId,
                 machineStock.StockQuantity,
-                machineStock.InventoryCostTransitionBaseline!.CutoffAt))
+                machineStock.InventoryCostTransitionBaseline.CutoffAt))
             .ToListAsync(cancellationToken);
 
         var pendingEventCount = await _db.NayaxMachineStockEvents

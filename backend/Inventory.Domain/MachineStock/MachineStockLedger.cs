@@ -224,8 +224,7 @@ public static class MachineStockLedger
                     expected += movement.MachineQuantityChange;
                     break;
 
-                case MachineStockMovementKind.CompletedSale:
-                default:
+                default: // MachineStockMovementKind.CompletedSale
                     sold += -movement.MachineQuantityChange;
                     expected += movement.MachineQuantityChange;
                     break;

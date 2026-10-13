@@ -168,14 +168,26 @@ public static class MachineStockReconciliationPolicy
             < 0 => MachineStockReconciliationStatus.Shortage,
             _ => MachineStockReconciliationStatus.Overage
         };
+        int? shrinkageQuantity = discrepancy switch
+        {
+            null => null,
+            < 0 => -discrepancy.Value,
+            _ => 0
+        };
+        int? overageQuantity = discrepancy switch
+        {
+            null => null,
+            > 0 => discrepancy.Value,
+            _ => 0
+        };
 
         return new MachineStockProductReconciliation(
             ledger.ProductId,
             ledger.ExpectedQuantity,
             observedQuantity,
             discrepancy,
-            discrepancy is { } shortfall and < 0 ? -shortfall : discrepancy is null ? null : 0,
-            discrepancy is { } surplus and > 0 ? surplus : discrepancy is null ? null : 0,
+            shrinkageQuantity,
+            overageQuantity,
             status,
             ledger.BaselineSource,
             ledger.BaselineAtUtc,
