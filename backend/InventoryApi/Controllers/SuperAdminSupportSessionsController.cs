@@ -11,12 +11,13 @@ namespace InventoryApi.Controllers;
 /// The Super Admin's read-only support sessions (issue #550, a slice of #512 under #328): start one
 /// for a business that is reporting a problem, read the one in progress, and end it.
 ///
-/// <para><strong>What this slice does, and deliberately does not do.</strong> It stores the record
-/// that a platform administrator may read one business's data for an hour, reports it and ends it.
-/// Nothing in the request pipeline resolves a business from that record yet - issue #551 adds the
-/// header, the new scope state and the read-only enforcement, and issue #552 the dashboard's
-/// behaviour under it - so a session started today grants no access at all. Building it in that order
-/// is the fail-closed one: the audited record exists before anything acts on it.</para>
+/// <para><strong>What this surface does, and deliberately does not do.</strong> It stores the record
+/// that a platform administrator may read one business's data for an hour, reports it and ends it,
+/// and nothing more. Resolving a business from that record is <c>RequestSupportSessionAccessor</c>'s,
+/// on the request that presents the session id (issue #551), so *holding* a session grants nothing:
+/// these endpoints never carry the header and are always reached as the administrator themselves.
+/// Issue #550 shipped the audited record before anything acted on it, which was the fail-closed order
+/// to build this in.</para>
 ///
 /// <para><strong>Authorisation is the platform-admin surface's, unchanged.</strong>
 /// <c>[Authorize]</c>, <c>[Authorize(Policy = PlatformAdminPolicy.Name)]</c>,

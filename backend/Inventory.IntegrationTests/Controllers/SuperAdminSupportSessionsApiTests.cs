@@ -222,14 +222,19 @@ public class SuperAdminSupportSessionsApiTests
     }
 
     /// <summary>
-    /// Starting a session does not make the administrator a member of anything: the business
-    /// endpoints still refuse them, because nothing in the request pipeline reads a session yet
-    /// (issue #551 is what changes that). This is the fail-closed order the slice was built in, and
-    /// it is worth pinning: a session that silently granted access would make the enforcement work of
-    /// #551 unnecessary and unreviewed.
+    /// Starting a session does not make the administrator a member of anything, and *holding* one
+    /// grants nothing: a request that does not present the session id in the
+    /// <c>X-Support-Session</c> header runs as the administrator's own (non-existent) membership, so
+    /// the business endpoints refuse it exactly as they always did.
+    ///
+    /// <para>This was #550's "a session grants no access at all" and is now #551's "a session grants
+    /// nothing until it is presented" - the same assertions, and still the one worth pinning here:
+    /// access that leaked from merely having a session would make the enforcement of #551
+    /// unnecessary and unreviewed. What presenting it does grant is
+    /// <c>SupportSessionRequestApiTests</c>.</para>
     /// </summary>
     [Fact]
-    public async Task A_session_grants_no_access_in_this_slice()
+    public async Task A_session_grants_nothing_until_it_is_presented()
     {
         var client = _factory.AsAdministrator();
         await client.PostAsJsonAsync(

@@ -8,8 +8,8 @@ namespace Inventory.Domain.Tenancy;
 /// (issue #550, a slice of #512 under #328).
 ///
 /// <para><strong>It is a credential, not a key.</strong> A support session is a person from outside a
-/// business reading that business's data, and under issue #551 a request joins the session by
-/// presenting this value in a header. Anything that can present it can read the business, so it is
+/// business reading that business's data, and a request joins the session by presenting this value in
+/// a header (issue #551). Anything that can present it can read the business, so it is
 /// generated from cryptographic randomness, returned exactly once - in the response to the start that
 /// created it - and never reported, logged or audited again.</para>
 ///

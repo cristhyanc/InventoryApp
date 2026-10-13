@@ -111,6 +111,12 @@ var configuredPlatformAdmin = ConfiguredPlatformAdmin.From(
 builder.Services.AddSingleton(configuredPlatformAdmin);
 builder.Services.AddScoped<IAuthorizationHandler, PlatformAdminAuthorizationHandler>();
 builder.Services.AddScoped<IAuthorizationHandler, BusinessCapabilityAuthorizationHandler>();
+
+// Gives the two support-session authorization refusals a body carrying their stable code (issue
+// #551), and leaves every other authorization failure exactly as the framework answers it - a bare
+// 403 that tells a caller nothing about the role matrix. A singleton, because it holds no
+// per-request state and delegates to the framework's own stateless default.
+builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, SupportSessionAuthorizationResultHandler>();
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy(PlatformAdminPolicy.Name, policy =>
@@ -177,6 +183,10 @@ builder.Services.AddPendingReimbursementXmlSource(new PendingReimbursementXmlOpt
 // Controlled RFC 7807 responses for Nayax upstream failures, and for the current business's own
 // Nayax connection being unusable (issue #520).
 builder.Services.AddProblemDetails();
+// The two support-session refusals that are raised rather than decided (issue #551): a write that
+// reached the persistence boundary or document storage, and a Nayax call whose credentials were
+// never resolved. Registered first because it claims only its own two Application-owned types.
+builder.Services.AddExceptionHandler<SupportSessionExceptionHandler>();
 builder.Services.AddExceptionHandler<NayaxConnectionExceptionHandler>();
 builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
 builder.Services.AddExceptionHandler<DomainExceptionHandler>();
@@ -314,6 +324,14 @@ builder.Services.AddScoped<IAuthenticatedActorAccessor, EntraActorIdentityAccess
 // takes the identity half of its answer from the accessor above so there is one implementation of
 // "who is calling", and nothing it returns takes part in an access decision.
 builder.Services.AddScoped<IActorProfileAccessor, EntraActorProfileAccessor>();
+
+// Whether this request is inside a support session, and which business it reads (issue #551). The
+// implementation is in this layer because joining a session is a transport fact - the session id
+// arrives in the X-Support-Session header, and whether the caller is the platform administrator is
+// this layer's own policy - and it is the only thing in the application that reads that header's
+// value. Scoped and memoised, so the authorization handler, the business-scope middleware and the
+// use cases all act on one answer.
+builder.Services.AddScoped<ISupportSessionAccessor, RequestSupportSessionAccessor>();
 
 // The host-side half of that refresh: one background drain that runs each queued write in its own
 // new service scope, after the request that scheduled it has finished and with no business

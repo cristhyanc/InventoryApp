@@ -103,9 +103,12 @@ public sealed class MeAccessApiTests : IClassFixture<MeAccessApiTests.ApiFactory
         var json = await ReadJsonAsync(response);
 
         Assert.Equal(
-            ["businessName", "capabilities", "role", "timeZoneId"],
+            ["businessName", "capabilities", "role", "supportSession", "timeZoneId"],
             json.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.Equal(expectedRole, json.GetProperty("role").GetString());
+        // A member is in no support session, and the field is an explicit null rather than omitted
+        // so the shape is stable for a client (issue #551).
+        Assert.Equal(JsonValueKind.Null, json.GetProperty("supportSession").ValueKind);
         Assert.Equal(
             expectedCapabilities,
             json.GetProperty("capabilities").EnumerateArray().Select(value => value.GetString()));

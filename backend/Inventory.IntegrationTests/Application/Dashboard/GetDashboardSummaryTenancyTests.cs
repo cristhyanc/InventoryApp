@@ -1,3 +1,4 @@
+using Inventory.Application.Access;
 using Inventory.Application.Dashboard;
 using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
@@ -8,6 +9,7 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -134,7 +136,7 @@ public class GetDashboardSummaryTenancyTests : IDisposable
         return new GetDashboardSummary(
             Time.Clock,
             Time.Calendar,
-            currentBusiness,
+            new CurrentCapabilities(new FakeSupportSessionAccessor(), currentBusiness),
             new EfDashboardSummarySalesFactsProvider(db),
             new EfProductCatalogStore(db),
             new CalculateReorderNeeds((fleet ?? SharedOperatorFleet()).Object, outstandingOrders.Object));

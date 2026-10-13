@@ -70,6 +70,7 @@
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Transactions\FakeTransactionSalesReportFactsProvider.cs" Link="Application\Reporting\Transactions\FakeTransactionSalesReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Stock\FakeStockAdjustmentStore.cs" Link="Application\Stock\FakeStockAdjustmentStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Suppliers\FakeSupplierStore.cs" Link="Application\Suppliers\FakeSupplierStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\SupportSessions\FakeSupportSessionAccessor.cs" Link="Application\SupportSessions\FakeSupportSessionAccessor.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Tenancy\FakeActorProfileAccessor.cs" Link="Application\Tenancy\FakeActorProfileAccessor.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Tenancy\FakeAuthenticatedActorAccessor.cs" Link="Application\Tenancy\FakeAuthenticatedActorAccessor.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Tenancy\FakeMemberProfileWriteStore.cs" Link="Application\Tenancy\FakeMemberProfileWriteStore.cs" />

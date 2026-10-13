@@ -45,16 +45,18 @@ namespace Inventory.Application.Dashboard;
 /// has no such properties, and <see cref="IDashboardSummarySalesFactsProvider"/> is not called at
 /// all for them - the figures are withheld because they were never calculated, not stripped on the
 /// way out. The decision is made here rather than at the HTTP boundary because it decides what is
-/// <em>read</em>, and it is made from <see cref="RoleCapabilities"/>, the one role → capability
-/// table <c>GET /api/me/access</c> also reports, through the request's memoised membership
-/// resolution - so it cannot disagree with the capability the endpoint itself enforces. No role name
-/// appears in it.</para>
+/// <em>read</em>, and it is made through <see cref="CurrentCapabilities"/>, the one place that
+/// answers "what may this request do" - <see cref="RoleCapabilities"/> for a member, from the
+/// request's memoised membership resolution, and <see cref="SupportSessionAccessPolicy"/>'s fixed
+/// set for a support session (issue #551), which grants <c>Dashboard.ViewFinancials</c>. So it
+/// cannot disagree with the capability the endpoint itself enforces, or with what
+/// <c>GET /api/me/access</c> reported. No role name appears in it.</para>
 /// </summary>
 public sealed class GetDashboardSummary
 {
     private readonly IClock _clock;
     private readonly IBusinessCalendar _businessCalendar;
-    private readonly ICurrentBusinessProvider _currentBusiness;
+    private readonly CurrentCapabilities _capabilities;
     private readonly IDashboardSummarySalesFactsProvider _salesFacts;
     private readonly IProductCatalogStore _catalog;
     private readonly CalculateReorderNeeds _calculateReorderNeeds;
@@ -62,30 +64,31 @@ public sealed class GetDashboardSummary
     public GetDashboardSummary(
         IClock clock,
         IBusinessCalendar businessCalendar,
-        ICurrentBusinessProvider currentBusiness,
+        CurrentCapabilities capabilities,
         IDashboardSummarySalesFactsProvider salesFacts,
         IProductCatalogStore catalog,
         CalculateReorderNeeds calculateReorderNeeds)
     {
         _clock = clock;
         _businessCalendar = businessCalendar;
-        _currentBusiness = currentBusiness;
+        _capabilities = capabilities;
         _salesFacts = salesFacts;
         _catalog = catalog;
         _calculateReorderNeeds = calculateReorderNeeds;
     }
 
     /// <exception cref="BusinessAccessDeniedException">
-    /// The caller has no usable membership, so there is no role to decide the response shape from.
-    /// Nothing is read: an unresolved membership is a refusal, never a fall back to the
-    /// least-privileged role. A request cannot reach this - the endpoint's <c>Dashboard.View</c>
-    /// policy refuses such a caller first - and it fails closed if one ever could.
+    /// The caller has neither a usable membership nor a support session, so there is nothing to
+    /// decide the response shape from. Nothing is read: an unresolved membership is a refusal, never
+    /// a fall back to the least-privileged role. A request cannot reach this - the endpoint's
+    /// <c>Dashboard.View</c> policy refuses such a caller first - and it fails closed if one ever
+    /// could.
     /// </exception>
     public async Task<IDashboardSummaryDto> Handle(CancellationToken cancellationToken)
     {
-        var mayViewFinancials = RoleCapabilities.Allows(
-            await _currentBusiness.RequireRoleAsync(cancellationToken).ConfigureAwait(false),
-            Capability.DashboardViewFinancials);
+        var mayViewFinancials = await _capabilities
+            .AllowsAsync(Capability.DashboardViewFinancials, cancellationToken)
+            .ConfigureAwait(false);
 
         // Resolved once, before anything is read, so every card describes the same instant and the
         // same business week rather than whichever moment its own read happened to start at.

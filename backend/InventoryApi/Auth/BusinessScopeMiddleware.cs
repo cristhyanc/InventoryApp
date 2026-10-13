@@ -1,9 +1,12 @@
+using System.Diagnostics;
 using Inventory.Application.Businesses;
+using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Auth.PlatformAdmin;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 
 namespace InventoryApi.Auth;
 
@@ -55,6 +58,23 @@ namespace InventoryApi.Auth;
 /// endpoint reads no business data at all, and the marker does nothing on any other endpoint. An
 /// endpoint carrying both markers stays a diagnostics endpoint, decided by the policy above.</para>
 ///
+/// <para><strong>A third way to resolve a business, and the only one that is not a membership
+/// (issue #551).</strong> A platform administrator who presents the session id of an active support
+/// session of their own, for a business that is still active, has that business published as
+/// <see cref="BusinessScopeState.SupportReadOnly"/>: the tenant query filters treat it exactly as
+/// that business, and <c>BusinessOwnershipEnforcer</c> refuses every write. The decision is
+/// <see cref="ISupportSessionAccessor"/>'s - the same memoised answer the capability authorization
+/// handler already acted on earlier in the pipeline - so the business a request was authorised for
+/// and the business it then reads cannot differ.</para>
+///
+/// <para>A presented session that is not usable is refused here with <c>403</c> and
+/// <see cref="SupportSessionErrorCodes.SessionEnded"/>, before any business is resolved and
+/// therefore before any business endpoint reads anything. It deliberately does not fall back to the
+/// administrator's own membership: they have none, and a silent fallback would turn "your session
+/// ended" into "you are not a member of anything". A request with no header at all, or one from
+/// anybody who is not the platform administrator, takes the membership path below completely
+/// unchanged.</para>
+///
 /// <para><strong>One thing happens after the response (issue #524).</strong> A request that
 /// resolved a membership schedules the member's display name and email address to be refreshed from
 /// the claims the same validated token carried. It is scheduling only: the write happens later, in
@@ -62,6 +82,12 @@ namespace InventoryApi.Auth;
 /// response - and it is skipped entirely for a request carrying
 /// <see cref="SupportSessionHeader"/>. The two values it refreshes decide nothing; this middleware
 /// still resolves access from the <c>(tid, oid)</c> pair and the membership row alone.</para>
+///
+/// <para><strong>And one thing is recorded (issue #551).</strong> Every request made inside a
+/// support session emits one structured audit event naming the route template, the method and the
+/// status it was answered with - never a path, a query value, a body or anything that was read. It
+/// is the trail of what somebody from outside the business actually looked at, and it belongs here
+/// because the route template and the status are facts only this layer has.</para>
 /// </summary>
 public sealed class BusinessScopeMiddleware
 {
@@ -81,6 +107,7 @@ public sealed class BusinessScopeMiddleware
         BusinessTimeZoneScope businessTimeZoneScope,
         IBusinessProfileStore businessProfileStore,
         IAuthorizationService authorizationService,
+        ISupportSessionAccessor supportSessionAccessor,
         MemberProfileRefreshRequestScheduler memberProfileRefreshScheduler)
     {
         if (context.User.Identity is not { IsAuthenticated: true })
@@ -121,6 +148,31 @@ public sealed class BusinessScopeMiddleware
             return;
         }
 
+        // A support session is resolved before membership, because the two are alternatives rather
+        // than a sequence: the one caller who can present a session is a member of nothing, so
+        // asking about their membership first would answer "denied" and hide the session entirely.
+        var support = await supportSessionAccessor.ResolveAsync(context.RequestAborted);
+
+        if (support.State == SupportSessionAccessState.Ended)
+        {
+            await WriteSupportSessionEndedAsync(context);
+            return;
+        }
+
+        if (support is { IsActive: true, BusinessId: { } supportedBusinessId }
+            && BusinessId.TryFrom(supportedBusinessId, out var supportedBusiness))
+        {
+            businessScope.ResolveForSupportSession(supportedBusiness);
+
+            await PublishBusinessTimeZoneAsync(
+                context, supportedBusiness, businessTimeZoneScope, businessProfileStore);
+
+            // No profile refresh is scheduled for this path at all, which is issue #524's rule made
+            // structural: the supporter's claims are not the member's, and there is no member here.
+            await AuditSupportSessionRequestAsync(context, support);
+            return;
+        }
+
         var resolution = await currentBusinessProvider.ResolveAsync(context.RequestAborted);
 
         if (resolution.ResolvedBusinessId is not { } businessId)
@@ -136,6 +188,45 @@ public sealed class BusinessScopeMiddleware
         await _next(context);
 
         SchedulePostResponseProfileRefresh(context, memberProfileRefreshScheduler);
+    }
+
+    /// <summary>
+    /// Runs the rest of the request and records one audit event for it (issue #551).
+    ///
+    /// <para>A support session is somebody from outside a business reading its data, so "what did
+    /// they look at?" has to be answerable afterwards. The event carries the route template, the
+    /// method, the status the request was answered with, the business, and the session row's own
+    /// key - so a trail of requests reads as one session, tied to the start event issue #550
+    /// recorded under that same key, which is where the administrator's identity and their stated
+    /// reason are. Repeating the identity on every request would spread it across the trail for no
+    /// extra fact.</para>
+    ///
+    /// <para>It carries <strong>no result data</strong>: not a response body, not a count, not a
+    /// path or a query string, and not the session id in either form. The route template rather than
+    /// the path is the point - <c>api/products/{id}</c> says which endpoint was reached without
+    /// recording which record.</para>
+    ///
+    /// <para>The event is written in a <c>finally</c>, so a request that failed is recorded with the
+    /// status it actually got rather than silently left out of the trail.</para>
+    /// </summary>
+    private async Task AuditSupportSessionRequestAsync(HttpContext context, SupportSessionAccess support)
+    {
+        try
+        {
+            await _next(context);
+        }
+        finally
+        {
+            _logger.LogInformation(
+                "Support session request. SupportSessionKey={SupportSessionKey} BusinessId={BusinessId} "
+                    + "Method={Method} Route={Route} Status={Status} TraceId={TraceId}",
+                support.SessionKey,
+                support.BusinessId,
+                context.Request.Method,
+                (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText,
+                context.Response.StatusCode,
+                Activity.Current?.Id ?? context.TraceIdentifier);
+        }
     }
 
     /// <summary>
@@ -211,6 +302,44 @@ public sealed class BusinessScopeMiddleware
         }
 
         businessTimeZoneScope.Resolve(profile.TimeZoneId);
+    }
+
+    /// <summary>
+    /// Refuses a request whose presented support session is no longer usable (issue #551).
+    ///
+    /// <para>It carries the stable <see cref="SupportSessionErrorCodes.SessionEnded"/> code, which
+    /// is the whole point of this refusal having its own shape: the support banner has to tell "your
+    /// session is over" from "this view is read-only" and from an ordinary membership refusal. It is
+    /// the same code, sentence and shape the authorization result handler publishes when the same
+    /// dead session is noticed earlier in the pipeline, so a client sees one answer wherever the
+    /// refusal happened to be decided.</para>
+    ///
+    /// <para>Why the session failed is not in the response - that is logged by the accessor for an
+    /// operator - because three of the four reasons are facts about somebody else's session or about
+    /// a business this caller is no longer entitled to anything about.</para>
+    /// </summary>
+    private async Task WriteSupportSessionEndedAsync(HttpContext context)
+    {
+        _logger.LogWarning(
+            "A support-session request was refused: the presented session is no longer usable. "
+                + "SupportSessionErrorCode={SupportSessionErrorCode}.",
+            SupportSessionErrorCodes.SessionEnded);
+
+        context.Response.StatusCode = StatusCodes.Status403Forbidden;
+        context.Response.ContentType = "application/problem+json";
+
+        var problemDetails = new ProblemDetails
+        {
+            Type = "https://tools.ietf.org/html/rfc9110#section-15.5.4",
+            Title = "Forbidden",
+            Detail = SupportSessionAuthorizationResultHandler.SessionEndedMessage,
+            Status = StatusCodes.Status403Forbidden,
+        };
+        problemDetails.Extensions["traceId"] = Activity.Current?.Id ?? context.TraceIdentifier;
+        problemDetails.Extensions["message"] = SupportSessionAuthorizationResultHandler.SessionEndedMessage;
+        problemDetails.Extensions["code"] = SupportSessionErrorCodes.SessionEnded;
+
+        await context.Response.WriteAsJsonAsync(problemDetails);
     }
 
     /// <summary>

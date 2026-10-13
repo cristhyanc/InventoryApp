@@ -1,3 +1,4 @@
+using Inventory.Application.Access;
 using Inventory.Application.Dashboard;
 using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
@@ -5,6 +6,7 @@ using Inventory.Application.Products;
 using Inventory.Application.Reorder;
 using InventoryApi.Controllers;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Moq;
 using Xunit;
@@ -46,7 +48,9 @@ public class DashboardControllerTests
             new FakeBusinessCalendar(NowUtc),
             // An Owner, so the endpoint returns the full shape; the role-dependent shape itself is
             // DashboardSummaryRedactionApiTests, through the real request pipeline.
-            new FakeCurrentBusinessProvider(businessId: 1),
+            new CurrentCapabilities(
+                new FakeSupportSessionAccessor(),
+                new FakeCurrentBusinessProvider(businessId: 1)),
             salesFacts.Object,
             catalog.Object,
             new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object)));

@@ -60,6 +60,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetBusinessSettings>();
         services.AddScoped<UpdateBusinessSettings>();
 
+        // What the current request may do (issue #551). Scoped because both of its sources are
+        // per-request facts: the caller's membership role, and the support session they presented.
+        // Registered before its consumers below for no reason other than reading order.
+        services.AddScoped<CurrentCapabilities>();
+
         // The signed-in member's role and capabilities (issue #521). Per request for the same
         // reason, and so a role change applies on the next request rather than being cached.
         services.AddScoped<GetCurrentAccess>();

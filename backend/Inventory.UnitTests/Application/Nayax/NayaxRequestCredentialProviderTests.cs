@@ -1,5 +1,8 @@
 using Inventory.Application.Nayax;
+using Inventory.Application.SupportSessions;
+using Inventory.Application.Tenancy;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
 
@@ -282,8 +285,54 @@ public class NayaxRequestCredentialProviderTests
         Assert.Contains(OperatorId, rendered, StringComparison.Ordinal);
     }
 
-    private static NayaxRequestCredentialProvider CreateProvider(INayaxConnectionStore store) =>
-        new(store, new FakeClock(Now));
+    /// <summary>
+    /// The criterion of issue #551: in a support session the provider refuses to resolve
+    /// credentials, so every Nayax call fails before anything leaves the API - whatever the
+    /// connection's own status is, including the perfectly healthy one.
+    /// </summary>
+    [Theory]
+    [InlineData(NayaxConnectionStatus.Ready)]
+    [InlineData(NayaxConnectionStatus.PendingPermissions)]
+    public async Task A_support_session_resolves_no_credentials_whatever_the_connection_says(
+        NayaxConnectionStatus status)
+    {
+        var store = new FakeNayaxConnectionStore(OperatorId, Token, status);
+        var provider = CreateProvider(store, SupportSessionScope());
+
+        var refusal = await Assert.ThrowsAsync<SupportSessionNayaxUnavailableException>(
+            () => provider.GetForOperationAsync(CancellationToken.None));
+
+        // Nothing was read at all, so nothing could have been decrypted: the refusal is ahead of the
+        // connection read, not a filter applied to its result.
+        Assert.Equal(0, store.ConnectionReads);
+        Assert.Equal(0, store.CredentialReads);
+        Assert.DoesNotContain(Token, refusal.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(OperatorId, refusal.Message, StringComparison.Ordinal);
+    }
+
+    private static NayaxRequestCredentialProvider CreateProvider(
+        INayaxConnectionStore store,
+        IBusinessScope? businessScope = null) =>
+        new(store, businessScope ?? ResolvedScope(), new FakeClock(Now));
+
+    /// <summary>
+    /// An ordinary member's request scope - the state every case here but the support-session one
+    /// runs in.
+    /// </summary>
+    private static BusinessScope ResolvedScope()
+    {
+        var scope = new BusinessScope();
+        scope.Resolve(BusinessId.From(1));
+        return scope;
+    }
+
+    /// <summary>A request reading one business through a support session (issue #551).</summary>
+    private static BusinessScope SupportSessionScope()
+    {
+        var scope = new BusinessScope();
+        scope.ResolveForSupportSession(BusinessId.From(1));
+        return scope;
+    }
 
     /// <summary>
     /// Reports a usable status in a snapshot that carries no credential at all.

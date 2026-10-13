@@ -1,8 +1,10 @@
 using System.Security.Claims;
 using Inventory.Application.Access;
+using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Auth;
+using InventoryApi.Tests.Application.SupportSessions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -206,6 +208,172 @@ public class BusinessCapabilityAuthorizationHandlerTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new RequireCapabilityAttribute((Capability)99));
     }
 
+    #region Support sessions (issue #551)
+
+    /// <summary>
+    /// The criterion: in a support session a <c>GET</c> succeeds for every capability in the agreed
+    /// set, from that set and not from a role - the provider here resolves no membership at all,
+    /// which is the true state of a platform administrator.
+    /// </summary>
+    [Theory]
+    [InlineData(Capability.DashboardView)]
+    [InlineData(Capability.DashboardViewFinancials)]
+    [InlineData(Capability.PickListView)]
+    [InlineData(Capability.InventoryOperate)]
+    [InlineData(Capability.PurchasingOperate)]
+    [InlineData(Capability.ExpensesManage)]
+    [InlineData(Capability.ReportsView)]
+    [InlineData(Capability.ImportsRun)]
+    [InlineData(Capability.SiteCommissionsManage)]
+    [InlineData(Capability.IntegrationManage)]
+    [InlineData(Capability.DataRepair)]
+    [InlineData(Capability.RolesView)]
+    [InlineData(Capability.BusinessManage)]
+    public async Task In_a_support_session_a_read_succeeds_for_every_capability_in_the_set(
+        Capability capability)
+    {
+        var context = await HandleAsync(
+            capability,
+            new RecordingCurrentBusinessProvider(
+                BusinessMembershipResolution.Denied(BusinessAccessDenialReason.MembershipMissing)),
+            supportSession: FakeSupportSessionAccessor.Active(businessId: 7));
+
+        Assert.True(context.HasSucceeded);
+    }
+
+    /// <summary>
+    /// The two exclusions: a <c>GET</c> is refused for them too, so the members list and the GST
+    /// defaults are out of a support view entirely rather than merely not editable.
+    /// </summary>
+    [Theory]
+    [InlineData(Capability.MembersManage)]
+    [InlineData(Capability.SuppliersManageGstDefaults)]
+    public async Task In_a_support_session_the_two_excluded_capabilities_are_refused_even_for_a_read(
+        Capability capability)
+    {
+        var context = await HandleAsync(
+            capability,
+            new RecordingCurrentBusinessProvider(
+                BusinessMembershipResolution.Denied(BusinessAccessDenialReason.MembershipMissing)),
+            supportSession: FakeSupportSessionAccessor.Active(businessId: 7));
+
+        Assert.False(context.HasSucceeded);
+        Assert.Null(SupportSessionAuthorizationFailure.TryGetCode(Failure(context)));
+    }
+
+    /// <summary>
+    /// The criterion: any method that is not a read is refused with
+    /// <c>read_only_support_session</c>, <em>whatever</em> the capability - including one the
+    /// session's own set grants, which is what makes the method rule independent of the capability
+    /// rule rather than an extra condition on it.
+    /// </summary>
+    [Theory]
+    [InlineData("POST")]
+    [InlineData("PUT")]
+    [InlineData("PATCH")]
+    [InlineData("DELETE")]
+    [InlineData("QUERY")]
+    public async Task In_a_support_session_a_write_is_refused_as_read_only(string method)
+    {
+        var context = await HandleAsync(
+            Capability.InventoryOperate,
+            new RecordingCurrentBusinessProvider(
+                BusinessMembershipResolution.Denied(BusinessAccessDenialReason.MembershipMissing)),
+            supportSession: FakeSupportSessionAccessor.Active(businessId: 7),
+            method: method);
+
+        Assert.False(context.HasSucceeded);
+        Assert.Equal(
+            SupportSessionErrorCodes.ReadOnly,
+            SupportSessionAuthorizationFailure.TryGetCode(Failure(context)));
+    }
+
+    /// <summary>
+    /// <c>HEAD</c> is a read and is allowed, which is the other half of the allowlist: the rule is
+    /// "these two methods" rather than "not these methods".
+    /// </summary>
+    [Fact]
+    public async Task In_a_support_session_a_head_request_is_a_read()
+    {
+        var context = await HandleAsync(
+            Capability.InventoryOperate,
+            new RecordingCurrentBusinessProvider(
+                BusinessMembershipResolution.Denied(BusinessAccessDenialReason.MembershipMissing)),
+            supportSession: FakeSupportSessionAccessor.Active(businessId: 7),
+            method: "HEAD");
+
+        Assert.True(context.HasSucceeded);
+    }
+
+    /// <summary>
+    /// A presented session the server will not honour is refused as a dead session rather than as a
+    /// missing membership - and before the capability or the method is considered at all, because
+    /// this handler is the first thing in the pipeline that can say so.
+    /// </summary>
+    [Fact]
+    public async Task A_presented_session_that_ended_is_refused_with_its_own_code()
+    {
+        var provider = new RecordingCurrentBusinessProvider(
+            BusinessMembershipResolution.Resolved(Business, BusinessRole.Owner));
+
+        var context = await HandleAsync(
+            Capability.InventoryOperate,
+            provider,
+            supportSession: FakeSupportSessionAccessor.Ended());
+
+        Assert.False(context.HasSucceeded);
+        Assert.Equal(
+            SupportSessionErrorCodes.SessionEnded,
+            SupportSessionAuthorizationFailure.TryGetCode(Failure(context)));
+        // Never the administrator's own membership, even when one would have been resolvable.
+        Assert.Equal(0, provider.Resolutions);
+    }
+
+    /// <summary>
+    /// An ordinary member who presented nothing is decided by their role exactly as before, and the
+    /// refusal carries no support-session code for a client to misread.
+    /// </summary>
+    [Fact]
+    public async Task A_member_who_presented_no_session_is_unaffected()
+    {
+        var allowed = await HandleAsync(
+            Capability.InventoryOperate,
+            BusinessMembershipResolution.Resolved(Business, BusinessRole.Operator));
+        var refused = await HandleAsync(
+            Capability.BusinessManage,
+            BusinessMembershipResolution.Resolved(Business, BusinessRole.Operator));
+
+        Assert.True(allowed.HasSucceeded);
+        Assert.False(refused.HasSucceeded);
+        Assert.Null(SupportSessionAuthorizationFailure.TryGetCode(Failure(refused)));
+    }
+
+    /// <summary>
+    /// An ordinary member's write is decided by their capability, not by the read-only rule: the
+    /// method rule belongs to support sessions alone.
+    /// </summary>
+    [Fact]
+    public async Task A_members_write_is_not_subject_to_the_read_only_rule()
+    {
+        var context = await HandleAsync(
+            Capability.InventoryOperate,
+            new RecordingCurrentBusinessProvider(
+                BusinessMembershipResolution.Resolved(Business, BusinessRole.Operator)),
+            method: "POST");
+
+        Assert.True(context.HasSucceeded);
+    }
+
+    /// <summary>
+    /// Builds the authorization failure the middleware would see from an evaluation that did not
+    /// succeed, so the code attached to it can be read back the same way
+    /// <c>SupportSessionAuthorizationResultHandler</c> reads it.
+    /// </summary>
+    private static AuthorizationFailure Failure(AuthorizationHandlerContext context) =>
+        AuthorizationFailure.Failed(context.FailureReasons);
+
+    #endregion
+
     private static async Task<AuthorizationHandlerContext> HandleAsync(
         Capability capability,
         BusinessMembershipResolution resolution) =>
@@ -214,7 +382,9 @@ public class BusinessCapabilityAuthorizationHandlerTests
     private static async Task<AuthorizationHandlerContext> HandleAsync(
         Capability capability,
         RecordingCurrentBusinessProvider provider,
-        ClaimsPrincipal? user = null)
+        ClaimsPrincipal? user = null,
+        ISupportSessionAccessor? supportSession = null,
+        string method = "GET")
     {
         var requirement = new BusinessCapabilityRequirement(capability);
         var context = new AuthorizationHandlerContext(
@@ -222,16 +392,26 @@ public class BusinessCapabilityAuthorizationHandlerTests
             user ?? AuthenticatedCaller(),
             resource: null);
 
-        await Handler(provider).HandleAsync(context);
+        await Handler(provider, supportSession, method).HandleAsync(context);
 
         return context;
     }
 
-    private static BusinessCapabilityAuthorizationHandler Handler(ICurrentBusinessProvider provider) =>
-        new(
-            provider,
-            new HttpContextAccessor { HttpContext = new DefaultHttpContext() },
+    private static BusinessCapabilityAuthorizationHandler Handler(
+        ICurrentBusinessProvider provider,
+        ISupportSessionAccessor? supportSession = null,
+        string method = "GET")
+    {
+        var session = supportSession ?? new FakeSupportSessionAccessor();
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Method = method;
+
+        return new(
+            new CurrentCapabilities(session, provider),
+            session,
+            new HttpContextAccessor { HttpContext = httpContext },
             NullLogger<BusinessCapabilityAuthorizationHandler>.Instance);
+    }
 
     private static ClaimsPrincipal AuthenticatedCaller() =>
         new(new ClaimsIdentity(
@@ -256,7 +436,14 @@ public class BusinessCapabilityAuthorizationHandlerTests
         public Task<BusinessId> RequireBusinessIdAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<BusinessRole> RequireRoleAsync(CancellationToken cancellationToken) =>
-            throw new NotSupportedException();
+        public Task<BusinessRole> RequireRoleAsync(CancellationToken cancellationToken)
+        {
+            Resolutions++;
+
+            return resolution.ResolvedRole is { } role
+                ? Task.FromResult(role)
+                : throw new BusinessAccessDeniedException(
+                    resolution.DenialReason ?? BusinessAccessDenialReason.NotAuthenticated);
+        }
     }
 }

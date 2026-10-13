@@ -102,6 +102,13 @@ public sealed class AzureBlobDocumentStorage : IDocumentStorage
     /// and silently picking a prefix would be a cross-business write waiting to happen.
     /// Cross-business access for maintenance work needs its own explicit path rather than a
     /// weakening of this one.
+    ///
+    /// <see cref="BusinessScopeState.SupportReadOnly"/> (issue #551) is accepted on the same terms
+    /// as <see cref="BusinessScopeState.Resolved"/>, because it names exactly one business in
+    /// exactly the same way: a supporter looking at a purchase is looking at its receipt too. It is
+    /// not a weakening of the write side - <see cref="SupportSessionReadOnlyDocumentStorage"/>
+    /// refuses every write and delete in that state before this adapter is reached - so what a
+    /// support session gets here is the prefix of the business it is reading, for reads only.
     /// </summary>
     private BusinessId RequireCurrentBusiness()
     {
@@ -111,7 +118,7 @@ public sealed class AzureBlobDocumentStorage : IDocumentStorage
                 "Document storage cannot run with an unscoped business scope: a document belongs to exactly one business, and its blob name is derived from that business. Cross-business access requires a separate, explicit path.");
         }
 
-        if (_businessScope.State != BusinessScopeState.Resolved ||
+        if (_businessScope.State is not (BusinessScopeState.Resolved or BusinessScopeState.SupportReadOnly) ||
             _businessScope.BusinessId is not { } businessId ||
             !BusinessId.TryFrom(businessId, out var trusted))
         {

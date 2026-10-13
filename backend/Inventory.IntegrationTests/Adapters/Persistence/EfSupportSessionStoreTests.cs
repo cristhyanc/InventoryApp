@@ -336,6 +336,126 @@ public class EfSupportSessionStoreTests
         }
     }
 
+    #region The id-to-session lookup a support request makes (issue #551)
+
+    /// <summary>
+    /// The lookup a support request needs: the presented id, hashed, finds that administrator's own
+    /// active session - and the row it answers with still carries no copy of the hash, let alone the
+    /// id, because the projection does not read that column.
+    /// </summary>
+    [Fact]
+    public async Task The_presented_id_finds_the_callers_own_active_session()
+    {
+        var (connection, options) = await CreateSqliteAsync();
+        await using (connection)
+        {
+            const string sessionId = "the-id-the-start-returned-once";
+            var key = await SeedAsync(
+                options, FirstBusinessId, AdministratorOid, sessionIdHash: SupportSessionId.Hash(sessionId));
+            await using var db = TestAppDbContext.Denied(options);
+
+            var found = await new EfSupportSessionStore(db).FindActiveForActorByIdHashAsync(
+                Administrator(AdministratorOid),
+                SupportSessionId.Hash(sessionId),
+                Now,
+                CancellationToken.None);
+
+            Assert.NotNull(found);
+            Assert.Equal(key, found!.Key);
+            Assert.Equal(FirstBusinessId, found.BusinessId);
+            Assert.Equal(SupportSessionPolicy.ExpiresAt(StartedAt), found.ExpiresAtUtc);
+            Assert.Equal(DateTimeKind.Utc, found.ExpiresAtUtc.Kind);
+        }
+    }
+
+    /// <summary>
+    /// The four ways the lookup finds nothing, each of them a condition of the statement rather than
+    /// a check made on its result: another administrator presenting a leaked id, the caller's own id
+    /// after it expired, after it was ended, and an id that was never issued at all.
+    ///
+    /// <para>The leaked-id case is the one that matters most. A session is visible and usable only to
+    /// the administrator it was granted to, so a copied id is not a session somebody else is
+    /// <em>refused</em> - it is a session they cannot find.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_presented_id_finds_nothing_for_anybody_else_or_once_it_is_over()
+    {
+        var (connection, options) = await CreateSqliteAsync();
+        await using (connection)
+        {
+            const string sessionId = "the-id-the-start-returned-once";
+            var hash = SupportSessionId.Hash(sessionId);
+            await SeedAsync(options, FirstBusinessId, AdministratorOid, sessionIdHash: hash);
+            await using var db = TestAppDbContext.Denied(options);
+            var store = new EfSupportSessionStore(db);
+
+            // Another administrator with the same id in their hand.
+            Assert.Null(await store.FindActiveForActorByIdHashAsync(
+                Administrator(OtherAdministratorOid), hash, Now, CancellationToken.None));
+
+            // The owner's own id, after the expiry instant - inclusive, exactly as IsActive is.
+            Assert.Null(await store.FindActiveForActorByIdHashAsync(
+                Administrator(AdministratorOid),
+                hash,
+                SupportSessionPolicy.ExpiresAt(StartedAt),
+                CancellationToken.None));
+
+            // An id that names no row.
+            Assert.Null(await store.FindActiveForActorByIdHashAsync(
+                Administrator(AdministratorOid),
+                SupportSessionId.Hash("an-id-nothing-ever-issued"),
+                Now,
+                CancellationToken.None));
+        }
+    }
+
+    /// <summary>
+    /// An ended session is over for the lookup too, which is what makes the end a real revocation
+    /// rather than a flag somewhere: the row still exists, and presenting its id finds nothing.
+    /// </summary>
+    [Fact]
+    public async Task An_ended_sessions_id_finds_nothing()
+    {
+        var (connection, options) = await CreateSqliteAsync();
+        await using (connection)
+        {
+            var hash = SupportSessionId.Hash("an-id-that-was-ended");
+            await SeedAsync(
+                options,
+                FirstBusinessId,
+                AdministratorOid,
+                endedAtUtc: StartedAt.AddMinutes(5),
+                sessionIdHash: hash);
+            await using var db = TestAppDbContext.Denied(options);
+
+            Assert.Null(await new EfSupportSessionStore(db).FindActiveForActorByIdHashAsync(
+                Administrator(AdministratorOid), hash, Now, CancellationToken.None));
+        }
+    }
+
+    /// <summary>
+    /// A blank hash is a programming error, not a lookup: hashing nothing would otherwise produce a
+    /// perfectly valid-looking key, and the only way to reach it is a caller that forgot to check
+    /// what the request presented.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task A_blank_hash_is_refused_rather_than_queried(string hash)
+    {
+        var (connection, options) = await CreateSqliteAsync();
+        await using (connection)
+        {
+            await using var db = TestAppDbContext.Denied(options);
+
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => new EfSupportSessionStore(db).FindActiveForActorByIdHashAsync(
+                    Administrator(AdministratorOid), hash, Now, CancellationToken.None));
+        }
+    }
+
+    #endregion
+
     private static async Task<(SqliteConnection Connection, DbContextOptions<AppDbContext> Options)> CreateSqliteAsync()
     {
         var connection = new SqliteConnection("Data Source=:memory:");
