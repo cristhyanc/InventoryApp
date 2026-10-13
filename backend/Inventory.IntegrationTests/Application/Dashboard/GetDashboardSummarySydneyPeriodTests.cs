@@ -3,9 +3,11 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.Dashboard;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
+using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -38,7 +40,13 @@ public class GetDashboardSummarySydneyPeriodTests : IDisposable
 
         using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
-        setup.Businesses.Add(new Business { Id = BusinessId, Name = "Vending", CreatedAtUtc = DateTime.UtcNow });
+        setup.Businesses.Add(new Business
+        {
+            Id = BusinessId,
+            Name = "Vending",
+            Status = BusinessStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+        });
         setup.SaveChanges();
     }
 
@@ -78,13 +86,17 @@ public class GetDashboardSummarySydneyPeriodTests : IDisposable
             .ReturnsAsync(new Dictionary<long, decimal>());
 
         await using var db = TestAppDbContext.For(_options, BusinessId);
-        return await new GetDashboardSummary(
+        var summary = await new GetDashboardSummary(
                 time.Clock,
                 time.Calendar,
+                // An Owner, so the sales card these tests are about is published at all (issue #527).
+                new FakeCurrentBusinessProvider(BusinessId),
                 new EfDashboardSummarySalesFactsProvider(db),
                 new EfProductCatalogStore(db),
                 new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object))
             .Handle(CancellationToken.None);
+
+        return Assert.IsType<DashboardSummaryDto>(summary);
     }
 
     /// <summary>

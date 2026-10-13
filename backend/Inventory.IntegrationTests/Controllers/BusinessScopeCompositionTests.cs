@@ -1,6 +1,8 @@
 using System.Net;
+using Inventory.Application.PlatformAdmin;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -24,6 +26,11 @@ namespace InventoryApi.Tests.Controllers;
 /// cannot produce an unfiltered context, and the application has to resolve a request-backed
 /// scope so a dependency-injection mistake cannot silently unscope production while every other
 /// test still passes.
+///
+/// <para>Issue #544 extended it to the Super Admin's business store, the first write-capable
+/// platform-admin adapter and the only request path that reads across every business through
+/// <see cref="AppDbContext"/>: it is registered scoped, takes nothing but the request's own
+/// context, and no registration anywhere offers a request path an unscoped one.</para>
 /// </summary>
 public sealed class BusinessScopeCompositionTests : IClassFixture<BusinessScopeCompositionTests.ApiFactory>
 {
@@ -92,6 +99,60 @@ public sealed class BusinessScopeCompositionTests : IClassFixture<BusinessScopeC
 
         Assert.True(db.TenantFilteringEnabled);
         Assert.Null(db.CurrentBusinessId);
+    }
+
+    /// <summary>
+    /// The Super Admin's business store is not an exception to any of the above (issue #544). It is
+    /// the first write-capable platform-admin adapter and the only request path that reads across
+    /// every business through <c>AppDbContext</c>, so this is where "no unscoped context is exposed"
+    /// has to be asserted rather than described.
+    ///
+    /// <para>Three things together make that true, and all three are checked: the port is satisfied
+    /// by the Infrastructure adapter as a <em>scoped</em> registration, so it is built per request;
+    /// its only constructor dependency is <see cref="AppDbContext"/>, so nothing can hand it a
+    /// scope, a context factory or options of its own; and the context it therefore receives is the
+    /// request's own, which the test above proves starts denied and filters every tenant-owned
+    /// read.</para>
+    /// </summary>
+    [Fact]
+    public void The_super_admin_business_store_gets_the_request_scoped_context_and_nothing_else()
+    {
+        using var scope = _factory.Services.CreateScope();
+
+        var store = scope.ServiceProvider.GetRequiredService<IPlatformBusinessDirectoryStore>();
+
+        Assert.IsType<EfPlatformBusinessDirectoryStore>(store);
+
+        var dependencies = typeof(EfPlatformBusinessDirectoryStore)
+            .GetConstructors()
+            .SelectMany(constructor => constructor.GetParameters())
+            .Select(parameter => parameter.ParameterType)
+            .ToArray();
+
+        Assert.Equal([typeof(AppDbContext)], dependencies);
+
+        // The context that adapter is therefore built with: the request's own, which has resolved no
+        // business and reads nothing tenant-owned.
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.True(db.TenantFilteringEnabled);
+        Assert.Null(db.CurrentBusinessId);
+        Assert.Empty(db.Products.ToList());
+    }
+
+    /// <summary>
+    /// The other half of the same rule: the composition root registers no way for <em>any</em>
+    /// request-path service to obtain unrestricted access. <see cref="UnscopedBusinessScope"/> is
+    /// not resolvable at all, and the scope that is resolvable is the request-backed one - so the
+    /// platform-admin adapter above cannot be given an unscoped context by asking for one either
+    /// (issue #544).
+    /// </summary>
+    [Fact]
+    public void No_registration_exposes_unrestricted_access_to_a_request_path()
+    {
+        using var scope = _factory.Services.CreateScope();
+
+        Assert.Null(scope.ServiceProvider.GetService<UnscopedBusinessScope>());
+        Assert.IsNotType<UnscopedBusinessScope>(scope.ServiceProvider.GetRequiredService<IBusinessScope>());
     }
 
     /// <summary>

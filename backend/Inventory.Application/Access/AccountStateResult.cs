@@ -12,14 +12,19 @@ namespace Inventory.Application.Access;
 /// </summary>
 /// <param name="State">The caller's own account state, from <see cref="AccountStatePolicy"/>.</param>
 /// <param name="OnboardingEnabled">
-/// Whether a person with no membership may apply for a business themselves. Always
-/// <see langword="false"/> until issue #507 adds the <c>SelfServiceOnboarding:Enabled</c> flag
-/// this will report.
+/// Whether this deployment lets a person apply for a business themselves: the
+/// <c>SelfServiceOnboarding:Enabled</c> flag, read through
+/// <see cref="Onboarding.ISelfServiceOnboardingFlag"/> (issue #541), which is the same value
+/// <c>POST /api/onboarding/business-applications</c> itself reads. It describes the deployment and
+/// never the caller: whether <em>this</em> account may apply is decided by
+/// <see cref="Onboarding.ApplyForBusiness"/> from their own membership records, so a member or a
+/// pending applicant sees <see langword="true"/> here too while the endpoint still refuses them.
 /// </param>
 /// <param name="RejectionReason">
-/// Why a business application was rejected, and <see langword="null"/> for every other state. It
-/// arrives with issue #507, which adds both the rejected business status and the stored reason, so
-/// it is always <see langword="null"/> today.
+/// Why a business application was rejected, and <see langword="null"/> for every other state
+/// (issue #540). It comes from the business's stored reason through
+/// <see cref="AccountStateDecision"/>, together with the state it belongs to, so a reason is never
+/// reported beside a state it does not describe.
 /// </param>
 public sealed record AccountStateResult(
     AccountState State,

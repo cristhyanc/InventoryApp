@@ -15,7 +15,9 @@ namespace Inventory.Infrastructure.Persistence;
 /// persistence models it reads.
 ///
 /// It is the one place the <c>BEGIN IMMEDIATE</c> half of the shared membership write path is
-/// implemented, and the only place in the application that asks SQLite for a transaction mode. The
+/// implemented. It was also the only place in the application that asked SQLite for a transaction
+/// mode until issue #537's <see cref="EfNayaxConnectionSaveTransactions"/>, which does the same
+/// thing for the same reason - a read that decides a write has to be inside the write lock. The
 /// reason it has to be explicit is that a deferred transaction - the default - takes its write lock
 /// at the first write, which is *after* the eligibility check it is supposed to protect: two
 /// callers would both read "no active membership", and only the second would find out at its

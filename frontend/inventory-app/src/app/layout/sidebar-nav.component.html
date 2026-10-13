@@ -79,19 +79,25 @@
 
           @if (expanded && isGroupOpen(item)) {
             <ul [id]="groupPanelId(item)" class="ml-5 mt-1 flex flex-col gap-1 border-l border-md-gray-200 pl-3">
-              @for (child of item.children; track child.route) {
+              @for (child of item.children; track child.label) {
                 <li>
-                  <a
-                    [routerLink]="child.route"
-                    class="block truncate rounded-md-control px-3 py-1.5 transition hover:bg-md-gray-100"
-                    [class.bg-md-dark-gradient]="isLinkActive(child)"
-                    [class.text-white]="isLinkActive(child)"
-                    [class.font-semibold]="isLinkActive(child)"
-                    [class.text-md-gray-800]="!isLinkActive(child)"
-                    [attr.aria-current]="isLinkActive(child) ? 'page' : null"
-                    (click)="navigated.emit()"
-                    >{{ child.label }}</a
-                  >
+                  @if (child.kind === 'link') {
+                    <a
+                      [routerLink]="child.route"
+                      class="block truncate rounded-md-control px-3 py-1.5 transition hover:bg-md-gray-100"
+                      [class.bg-md-dark-gradient]="isLinkActive(child)"
+                      [class.text-white]="isLinkActive(child)"
+                      [class.font-semibold]="isLinkActive(child)"
+                      [class.text-md-gray-800]="!isLinkActive(child)"
+                      [attr.aria-current]="isLinkActive(child) ? 'page' : null"
+                      (click)="navigated.emit()"
+                      >{{ child.label }}</a
+                    >
+                  } @else {
+                    <span class="block truncate rounded-md-control px-3 py-1.5 text-md-gray-400" aria-disabled="true">{{
+                      child.label
+                    }}</span>
+                  }
                 </li>
               }
             </ul>

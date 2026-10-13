@@ -1,14 +1,16 @@
 import { Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AccountInfo, AuthenticationResult, InteractionStatus } from '@azure/msal-browser';
-import { Subject, Subscription, catchError, defer, filter, map, of, retry, takeUntil, timer } from 'rxjs';
+import { AuthenticationResult } from '@azure/msal-browser';
+import { Subject, Subscription, catchError, defer, filter, map, of, retry, switchMap, take, takeUntil, timer } from 'rxjs';
 import { ToastContainerComponent } from "./components/shared/toast-container.component";
 import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
 import { BreadcrumbsComponent } from './layout/breadcrumbs/breadcrumbs.component';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav.component';
 import { UserMenuComponent } from './layout/user-menu.component';
+import { AccountStateService } from './access/account-state.service';
+import { activeAccountKey, signedInAccountMayHaveChanged } from './access/signed-in-account';
 import { BusinessService } from './services/business.service';
 import { loginRequest } from './auth-config';
 
@@ -30,6 +32,14 @@ import { loginRequest } from './auth-config';
  *
  * Authentication is unchanged: this component still owns the MSAL redirect handling, active
  * account and login/logout calls, and `UserMenuComponent` only reports the operator's intent.
+ *
+ * What the shell shows follows the identity signed in **now** (issue #604). It watches the same
+ * `signedInAccountMayHaveChanged` trigger the access caches do - MSAL's account events as well as
+ * `inProgress$` settling - so a direct Microsoft account switch, which raises
+ * `ACTIVE_ACCOUNT_CHANGED` without any interaction, updates the displayed account, discards the
+ * previous account's business context and published time zone, cancels its lookup, and closes the
+ * routed-page gate until the new account's own business has answered. A superseded lookup can
+ * neither publish nor open that gate; a sign-out clears the context with no authenticated call.
  */
 @Component({
   selector: 'app-root',
@@ -72,7 +82,8 @@ export class AppComponent implements OnInit, OnDestroy {
   /**
    * The signed-in identity the business context above was requested for, or `null` when nobody is
    * signed in. A different identity means a different business, so the context is discarded and
-   * read again rather than kept from the previous account.
+   * read again rather than kept from the previous account. It is keyed by `activeAccountKey`, the
+   * same identity the access caches use, so the two cannot disagree about who is signed in.
    */
   private businessAccountKey: string | null = null;
   private businessLookup?: Subscription;
@@ -89,6 +100,7 @@ export class AppComponent implements OnInit, OnDestroy {
   constructor(
     private readonly authService: MsalService,
     private readonly msalBroadcastService: MsalBroadcastService,
+    private readonly accountState: AccountStateService,
     private readonly businessService: BusinessService
   ) {}
 
@@ -140,12 +152,14 @@ export class AppComponent implements OnInit, OnDestroy {
         }
       });
 
-    // Do not inspect accounts until MSAL has finished any authentication interaction.
-    this.msalBroadcastService.inProgress$
-      .pipe(
-        filter((status: InteractionStatus) => status === InteractionStatus.None),
-        takeUntil(this.destroying$)
-      )
+    // Whoever is signed in now, from both signals that report it changing (issue #604): MSAL's own
+    // account events - `ACTIVE_ACCOUNT_CHANGED` among them - and `inProgress$` settling, which is
+    // what says any authentication interaction has finished and the accounts may be inspected. A
+    // direct account switch raises only the event, because no interaction is involved: the shell
+    // that watched the interaction status alone therefore kept the previous account's name,
+    // business and time zone on screen for the rest of the session.
+    signedInAccountMayHaveChanged(this.msalBroadcastService)
+      .pipe(takeUntil(this.destroying$))
       .subscribe(() => {
         this.ensureActiveAccount();
         this.updateLoginState();
@@ -233,12 +247,16 @@ export class AppComponent implements OnInit, OnDestroy {
     this.isLoggedIn = account !== null;
     this.userName = account?.name ?? account?.username ?? '';
 
-    const accountKey = AppComponent.accountKey(account);
+    // The same identity the access caches key their answers on, so what the shell shows and what
+    // they answer cannot drift apart across an account switch (issue #604).
+    const accountKey = activeAccountKey(this.authService);
     if (accountKey !== this.businessAccountKey) {
       // A different account (or a sign-out) owns a different business context. Drop the previous
       // one entirely - the cached lookup, the published zone and any lookup still in flight - so
       // neither the loading state nor a failure can show the previous business's zone, and read
-      // the business again as the new account.
+      // the business again as the new account. The routed page goes back to waiting: it is on
+      // screen only while the business whose zone it renders its instants in is the current
+      // account's own.
       this.businessAccountKey = accountKey;
       this.businessLookup?.unsubscribe();
       this.businessLookup = undefined;
@@ -250,41 +268,57 @@ export class AppComponent implements OnInit, OnDestroy {
     if (this.isLoggedIn && !this.businessRequested) {
       // The business's own name and time zone, which every operator-facing date/time is rendered
       // in (issue #499). It is an authenticated read, so it cannot happen at bootstrap; it is
-      // requested here, once sign-in has settled. The routed page waits for it (see
-      // isBusinessContextReady), because a page rendered before the business is known would show
-      // its instants in no time zone at all.
+      // requested here, once sign-in has settled or the signed-in account has changed. The routed
+      // page waits for it (see isBusinessContextReady), because a page rendered before the
+      // business is known would show its instants in no time zone at all.
+      //
+      // It waits for the account state first (issue #529): a person who is not `Member` has no
+      // business to look up, and `GET /api/business/current` would only answer the same `403`
+      // `BusinessScopeMiddleware` already gives every other member endpoint. An account state that
+      // could not be read is treated the same way `accountStateGuard` treats it - the lookup is
+      // attempted anyway, because the membership check on the endpoint itself is the real boundary.
+      //
+      // The answer it waits for is the **current** identity's (issue #604). `AccountStateService`
+      // publishes `unread` again from the moment the identity changes (issue #603) and the shell
+      // starts this lookup afresh on the same signal, so the one answer that can decide the new
+      // account's business is the new account's own; `take(1)` ends this subscription on it, and a
+      // later identity change replaces the whole subscription rather than repairing it.
       this.businessRequested = true;
-      this.businessLookup = defer(() => this.businessService.load())
+      this.businessLookup = this.accountState.state$
         .pipe(
-          // A failed lookup emits null and is retryable (BusinessService drops it), so it is asked
-          // again, with a growing delay, before the shell gives up on it.
-          map((business) => {
-            if (business === null) {
-              throw new Error('The current business could not be read.');
+          filter((answer) => answer.status !== 'unread'),
+          take(1),
+          switchMap((answer) => {
+            if (answer.status === 'known' && answer.accountState.state !== 'Member') {
+              return of(null);
             }
-            return business;
+
+            return defer(() => this.businessService.load()).pipe(
+              // A failed lookup emits null and is retryable (BusinessService drops it), so it is
+              // asked again, with a growing delay, before the shell gives up on it.
+              map((business) => {
+                if (business === null) {
+                  throw new Error('The current business could not be read.');
+                }
+                return business;
+              }),
+              retry({
+                count: AppComponent.businessLookupRetries,
+                delay: (_error, attempt) => timer(attempt * AppComponent.businessLookupRetryDelayMs)
+              }),
+              catchError(() => of(null))
+            );
           }),
-          retry({
-            count: AppComponent.businessLookupRetries,
-            delay: (_error, attempt) => timer(attempt * AppComponent.businessLookupRetryDelayMs)
-          }),
-          catchError(() => of(null)),
           takeUntil(this.destroying$)
         )
         .subscribe(() => {
           // Settled either way. A lookup that still failed after its retries published no zone,
           // so dates render as unavailable - but the application is still shown rather than
-          // waiting forever.
+          // waiting forever. Only the current identity's lookup reaches this: a superseded one was
+          // unsubscribed above, so a response that arrives late can neither mark this context
+          // ready nor publish the previous business's zone (`BusinessService.reset`).
           this.isBusinessSettled = true;
         });
     }
-  }
-
-  /** The stable identity of a signed-in account, independent of its display name. */
-  private static accountKey(account: AccountInfo | null): string | null {
-    if (account === null) {
-      return null;
-    }
-    return account.homeAccountId || account.localAccountId || account.username || '';
   }
 }

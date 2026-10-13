@@ -4,26 +4,37 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { NayaxProcessingFeeRate, NayaxSettingsService } from '../../../services/nayax-settings.service';
 import { ToastService } from '../../../services/toast.service';
+import { NayaxConnectionWizardComponent } from './nayax-connection-wizard.component';
 
 /**
- * Dedicated page for the Nayax processing-fee rate configuration workflow, split out of
- * `AdminComponent` (issue #388, Admin split 1/3). Owns the fee-rate form, the configured-rate
- * history and the current/future/previous status presentation; `NayaxSettingsService` remains
- * the sole authority for persisting and loading rates, so no fee formula is reimplemented here.
+ * Dedicated page for the Owner-only Nayax integration settings, split out of `AdminComponent`
+ * (issue #388, Admin split 1/3).
+ *
+ * It owns the fee-rate form, the configured-rate history and the current/future/previous status
+ * presentation; `NayaxSettingsService` remains the sole authority for persisting and loading rates,
+ * so no fee formula is reimplemented here.
+ *
+ * The connection wizard of issue #538 is **composed**, not grown into this page: per
+ * docs/architecture.md § Page composition boundary (issue #191) its steps, its write-only token
+ * field, its checklist, its support request and its save/re-test lifecycle belong to
+ * `NayaxConnectionWizardComponent`. The two sections are independent - connecting Nayax and
+ * configuring an estimated fee rate are different jobs - and neither reads the other's state.
  */
 @Component({
   selector: 'app-nayax-settings',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink],
+  imports: [CommonModule, FormsModule, RouterLink, NayaxConnectionWizardComponent],
   template: `
     <div class="page">
       <header class="page-header">
         <div>
           <a routerLink="/admin" class="btn-link text-sm">&larr; Back to Admin</a>
           <h1 class="page-title mt-2">Nayax Settings</h1>
-          <p class="page-subtitle">Used for current-period reporting when actual Nayax processing fee data has not yet been imported. Imported reimbursement data always takes precedence.</p>
+          <p class="page-subtitle">Connect this business's own Nayax account, and configure the estimated processing fee rate used for current-period reporting until actual Nayax fee data is imported. Imported reimbursement data always takes precedence.</p>
         </div>
       </header>
+
+      <app-nayax-connection-wizard class="mb-5 block"></app-nayax-connection-wizard>
 
       <section class="card">
         <div class="card-header">

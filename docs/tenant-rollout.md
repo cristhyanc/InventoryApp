@@ -13,8 +13,10 @@ only the schema-migration step's "deploy and let startup apply it" alternative i
 | Action | Who |
 | --- | --- |
 | Apply schema migrations | **Application**, automatically at Production startup (issue #201) — or **Human**, via `migrate-database --apply`, for diagnostics or ahead of a deployment window |
-| Create the `Business` record | **Human**, via `bootstrap-business` |
-| Create `BusinessMembership` rows from the supplied Entra mapping, in the role it names | **Human**, via `bootstrap-business` (see [The member's role](#the-members-role-issue-521)) |
+| Create the `Business` record, in the `Active` lifecycle status | **Human**, via `bootstrap-business` (see [The business lifecycle status](#the-business-lifecycle-status-issue-540)) |
+| Create the **first** `BusinessMembership` row from the supplied Entra mapping, in the role it names | **Human**, via `bootstrap-business` (see [The member's role](#the-members-role-issue-521)) |
+| Add any **later** member | An **Owner of that business**, by creating an invite link the person redeems — no operator run and no Entra ids needed (issue #532; see [Adding a member after the bootstrap](#adding-a-member-after-the-bootstrap-invite-links-issues-531-and-532)) |
+| Release a member whose own business has been deactivated, so they can join elsewhere | **Human**, by revoking that membership row deliberately — no Owner of a deactivated business can be reached |
 | Assign existing rows to that business | **Human**, via `bootstrap-business --apply` |
 | Move the global Nayax operator id and token into that business's record | **Human**, via `migrate-nayax-connection --apply` (issue #519; see [Migrating the Nayax connection](#migrating-the-nayax-connection-into-the-business-issue-519)) |
 | Remove the global `NayaxLynx` operator id and token | **Human**, once the per-business record is in use and verified (the client reads it since issue #520; `NayaxLynx__BaseUrl` stays) |
@@ -162,10 +164,176 @@ stored value.
 Give each member their own `Role` key (`Members:1:Role`, and so on); one entry's role never carries
 onto another. Re-running the command never changes the role an existing member already holds, for
 the same reason it never resurrects a revoked approval — so a role cannot be corrected by editing
-this configuration and running again. Today a role is set when the membership row is created and
-changed only by a human directly in the database; the members page that will change one is issue
-#524. A signed-in member can see their own role and capabilities at `GET /api/me/access`, and a
-change applies on their next request.
+this configuration and running again. A role is set when the membership row is created and changed
+afterwards through the Owner-only `PUT /api/members/{membershipId}/role` (issue #533), which also
+revokes and reinstates a membership and always keeps the business at least one active Owner — see
+[docs/architecture.md § Member management](architecture.md#member-management-list-role-revoke-and-reinstate-issue-533).
+The Users page that will drive it is issue #505. A signed-in member can see their own role and
+capabilities at `GET /api/me/access`, and a change applies on their next request.
+
+Since issues #525 and #526 the role a member is given decides what the API lets them call, rather
+than only describing them: every endpoint requires the capability its caller's role must grant and
+answers a bare `403` otherwise (see
+[docs/architecture.md § Capability authorization](architecture.md#capability-authorization-issue-525)
+and the full matrix by page and endpoint in
+[§ Capability authorization on the Manager and Owner endpoints](architecture.md#capability-authorization-on-the-manager-and-owner-endpoints-issue-526)).
+So the role is now a real decision: an `Operator` reaches the dashboard, the pick list, inventory and
+purchasing and nothing else — no report, expense, import, site commission, setting or maintenance
+tool — and a `Manager` adds the supplier GST defaults, expenses, reports, imports and site
+commissions but not the Nayax settings or any data repair. `Owner`, the default and what every
+existing member was backfilled to, grants everything.
+
+#### Adding a member after the bootstrap: invite links (issues #531 and #532)
+
+`BusinessBootstrap:Members` is **no longer the only way a person gets access**, and from now on it
+should not be the usual one. Since issue #532 an Owner can add somebody without an operator run, a
+deployment or anybody handling Entra ids at all:
+
+1. The Owner creates an invite in the application — `POST /api/members/invites` with the role to
+   grant — and the response carries the token **once**.
+2. The Owner sends the person a link containing that token, by whatever means they already use. The
+   application sends no email, and no later read can produce the token again: a lost link means
+   creating another invite.
+3. The person signs in with their own Microsoft account and redeems it —
+   `POST /api/invites/redeem` with the token — which creates their membership with the invite's
+   role, in that business, and marks the invite used. The invite lasts **seven days** and is
+   single-use.
+
+What this changes for an operator:
+
+- **You no longer need anybody's `(tid, oid)` pair to add a member.** The redemption takes the
+  identity from the person's own validated token, which is why the invite carries a role and not an
+  identity. "Before you start" still asks for the pair, and it still has to, for the *first*
+  Owner — a business with no member has nobody to create an invite.
+- **Use the bootstrap configuration for the first Owner, and invites for everybody after.** Adding
+  members by editing App Service settings and re-running `bootstrap-business` still works and is
+  unchanged, but it needs a deployment-level credential and a person's directory identifiers for
+  something the business can now do itself. Remove those settings once the bootstrap is complete,
+  as that section already says.
+- **A person who left and is coming back is re-invited, not re-bootstrapped.** Re-running
+  `bootstrap-business` deliberately never resurrects a revoked approval; redeeming an invite does
+  reactivate that person's existing revoked row in that business, with the invite's role. There is
+  still one membership row per person per business.
+- **One active membership per identity still holds** (see the section of that name below). Somebody
+  who already belongs to a business cannot redeem an invite into another: they are refused with
+  `409` and "This person is already a member of a business.", and the invite is left unused. The
+  remedy is the deliberate one — an Owner of their current business revokes their membership first.
+- **One case needs you.** If that person's business has been **deactivated**, no Owner of it can be
+  reached to revoke their membership, so the refusal tells them they "must first be released by the
+  platform administrator". Releasing them means revoking that membership row deliberately; there is
+  no self-service path, and it is a human decision about access to financial data.
+- **Nothing a redemption is told reveals a business.** An expired, used, withdrawn or unknown token,
+  and an invite of a business that is not active, all answer with one `400` and the same sentence,
+  and a successful redemption reports only the role. That is deliberate: an invite token is a
+  secret, and an answer that distinguished the cases would confirm which links exist.
+
+See [docs/architecture.md § Invite links](architecture.md#invite-links-create-list-and-cancel-issue-531)
+and [§ Invite redemption](architecture.md#invite-redemption-issue-532). The invite page that will
+drive both is issue #505; until it ships, both endpoints are called directly.
+
+#### The business lifecycle status (issue #540)
+
+Since issue #540 a business carries a lifecycle status — `Pending`, `Active`, `Rejected` or
+`Deactivated` — instead of an active flag, and **only `Active` grants access to its data**. There is
+nothing to configure: `bootstrap-business` creates the business as `Active`, which is the status the
+migration also gave every business that was active before the change, so a bootstrapped and a
+migrated database describe the existing business identically.
+
+This command stays the legacy path, and that is deliberate. It adopts one specific history — the
+single Australian vending operation — so it never creates a pending application, never records an
+application or decision instant, and leaves every profile column the application form collects
+(contact email, GST registration, ABN, applied/decided instants, rejection reason) empty rather than
+inventing a value for a business that predates the form. The self-service application that creates a
+`Pending` business is issue #541's, behind the flag described in
+[Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541) below, and
+approving, rejecting or deactivating one is issue #509; neither goes through this command.
+
+Two consequences for this procedure. The bootstrap refuses to assign data to a business in any other
+status and names the status in its message (see
+[If something goes wrong](#if-something-goes-wrong)), and the startup readiness check counts a
+business as active only while its status is `Active` — so a business left `Pending`, `Rejected` or
+`Deactivated` reports an unfinished rollout rather than a healthy one. A member of such a business
+signs in successfully and is told their own account state by `GET /api/me/account-state`, but reaches
+no business data at all.
+
+#### A status is always stated, never defaulted (issue #584)
+
+Since issue #584 nothing creates a business without saying what its status is. `bootstrap-business`
+is unchanged in what it does — it still creates the business as `Active`, and still only for the
+authorized caller the configuration names — but it now states that status because the application
+gives it no choice: the entity property is `required`, a status outside the declared four is refused
+on `SaveChanges`, and the `Businesses.Status` column's database default is no longer `Active`. There
+is still nothing to configure, and no step of this procedure changes.
+
+**For an existing database, the operational effect is one migration and no data change.**
+`RemoveBusinessStatusActiveDatabaseDefault` replaces the column's `DEFAULT 20` (`Active`) with
+`DEFAULT 0`, a value that is not a status at all and that the access decision denies. It preserves
+every business's exact status — an `Active` business stays `Active` and keeps its access, a
+`Deactivated`, `Pending` or `Rejected` one stays denied — and changes no other column. It does this
+with four in-place statements rather than rebuilding the `Businesses` table: a replacement column is
+added with the new default, each row's status is copied into it, the old column is dropped, and the
+replacement is renamed into its place, all inside the migration's transaction. The only visible
+schema difference besides the default is that `Status` is now the last column of the table, which
+nothing reads by position. Startup applies it automatically in Production exactly as it applies any
+other pending migration (see
+[Automatic Production-startup migration](#automatic-production-startup-migration-issue-201)); it
+needs no window, no backfill and no manual step beyond the backup this procedure already requires.
+
+**Rolling it back is equally uneventful.** `Down` restores issue #540's schema, `Active` default
+included, and again preserves every stored status, so a downgrade reactivates, deactivates or
+reclassifies no business. What a rollback restores is the accidental-`Active` default itself — the
+thing this change removed — so a database that has been rolled back is again one where an `INSERT`
+that omits the status would create a reachable business.
+
+**If a business ever shows a status of `0`.** That is not one of the four statuses: it means a row
+was inserted by something that bypassed the application, and it denies all access. Do not "fix" it
+by guessing. Decide what the business actually is and set that status deliberately, the same way any
+other lifecycle decision is made.
+
+#### Enabling self-service onboarding (issue #541)
+
+Since issue #541 a business can also be created by somebody applying for one:
+`POST /api/onboarding/business-applications` records a `Pending` business with the applicant as its
+Owner, and the Super Admin decides on it. That path is **behind the `SelfServiceOnboarding:Enabled`
+flag, which is `false` in source control and must stay off in production until the gate below has
+been met.** See
+[docs/architecture.md § Self-service business application](architecture.md#self-service-business-application-issue-541)
+for the design.
+
+**Nothing in this procedure changes while the flag is off.** With it off the endpoint answers `404`
+and `GET /api/me/account-state` reports `onboardingEnabled: false`, so nobody can apply and no
+`Pending` business can appear. `bootstrap-business` remains the only way a business exists, and it
+still creates it `Active`. Turning the flag on adds no migration and changes no stored row.
+
+**The release gate — all of it, verified by a human, before the flag is switched on in
+production:**
+
+1. **Issue #500's migration command (#519) has been run in production.** That is
+   [Migrating the Nayax connection into the business](#migrating-the-nayax-connection-into-the-business-issue-519)
+   below, applied and verified in production. Until it has, the existing business's Nayax credential
+   is still only in global configuration, and a second business in the same deployment would be a
+   business whose Nayax calls have no credential of their own to read.
+2. **Issue #329's required changes are deployed to production *and verified there* by a human.**
+   Merging them is explicitly **not** enough. Chief among them is the degraded dashboard: for a
+   business whose Nayax connection status is not usable (`Ready` or `PendingPermissions`),
+   `GET /api/dashboard/summary` must return its local sections with `needsRefill` and `needsOrdering`
+   replaced by `{ "available": false, "reason": "NayaxNotConnected" }` — never a partial result.
+   A newly approved business has no Nayax connection at all, so this is the first screen its Owner
+   sees; without it, their dashboard would fail rather than explain itself.
+
+Record who verified each condition and when, the same way the rest of this procedure is recorded.
+Switching the flag on is a configuration change in the production App Service
+(`SelfServiceOnboarding__Enabled=true`), read once at startup, so it takes effect on the next
+restart; switching it back off is the same change in reverse and disables the endpoint again without
+touching any business that was already created.
+
+**What the flag does not gate.** Approving and rejecting applications is issue #509's work and does
+not exist yet, so while the flag is on, applications accumulate as `Pending` businesses that nobody
+can yet approve and whose applicants see a waiting screen. Do not switch the flag on before that
+side exists, unless the intent is specifically to collect applications and decide on them by hand.
+A `Pending` business reaches no data and reports an unfinished rollout to the startup readiness
+check (see [The business lifecycle status](#the-business-lifecycle-status-issue-540) above), so
+expect `TenantOwnershipReadiness` to count it as a business that is not active.
 
 ## Rollout sequence
 
@@ -234,8 +402,8 @@ rolls back automatically if any row count or financial total moved. Then check b
   figures;
 - compare a few known totals against the pre-rollout backup;
 - confirm the API's startup log now reports tenant ownership as bootstrapped — it requires no
-  unassigned rows, **exactly one** business which is **active**, and at least one active
-  membership on that active business, so a partial rollout will not report success. "Exactly
+  unassigned rows, **exactly one** business whose lifecycle status is **`Active`** (issue #540), and
+  at least one active membership on that business, so a partial rollout will not report success. "Exactly
   one" is deliberate for this single-business rollout: a second business appearing is a state a
   human should look at, not a healthy steady state, so it stops reporting ready;
 - read the `BusinessBackfillAudits` table — one row per table, recording rows assigned and rows
@@ -263,8 +431,10 @@ rolls back automatically if any row count or financial total moved. Then check b
   refusing (issue #201) — if Production starts with these tenancy migrations still pending, it
   applies them itself rather than waiting for step 2's manual review, so keep to the sequence above
   rather than relying on that as a substitute for reviewing what `--dry-run` reports.
-- **"the business ... is deactivated".** The business that would own the data is inactive, so its
-  records would be unreachable whoever is a member. Reactivate it deliberately, then run again.
+- **"the business ... is not active (its status is ...)".** The business that would own the data is
+  not in the `Active` lifecycle status — it is `Pending`, `Rejected` or `Deactivated` (issue #540) —
+  so its records would be unreachable whoever is a member. The message names the status it found.
+  Put the business into `Active` deliberately, then run again; nothing was assigned.
 - **Ownership was assigned to the wrong business.** Restore from the backup. Do not attempt to
   reassign rows by hand; ownership is immutable through the application and editing it directly
   bypasses every check in the boundary.
@@ -281,9 +451,14 @@ unique index allows at most one **active** `BusinessMembership` per Entra identi
 unaffected — any number may exist — so revoking a membership is how somebody moves from one
 business to another.
 
-This matters to an operator in exactly one situation: the migration that adds the index checks the
-existing data first, and **refuses to apply** if any identity already holds more than one active
-membership.
+This matters to an operator in two situations. The migration that adds the index checks the existing
+data first, and **refuses to apply** if any identity already holds more than one active membership
+(below). And since issue #532 the rule is something a person can now run into for themselves:
+redeeming an invite while already a member of a business is refused, and a caller whose own business
+has been **deactivated** has to be released by a platform administrator because no Owner of that
+business can revoke their membership — see
+[Adding a member after the bootstrap](#adding-a-member-after-the-bootstrap-invite-links-issues-531-and-532)
+above.
 
 ### If the migration aborts
 
@@ -320,8 +495,11 @@ business's ledger, and neither is a decision a migration may make unattended.
    HAVING COUNT(*) > 1;
    ```
 
-   The result is Entra identifiers, not names: the membership table deliberately stores no email
-   address or display name. Match them to people through Entra, with a person who is entitled to.
+   The result is Entra identifiers. Since issue #524 the table does also carry a `DisplayName` and
+   an `Email`, refreshed from each member's own sign-in token, but they are display-only and may be
+   empty for anybody who has not signed in since — so match the identifiers to people through
+   Entra, with a person who is entitled to, rather than trusting whatever those two columns happen
+   to hold.
 
 2. **Ask, then decide.** For each identity, a human decides which single business that person keeps
    — and says so to the person and to the business losing access. Do not infer it from which
@@ -338,8 +516,10 @@ business's ledger, and neither is a decision a migration may make unattended.
    it again rather than applying with the problem still present.
 
 Note that until the duplicate exists the index never fires: the application's single live business
-cannot produce this state through any supported path, and no request path creates, revokes or
-reactivates a membership today. A database that has it, has it from a hand-written change.
+cannot produce this state through any supported path. No request path creates a membership today,
+and the one path that revokes or reinstates one — the Owner-only member management of issue #533 —
+re-checks this exact rule inside the write transaction the index backs up, so it refuses rather than
+creates the state. A database that has it, has it from a hand-written change.
 
 ## Migrating the Nayax connection into the business (issue #519)
 
@@ -475,11 +655,19 @@ token undecryptable.
 
 - **Onboarding a second business.** The Nayax *credential* is now per business: issue #519's
   `migrate-nayax-connection` moves the existing business's credential into its own record, and since
-  issue #520 the client reads each business's own with no global fallback. What is still missing is
-  the self-service side — a credential reaches the database only through that human-run command, so
-  there is no supported way for a second business to connect its own Nayax account (the Owner
-  connection wizard and re-test endpoints of issue #506). Do not add a second business until it
-  exists.
+  issue #520 the client reads each business's own with no global fallback. The Owner-facing API of
+  issue #506 now exists as well — test a pasted operator id and token (#536), save the tested pair
+  and re-test the stored one (#537; see
+  [docs/architecture.md § Saving a tested connection and re-testing it](architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)).
+  Issue #538 added the Owner-facing wizard over those endpoints on Admin → Nayax Settings (see
+  [docs/architecture.md § The Nayax connection wizard](architecture.md#the-nayax-connection-wizard-issue-538)),
+  so an Owner can now connect, save and re-test their own account from the application. Since
+  issue #541 the *application* side of onboarding exists too, behind a flag that is off by default
+  and gated as [Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541)
+  describes. What is still missing is the rest of the journey: approving or rejecting an
+  application is #509's, the application and approval pages are #508's and #509's, and the
+  connection banners are #539's; the business that is live today had its credential moved in by
+  that human-run command. Do not add a second live business until the flow is complete.
 - **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred, and still
   **required**. This is an outstanding integrity step, not a decision that the constraint is
   unnecessary.

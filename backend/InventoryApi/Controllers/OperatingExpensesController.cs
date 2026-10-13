@@ -1,5 +1,7 @@
+using Inventory.Application.Access;
 using Inventory.Application.Expenses;
 using Inventory.Domain.Expenses;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -7,10 +9,20 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// The business's operating expenses and their receipt attachments.
+///
+/// The whole controller requires <c>Expenses.Manage</c> (issue #526), the read included: an
+/// expense record and its attachment are the business's own costs, which feed direct profit and the
+/// GST accounting aid, and the agreed table of #328 gives recording and reading them to a Manager
+/// and an Owner and not to an Operator. There is deliberately no read/write split here - an
+/// Operator has no use for the list that would justify showing them what the business spends.
+/// </summary>
 [ApiController]
 [Route("api/operating-expenses")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.ExpensesManage)]
 public sealed class OperatingExpensesController : ControllerBase
 {
     private const long MaxAttachmentFileSizeBytes = ExpenseAttachmentPolicy.MaxFileSizeBytes;

@@ -64,15 +64,28 @@ public class AddBusinessNayaxConnectionsMigrationTests
 
             // No credential is created or inferred for the business that already exists: the
             // migration command for it is issue #519, run by a human.
-            Assert.Empty(await after.BusinessNayaxConnections.ToListAsync());
+            //
+            // Projected rather than materialised, like the product below: this database stops at
+            // TargetMigration, so a column a later additive migration adds to this table - issue
+            // #537's MachineChecksPending - does not exist here yet.
+            Assert.Empty(await after.BusinessNayaxConnections
+                .Select(candidate => candidate.Id)
+                .ToListAsync());
 
             // One row per business is a schema guarantee, not an adapter convention.
             Assert.True(await UniqueBusinessIndexExistsAsync(connection));
 
             var business = await after.Businesses
-                .Select(candidate => new { candidate.Name, candidate.IsActive, candidate.TimeZoneId })
+                .Select(candidate => new { candidate.Name, candidate.TimeZoneId })
                 .SingleAsync();
-            Assert.Equal(("Vending Co", true, "Australia/Sydney"), (business.Name, business.IsActive, business.TimeZoneId));
+            Assert.Equal(("Vending Co", "Australia/Sydney"), (business.Name, business.TimeZoneId));
+
+            // The active flag is read with SQL rather than projected: this database stops at
+            // TargetMigration, where the business still carries `IsActive` and not yet the
+            // lifecycle status issue #540 replaced it with, so the EF model cannot describe it.
+            await using var activeFlag = connection.CreateCommand();
+            activeFlag.CommandText = "SELECT IsActive FROM Businesses;";
+            Assert.Equal(1L, await activeFlag.ExecuteScalarAsync());
 
             // Projected rather than materialised: this database stops at TargetMigration, so a
             // column a later additive migration adds to Products does not exist here yet.

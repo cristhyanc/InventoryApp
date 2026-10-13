@@ -6,6 +6,7 @@ import './agent-review-transport.test.mjs';
 import './agent-architecture-handoff.test.mjs';
 import './agent-pr-guard.test.mjs';
 import './agent-outcomes.test.mjs';
+import './agent-branch-cleanup.test.mjs';
 // Deterministic contract tests for the validation workflow's concurrency and status model.
 // Run with: node --test scripts/validate-agent-workflows.test.mjs
 import assert from 'node:assert/strict';
@@ -32,6 +33,8 @@ import {
   verifyScopedDirectoryCreationPermissions,
   appPushRetryPath,
   implementPath,
+  branchCleanupPath,
+  verifyAgentBranchCleanup,
   architecturePath,
   issueTemplatePath,
   pullRequestTemplatePath,
@@ -87,6 +90,25 @@ function replaceOnce(text, from, to) {
 function readWithOverrides(overrides) {
   return (path) => (Object.hasOwn(overrides, path) ? overrides[path] : readRepositoryFile(path));
 }
+
+describe('agent branch cleanup', () => {
+  it('accepts the repository workflows', () => {
+    assert.doesNotThrow(() => verifyAgentBranchCleanup());
+  });
+
+  it('rejects running the cleanup helper from the agent-edited tree', () => {
+    const implement = readRepositoryFile(implementPath).replace(
+      'git show "$BASE_SHA:scripts/agent-branch-cleanup.sh" > "$cleanup"\n          bash "$cleanup"',
+      'bash scripts/agent-branch-cleanup.sh',
+    );
+    assert.throws(() => verifyAgentBranchCleanup(readWithOverrides({ [implementPath]: implement })), /storage cleanup/);
+  });
+
+  it('rejects a closed-PR cleanup that checks out pull request code', () => {
+    const workflow = readRepositoryFile(branchCleanupPath).replace('ref: develop', 'ref: ${{ github.event.pull_request.head.sha }}');
+    assert.throws(() => verifyAgentBranchCleanup(readWithOverrides({ [branchCleanupPath]: workflow })), /agent-branch-cleanup\.yml/);
+  });
+});
 
 describe('GitHub expression evaluation', () => {
   const context = {
@@ -751,6 +773,25 @@ describe('agent shell timeout covers full validation', () => {
       ]) {
         const altered = replaceOnce(workflow, from, to);
         assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: altered }) }), new RegExp(`${source}: missing required text: BASH_`));
+      }
+    }
+  });
+});
+
+describe('agent background tasks are disabled', () => {
+  it('requires background tasks off and Monitor refused for implementation, architecture and repair Claude steps', () => {
+    assert.doesNotThrow(() => runContractChecks());
+    for (const [path, workflow, source] of [
+      [implementPath, implementWorkflow, 'implementation agent'],
+      [architecturePath, architectureWorkflow, 'architect'],
+      [repairPath, repairWorkflow, 'repair agent'],
+    ]) {
+      for (const [from, to, missing] of [
+        ['CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"', 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "0"', 'missing required text: CLAUDE_CODE_DISABLE_BACKGROUND_TASKS'],
+        ['            "Monitor"\n', '', 'missing required text: +"Monitor"'],
+      ]) {
+        const altered = replaceOnce(workflow, from, to);
+        assert.throws(() => runContractChecks({ read: readWithOverrides({ [path]: altered }) }), new RegExp(`${source}: ${missing}`));
       }
     }
   });

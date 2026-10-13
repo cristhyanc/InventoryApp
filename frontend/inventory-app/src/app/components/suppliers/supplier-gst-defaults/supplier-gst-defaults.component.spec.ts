@@ -1,6 +1,9 @@
 import { TestBed } from '@angular/core/testing';
-import { of, Subject, throwError } from 'rxjs';
+import { BehaviorSubject, NEVER, Observable, of, Subject, throwError } from 'rxjs';
 import { SupplierGstDefaultsComponent } from './supplier-gst-defaults.component';
+import { AccessService } from '../../../access/access.service';
+import { CAPABILITIES, Capability } from '../../../access/capabilities';
+import { apiConfig, queuedReads, readingHttp, signedInIdentity } from '../../../access/identity-cache.spec-helpers';
 import { SupplierService } from '../../../services/supplier.service';
 import { GstClassification, SupplierGstDefaults } from '../../../models/models';
 
@@ -23,13 +26,26 @@ const defaultsFor = (
   packageGstDefault
 });
 
+/**
+ * The capability answer is stubbed: the component renders what `GET /api/me/access` reported and
+ * decides nothing itself, and the write is refused by the API whatever it renders (issue #528).
+ * Granted by default, which is what every role but an Operator holds. `access` replaces the stub
+ * with the real service for the tests that are about when it answers (issue #603).
+ */
 async function render(
   getGstDefaults: jest.Mock = jest.fn(() => of(noDefaults)),
-  setGstDefaults: jest.Mock = jest.fn(() => of(undefined))
+  setGstDefaults: jest.Mock = jest.fn(() => of(undefined)),
+  canManage: Observable<boolean> = of(true),
+  access?: AccessService
 ) {
+  const allows = jest.fn((_capability: Capability) => canManage);
+
   await TestBed.configureTestingModule({
     imports: [SupplierGstDefaultsComponent],
-    providers: [{ provide: SupplierService, useValue: { getGstDefaults, setGstDefaults } }]
+    providers: [
+      { provide: SupplierService, useValue: { getGstDefaults, setGstDefaults } },
+      { provide: AccessService, useValue: access ?? { allows } }
+    ]
   }).compileComponents();
 
   const fixture = TestBed.createComponent(SupplierGstDefaultsComponent);
@@ -52,7 +68,7 @@ async function render(
     fixture.detectChanges();
   };
 
-  return { fixture, host, saveButton, save, openSupplier, getGstDefaults, setGstDefaults };
+  return { fixture, host, saveButton, save, openSupplier, getGstDefaults, setGstDefaults, allows, canManage };
 }
 
 describe('SupplierGstDefaultsComponent', () => {
@@ -260,5 +276,165 @@ describe('SupplierGstDefaultsComponent', () => {
     expect(host.textContent).toContain('applies only where the purchased product has no GST rule of its own');
     expect(host.textContent).toContain('never inherit the product-line default');
     expect(host.textContent).toContain('does not change the GST classification of any');
+  });
+});
+
+/**
+ * The editor is the one action this page hides by role (issue #528). Reading the defaults stays on
+ * `Purchasing.Operate`, because an Operator recording a purchase needs to see which classification
+ * it will be given; changing them needs `Suppliers.ManageGstDefaults`. The API enforces the same
+ * split, so this hides a control rather than protecting the configuration.
+ */
+describe('SupplierGstDefaultsComponent without Suppliers.ManageGstDefaults (issue #528)', () => {
+  function withoutManage(getGstDefaults?: jest.Mock, setGstDefaults?: jest.Mock) {
+    return render(
+      getGstDefaults ?? jest.fn(() => of(noDefaults)),
+      setGstDefaults ?? jest.fn(() => of(undefined)),
+      of(false)
+    );
+  }
+
+  it('asks the access service for exactly that capability', async () => {
+    const { allows } = await render();
+
+    expect(allows).toHaveBeenCalledWith('Suppliers.ManageGstDefaults');
+  });
+
+  it('renders no Save control', async () => {
+    const { host } = await withoutManage();
+
+    const buttons = Array.from(host.querySelectorAll('button')).map((button) => button.textContent?.trim() ?? '');
+    expect(buttons.some((text) => text.startsWith('Save'))).toBe(false);
+    expect(host.textContent).toContain('Your role can see these defaults but not change them');
+  });
+
+  it('still shows the stored defaults, read-only, because the classification is worth seeing', async () => {
+    const { host, fixture, getGstDefaults } = await withoutManage(
+      jest.fn(() =>
+        of({
+          supplierId: 7,
+          productLineGstDefault: GstClassification.GstFree,
+          deliveryGstDefault: GstClassification.Taxable,
+          packageGstDefault: GstClassification.Unknown
+        })
+      )
+    );
+
+    expect(getGstDefaults).toHaveBeenCalledWith(7);
+    expect(fixture.componentInstance.form.productLineGstDefault).toBe(GstClassification.GstFree);
+    for (const select of Array.from(host.querySelectorAll<HTMLSelectElement>('select'))) {
+      expect(select.disabled).toBe(true);
+    }
+  });
+
+  it('issues no PUT even if save() is reached some other way', async () => {
+    const setGstDefaults = jest.fn(() => of(undefined));
+    const { fixture } = await withoutManage(undefined, setGstDefaults);
+
+    fixture.componentInstance.save();
+
+    expect(setGstDefaults).not.toHaveBeenCalled();
+  });
+
+  it('offers the control again when a refreshed capability set allows it', async () => {
+    const canManage = new BehaviorSubject(false);
+    const { fixture, host } = await render(undefined, undefined, canManage);
+    expect(host.querySelectorAll('button')).toHaveLength(0);
+
+    canManage.next(true);
+    fixture.detectChanges();
+
+    expect(host.querySelector('button')?.textContent?.trim()).toBe('Save GST defaults');
+  });
+
+  /**
+   * The fail-open rule: an unanswered or unreadable capability set must not take the editor away
+   * from the Owner it belongs to, because the API refuses the write regardless.
+   */
+  it('keeps the control while the capability set has not answered', async () => {
+    const { host } = await render(undefined, undefined, NEVER);
+
+    expect(host.querySelector('button')?.textContent?.trim()).toBe('Save GST defaults');
+  });
+});
+
+/**
+ * The Save control after a Microsoft account change (issue #603). This editor is the one action
+ * the capability matrix hides, and it holds its subscription for as long as it is on screen, so it
+ * is the consumer that would otherwise keep presenting the previous account's permission while the
+ * new account's capabilities are still being read. The real `AccessService` answers here, with
+ * only its one `GET` and MSAL's two signals doubled: the point of the test is when it answers.
+ */
+describe('SupplierGstDefaultsComponent across a Microsoft account change (issue #603)', () => {
+  const OWNER_RESPONSE = {
+    role: 'Owner',
+    capabilities: [...CAPABILITIES],
+    businessName: 'Vending Co',
+    timeZoneId: 'Australia/Sydney'
+  };
+  const OPERATOR_RESPONSE = {
+    role: 'Operator',
+    capabilities: ['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate'],
+    businessName: 'Other Co',
+    timeZoneId: 'Australia/Sydney'
+  };
+
+  function accessWithSwitch(reads: (() => unknown)[]): { access: AccessService; switchAccount(id: string): void } {
+    const identity = signedInIdentity();
+    const read = queuedReads(reads, OWNER_RESPONSE);
+    const access = new AccessService(readingHttp(read), apiConfig(), identity.msal, identity.broadcast);
+
+    return { access, switchAccount: identity.switchAccount };
+  }
+
+  it('takes the Save control away at once, and no late answer gives it back', async () => {
+    const stale = new Subject<unknown>();
+    const pending = new Subject<unknown>();
+    const setGstDefaults = jest.fn(() => of(undefined));
+    const { access, switchAccount } = accessWithSwitch([() => of(OWNER_RESPONSE), () => stale, () => pending]);
+    const { fixture, host } = await render(undefined, setGstDefaults, undefined, access);
+    expect(host.querySelector('button')?.textContent?.trim()).toBe('Save GST defaults');
+
+    // The previous identity's own re-read - what a `403` triggers - still in flight when the
+    // Microsoft account changes.
+    access.refresh();
+    switchAccount('member-2');
+    fixture.detectChanges();
+
+    expect(host.querySelectorAll('button')).toHaveLength(0);
+    expect(fixture.componentInstance.canManage).toBe(false);
+    fixture.componentInstance.save();
+    expect(setGstDefaults).not.toHaveBeenCalled();
+
+    stale.next(OWNER_RESPONSE);
+    stale.complete();
+    fixture.detectChanges();
+
+    // The previous Owner answering last cannot hand the next member their control.
+    expect(host.querySelectorAll('button')).toHaveLength(0);
+
+    pending.next(OPERATOR_RESPONSE);
+    pending.complete();
+    fixture.detectChanges();
+
+    expect(host.querySelectorAll('button')).toHaveLength(0);
+    expect(host.textContent).toContain('Your role can see these defaults but not change them');
+  });
+
+  /** The fail-open rule still holds for the identity signed in now, and only for it. */
+  it('offers the control again when the new identity’s own capabilities allow it', async () => {
+    const pending = new Subject<unknown>();
+    const { access, switchAccount } = accessWithSwitch([() => of(OWNER_RESPONSE), () => pending]);
+    const { fixture, host } = await render(undefined, undefined, undefined, access);
+
+    switchAccount('member-2');
+    fixture.detectChanges();
+    expect(host.querySelectorAll('button')).toHaveLength(0);
+
+    pending.next(OWNER_RESPONSE);
+    pending.complete();
+    fixture.detectChanges();
+
+    expect(host.querySelector('button')?.textContent?.trim()).toBe('Save GST defaults');
   });
 });

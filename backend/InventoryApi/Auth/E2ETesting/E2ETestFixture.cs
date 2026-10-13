@@ -147,7 +147,7 @@ public static class E2ETestFixture
             business = new Business
             {
                 Name = name,
-                IsActive = true,
+                Status = BusinessStatus.Active,
                 CreatedAtUtc = SeededAtUtc,
             };
 

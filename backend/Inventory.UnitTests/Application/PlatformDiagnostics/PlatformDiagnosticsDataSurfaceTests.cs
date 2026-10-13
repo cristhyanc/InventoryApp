@@ -106,6 +106,21 @@ public class PlatformDiagnosticsDataSurfaceTests
     }
 
     /// <summary>
+    /// The member display name and email address issue #524 added to <c>BusinessMemberships</c>.
+    /// They are the first personal data in that table, and they must stay as unreachable here as the
+    /// Entra identity columns beside them: this surface excludes the whole table, so naming the two
+    /// new columns is checking that the exclusion still covers what arrived on it.
+    /// </summary>
+    [Theory]
+    [InlineData("DisplayName")]
+    [InlineData("Email")]
+    public void The_display_only_member_name_and_email_are_not_on_the_surface(string column)
+    {
+        Assert.False(PlatformDiagnosticsDataSurface.PermitsTable("BusinessMemberships"));
+        Assert.False(PlatformDiagnosticsDataSurface.Permits("BusinessMemberships", column));
+    }
+
+    /// <summary>
     /// The fail-closed default a future schema change relies on: a column nobody has reviewed is
     /// denied without this file or the enforcement adapter changing.
     /// </summary>

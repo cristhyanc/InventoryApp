@@ -38,9 +38,12 @@ public class OneActiveMembershipPerIdentityTests
         return (connection, options);
     }
 
-    private static async Task<Business> AddBusinessAsync(AppDbContext db, string name, bool isActive = true)
+    private static async Task<Business> AddBusinessAsync(
+        AppDbContext db,
+        string name,
+        BusinessStatus status = BusinessStatus.Active)
     {
-        var business = new Business { Name = name, IsActive = isActive, CreatedAtUtc = DateTime.UtcNow };
+        var business = new Business { Name = name, Status = status, CreatedAtUtc = DateTime.UtcNow };
         db.Businesses.Add(business);
         await db.SaveChangesAsync();
         return business;
@@ -75,16 +78,18 @@ public class OneActiveMembershipPerIdentityTests
     /// joins somewhere else.
     /// </summary>
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task A_second_active_membership_in_another_business_is_refused(bool secondBusinessIsActive)
+    [InlineData(BusinessStatus.Active)]
+    [InlineData(BusinessStatus.Pending)]
+    [InlineData(BusinessStatus.Rejected)]
+    [InlineData(BusinessStatus.Deactivated)]
+    public async Task A_second_active_membership_in_another_business_is_refused(BusinessStatus secondBusinessStatus)
     {
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
             var first = await AddBusinessAsync(db, "Vending Co");
-            var second = await AddBusinessAsync(db, "Other Vending Co", isActive: secondBusinessIsActive);
+            var second = await AddBusinessAsync(db, "Other Vending Co", secondBusinessStatus);
             await AddMembershipAsync(db, first.Id);
 
             await Assert.ThrowsAsync<DbUpdateException>(() => AddMembershipAsync(db, second.Id));

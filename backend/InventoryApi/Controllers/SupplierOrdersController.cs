@@ -1,5 +1,7 @@
+using Inventory.Application.Access;
 using Inventory.Application.SupplierOrders;
 using InventoryApi.Adapters.Mapping;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -7,10 +9,15 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// Outstanding supplier orders: what has been ordered and not yet received. Day-to-day purchasing
+/// work, so every action requires <c>Purchasing.Operate</c> (issue #525).
+/// </summary>
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.PurchasingOperate)]
 public class SupplierOrdersController : ControllerBase
 {
     private readonly ListActiveSupplierOrders _listActiveSupplierOrders;

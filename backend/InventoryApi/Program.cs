@@ -1,14 +1,23 @@
 using Microsoft.EntityFrameworkCore;
 using Inventory.Application;
+using Inventory.Application.Access;
+using Inventory.Application.Members;
 using Inventory.Application.Nayax;
+using Inventory.Application.Onboarding;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Documents;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
+using Inventory.Application.Businesses;
+using InventoryApi.Adapters.Businesses;
+using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
+using InventoryApi.Adapters.Onboarding;
+using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
+using Inventory.Application.PlatformAdmin;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using InventoryApi.Auth.E2ETesting;
@@ -81,16 +90,26 @@ builder.Services.AddInventoryApiTelemetry(builder.Configuration);
 // cannot be influenced by request input - see InventoryApi.Auth.E2ETesting.
 builder.Services.AddInventoryApiAuthentication(builder.Configuration, builder.Environment);
 
-// Authorization (issue #336). The default policy is unchanged - every business controller keeps
-// [Authorize] plus [RequiredScope("access_as_user")] - and exactly one named policy is added, for
-// the platform diagnostics endpoints. It is satisfied only by the separately configured Entra
+// Authorization (issues #336 and #525). The default policy is unchanged - every business controller
+// keeps [Authorize] plus [RequiredScope("access_as_user")] - and two families of named policy are
+// added on top of it.
+//
+// The platform diagnostics policy (issue #336) is satisfied only by the separately configured Entra
 // (tid, oid) pair below, never by a business role, a membership row or anything a request supplies.
 // With nothing configured, which is the shipped state, the policy denies everyone.
+//
+// The capability policies (issue #525) are one per declared Capability, named after the published
+// capability name and answered by BusinessCapabilityAuthorizationHandler from the single role →
+// capability table of issue #521. They are registered for every capability, including the ones no
+// endpoint declares yet, so an endpoint can only ever reference a policy that exists. Neither
+// family grants anything the other decides: a capability policy holds no platform-admin
+// requirement, and PlatformAdminPolicy grants no business capability.
 var configuredPlatformAdmin = ConfiguredPlatformAdmin.From(
     builder.Configuration.GetSection(PlatformAdminOptions.SectionName).Get<PlatformAdminOptions>());
 
 builder.Services.AddSingleton(configuredPlatformAdmin);
 builder.Services.AddScoped<IAuthorizationHandler, PlatformAdminAuthorizationHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, BusinessCapabilityAuthorizationHandler>();
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy(PlatformAdminPolicy.Name, policy =>
@@ -98,6 +117,15 @@ builder.Services.AddAuthorization(options =>
         policy.RequireAuthenticatedUser();
         policy.AddRequirements(new PlatformAdminRequirement());
     });
+
+    foreach (var capability in Capabilities.All)
+    {
+        options.AddPolicy(CapabilityPolicy.Name(capability), policy =>
+        {
+            policy.RequireAuthenticatedUser();
+            policy.AddRequirements(new BusinessCapabilityRequirement(capability));
+        });
+    }
 });
 
 // Required by EntraActorIdentityAccessor, which reads the current request's ClaimsPrincipal.
@@ -175,6 +203,42 @@ builder.Services.AddPlatformDiagnostics(new SqliteDiagnosticsOptions
 
 builder.Services.AddScoped<IPlatformDiagnosticsAudit, LoggingPlatformDiagnosticsAudit>();
 
+// The member management audit trail (issue #533), on the same terms as the diagnostics one above:
+// a structured log event at the boundary, which is the only layer that knows the request's
+// correlation id, and never a row in the database the change was made in.
+builder.Services.AddScoped<IMemberManagementAudit, LoggingMemberManagementAudit>();
+// The invite audit trail (issue #531), on exactly the same terms. It is a separate port from the
+// member one above because an invite change is a different event with different fields - and
+// because neither entry type has a field for the invite token, which is what keeps the secret out
+// of the audit trail structurally rather than by a sink's discretion.
+builder.Services.AddScoped<IMemberInviteAudit, LoggingMemberInviteAudit>();
+// The Owner's business-settings audit trail (issue #548). The port is satisfied in this layer for
+// the reason the diagnostics audit's is: the event carries the request's correlation id, which is a
+// transport fact. The event names the fields that changed and never a value - see
+// LoggingBusinessSettingsAudit.
+builder.Services.AddScoped<IBusinessSettingsAudit, LoggingBusinessSettingsAudit>();
+// The self-service business application audit trail (issue #541), on the same terms again. It is a
+// separate port from the three above because an application is a different event with different
+// fields - and because its entry type has no field for a business name, a contact address or an
+// ABN, which is what keeps a stranger's submitted personal and tax detail out of the audit trail
+// structurally rather than by a sink's discretion.
+builder.Services.AddScoped<IBusinessApplicationAudit, LoggingBusinessApplicationAudit>();
+// The platform business-decision audit trail (issue #544), on the same terms again, and the first
+// one about a platform-admin *write*. A separate port from the four above because a decision is a
+// different event with different fields - and because its entry type has no field for a business
+// name, a contact address, an applicant identity or the rejection reason's text, which is what keeps
+// all four out of the audit trail structurally rather than by a sink's discretion.
+builder.Services.AddScoped<IPlatformBusinessDecisionAudit, LoggingPlatformBusinessDecisionAudit>();
+
+// Whether self-service onboarding is switched on at all (issue #541). Read once here, because only
+// the composition root reads configuration, and published as the Application layer's narrow flag
+// port so the apply endpoint and GET /api/me/account-state cannot disagree about it. Off unless the
+// setting says otherwise - an absent, blank or unparseable value leaves it off - and switching it
+// on in production is gated on the human-verified release steps in docs/tenant-rollout.md. A
+// singleton, because it is one startup decision rather than a per-request one.
+builder.Services.AddSingleton<ISelfServiceOnboardingFlag>(
+    new ConfiguredSelfServiceOnboardingFlag(builder.Configuration));
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAngularDevClient", policy =>
@@ -223,6 +287,19 @@ builder.Services.AddNayaxTokenProtection(
 // only implementation of the Application's actor port, and the current-business abstraction
 // itself (ICurrentBusinessProvider) is registered by AddApplicationServices().
 builder.Services.AddScoped<IAuthenticatedActorAccessor, EntraActorIdentityAccessor>();
+
+// The member's display-only name and email address (issue #524). The accessor is the second, and
+// deliberately separate, claims adapter at this boundary: it reads the name and email claims only,
+// takes the identity half of its answer from the accessor above so there is one implementation of
+// "who is calling", and nothing it returns takes part in an access decision.
+builder.Services.AddScoped<IActorProfileAccessor, EntraActorProfileAccessor>();
+
+// The host-side half of that refresh: one background drain that runs each queued write in its own
+// new service scope, after the request that scheduled it has finished and with no business
+// resolved. It is the only hosted service this application runs; see
+// docs/architecture.md § Member display name and email for why this work is in-process rather than
+// a WebJob or a Function.
+builder.Services.AddHostedService<MemberProfileRefreshWorker>();
 
 // The per-request current business, published by BusinessScopeMiddleware and read by
 // AppDbContext's query filters and SaveChanges enforcement. Registered as the concrete type as
@@ -294,10 +371,24 @@ if (app.Environment.IsDevelopment())
 // endpoints, so no business document has an anonymous URL.
 app.UseCors("AllowAngularDevClient");
 app.UseAuthentication();
+
+// Endpoint authorization: [Authorize], the platform diagnostics policy and the capability policies
+// of issue #525. The order with the business-scope middleware below is deliberate and is pinned by
+// CapabilityAuthorizationApiTests: authorization runs first, so a caller the capability policy
+// refuses never reaches the membership middleware, the endpoint or a use case, and the 403 they get
+// is the policy's bare one rather than the middleware's membership sentence.
+//
+// Ordering is not what makes the capability decision safe, though. The capability handler resolves
+// the caller's membership itself, through the same per-request memoised ICurrentBusinessProvider the
+// middleware uses, so no capability policy can pass before the membership is resolved however this
+// pipeline is later rearranged - the same reason the diagnostics bypass re-evaluates its own policy
+// instead of inferring one from where it sits here.
 app.UseAuthorization();
 
 // After authentication, so the caller's claims exist, and before the endpoint, so an
-// authenticated caller with no business membership is refused before any action reads data.
+// authenticated caller with no business membership is refused before any action reads data. It
+// publishes the resolved business and its time zone, which authorization does not: a capability
+// policy answers "may this role do that?" and this middleware answers "whose data is this?".
 app.UseMiddleware<BusinessScopeMiddleware>();
 
 // Health checks (issue #164). Anonymous by design so Azure App Service and other operators can

@@ -121,6 +121,14 @@ public class AddBusinessMembershipRoleMigrationTests
 
         await MigrateToAsync(db, RoleMigration);
 
+        // The role the migration backfilled is read through today's adapter, so the database is
+        // brought to the current head first: every migration after this one is additive to the
+        // membership (StatusChangedAtUtc, the display columns) or replaces the business active flag
+        // with its lifecycle status (issue #540), and the adapter reads those columns. What this
+        // test is about survives it - the Role value under test is the one the migration above
+        // backfilled, and nothing later touches it.
+        await db.Database.MigrateAsync();
+
         Assert.True(ActorIdentity.TryCreate(Tid, FirstOid, out var actor));
         var memberships = await new Inventory.Infrastructure.Persistence.EfBusinessMembershipStore(db)
             .FindMembershipsAsync(actor!, CancellationToken.None);

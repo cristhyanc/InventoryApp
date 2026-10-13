@@ -186,6 +186,10 @@ jobs:
           # would push the agent toward backgrounding or redirecting it, which the allowlist refuses.
           BASH_DEFAULT_TIMEOUT_MS: "1800000"
           BASH_MAX_TIMEOUT_MS: "1800000"
+          # Background work outlives a headless run: an agent that starts validation in the background
+          # and waits for it ends its turn, and the run finishes with uncommitted work (issue #498,
+          # run 38104920781). Disable it so every command, validate.sh included, runs to completion.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -246,6 +250,7 @@ jobs:
             "mcp__nayax__search_nayax_developer_portal,mcp__nayax__query_docs_filesystem_nayax_developer_portal"
             --disallowedTools "Agent,WebFetch,WebSearch"
             "mcp__nayax__submit_feedback"
+            "Monitor"
             "Bash(git push *),Bash(git push * --force *),Bash(git push * -f *),Bash(git push * --force-with-lease *),Bash(git push --force *),Bash(git push -f *)"
             "Bash(git reset --hard *),Bash(git rebase *),Bash(git checkout develop *),Bash(git checkout main *),Bash(git switch develop *),Bash(git switch main *)"
             "Bash(gh pr create *),Bash(gh pr merge *),Bash(gh pr review *),Bash(gh pr edit *),Bash(gh issue edit *),Bash(gh api *),Bash(gh workflow *),Bash(gh run *),Bash(gh release *),Bash(gh secret *),Bash(gh variable *)"
@@ -469,6 +474,18 @@ jobs:
           [ "$(git branch --show-current)" = "$BRANCH" ] || fail "Local branch changed before publish."
           [ "$(git rev-parse HEAD)" = "$HEAD_SHA" ] || fail "Local HEAD changed before publish."
 
+          # A same-named branch left by an earlier closed pull request would reject this push. Remove it only
+          # when it still equals that closed pull request's final head and no open pull request uses it:
+          # GitHub keeps that head on the closed pull request and can restore the branch from there.
+          stale_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$BRANCH" --jq '.object.sha' 2>/dev/null || true)"
+          if [ -n "$stale_sha" ] && [ "$stale_sha" != "$HEAD_SHA" ]; then
+            branch_prs="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state all --limit 100 --json state,headRefOid)"
+            if jq -e --arg sha "$stale_sha" 'all(.[]; .state != "OPEN") and any(.[]; .headRefOid == $sha)' <<<"$branch_prs" >/dev/null; then
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$BRANCH" --silent || fail "Could not remove stale branch $BRANCH from a closed pull request."
+              echo "Removed stale $BRANCH ($stale_sha) left by a closed pull request." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
           bash scripts/git-push-with-app-retry.sh "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$BRANCH"
 
           title="$(cat .agent-pr-title)"
@@ -485,6 +502,21 @@ jobs:
             echo "branch=$BRANCH"
             echo "head_sha=$HEAD_SHA"
           } >> "$GITHUB_OUTPUT"
+
+      # Housekeeping only: the published branch now holds the saved work, so its storage refs are redundant.
+      - name: Delete storage branches contained in the published pull request
+        if: steps.publish_implementation.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.implementation_app_token.outputs.token }}
+          BASE_SHA: ${{ steps.starting_point.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.publish_implementation.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          # Run the helper from trusted develop, never from the agent-edited working tree.
+          cleanup="$RUNNER_TEMP/agent-branch-cleanup.sh"
+          git show "$BASE_SHA:scripts/agent-branch-cleanup.sh" > "$cleanup"
+          bash "$cleanup" "https://github.com/${GITHUB_REPOSITORY}.git" "$ISSUE_NUMBER" contained "$HEAD_SHA"
 
       - name: Record implementation outcome
         id: outcome

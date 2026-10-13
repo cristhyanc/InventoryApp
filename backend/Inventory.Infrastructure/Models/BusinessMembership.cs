@@ -8,12 +8,20 @@ namespace Inventory.Infrastructure.Models;
 /// <c>(tid, oid)</c> claim pair, for one <see cref="Models.Business"/> (issue #64).
 ///
 /// This table is the application's authorization boundary for data ownership: an actor with no
-/// active row here reads no business data, whatever Entra directory issued a valid token. Rows
-/// are created by an explicit, human-supplied bootstrap, never by self-service sign-up.
+/// active row here reads no business data, whatever Entra directory issued a valid token. A row is
+/// created either by the human-invoked <c>bootstrap-business</c> command or, since issue #532, by
+/// redeeming an invite an Owner of that business created - never by self-service sign-up, and never
+/// from anything a request chooses: a redemption takes the business from the invite row and the
+/// identity from the caller's own validated token.
 ///
-/// It deliberately stores no email address, display name, or other personal identifier: those
-/// are mutable and reassignable, so they must not decide ownership, and keeping them out avoids
-/// putting personal data in the repository's schema.
+/// Since issue #524 it also stores two pieces of personal data, <see cref="DisplayName"/> and
+/// <see cref="Email"/>, and they are <em>display only</em>: an Owner has to be able to see who
+/// their members are, and an Entra object id does not tell them. Nothing else changed about this
+/// table's role. Identity is still the <c>(tid, oid)</c> pair alone, because an email address and a
+/// display name are mutable and reassignable and so must never decide ownership; neither column is
+/// read by any authorization, membership, role or capability decision, neither is ever logged, and
+/// neither is reachable through the platform-diagnostics surface, which excludes this table
+/// entirely.
 /// </summary>
 public class BusinessMembership
 {
@@ -29,6 +37,30 @@ public class BusinessMembership
 
     /// <summary>The actor's stable Entra object id (<c>oid</c>) within that directory.</summary>
     public string ObjectId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The member's display name, as their validated sign-in token last reported it (issue #524),
+    /// or <c>null</c> when no token has reported one.
+    ///
+    /// Display only. It exists so a members list can show a person rather than a GUID, and it is
+    /// refreshed from the <c>name</c> claim at most once an hour by the dedicated write path that
+    /// runs after a response is decided. Nullable because a membership can be created - by
+    /// <c>bootstrap-business</c> - before its member has ever signed in, and because a token need
+    /// not carry the claim at all.
+    /// </summary>
+    public string? DisplayName { get; set; }
+
+    /// <summary>
+    /// The member's email address, from the same token and on the same terms as
+    /// <see cref="DisplayName"/> (issue #524): the <c>preferred_username</c> claim, or the
+    /// <c>email</c> claim when that is what the token carries.
+    ///
+    /// It is a mailbox to display, never a credential and never an identifier. No lookup, no
+    /// membership resolution and no invitation matching may key off it: two directories may issue
+    /// the same address, an address can be reassigned to a different person, and the one thing that
+    /// identifies an actor here is the <c>(tid, oid)</c> pair above.
+    /// </summary>
+    public string? Email { get; set; }
 
     /// <summary>
     /// What this member may do in the business (issue #521), stored as the constrained

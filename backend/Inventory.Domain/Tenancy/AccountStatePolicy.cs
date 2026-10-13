@@ -8,11 +8,12 @@ namespace Inventory.Domain.Tenancy;
 ///   <item><see cref="AccountState.MembershipAmbiguous"/>: more than one active membership.</item>
 ///   <item><see cref="AccountState.Member"/>: one active membership in an active business.</item>
 ///   <item><see cref="AccountState.ApplicationPending"/>: one active membership in a pending
-///   business (issue #507's business status).</item>
-///   <item><see cref="AccountState.BusinessDeactivated"/>: one active membership in a deactivated
-///   business.</item>
+///   business (<see cref="BusinessStatus.Pending"/>, issue #540).</item>
+///   <item><see cref="AccountState.BusinessDeactivated"/>: one active membership in a business that
+///   is neither active nor pending.</item>
 ///   <item>No active membership: the most recent inactive record decides - an inactive membership
-///   in a rejected business gives <see cref="AccountState.ApplicationRejected"/> (issue #507), any
+///   in a <see cref="BusinessStatus.Rejected"/> business gives
+///   <see cref="AccountState.ApplicationRejected"/> with that business's recorded reason, any
 ///   other gives <see cref="AccountState.MembershipRevoked"/>.</item>
 ///   <item><see cref="AccountState.NoMembership"/>: no rows.</item>
 /// </list>
@@ -21,15 +22,20 @@ namespace Inventory.Domain.Tenancy;
 /// and the one thing that must never happen is an old revocation describing an account that works
 /// today: the active membership is examined before the inactive ones, not merged with them.</para>
 ///
-/// <para><strong>Steps 3 and 5's rejected case are not reachable yet.</strong> Both read a
-/// business status - <c>Pending</c>, <c>Rejected</c> - that no business carries until issue #507
-/// adds it, so today step 3 cannot match and every inactive record falls to
-/// <see cref="AccountState.MembershipRevoked"/>. That also makes "the most recent inactive record"
-/// unobservable rather than unimplemented: with one possible answer for an inactive record, which
-/// record is most recent cannot change the state. The column it will be ordered by,
-/// <c>BusinessMembership.StatusChangedAtUtc</c>, is already stored and filled (issue #522), so
-/// #507 adds the status to <see cref="ActorBusinessMembership"/>, the ordering and the two states
-/// together.</para>
+/// <para><strong>Step 4 is the fail-closed step.</strong> It is written as "neither active nor
+/// pending" rather than as a list of the remaining statuses, so a status this code does not
+/// declare - and an active membership in a <see cref="BusinessStatus.Rejected"/> business, which
+/// the approval workflow does not produce because rejecting an application revokes its memberships
+/// in the same operation - report the state that promises nothing instead of falling through to a
+/// screen that claims the account works.</para>
+///
+/// <para><strong>Step 5 orders the inactive records.</strong> Two inactive records can now give
+/// different states, so which one is most recent decides: the record with the latest
+/// <see cref="ActorBusinessMembership.StatusChangedAtUtc"/> (issue #522's membership column). An
+/// old rejection must never outrank a newer revocation. A tie - two records whose state changed at
+/// the very same instant - resolves towards <see cref="AccountState.MembershipRevoked"/>, which is
+/// the state that claims less about what happened, so the answer is deterministic rather than
+/// dependent on the order persistence returned the rows in.</para>
 ///
 /// <para><strong>This rule grants nothing.</strong> It is a description of the caller's own
 /// account, reported only to that caller.
@@ -41,31 +47,58 @@ namespace Inventory.Domain.Tenancy;
 /// </summary>
 public static class AccountStatePolicy
 {
-    public static AccountState Determine(IReadOnlyCollection<ActorBusinessMembership>? memberships)
+    public static AccountStateDecision Determine(IReadOnlyCollection<ActorBusinessMembership>? memberships)
     {
         if (memberships is null || memberships.Count == 0)
         {
-            return AccountState.NoMembership;
+            return State(AccountState.NoMembership);
         }
 
         var active = memberships.Where(membership => membership.IsActive).ToList();
 
         if (active.Count > 1)
         {
-            return AccountState.MembershipAmbiguous;
+            return State(AccountState.MembershipAmbiguous);
         }
 
         if (active.Count == 1)
         {
-            // Step 3, the pending business, belongs between these two once #507 adds the status.
-            return active[0].BusinessIsActive
-                ? AccountState.Member
-                : AccountState.BusinessDeactivated;
+            return State(active[0].BusinessStatus switch
+            {
+                BusinessStatus.Active => AccountState.Member,
+                BusinessStatus.Pending => AccountState.ApplicationPending,
+                _ => AccountState.BusinessDeactivated,
+            });
         }
 
-        // Every record is inactive. The account held a membership and no longer does, whatever
-        // state the business it belonged to is in; the rejected-application case #507 adds is the
-        // one exception, and it reads a business status that does not exist yet.
-        return AccountState.MembershipRevoked;
+        // Every record is inactive: the account held a membership and no longer does. The most
+        // recent record is the one that describes how that happened, and a rejected business is
+        // the one case where that was an application decision rather than a revocation.
+        var inactive = memberships.Where(membership => !membership.IsActive).ToList();
+        var latestChange = inactive.Max(membership => membership.StatusChangedAtUtc);
+        var latest = inactive
+            .Where(membership => membership.StatusChangedAtUtc == latestChange)
+            .ToList();
+
+        if (latest.Any(membership => membership.BusinessStatus != BusinessStatus.Rejected))
+        {
+            return State(AccountState.MembershipRevoked);
+        }
+
+        // Every record at that instant is a rejection. Ordering by business id keeps the reported
+        // reason deterministic in the - only theoretically reachable - case of two rejections
+        // recorded at the same instant.
+        return new AccountStateDecision(
+            AccountState.ApplicationRejected,
+            latest
+                .OrderBy(membership => membership.BusinessId.Value)
+                .First()
+                .BusinessRejectionReason);
     }
+
+    /// <summary>
+    /// A state that carries no rejection reason, which is every state but one: a reason is only
+    /// ever reported together with <see cref="AccountState.ApplicationRejected"/>.
+    /// </summary>
+    private static AccountStateDecision State(AccountState state) => new(state, RejectionReason: null);
 }

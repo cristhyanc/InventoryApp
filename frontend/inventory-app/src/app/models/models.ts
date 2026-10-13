@@ -109,6 +109,9 @@ export interface DashboardSummaryPeriod {
  * comparison field is `null` when `isComparisonAvailable` is `false`, and `changePercent` is also
  * `null` for a zero prior period, because there is no honest percentage change from nothing;
  * `comparisonNote` carries the reason to show instead. Angular never recomputes any of this.
+ *
+ * The whole object is **absent** from the summary of a caller whose role does not grant
+ * `Dashboard.ViewFinancials` (issue #527); see `DashboardSummary.salesThisWeek`.
  */
 export interface DashboardSalesThisWeek {
   sales: number;
@@ -157,9 +160,15 @@ export interface DashboardOrderingSummary {
  * `unitsInStorage` is physical storage/home stock only - it excludes units already loaded into a
  * machine and is never a valuation input; `productCount` is the whole catalogue, active and
  * inactive, that the other two figures are taken over.
+ *
+ * `inventoryValueAtCost` is **absent** - not `null` - for a caller whose role does not grant
+ * `Dashboard.ViewFinancials` (issue #527). The two states are different answers and must stay
+ * distinguishable: `null` means the valuation is incomplete, while an absent property means the
+ * amount was withheld from this caller, so the page hides the figure instead of reporting it as
+ * unavailable.
  */
 export interface DashboardInventorySummary {
-  inventoryValueAtCost: number | null;
+  inventoryValueAtCost?: number | null;
   isInventoryValueComplete: boolean;
   productsWithUnknownCost: number;
   productCount: number;
@@ -172,11 +181,18 @@ export interface DashboardInventorySummary {
  * `DashboardComponent` (issue #460). The backend owns every sales, refill, ordering and valuation
  * decision behind the four headline cards; Angular displays the figures and completeness flags
  * exactly as returned, with no revenue, percentage, refill, reorder or valuation formula of its own.
+ *
+ * The API publishes two shapes of this response and the caller's role picks one (issue #527).
+ * `salesThisWeek` and `inventory.inventoryValueAtCost` are both **absent** for a caller whose role
+ * does not grant `Dashboard.ViewFinancials`, so they are declared optional here: the page hides
+ * the two money cards rather than rendering a figure it was not given (issue #528). Neither is
+ * ever sent as `null` or `0` to mean "withheld", and the page must not read either absence as a
+ * zero week or an incomplete valuation.
  */
 export interface DashboardSummary {
   asOfUtc: string;
   businessDate: string;
-  salesThisWeek: DashboardSalesThisWeek;
+  salesThisWeek?: DashboardSalesThisWeek;
   needsRefill: DashboardRefillSummary;
   needsOrdering: DashboardOrderingSummary;
   inventory: DashboardInventorySummary;

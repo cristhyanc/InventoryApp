@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Xunit;
 
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Tenancy;
 
 namespace InventoryApi.Tests.Services;
 
@@ -44,8 +45,8 @@ public sealed class NayaxImportTenantIsolationTests : IDisposable
         using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
         setup.Businesses.AddRange(
-            new Business { Id = BusinessA, Name = "Vending A", CreatedAtUtc = DateTime.UtcNow },
-            new Business { Id = BusinessB, Name = "Vending B", CreatedAtUtc = DateTime.UtcNow });
+            new Business { Id = BusinessA, Name = "Vending A", Status = BusinessStatus.Active, CreatedAtUtc = DateTime.UtcNow },
+            new Business { Id = BusinessB, Name = "Vending B", Status = BusinessStatus.Active, CreatedAtUtc = DateTime.UtcNow });
         setup.SaveChanges();
     }
 

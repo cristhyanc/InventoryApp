@@ -45,8 +45,20 @@ public class BusinessMembershipWriteTransactionTests : IDisposable
         using var db = TestAppDbContext.Unrestricted(Options());
         db.Database.Migrate();
         db.Businesses.AddRange(
-            new Business { Id = FirstBusinessId, Name = "Vending Co", IsActive = true, CreatedAtUtc = DateTime.UtcNow },
-            new Business { Id = SecondBusinessId, Name = "Other Vending Co", IsActive = true, CreatedAtUtc = DateTime.UtcNow });
+            new Business
+            {
+                Id = FirstBusinessId,
+                Name = "Vending Co",
+                Status = BusinessStatus.Active,
+                CreatedAtUtc = DateTime.UtcNow,
+            },
+            new Business
+            {
+                Id = SecondBusinessId,
+                Name = "Other Vending Co",
+                Status = BusinessStatus.Active,
+                CreatedAtUtc = DateTime.UtcNow,
+            });
         db.SaveChanges();
     }
 
@@ -435,7 +447,7 @@ public class BusinessMembershipWriteTransactionTests : IDisposable
         using (var setup = TestAppDbContext.Unrestricted(Options()))
         {
             var business = setup.Businesses.Single(row => row.Id == SecondBusinessId);
-            business.IsActive = false;
+            business.Status = BusinessStatus.Deactivated;
             setup.SaveChanges();
         }
 

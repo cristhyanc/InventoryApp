@@ -1,4 +1,6 @@
+using Inventory.Application.Access;
 using Inventory.Application.Categories;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -6,10 +8,15 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// The product categories, read-only. Part of day-to-day inventory work, so it requires
+/// <c>Inventory.Operate</c> (issue #525): a category is how the catalogue is navigated.
+/// </summary>
 [ApiController]
 [Route("api/[controller]")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.InventoryOperate)]
 public class CategoriesController : ControllerBase
 {
     private readonly ListCategories _listCategories;

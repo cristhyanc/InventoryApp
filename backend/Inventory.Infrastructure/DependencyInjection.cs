@@ -13,10 +13,13 @@ using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
+using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
+using Inventory.Application.PlatformAdmin;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
@@ -140,12 +143,57 @@ public static class InfrastructureServiceCollectionExtensions
         // The write side of the membership table (issue #522): the BEGIN IMMEDIATE transaction and
         // the rows the one-active-membership and last-Owner rules are decided from.
         services.AddScoped<IBusinessMembershipWriteStore, EfBusinessMembershipWriteStore>();
+        // The display-only member profile (issue #524): its own narrow write path, deliberately
+        // separate from the membership write store above because it changes nothing a membership
+        // means and takes none of that path's write lock.
+        services.AddScoped<IMemberProfileWriteStore, EfMemberProfileWriteStore>();
+        // The Owner-facing member roster and the three targeted member updates (issue #533). It
+        // reads and writes the same non-tenant-owned table as the two stores above, and takes the
+        // business id explicitly for that reason.
+        services.AddScoped<IBusinessMemberStore, EfBusinessMemberStore>();
+        // The Owner's invite links (issue #531). Like the membership stores above it names the business
+        // in every statement, because the invite table is structurally non-tenant-owned too (the
+        // reviewed ownership decision on issue #532): the redemption below has to find an invite by
+        // its token under a denied scope, which no central query filter can match.
+        services.AddScoped<IMemberInviteStore, EfMemberInviteStore>();
+        // Redeeming an invite (issue #532) - the one persistence surface a caller with no business
+        // membership can reach. A separate, deliberately tiny adapter from the Owner-facing store
+        // above: its lookup takes only the presented token's hash, and every statement after that
+        // names the business id the invite row reported, never one the request supplied.
+        services.AddScoped<IMemberInviteRedemptionStore, EfMemberInviteRedemptionStore>();
+        // The self-service business application (issue #541) - the second persistence surface a
+        // caller with no business membership can reach, and the only one that creates a business.
+        // A separate, deliberately tiny adapter again: it reads one business by the id the
+        // applicant's own membership row supplied, and the business it creates is its own owner, so
+        // no statement here names an id that came from a request.
+        services.AddScoped<IBusinessApplicationStore, EfBusinessApplicationStore>();
+        // The Super Admin's business directory and the two decisions on an application (issue
+        // #544) - the first platform-admin surface that writes, and the only request path that
+        // reads across every business through AppDbContext. A separate, deliberately tiny adapter
+        // again, and for a stronger reason than the two above: the whole of what a platform
+        // administrator can reach has to be one reviewable file. It is scoped like every other
+        // adapter here, so it runs on the request's own denied-scope context and inside
+        // MembershipWriteGuard's transaction on it; nothing hands it an unscoped context.
+        services.AddScoped<IPlatformBusinessDirectoryStore, EfPlatformBusinessDirectoryStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
+        // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
+        // the profile read above: that one answers every request, this one is a rare write that has
+        // to go through SaveChanges so the central business enforcers validate it.
+        services.AddScoped<IBusinessSettingsStore, EfBusinessSettingsStore>();
         services.AddScoped<INayaxFeeRateStore, EfNayaxFeeRateStore>();
         // The per-business Nayax connection (issue #518). Its INayaxTokenProtector dependency comes
         // from AddNayaxTokenProtection below rather than from this method, for the same reason the
         // Nayax HTTP client's options do: only the composition root reads configuration.
         services.AddScoped<INayaxConnectionStore, EfNayaxConnectionStore>();
+        // The short-lived, encrypted connection-test draft (issue #536). A separate store from the
+        // connection above, over a separate table, because a draft is credentials nothing has
+        // accepted: no Nayax call may resolve one, and nothing that reads the connection may reach
+        // one by accident.
+        services.AddScoped<INayaxConnectionTestDraftStore, EfNayaxConnectionTestDraftStore>();
+        // The transaction a save-from-draft (issue #537) claims the draft and writes the credential
+        // in. It is registered over the request's own AppDbContext, which is the scoped unit of work
+        // both stores above are constructed with, so the two writes join one transaction.
+        services.AddScoped<INayaxConnectionSaveTransactions, EfNayaxConnectionSaveTransactions>();
         services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
         services.AddScoped<ICategoryStore, EfCategoryStore>();
         services.AddScoped<ISupplierStore, EfSupplierStore>();
@@ -306,6 +354,15 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddTransient<NayaxResilienceHandler>();
         services.AddHttpClient<INayaxLynxClient, NayaxLynxClient>(http => http.BaseAddress = baseAddress)
+            .AddHttpMessageHandler<NayaxResilienceHandler>();
+
+        // The connection-test check runner (issue #536) gets its own HttpClient from the same base
+        // address and the same resilience handler, and registers no credential here either: it
+        // authenticates each check with the pair the Owner submitted, which is why it cannot share
+        // the typed client above. Same base URL and same timeout/retry/circuit-breaker policy on
+        // purpose - "Nayax is unavailable" has to mean the same thing on a test as on a sync.
+        services.AddHttpClient<INayaxConnectionCheckRunner, NayaxConnectionCheckRunner>(
+                http => http.BaseAddress = baseAddress)
             .AddHttpMessageHandler<NayaxResilienceHandler>();
 
         return services;

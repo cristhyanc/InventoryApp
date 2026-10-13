@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Inventory.Application.Tenancy;
+using Inventory.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Inventory.Infrastructure.Models;
 
@@ -58,6 +59,13 @@ public class AppDbContext : DbContext
     public DbSet<BusinessBackfillAudit> BusinessBackfillAudits => Set<BusinessBackfillAudit>();
 
     public DbSet<BusinessMembership> BusinessMemberships => Set<BusinessMembership>();
+
+    /// <summary>
+    /// The single-use invite links an Owner creates for their own business (issue #531). Ordinary
+    /// tenant-owned data, unlike the membership table above, and the token is stored only as a
+    /// hash; see <see cref="MemberInvite"/>.
+    /// </summary>
+    public DbSet<MemberInvite> MemberInvites => Set<MemberInvite>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
     public DbSet<Product> Products => Set<Product>();
@@ -84,6 +92,13 @@ public class AppDbContext : DbContext
     /// <see cref="BusinessNayaxConnection"/>.
     /// </summary>
     public DbSet<BusinessNayaxConnection> BusinessNayaxConnections => Set<BusinessNayaxConnection>();
+
+    /// <summary>
+    /// Each business's one short-lived, encrypted Nayax connection-test draft (issue #536). Not the
+    /// accepted connection above and never read by a Nayax call; see
+    /// <see cref="NayaxConnectionTestDraft"/>.
+    /// </summary>
+    public DbSet<NayaxConnectionTestDraft> NayaxConnectionTestDrafts => Set<NayaxConnectionTestDraft>();
     public DbSet<SiteCommissionAgreement> SiteCommissionAgreements => Set<SiteCommissionAgreement>();
     public DbSet<CommissionPayment> CommissionPayments => Set<CommissionPayment>();
     public DbSet<InventoryCostTransitionBaseline> InventoryCostTransitionBaselines => Set<InventoryCostTransitionBaseline>();
@@ -115,11 +130,22 @@ public class AppDbContext : DbContext
     /// <see cref="BusinessTimeZoneEnforcer"/> joins it for the same reason (issue #499): a
     /// business's time zone is what every business date is derived from, so an unresolvable one is
     /// refused on whichever path writes it rather than per write path.
+    ///
+    /// <see cref="BusinessAbnEnforcer"/> joins them on the same terms (issue #540): the business's
+    /// ABN appears on tax invoices and in the GST accounting aid, so a value that cannot be an ABN
+    /// is refused centrally rather than per write path.
+    ///
+    /// <see cref="BusinessStatusEnforcer"/> joins them for the strongest of those reasons (issue
+    /// #584): the business's lifecycle status is what decides whether its data may be reached at
+    /// all, so a status nobody declared is refused here rather than stored as a business whose
+    /// access state nobody chose.
     /// </summary>
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
+        BusinessAbnEnforcer.Enforce(this);
+        BusinessStatusEnforcer.Enforce(this);
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
@@ -129,12 +155,15 @@ public class AppDbContext : DbContext
     {
         BusinessOwnershipEnforcer.Enforce(this);
         BusinessTimeZoneEnforcer.Enforce(this);
+        BusinessAbnEnforcer.Enforce(this);
+        BusinessStatusEnforcer.Enforce(this);
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         ConfigureTenancy(modelBuilder);
+        ConfigureMemberInvites(modelBuilder);
 
         modelBuilder.Entity<Product>()
             .Property(p => p.UnitPrice)
@@ -264,6 +293,35 @@ public class AppDbContext : DbContext
                     : fromProvider);
         modelBuilder.Entity<BusinessNayaxConnection>()
             .Property(x => x.UpdatedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        // One connection-test draft per business (issue #536), for the same reason the connection
+        // above has one row per business: "a new test replaces the previous draft" is then a schema
+        // guarantee rather than a convention the adapter has to remember, so a second draft - and a
+        // second decryptable token - cannot exist for a business however the write path is called.
+        modelBuilder.Entity<NayaxConnectionTestDraft>()
+            .HasIndex(draft => draft.BusinessId)
+            .IsUnique();
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.OperatorId).IsRequired();
+        // Required, not nullable, as on the connection: the row exists only once a test has stored
+        // credentials, so an empty ciphertext or a nameless key would be a state nothing can act on.
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.AccessTokenCiphertext).IsRequired();
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.EncryptionKeyId).IsRequired();
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.ResultsJson).IsRequired();
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.CreatedByDirectoryTenantId).IsRequired();
+        modelBuilder.Entity<NayaxConnectionTestDraft>().Property(x => x.CreatedByObjectId).IsRequired();
+        // Both instants are persisted UTC and both are reported, so each is marked UTC on the way
+        // out - see the StockAdjustment.CreatedAt comment below for why the SQLite provider makes
+        // that necessary. The expiry comparison is a tick comparison either way.
+        modelBuilder.Entity<NayaxConnectionTestDraft>()
+            .Property(x => x.CreatedAt)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        modelBuilder.Entity<NayaxConnectionTestDraft>()
+            .Property(x => x.ExpiresAt)
             .HasConversion(
                 toProvider => toProvider,
                 fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
@@ -564,6 +622,9 @@ public class AppDbContext : DbContext
     /// <see cref="Business"/> and <see cref="BusinessMembership"/> are deliberately excluded.
     /// They are the tenancy tables themselves: membership is what resolves the scope in the
     /// first place, so filtering it by the scope would be circular and would deny every caller.
+    /// <see cref="MemberInvite"/> is excluded for a related structural reason (issue #532): the
+    /// redemption has to find an invite by the token a caller with no membership presents, under a
+    /// denied scope that matches no filtered row. See <see cref="ConfigureMemberInvites"/>.
     /// </summary>
     private void ConfigureBusinessOwnership(ModelBuilder modelBuilder)
     {
@@ -626,6 +687,99 @@ public class AppDbContext : DbContext
     }
 
     /// <summary>
+    /// Maps the single-use member invite links of issue #531.
+    ///
+    /// The invite is one of the four structural non-tenant-owned tables (the reviewed decision on
+    /// issue #532, see <see cref="MemberInvite"/>), so <see cref="ConfigureBusinessOwnership"/>
+    /// does not reach it: its business key, its <c>BusinessId</c> index and the absence of a global
+    /// query filter are declared here instead. Everything else this method adds is specific to an
+    /// invite: the bounds on its columns, the per-business uniqueness of the token hash, and the
+    /// foreign key to the membership a redemption creates.
+    /// </summary>
+    private static void ConfigureMemberInvites(ModelBuilder modelBuilder)
+    {
+        var invite = modelBuilder.Entity<MemberInvite>();
+
+        // The owning business, declared explicitly because no central mechanism declares it for
+        // this table. Required: an invite with no owner would be an invite into nothing, and the
+        // redemption takes the business it writes in from this column. There is deliberately no
+        // query filter - the redemption has to find an invite by its token under a denied scope,
+        // which a filter would make impossible - so the boundary is this column named in every
+        // statement, exactly as it is for BusinessMembership.
+        invite.Property(x => x.BusinessId).IsRequired();
+
+        // Every statement in both invite adapters starts with "BusinessId = @business", so it
+        // leads. It is the same index ConfigureBusinessOwnership used to add, declared by name here
+        // instead, which is what keeps this ownership change free of any schema change.
+        invite.HasIndex(x => x.BusinessId);
+
+        // The role the invite grants (issue #521's vocabulary) and what became of the invite. Both
+        // are required integer columns holding a declared value, and neither carries a CHECK
+        // constraint, for the reason BusinessMembership.Role carries none: SQLite cannot add one to
+        // an existing table without rebuilding it, and a value a newer deployment writes has to
+        // fail closed in the policy regardless - MemberInvitePolicy reports an undeclared status as
+        // unknown and never as Pending.
+        invite.Property(x => x.Role).IsRequired();
+        invite.Property(x => x.Status).IsRequired();
+
+        // The Owner's note is display-only free text. Bounded in the schema as well as in
+        // MemberInvitePolicy, and deliberately not indexed: nothing looks an invite up by it.
+        invite.Property(x => x.Note).HasMaxLength(MemberInvitePolicy.MaxNoteLength);
+
+        // The token's digest. Required and fixed-width, because the row exists only once a token
+        // has been generated for it: an empty hash would be an invite nothing could ever redeem.
+        invite.Property(x => x.TokenHash).IsRequired().HasMaxLength(MemberInviteToken.HashLength);
+
+        // Unique per business, which is the repository-wide rule for a uniqueness constraint over
+        // an externally shaped value (docs/architecture.md § Tenant ownership): a globally unique
+        // index here would let one business's row deny another's. Global uniqueness is not what
+        // makes a token unambiguous anyway - 256 bits of cryptographic randomness is.
+        //
+        // The redemption's lookup is by TokenHash alone, because the token is the only thing the
+        // caller presents, so it is a scan of this index rather than a seek into it. That is a
+        // deliberate trade and not a missed index: an index on the hash by itself would be globally
+        // unique in effect over a value two businesses may legitimately hold, and the table holds
+        // one row per invite ever issued - tens, not millions.
+        invite.HasIndex(x => new { x.BusinessId, x.TokenHash }).IsUnique();
+
+        invite.Property(x => x.CreatedByDirectoryTenantId).IsRequired();
+        invite.Property(x => x.CreatedByObjectId).IsRequired();
+
+        // The membership a redemption created (#532). Restrict, not Cascade, for the reason
+        // BusinessMembership's own foreign key to Businesses is restricted: a membership an invite
+        // records as redeemed must not be deletable in a way that silently drops the link between
+        // the access and the invite that granted it. There is no navigation property, because
+        // nothing in this slice or the next loads the membership through the invite.
+        invite
+            .HasOne<BusinessMembership>()
+            .WithMany()
+            .HasForeignKey(x => x.RedeemedByMembershipId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // All four instants are persisted UTC and all four are reported by the invite API, so each
+        // is marked UTC on the way out - see the StockAdjustment.CreatedAt comment below for why
+        // the SQLite provider makes that necessary. The conversion changes no stored byte and no
+        // comparison, so the expiry condition in the cancellation's WHERE clause is unaffected: a
+        // DateTime comparison looks at ticks, not Kind.
+        invite.Property(x => x.CreatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        invite.Property(x => x.ExpiresAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        invite.Property(x => x.UsedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        invite.Property(x => x.CancelledAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+    }
+
+    /// <summary>
     /// Maps the application-owned tenancy tables introduced for issue #64: the Business that owns
     /// data, and the BusinessMembership rows that approve an authenticated Entra actor for it.
     ///
@@ -643,6 +797,21 @@ public class AppDbContext : DbContext
         // has no derivable business dates at all; the value itself is validated against the host's
         // time-zone database by BusinessTimeZoneEnforcer, which a schema constraint cannot do.
         modelBuilder.Entity<Business>().Property(b => b.TimeZoneId).IsRequired();
+
+        // The lifecycle status (issue #540). Required, because "no status" is not a state a
+        // business can be in and an unfilled column would deny access without saying why; the
+        // vocabulary itself is enforced where it has to be anyway - an undeclared stored value is
+        // not Active, so BusinessMembershipResolutionPolicy denies it. No CHECK constraint, for
+        // the reason BusinessMembership.Role carries none: SQLite cannot add one without
+        // rebuilding the table, and a value a newer deployment writes has to fail closed in the
+        // policy regardless.
+        //
+        // The profile columns the business application collects are all nullable, so the existing
+        // business migrates without a single invented value, and none of them is validated by a
+        // schema constraint: the ABN's check digits are enforced by BusinessAbnEnforcer on
+        // SaveChanges, which a constraint cannot express, and the rest are facts an application
+        // form records rather than values anything derives from.
+        modelBuilder.Entity<Business>().Property(b => b.Status).IsRequired();
 
         // The backfill audit is keyed only by its own id: it records what happened to a table,
         // including runs that assigned rows to the wrong business, so it must stay queryable
@@ -688,6 +857,21 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<BusinessMembership>()
             .Property(m => m.StatusChangedAtUtc)
             .IsRequired();
+
+        // The member's display-only name and email address (issue #524). Both are nullable, because
+        // a membership exists before its member has ever signed in and a validated token need not
+        // carry either claim, and both are bounded: MemberProfile refuses a longer claim value
+        // outright, and the declared length states that bound in the schema as well.
+        //
+        // Deliberately not indexed, not unique and not collated for lookup, unlike the identity
+        // columns above. These two are display data: nothing resolves a membership, a business or a
+        // person by them, and an index would be the first step towards something doing so.
+        modelBuilder.Entity<BusinessMembership>()
+            .Property(m => m.DisplayName)
+            .HasMaxLength(MemberProfile.MaxLength);
+        modelBuilder.Entity<BusinessMembership>()
+            .Property(m => m.Email)
+            .HasMaxLength(MemberProfile.MaxLength);
 
         // One membership row per (actor, business), active or revoked, so duplicates cannot
         // quietly accumulate for one person in one business.

@@ -19,12 +19,19 @@ public sealed record PlatformDiagnosticsTable(string Table, IReadOnlyList<string
 /// and cross-business ownership mistakes. Every entry is an identity or foreign-key column, so
 /// the surface carries no money, no quantity, no name, no note, no timestamp and no external
 /// payload. <c>Businesses</c> deliberately exposes only <c>Id</c> - not <c>Name</c>, which is a
-/// real trading name, and not <c>IsActive</c> or <c>CreatedAtUtc</c>.
+/// real trading name, and none of the lifecycle or profile columns of issue #540: not
+/// <c>Status</c>, <c>ContactEmail</c>, <c>GstRegistered</c>, <c>Abn</c>, <c>RejectionReason</c>,
+/// <c>AppliedAtUtc</c>, <c>DecidedAtUtc</c> or <c>CreatedAtUtc</c>. A diagnostics query therefore
+/// cannot read a business's trading identity, its application decision or the reason it was
+/// refused, and the columns that replaced the former <c>IsActive</c> flag are no more reachable
+/// than it was.
 ///
 /// Three families are absent on purpose and must stay absent: <c>BusinessMemberships</c> (Entra
 /// <c>(tid, oid)</c> identity data), the <c>Nayax*</c> and <c>Imported*</c> tables (raw remote
 /// payloads, and - since issue #518 - <c>BusinessNayaxConnections</c>, each business's own Nayax
-/// credentials), and every free-text or monetary column on the tables that are listed.
+/// credentials, joined since issue #536 by <c>NayaxConnectionTestDrafts</c>, the short-lived
+/// encrypted connection-test drafts), and every free-text or monetary column on the tables that are
+/// listed.
 ///
 /// This type is the authoritative contract. <c>Inventory.Infrastructure</c> enforces it inside
 /// SQLite itself; nothing may re-state it, widen it per request, or accept it from a caller.

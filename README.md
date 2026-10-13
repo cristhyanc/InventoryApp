@@ -8,6 +8,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
 - Nayax product and transaction imports with explicit payment/status handling.
+- Owner-driven Nayax connection setup: test a token, see which permissions it carries, save it and re-test it later (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)).
 - Historical weighted-average inventory costing and persisted COGS provenance.
 - Effective-dated Nayax processing fees and site commission agreements.
 - Operating expenses, reimbursement imports, and settlement reconciliation.
@@ -183,6 +184,11 @@ Re-running changes nothing. It refuses, writing nothing, unless the ownership bo
 for exactly one business, that business is the one `bootstrap-business` adopted, no *different*
 credential is already stored, and a `NayaxTokenProtection` key is provisioned.
 
+A new business does not need this command: an Owner connects their own Nayax account from the
+application, through the wizard on Admin → Nayax Settings (see
+[Connecting Nayax (Admin page)](#connecting-nayax-admin-page)). The command exists for the business
+whose credential was already in global configuration before that wizard did.
+
 **Do not run this against production from this description.**
 [docs/tenant-rollout.md § Migrating the Nayax connection into the business](docs/tenant-rollout.md#migrating-the-nayax-connection-into-the-business-issue-519)
 is the canonical procedure, including the cutover window around issue #520, how to verify Nayax
@@ -227,9 +233,25 @@ Protected business documents (purchase documents and operating-expense supportin
 
 Azure Static Web Apps direct navigation (including the `/auth` redirect landing) is handled by `frontend/inventory-app/src/staticwebapp.config.json`, which rewrites unmatched paths to `/index.html` so the Angular router — not a platform 404 — handles them.
 
-**Authentication identifies a person; business ownership decides what they may see.** Accepting sign-ins from multiple Microsoft Entra tenants (`TenantId: "common"`) only authenticates a user. Data isolation is a separate boundary, established by issue #64: the validated `(tid, oid)` claim pair is mapped to an application-owned **Business** through explicit `BusinessMembership` rows, and every tenant-owned read and write is scoped to that business centrally in `AppDbContext`. A signed-in account with no usable membership receives `403` and no business data — it fails closed rather than falling back to "see everything". The business ID is never accepted from route, query, form, or JSON input. There is one endpoint such an account may still reach, `GET /api/me/account-state` (issue #523), and it answers only with the state that account is in — `Member`, `NoMembership`, `MembershipRevoked`, `BusinessDeactivated` or `MembershipAmbiguous` — so the application can show the right screen instead of a bare error. It names no business and reads no business data; the `403` every other endpoint returns is unchanged.
+**Authentication identifies a person; business ownership decides what they may see.** Accepting sign-ins from multiple Microsoft Entra tenants (`TenantId: "common"`) only authenticates a user. Data isolation is a separate boundary, established by issue #64: the validated `(tid, oid)` claim pair is mapped to an application-owned **Business** through explicit `BusinessMembership` rows, and every tenant-owned read and write is scoped to that business centrally in `AppDbContext`. A signed-in account with no usable membership receives `403` and no business data — it fails closed rather than falling back to "see everything". The business ID is never accepted from route, query, form, or JSON input. There are exactly three endpoints such an account may still reach, all on a reviewed allowlist the build enforces, and none names an existing business or reads business data. `GET /api/me/account-state` (issue #523) answers only with the state that account is in — `Member`, `NoMembership`, `ApplicationPending`, `ApplicationRejected`, `MembershipRevoked`, `BusinessDeactivated` or `MembershipAmbiguous` — so the application can show the right screen instead of a bare error. `POST /api/invites/redeem` (issue #532) takes an invite token an Owner created and nothing else, and creates that account's **own** membership in the business the invite belongs to, with the role the invite grants; it returns only that role, and an unusable token and an account that already belongs somewhere are both refused with one fixed sentence. `POST /api/onboarding/business-applications` (issue #541) is the self-service application described [below](#starting-a-business-self-service-onboarding), behind a flag that is off by default. The `403` every other endpoint returns is unchanged, for all three of those callers.
 
-The first rollout serves **one** business. Adding a second live business is deliberately not enabled. The Nayax credential is no longer the reason: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). What is still missing is the self-service side — a business's credential reaches the database only through the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command, so there is no supported way for a second business to connect its own Nayax account yet. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
+**The Angular application reads that state before any business call and shows the screen it calls for** (issue #529). `Member` reaches the page asked for; `NoMembership` goes to a welcome page, `ApplicationPending`/`ApplicationRejected` to their own pages (all three are placeholders until issues #508 and #505 build the real ones), and `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` go to one "access unavailable" page that names no business — it says to contact the business Owner for the first and third, and support for the second. Because a revoked or released person is the one case `GET /api/me/account-state`'s `onboardingEnabled` flag can make eligible, that page also offers **I have an invite link** always and **Start a new business** only when `onboardingEnabled` is true, matching the API's own eligibility rule. A `403` from any other member endpoint shows "you don't have access to this" through the application's toast, except on one of those destination routes or `/invite/:token`, which already explain the situation themselves. None of this is a boundary: `BusinessScopeMiddleware` refuses every business call the same way regardless of what the router shows.
+
+### Starting a business: self-service onboarding
+
+A business is created in one of two ways. The legacy way is the human-invoked `bootstrap-business` command, which adopts the one existing Australian vending operation and creates it already `Active`; see [docs/tenant-rollout.md](docs/tenant-rollout.md). The other, since issue #541, is a **self-service application** behind the `SelfServiceOnboarding:Enabled` flag:
+
+1. Somebody signs in for the first time. `GET /api/me/account-state` reports `NoMembership`, and its `onboardingEnabled` field reports whether this deployment allows an application at all.
+2. They `POST /api/onboarding/business-applications` with the business's name, contact email address, optional ABN, GST registration and IANA time zone. All of those except the ABN are required, and the GST registration must be *stated* — a missing field is a `400`, never a recorded `false`.
+3. The server creates a **`Pending`** business with those details and makes the applicant its active **Owner**, in one transaction. It decides everything the request did not: the business's identifier, its status, the applicant's role, and who the applicant is (the validated `(tid, oid)` claim pair of their own token). The response carries only the application's name, status and submission instant — no business identifier.
+4. The business is **not usable yet.** Only an `Active` business resolves, so the applicant's very next request is answered with the same `403` as before, and `GET /api/me/account-state` now reports `ApplicationPending` so the application can show them a waiting screen. The new business starts completely empty, with no Nayax connection (`NotConfigured`).
+5. Approving or rejecting an application is a Super Admin decision, made through the [Super Admin businesses API](#super-admin-businesses-api) below (issue #544). Approving sets the business `Active`, so its Owner's next request is served; rejecting records a reason, which `GET /api/me/account-state` reports back to that applicant alone as `ApplicationRejected`, and releases the applicant's membership. The rejected application is kept, and the person may apply again, which creates a new business.
+
+Who may apply: an account with **no active membership anywhere** — never a member, released, or previously rejected. An account that already holds an active membership in any business, including a `Pending` or `Deactivated` one, gets `409`. Submitting the identical application again while it is pending returns the application already waiting (`200`, same submission instant) so a lost response cannot create a second business; submitting *different* details is `409`, because changing details an operator is reviewing is a different request. Applications are rate-limited per applicant, and each one emits a structured audit event carrying the actor and the new business id and **no name, email address or ABN**.
+
+**The flag is `false` in source control and must stay off in production until a human has verified the release gate** — see [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541). With it off, the endpoint answers `404` and `onboardingEnabled` is `false`.
+
+What is still missing for a second live business is the rest of the journey: the application and approval **user interface** (issues #508 and #510). The approval decision itself is no longer a blocker — the Super Admin's API exists (issue #544) and is called with an HTTP client until the page is built. The Nayax credential is no longer a blocker: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). An Owner can test a pasted operator id and token, save the tested pair and re-test the stored one (`/api/settings/nayax-connection/test`, `.../save`, `.../retest`; see [docs/architecture.md § Saving a tested connection and re-testing it](docs/architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)), and drives it from the connection wizard on Admin → Nayax Settings (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)); the connection banners on the other screens are still missing. The business that is live today had its credential moved in by the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
 
 ## Roles and capabilities
 
@@ -242,9 +264,79 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
 | **Operator** | Day-to-day work only: the dashboard without financial figures, the pick list, inventory (products, take inventory, categories, stock history, machines including Sync Restock, sites) and purchasing (purchases, supplier orders, suppliers) |
 
 - A signed-in member reads their own role and the capability names it grants from `GET /api/me/access`, which also returns their business's name and time zone. It describes the caller alone — never another member or another business — and a role change applies on their next request.
-- A role is set when the membership is created, by `bootstrap-business` (its `Role` option is optional and defaults to `Owner`; see [docs/tenant-rollout.md](docs/tenant-rollout.md#the-members-role-issue-521)). Existing memberships were backfilled to `Owner`, so no one's access changed when roles arrived, and nothing accepts a role from client input.
+- A role is first set when the membership is created, by `bootstrap-business` (its `Role` option is optional and defaults to `Owner`; see [docs/tenant-rollout.md](docs/tenant-rollout.md#the-members-role-issue-521)). Existing memberships were backfilled to `Owner`, so no one's access changed when roles arrived. Changing a role afterwards is the Owner-only member management below. The only other place a role arrives from client input is an Owner creating an invite link, which records the role the redemption will grant and changes nobody's access by itself; both check the role's published **name** against the same vocabulary, and no endpoint anywhere accepts a stored role value.
 - A stored role the application does not recognise **denies access** rather than falling back to the least privileged role.
-- **Capabilities are defined and reported, not yet enforced per endpoint.** Issue #502 adds that enforcement; until then every member reaches the same endpoints they did before. The capability vocabulary and the one role → capability table are described in [docs/architecture.md](docs/architecture.md#membership-roles-and-capabilities-issue-521).
+- **Every endpoint is enforced by capability** (issues #525 and #526). The capability a role must grant is checked before the request reaches the endpoint, and a refusal is a plain `403` that describes neither the capability nor the role. What each role can reach:
+  - **Operator** — the Dashboard (including its sales refresh) and the Pick List; inventory: products, take inventory, categories, stock and stock history, machines including Sync Restock, and sites; purchasing: purchases, supplier orders and suppliers. They may record a purchase but not change a supplier's GST defaults (`Suppliers.ManageGstDefaults`), and they reach no report, expense, import, site commission, setting or maintenance tool at all.
+  - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
+  - **Owner** — everything a Manager reaches, plus Admin → Nayax Settings (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, and all five maintenance repairs: Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery. Each repair's preview and dry run is as restricted as its apply.
+  - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
+  - **The Angular application renders what the role allows** (issue #528). It reads the caller's capabilities once from `GET /api/me/access` and builds the sidebar from them, so an Operator is offered no Expenses, Reports or Admin entries and a Manager no Nayax Settings or data-repair entries; a route the role does not allow shows an "access not allowed" page, and an action the role cannot use — the supplier GST defaults editor — is not offered. **None of that is the boundary**: the API checks the same capability on every request and refuses it there, so a hidden entry hides a page rather than protecting one, and a capability list that cannot be read hides nothing at all. Since every current member is an Owner, nothing changed for anybody using the application today.
+  - The capability vocabulary and the one role → capability table are described in [docs/architecture.md](docs/architecture.md#membership-roles-and-capabilities-issue-521), how they are enforced in [docs/architecture.md § Capability authorization](docs/architecture.md#capability-authorization-issue-525), and the full matrix by page and endpoint in [docs/architecture.md § Capability authorization on the Manager and Owner endpoints](docs/architecture.md#capability-authorization-on-the-manager-and-owner-endpoints-issue-526).
+
+### Managing members: changing a role and revoking access
+
+An Owner manages their own business's members through four endpoints (issue #533). They require `Members.Manage`, which only an Owner holds, so a Manager and an Operator get a plain `403` — the list included, because it is the roster the changes are made from and it shows every member's name and email address. No Angular page calls them yet; the Users page is separate work.
+
+```text
+GET  /api/members                              display name, email, role, active, joined
+PUT  /api/members/{membershipId}/role          { "role": "Owner" | "Manager" | "Operator" }
+POST /api/members/{membershipId}/revoke
+POST /api/members/{membershipId}/reinstate
+```
+
+- **Everything is scoped to the caller's own business.** No endpoint takes a business id, and a membership id belonging to another business is simply **not found** — an Owner holds every capability there is and still reaches nothing of another business's.
+- **Changes apply on that member's next request.** A demoted member's next call is answered with their new role, a revoked member's next call is refused, and a reinstated member's next call works again. There is nothing to wait for and no sign-out to force.
+- **Revoking keeps the row**, marked inactive, so the revoked approval stays visible on the list, can be reinstated, and no longer occupies that person's one active membership — which is what lets them join another business.
+- **The business always keeps at least one active Owner.** Revoking or demoting the last active one is refused with `409` and "A business must keep at least one active Owner. Give another member the Owner role first." — including when the Owner is acting on themselves. An Owner *may* step down or revoke themselves while another active Owner remains. The rule exists because only an Owner may manage members, roles, the integration and the business record, so a business that lost its last Owner could not be repaired from inside the application at all.
+- **Reinstating is refused with `409` if that person has since joined another business** ("This person is already a member of a business."), because a second active membership would deny them both. The message names no business, member or role.
+- **A revoked membership's role is not edited.** Reinstating restores the role the row still holds, so an Owner reinstates first and then changes the role; both steps are audited.
+- **Every change is audited.** One structured log event records who made it, the business, the membership, which change it was, and the old → new role and active flag. It contains **no name and no email address**, and it is written only after the change is committed — a refused change, or a request asking for the state a member already has, writes nothing and is audited as nothing.
+- An unsupported role name (including a bare number such as `40`) is rejected with `400` and stores nothing. A declared name is accepted case-insensitively.
+- See [docs/architecture.md § Member management](docs/architecture.md#member-management-list-role-revoke-and-reinstate-issue-533) for the design, the write transaction and the concurrency guarantees.
+
+### Adding a member: single-use invite links
+
+Until issue #531 the only way to give somebody access was `bootstrap-business`, run by a human with the new member's Entra ids typed in by hand. An Owner now creates an invite link instead — three endpoints, on the same `Members.Manage` capability as the member management above, so a Manager and an Operator get a plain `403`. No Angular page calls them yet, and **redeeming** an invite is separate work (issue #532), so an invite cannot create a membership yet.
+
+```text
+POST /api/members/invites                 { "role": "Owner" | "Manager" | "Operator", "note": "optional" }
+GET  /api/members/invites                 every invite, in every state
+POST /api/members/invites/{inviteId}/cancel
+```
+
+- **The token comes back exactly once**, in the creation response, and never again: the database stores only its SHA-256 hash, no log or audit event carries it, and no later read can produce it. An Owner either copies the link out of that response or creates another invite. The response carries the token rather than a full URL — the API does not know the web application's address, so the Owner-facing page (issue #505) composes the link.
+- **The token is 256 bits of cryptographic randomness**, URL-safe, and unguessable by design; that is what makes a plain hash the right way to store it rather than a password-style one.
+- **An invite lasts seven days**, fixed in code. Nothing in the request chooses the business, the creator, the expiry or the token.
+- **Expiry needs no cleanup job.** A pending invite past its expiry is reported as `Expired` with no row having changed, so there is no sweep to run and nothing that could leave an expired link looking usable. The four states are `Pending`, `Used`, `Expired` and `Cancelled`, and the list shows all of them — a used or cancelled invite is part of the record of who was offered access.
+- **Everything is scoped to the caller's own business.** No endpoint takes a business id, and an invite id belonging to another business is simply **not found**.
+- **Cancelling withdraws an invite that has not been used.** A replay is accepted and changes nothing; a **used** invite is refused with `409` ("This invite has already been used, so it cannot be cancelled.") because the membership it created exists, and an **expired** one is refused too, because a cancellation records a deliberate decision and an invite that ran out was nobody's. The check and the write are one statement, so an invite redeemed a moment earlier is never recorded as cancelled.
+- **Every creation and cancellation is audited.** One structured log event records who did it, the business, the invite and the role — and never the token, in any form, nor the Owner's note.
+- An unsupported role name (including a bare number such as `40`) or a note longer than 200 characters is rejected with `400` and stores nothing.
+- See [docs/architecture.md § Invite links](docs/architecture.md#invite-links-create-list-and-cancel-issue-531) for the design, the derived expiry and the cancellation's concurrency guarantee.
+
+### Accepting an invite
+
+Opening an invite link (`/invite/:token`) goes straight to an Accept button — the application reads the token into memory and immediately removes it from the address bar, never storing it anywhere else. A signed-out visitor is sent through sign-in first and lands back on this same link; MSAL's own sign-in bookkeeping is what carries the token across that round trip, so no application code has to.
+
+- **Who sees the Accept button.** Someone with no membership anywhere, someone a business revoked, and a rejected applicant — the three account states the redemption endpoint admits — see it. A member, a pending applicant, and anyone whose own membership is deactivated or ambiguous are sent to the page their own account state already calls for instead, because the API would only refuse them.
+- **Every refusal is shown exactly as the API phrases it**: an expired, used, cancelled or invalid link, already belonging to a business, or needing release by the platform administrator first each show their own clear sentence, and the attempt can be retried.
+- **Accepting joins the business immediately.** The application re-checks the signed-in person's access and lands on the dashboard with the role the invite granted — there is nothing further to do and no sign-out to force.
+- See [docs/architecture.md § Invite acceptance page](docs/architecture.md#invite-acceptance-page-issue-535) for the design, the token's one accepted residual, and what each account state is shown.
+
+## Privacy: the personal data this application stores
+
+The application stores almost no personal data. It holds a vending business's own trading records — products, purchases, sales, expenses and reports — and the only people it records are the business's own members.
+
+- **Who may sign in is recorded as an Entra identity, not as a person.** A `BusinessMembership` row maps the validated `(tid, oid)` claim pair to one business, with a role and a current state. That pair is the identity, and it is the only thing access is ever decided from.
+- **A member's display name and email address are stored for display** (issue #524). Both are nullable columns on that membership row, refreshed from the `name` and `preferred_username`/`email` claims of the member's own validated sign-in token, at most once an hour and never more than the latest values. They exist so an Owner can see who their members are instead of a list of object ids.
+- **They decide nothing.** No authorization, membership, role, capability or invitation decision reads either value; a name and an email address are mutable, reassignable and not unique across Entra directories. Changing them in Entra changes what is displayed on the member's next request and nothing else.
+- **They are never logged.** Neither value appears in a log message, a log property or an error, and neither is reachable through the [platform diagnostics API](#platform-diagnostics-api), whose allowlist excludes the membership table entirely. A request made in a support session (`X-Support-Session`) refreshes nothing, so a supporter's own details can never be written into a member's row.
+- **A member who has never signed in has neither value stored**, and no migration, deployment or startup step ever fills them in: the only thing that writes them is that member's own token. Exactly one surface reads them: the Owner-only members list above (issue #533), which shows them to that business's own Owner and reports an explicit `null` for a member who has never signed in. No other API response carries either value, and the audit event for a member change deliberately carries neither.
+- **An invite's note is free text an Owner typed** (issue #531), so it may well name the person being invited. It is stored on the invite row, shown back to that business's own Owners on the invite list, and nothing else: it decides nothing, nothing looks an invite up by it, and it is deliberately absent from the invite audit event. An invite stores no name and no email address of the person it is for — only the role it grants and the Entra pair of the Owner who created it.
+- **Uploaded business documents** (purchase and expense attachments) may contain whatever the supplier's paperwork contains. They are stored outside the API web root, are readable only through authenticated endpoints, and are never committed to this repository.
+
+See [docs/architecture.md § Member display name and email](docs/architecture.md#member-display-name-and-email-issue-524) for the design and the exact write path.
 
 ## Configuration and secrets
 
@@ -259,6 +351,7 @@ NayaxTokenProtection__ActiveKeyId
 NayaxTokenProtection__Keys__<key-id>
 PlatformAdmin__DirectoryTenantId
 PlatformAdmin__ObjectId
+SelfServiceOnboarding__Enabled
 APPLICATIONINSIGHTS_CONNECTION_STRING
 ```
 
@@ -270,7 +363,9 @@ A still-configured `NayaxLynx__OperatorId`, `NayaxLynx__AccessToken` or legacy `
 
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax base URL it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 
-`PlatformAdmin__DirectoryTenantId` and `PlatformAdmin__ObjectId` name the platform super-administrator for the diagnostics API below. Neither is a secret — an Entra object id is an identifier that grants nothing without a validated token carrying it — so they are ordinary application settings and need no Key Vault reference, but they are a real person's identifiers and are therefore **empty in `appsettings.json` and must never be committed**. Set them with `dotnet user-secrets` locally or application settings in Azure.
+`PlatformAdmin__DirectoryTenantId` and `PlatformAdmin__ObjectId` name the platform super-administrator for the two platform-admin APIs below — [diagnostics](#platform-diagnostics-api) and [businesses](#super-admin-businesses-api). Neither is a secret — an Entra object id is an identifier that grants nothing without a validated token carrying it — so they are ordinary application settings and need no Key Vault reference, but they are a real person's identifiers and are therefore **empty in `appsettings.json` and must never be committed**. Set them with `dotnet user-secrets` locally or application settings in Azure.
+
+`SelfServiceOnboarding__Enabled` switches [self-service business onboarding](#starting-a-business-self-service-onboarding) on (issue #541). It is not a secret, and it is **`false` in `appsettings.json`, which is the shipped state and the only one source control carries**: with it off `POST /api/onboarding/business-applications` answers `404` and `GET /api/me/account-state` reports `onboardingEnabled: false`, so nobody can create a business in a deployment that has not deliberately opened the door. An absent, blank or unparseable value is read as off, and the value is read once at startup, so changing it takes effect on the next restart. Switching it on in production is a human decision with a verified release gate in front of it — [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541).
 
 Uploaded purchase and expense documents are stored outside the API web root, under the content root's `protected-files/` folder, with their metadata in SQLite; they are readable only through the authenticated API endpoints. Do not commit uploaded business documents, local databases, or credentials.
 
@@ -284,11 +379,30 @@ POST /api/admin/diagnostics/query    { "sql": "..." } -> a bounded, truncation-f
 ```
 
 - **Who.** Only the Entra `(tid, oid)` pair in `PlatformAdmin__DirectoryTenantId` / `PlatformAdmin__ObjectId`, checked on every request by the named `PlatformDiagnostics` authorization policy. Not a business role, not a `BusinessMembership` row, not an email address, and nothing a request supplies. **With the pair unset — the shipped state — nobody is a platform administrator and both endpoints refuse every caller, including business members.**
-- **Nothing else changes.** The membership requirement is bypassed for these two endpoints only, and only after that policy succeeds. The platform administrator still receives `403` from `/api/products` and every other business route, and ordinary members' access is untouched.
+- **Where.** The Angular app offers it through the sidebar's top-level **Super Admin** group at `/super-admin/diagnostics` (`/admin/diagnostics` redirects there), shown only while `GET /api/admin/diagnostics/access` confirms the signed-in actor. Entering either URL directly works identically, because the policy above decides access on every request, not the link or the frontend guard in front of the route.
+- **Nothing else changes.** The membership requirement is bypassed for the platform-admin endpoints only — these two, and the business ones below — and only after that policy succeeds. The platform administrator still receives `403` from `/api/products` and every other business route, and ordinary members' access is untouched.
 - **Read-only and bounded.** One statement, 5 seconds, 500 rows, 1 MiB of serialized response, 16 KiB of submitted SQL. A truncated result says so; it is never presented as complete. No caller can raise a limit.
 - **The permitted surface is an allowlist of table *and column* pairs** — identity and foreign-key columns on `Businesses`, `Categories`, `Suppliers`, `Products`, `Receipts`, `ReceiptItems` and `StockAdjustments` — enforced inside SQLite by a read-only connection, `PRAGMA query_only`, a zero attached-database limit and an authorizer callback, so a join, alias, subquery or expression cannot reach outside it. No name, note, amount, quantity or free-text column is on it; `BusinessMemberships` and the `Nayax*`/`Imported*` tables are not on it at all. A new table or column is denied automatically until a reviewed change adds it — including a column named `rowid`, `oid` or `_rowid_`, which SQLite resolves to a declared column of that name when one exists.
 - **Audit.** Every query — including a refused one, and one that fails unexpectedly — emits one structured `ILogger` event with the actor `(tid, oid)`, the timestamp, the correlation id, a SHA-256 fingerprint of the normalized query *shape*, the duration, the row count and the outcome. It never contains the statement, a result row or a credential, and there is deliberately no audit table. **The log destination and retention period are platform configuration — Application Insights when `APPLICATIONINSIGHTS_CONNECTION_STRING` is set, the App Service log stream otherwise — set on that resource and not in this repository. A human must verify the destination and its retention period before relying on this audit trail.**
 - **It cannot repair anything, by design.** Any future data repair must be a separately reviewed, named maintenance operation with a preview/dry-run step and explicit verification, like `bootstrap-business`, `migrate-documents` and [Costing repair](#costing-repair-admin-page). A repair must never be reachable by submitting SQL.
+
+## Super Admin businesses API
+
+The Super Admin's other responsibility is the one the diagnostics API above deliberately cannot do: **deciding business applications.** [Self-service onboarding](#starting-a-business-self-service-onboarding) creates a `Pending` business and leaves it waiting, and this is what approves or refuses it — the first platform-admin path that writes anything (issue #544). See [docs/architecture.md](docs/architecture.md#super-admin-businesses-api-issue-544) for the complete design.
+
+```text
+GET  /api/super-admin/businesses                        every business, pending applications first
+GET  /api/super-admin/businesses/pending-count          { "pendingCount": 1 }
+POST /api/super-admin/businesses/{businessId}/approve   Pending -> Active
+POST /api/super-admin/businesses/{businessId}/reject    { "reason": "..." } (optional) -> Rejected
+```
+
+- **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the diagnostics API, checked on every request, plus the ordinary authentication and `access_as_user` scope requirements. **With the pair unset — the shipped state — nobody reaches it at all.** An Owner holds the strongest business role there is and is refused here like anybody else: a business role is not platform authority.
+- **What the Super Admin does with it.** See every business — name, status, created/applied/decided dates, contact email, ABN, how many of its members are active, and whether Nayax credentials are stored — approve an application so the business starts trading, or refuse it with an optional reason the applicant reads back on their own account-state screen. Refusing also releases the applicant's membership, which is what frees them to apply again.
+- **It can change a business's status and nothing else.** The whole surface is one narrow store: a fixed set of business columns, a membership count, the Nayax yes/no, and the two status writes. No sale, stock, cost, purchase, product, machine, site, document, report or credential value is readable or writable through it, the list takes no filter, sort or search, and a response never carries a member's name, email address or Entra id. Deactivating or reactivating a business and releasing its members are not here (issue #545).
+- **Only a pending application may be decided.** An already-trading, already-refused or deactivated business is `409`; an unknown id is `404`. Approving also requires that the applicant's membership in the application is still active and that they hold no active membership in any other business — a person belongs to one business at a time — so an approval after they joined somewhere else is `409` and changes nothing. Two decisions arriving at once resolve to one recorded decision and one `409`: the business is re-read inside the write transaction that decides it.
+- **Audit.** Every committed decision emits one structured `ILogger` event with the actor `(tid, oid)`, the business id, the old → new status, whether a reason was recorded, the instant and the correlation id. It never contains the business name, the contact address, the applicant's identity or the reason's text, and there is deliberately no audit table. **The log destination and retention period are platform configuration, exactly as for the diagnostics audit above, and a human must verify them before relying on this trail.**
+- **No page yet.** The Angular Super Admin pages are issue #510's work; until then the endpoints are called with an authenticated HTTP client.
 
 ## Database backup and restore
 
@@ -819,6 +933,57 @@ is correct, only an auditable explanation for a specific situation. It never cha
 stock, machine quantities, or stock adjustments. Use a real purchase or a stock correction instead
 when what is actually wrong is physical stock, not costing history - a repair exists only to record
 costing value that was never recorded in the first place.
+
+## Connecting Nayax (Admin page)
+
+**Admin → Nayax Settings** is where an Owner connects this business's own Nayax account. Only an
+Owner can reach it, and the connection wizard at the top of the page walks through six steps; the
+estimated processing fee rate is configured further down the same page and is unrelated to the
+connection.
+
+1. **Operator ID.** In Nayax Core: open **Operator** in the left sidebar, select your operator and
+   search; the numeric id is listed under **Company Info** as **Operator Id**. It is not a secret and
+   is stored with the connection.
+2. **Create a Lynx token.** In Nayax Core, click your username in the top right corner, then
+   **Account Settings** › **Security and Login** (the second tab) › **User Tokens** (below Your
+   Trusted Devices) › **Add Token**, and choose the **Lynx Token** type. If a Lynx token is already
+   listed, use **Show Token** next to it and copy that instead.
+3. **Paste the token and press Test connection.** The token field is write-only: it is sent once
+   with the test and cleared as soon as the test comes back, and it is never kept in the browser —
+   no local storage, no session storage, no URL. Testing stores nothing yet, changes no Nayax data,
+   and leaves any connection you already have exactly as it is, so testing a bad token cannot break
+   a working one.
+4. **Read the checklist.** The server calls each Nayax endpoint this application reads and reports
+   every one on its own line: a tick for granted, a cross with the cause for refused, and **Not
+   checked** for the machine-scoped lines when the account has no machines yet (or when the machine
+   list itself could not be read — the two are shown differently, because they need different
+   actions). An untested permission is never shown as a granted one. The restock write call is
+   deliberately not tested: a connection test must not change your Nayax data, so it is checked the
+   first time a refill is actually pushed.
+5. **Ask Nayax for anything refused.** Nayax grants a token's permissions, so when a line fails the
+   wizard composes a ready-to-copy request naming your operator id and every refused area with its
+   cause (never the token itself). Raise it in the Nayax support portal,
+   <https://nayax.service-now.com/csm>; if that gets no answer, <integration-support@nayax.com> is
+   the secondary contact. This step is skipped when nothing failed.
+6. **Save the connection.** Saving stores the operator id and the token the server just tested — the
+   page sends back only the server's reference to that test, never the token again. A token that did
+   not sign in to Nayax cannot be saved, and a test result older than fifteen minutes has to be run
+   again first. Saving with some areas still refused records the connection as **Permissions
+   pending**: the features that need those areas keep saying so until Nayax grants them and a
+   re-test confirms it.
+
+**Re-testing.** The stored connection is shown above the wizard with its status — Ready, Permissions
+pending, Needs attention, or Not connected — and a **Re-test this connection** button that runs the
+same read-only checks against the token already stored. Re-test works in every status, including
+Needs attention, which is the state it exists to recover from. When the connection was saved before
+any machine existed in the Nayax account, the page asks you to **re-test once your machines are set
+up**, because those permissions were never verified. If Nayax cannot be reached, the stored status is
+left exactly as it was and the page says so rather than concluding anything. If the token was
+replaced while a re-test was running, the result is discarded and the page asks you to run the test
+again, so the status always describes the token actually stored.
+
+Tests and re-tests share one allowance for the whole business (five runs per ten minutes); past it
+the page asks you to wait a few minutes, and no call reaches Nayax.
 
 ## Delivery workflow
 

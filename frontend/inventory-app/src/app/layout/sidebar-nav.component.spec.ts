@@ -1,14 +1,33 @@
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { NEVER, Observable, of, throwError } from 'rxjs';
+import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
+import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
+import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
+import { AccessService, MemberAccess, MemberAccessState } from '../access/access.service';
+import { CAPABILITIES, Capability, capabilitySet } from '../access/capabilities';
+import { apiConfig, queuedReads, readingHttp, signedInIdentity } from '../access/identity-cache.spec-helpers';
 import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
+import { PlatformDiagnosticsAccess, PlatformDiagnosticsService } from '../services/platform-diagnostics.service';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './sidebar-nav.component';
 import { NavGroup, navLinks, primaryNavigation } from './navigation';
 
 @Component({ standalone: true, template: '' })
 class BlankPageComponent {}
+
+function granted(capabilities: readonly Capability[]): MemberAccessState {
+  const access: MemberAccess = {
+    role: 'Test',
+    capabilities: capabilitySet([...capabilities]),
+    businessName: 'Vending Co',
+    timeZoneId: 'Australia/Sydney'
+  };
+  return { status: 'granted', access };
+}
+
+/** Every capability, which is what an Owner holds and what the shell tests assume by default. */
+const EVERY_CAPABILITY = granted(CAPABILITIES);
 
 interface Rendered {
   fixture: ComponentFixture<SidebarNavComponent>;
@@ -17,8 +36,9 @@ interface Rendered {
 }
 
 /**
- * The diagnostics access probe is stubbed, because the sidebar must never be the thing that
- * decides platform-admin access: it renders whatever the API's answer was (issue #335).
+ * Both access answers are stubbed, because the sidebar must never be the thing that decides
+ * either: it renders the capabilities `GET /api/me/access` reported (issue #528) and the
+ * diagnostics API's separate answer about platform-admin access (issue #335).
  */
 async function render(
   options: {
@@ -27,6 +47,9 @@ async function render(
     url?: string;
     navId?: string;
     diagnosticsAccess?: Observable<boolean>;
+    access?: Observable<MemberAccessState>;
+    /** The real `AccessService`, for the tests that are about what it publishes when (issue #603). */
+    accessService?: AccessService;
   } = {}
 ): Promise<Rendered> {
   await TestBed.configureTestingModule({
@@ -34,8 +57,12 @@ async function render(
     providers: [
       provideRouter([{ path: '**', component: BlankPageComponent }]),
       {
+        provide: AccessService,
+        useValue: options.accessService ?? { access$: options.access ?? of(EVERY_CAPABILITY) }
+      },
+      {
         provide: PlatformDiagnosticsAccessService,
-        useValue: { isGranted: () => options.diagnosticsAccess ?? of(false) }
+        useValue: { granted$: options.diagnosticsAccess ?? of(false) }
       }
     ]
   }).compileComponents();
@@ -69,7 +96,7 @@ function navGroup(label: string): NavGroup {
   return primaryNavigation.find((entry) => entry.label === label) as NavGroup;
 }
 
-const adminChildRoutes = navGroup('Admin').children.map((child) => child.route);
+const adminChildRoutes = navLinks([navGroup('Admin')]).map((child) => child.route);
 
 describe('SidebarNavComponent structure (issue #391)', () => {
   it('renders one primary navigation landmark with every top-level entry', async () => {
@@ -226,66 +253,315 @@ describe('SidebarNavComponent collapsed state (issue #391)', () => {
 });
 
 /**
- * The conditional super-admin diagnostics link (issue #335). The sidebar renders the API's
- * answer; it never decides it, and a hidden link protects nothing - `/admin/diagnostics` and both
- * diagnostics endpoints are independently authorized by the API.
+ * The top-level Super Admin group (issue #546, parent #510 under #328). The sidebar renders the
+ * API's answer; it never decides it, and a hidden group protects nothing -
+ * `/super-admin/diagnostics` and both diagnostics endpoints are independently authorized by the
+ * API.
  */
-describe('SidebarNavComponent super-admin diagnostics link (issue #335)', () => {
-  it('offers no diagnostics link when the API does not confirm platform-admin access', async () => {
-    const { fixture, host } = await render({ diagnosticsAccess: of(false) });
-    groupToggle(host, 'Admin').click();
-    fixture.detectChanges();
+describe('SidebarNavComponent Super Admin group (issue #546)', () => {
+  it('offers no Super Admin group when the API does not confirm platform-admin access', async () => {
+    const { host } = await render({ diagnosticsAccess: of(false) });
 
-    expect(link(host, '/admin/diagnostics')).toBeNull();
+    expect(host.textContent).not.toContain('Super Admin');
     expect(host.textContent).not.toContain('Platform Diagnostics');
   });
 
-  it('offers no diagnostics link while the access probe has not answered', async () => {
-    const { fixture, host } = await render({ diagnosticsAccess: NEVER });
-    groupToggle(host, 'Admin').click();
-    fixture.detectChanges();
+  it('offers no Super Admin group while the access probe has not answered', async () => {
+    const { host } = await render({ diagnosticsAccess: NEVER });
 
-    expect(link(host, '/admin/diagnostics')).toBeNull();
+    expect(host.textContent).not.toContain('Super Admin');
   });
 
-  it('offers no diagnostics link when the access probe fails', async () => {
-    const { fixture, host } = await render({ diagnosticsAccess: throwError(() => new Error('probe failed')) });
-    groupToggle(host, 'Admin').click();
-    fixture.detectChanges();
+  it('offers no Super Admin group when the access probe fails', async () => {
+    const { host } = await render({ diagnosticsAccess: throwError(() => new Error('probe failed')) });
 
-    expect(link(host, '/admin/diagnostics')).toBeNull();
+    expect(host.textContent).not.toContain('Super Admin');
   });
 
-  it('renders it inside the Admin group once the API confirms access', async () => {
+  it('renders Platform Diagnostics and the inert Businesses placeholder once the API confirms access', async () => {
     const { fixture, host } = await render({ diagnosticsAccess: of(true) });
-    expect(link(host, '/admin/diagnostics')).toBeNull();
+    expect(link(host, '/super-admin/diagnostics')).toBeNull();
 
-    groupToggle(host, 'Admin').click();
+    groupToggle(host, 'Super Admin').click();
     fixture.detectChanges();
 
-    const diagnostics = link(host, '/admin/diagnostics');
+    const diagnostics = link(host, '/super-admin/diagnostics');
     expect(diagnostics).not.toBeNull();
     expect(diagnostics?.textContent?.trim()).toBe('Platform Diagnostics');
-    for (const route of adminChildRoutes) {
-      expect(link(host, route)).not.toBeNull();
-    }
+
+    expect(host.textContent).toContain('Businesses');
+    expect(Array.from(host.querySelectorAll('a')).some((anchor) => anchor.textContent?.trim() === 'Businesses')).toBe(
+      false
+    );
   });
 
-  it('marks the diagnostics page active and opens the Admin group for it', async () => {
-    const { host } = await render({ url: '/admin/diagnostics', diagnosticsAccess: of(true) });
+  it('marks the diagnostics page active and opens the Super Admin group for it', async () => {
+    const { host } = await render({ url: '/super-admin/diagnostics', diagnosticsAccess: of(true) });
 
-    expect(groupToggle(host, 'Admin').getAttribute('aria-expanded')).toBe('true');
-    expect(link(host, '/admin/diagnostics')?.getAttribute('aria-current')).toBe('page');
+    expect(groupToggle(host, 'Super Admin').getAttribute('aria-expanded')).toBe('true');
+    expect(link(host, '/super-admin/diagnostics')?.getAttribute('aria-current')).toBe('page');
   });
 
-  it('adds no other destination when access is confirmed', async () => {
+  it('adds no other destination when access is confirmed, besides its own two children', async () => {
     const { component } = await render({ diagnosticsAccess: of(true) });
 
-    expect(component.navigation.map((entry) => entry.label)).toEqual(primaryNavigation.map((entry) => entry.label));
+    expect(component.navigation.map((entry) => entry.label)).toEqual([
+      ...primaryNavigation.map((entry) => entry.label),
+      'Super Admin'
+    ]);
     expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
       ...navLinks(primaryNavigation).map((entry) => entry.route),
-      '/admin/diagnostics'
+      '/super-admin/diagnostics'
     ]);
+  });
+});
+
+/**
+ * The Super Admin group follows the signed-in identity (issue #605). The real
+ * `PlatformDiagnosticsAccessService` is used here, with MSAL and the diagnostics HTTP call under
+ * the test's control, because the regression this covers is not in the sidebar's rendering but in
+ * what the cached probe answers after an account switch.
+ */
+describe('SidebarNavComponent Super Admin group across an identity change (issue #605)', () => {
+  const administrator = { name: 'A', homeAccountId: 'a-home-id' } as unknown as AccountInfo;
+  const ordinaryMember = { name: 'B', homeAccountId: 'b-home-id' } as unknown as AccountInfo;
+
+  const authorizedResponse: PlatformDiagnosticsAccess = {
+    authorized: true,
+    crossBusinessScope: true,
+    limits: { maxSqlBytes: 16384, maxRows: 500, maxResponseBytes: 1048576, maxDurationSeconds: 5 }
+  };
+
+  interface ProbedRender extends Rendered {
+    switchTo(next: AccountInfo): void;
+  }
+
+  /** One diagnostics response per probe, in order; the last one answers every further probe. */
+  function queued(...responses: readonly (() => Observable<PlatformDiagnosticsAccess>)[]) {
+    let call = 0;
+    return () => (responses[call++] ?? responses[responses.length - 1])();
+  }
+
+  async function renderWithRealProbe(
+    signedIn: AccountInfo,
+    access: () => Observable<PlatformDiagnosticsAccess>
+  ): Promise<ProbedRender> {
+    let activeAccount = signedIn;
+    const events = new Subject<EventMessage>();
+
+    await TestBed.configureTestingModule({
+      imports: [SidebarNavComponent],
+      providers: [
+        provideRouter([{ path: '**', component: BlankPageComponent }]),
+        { provide: AccessService, useValue: { access$: of(EVERY_CAPABILITY) } },
+        { provide: PlatformDiagnosticsService, useValue: { access, query: jest.fn() } },
+        {
+          provide: MsalService,
+          useValue: {
+            instance: { getActiveAccount: () => activeAccount, getAllAccounts: () => [activeAccount] }
+          }
+        },
+        {
+          provide: MsalBroadcastService,
+          useValue: {
+            inProgress$: new BehaviorSubject<InteractionStatus>(InteractionStatus.None),
+            msalSubject$: events
+          }
+        }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(SidebarNavComponent);
+    fixture.componentRef.setInput('expanded', true);
+    fixture.detectChanges();
+
+    return {
+      fixture,
+      component: fixture.componentInstance,
+      host: fixture.nativeElement as HTMLElement,
+      switchTo(next: AccountInfo): void {
+        activeAccount = next;
+        events.next({ eventType: EventType.ACTIVE_ACCOUNT_CHANGED } as EventMessage);
+        fixture.detectChanges();
+      }
+    };
+  }
+
+  it('removes a granted group the moment the identity changes, before the new probe answers', async () => {
+    const pending = new Subject<PlatformDiagnosticsAccess>();
+    const rendered = await renderWithRealProbe(
+      administrator,
+      queued(
+        () => of(authorizedResponse),
+        () => pending
+      )
+    );
+    expect(rendered.host.textContent).toContain('Super Admin');
+
+    rendered.switchTo(ordinaryMember);
+
+    expect(rendered.host.textContent).not.toContain('Super Admin');
+
+    pending.next({ ...authorizedResponse, authorized: false });
+    rendered.fixture.detectChanges();
+
+    expect(rendered.host.textContent).not.toContain('Super Admin');
+  });
+
+  it('offers the group to a newly active identity whose own probe confirms access', async () => {
+    const rendered = await renderWithRealProbe(
+      ordinaryMember,
+      queued(
+        () => throwError(() => ({ status: 403, error: null })),
+        () => of(authorizedResponse)
+      )
+    );
+    expect(rendered.host.textContent).not.toContain('Super Admin');
+
+    rendered.switchTo(administrator);
+
+    expect(rendered.host.textContent).toContain('Super Admin');
+  });
+});
+
+/**
+ * The capability-driven menu (issue #528). The sidebar renders the capability set the access
+ * service reported and decides nothing itself; a destination it does not render hides a page
+ * rather than protecting one, because the endpoints behind that page authorize every request.
+ */
+describe('SidebarNavComponent capability-driven menu (issue #528)', () => {
+  const operator = granted(['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate']);
+  const manager = granted([
+    'Dashboard.View',
+    'Dashboard.ViewFinancials',
+    'PickList.View',
+    'Inventory.Operate',
+    'Purchasing.Operate',
+    'Suppliers.ManageGstDefaults',
+    'Expenses.Manage',
+    'Reports.View',
+    'Imports.Run',
+    'SiteCommissions.Manage'
+  ]);
+
+  it('renders no destination at all until the capability set has been read', async () => {
+    const { host } = await render({ access: NEVER });
+
+    expect(host.querySelector('nav[aria-label="Primary"]')).not.toBeNull();
+    expect(host.querySelectorAll('nav[aria-label="Primary"] a')).toHaveLength(0);
+    expect(host.textContent).not.toContain('Expenses');
+  });
+
+  it('offers an Operator no Expenses link and no Reports or Admin heading', async () => {
+    const { host } = await render({ access: of(operator) });
+
+    expect(link(host, '/')).not.toBeNull();
+    expect(link(host, '/pick-list')).not.toBeNull();
+    expect(link(host, '/expenses')).toBeNull();
+    expect(host.textContent).not.toContain('Expenses');
+    expect(host.textContent).not.toContain('Reports');
+    expect(host.textContent).not.toContain('Admin');
+  });
+
+  it('offers a Manager the Reports and Admin groups, without Nayax Settings or a repair page', async () => {
+    const { fixture, host } = await render({ access: of(manager) });
+    groupToggle(host, 'Admin').click();
+    groupToggle(host, 'Reports').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/expenses')).not.toBeNull();
+    expect(link(host, '/reports/gst')).not.toBeNull();
+    expect(link(host, '/admin/imports')).not.toBeNull();
+    expect(link(host, '/admin/site-commission-agreements')).not.toBeNull();
+    expect(link(host, '/admin/nayax-settings')).toBeNull();
+    expect(link(host, '/admin/costing-repair')).toBeNull();
+    expect(link(host, '/admin/historical-gst-classification')).toBeNull();
+  });
+
+  it('re-renders when the capability set is read again, so a role change reaches the menu', async () => {
+    const access = new BehaviorSubject<MemberAccessState>(operator);
+    const { fixture, host } = await render({ access });
+    expect(link(host, '/expenses')).toBeNull();
+
+    access.next(EVERY_CAPABILITY);
+    fixture.detectChanges();
+
+    expect(link(host, '/expenses')).not.toBeNull();
+  });
+
+  /**
+   * The fail-open rule: the capability set could not be read, the API still refuses what the role
+   * may not do, and an empty menu would strand a member whose capability read happened to fail.
+   */
+  it('offers every destination when the capability set could not be read', async () => {
+    const { component } = await render({ access: of<MemberAccessState>({ status: 'unavailable' }) });
+
+    expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual(
+      navLinks(primaryNavigation).map((entry) => entry.route)
+    );
+  });
+
+  it('still offers the Super Admin group to an Operator the diagnostics API confirms, with no Admin group', async () => {
+    const { fixture, host } = await render({ access: of(operator), diagnosticsAccess: of(true) });
+    groupToggle(host, 'Super Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/super-admin/diagnostics')).not.toBeNull();
+    expect(Array.from(host.querySelectorAll('button')).some((button) => button.textContent?.trim() === 'Admin')).toBe(
+      false
+    );
+    expect(link(host, '/admin/nayax-settings')).toBeNull();
+  });
+});
+
+/**
+ * The menu after a Microsoft account change (issue #603). The sidebar holds one long-lived
+ * subscription for the life of the shell, so it is the consumer that would otherwise keep
+ * presenting the previous account's destinations for as long as the new account's read takes.
+ */
+describe('SidebarNavComponent menu across an account change (issue #603)', () => {
+  const OWNER_RESPONSE = {
+    role: 'Owner',
+    capabilities: [...CAPABILITIES],
+    businessName: 'Vending Co',
+    timeZoneId: 'Australia/Sydney'
+  };
+  const OPERATOR_RESPONSE = {
+    role: 'Operator',
+    capabilities: ['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate'],
+    businessName: 'Other Co',
+    timeZoneId: 'Australia/Sydney'
+  };
+
+  /** The real service, with only its one `GET` and MSAL's two signals doubled. */
+  function accessWithSwitch(reads: (() => unknown)[]): { access: AccessService; switchAccount(id: string): void } {
+    const identity = signedInIdentity();
+    const read = queuedReads(reads, OPERATOR_RESPONSE);
+    const access = new AccessService(readingHttp(read), apiConfig(), identity.msal, identity.broadcast);
+
+    return { access, switchAccount: identity.switchAccount };
+  }
+
+  it('offers no destination while the new account’s capabilities are still being read', async () => {
+    const pending = new Subject<unknown>();
+    const { access, switchAccount } = accessWithSwitch([() => of(OWNER_RESPONSE), () => pending]);
+    const { fixture, host } = await render({ accessService: access });
+    expect(link(host, '/expenses')).not.toBeNull();
+    expect(host.textContent).toContain('Admin');
+
+    switchAccount('member-2');
+    fixture.detectChanges();
+
+    expect(host.querySelectorAll('nav[aria-label="Primary"] a')).toHaveLength(0);
+    expect(host.textContent).not.toContain('Admin');
+
+    pending.next(OPERATOR_RESPONSE);
+    pending.complete();
+    fixture.detectChanges();
+
+    expect(link(host, '/pick-list')).not.toBeNull();
+    expect(link(host, '/expenses')).toBeNull();
+    expect(host.textContent).not.toContain('Admin');
   });
 });
 

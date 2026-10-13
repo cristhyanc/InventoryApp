@@ -91,10 +91,54 @@ public sealed record DashboardInventorySummaryDto(
     int UnitsInStorage);
 
 /// <summary>
+/// The "Inventory" card as a caller without <c>Dashboard.ViewFinancials</c> receives it (issue
+/// #527): the same card with no valuation property at all.
+///
+/// <see cref="IsInventoryValueComplete"/> and <see cref="ProductsWithUnknownCost"/> stay, because
+/// they describe the catalogue's costing data quality rather than an amount, and
+/// <see cref="ProductCount"/>/<see cref="UnitsInStorage"/> are unit counts a role that stocks the
+/// machines needs. What is withheld is the money.
+/// </summary>
+public sealed record RedactedDashboardInventorySummaryDto(
+    bool IsInventoryValueComplete,
+    int ProductsWithUnknownCost,
+    int ProductCount,
+    int UnitsInStorage);
+
+/// <summary>
+/// What every caller of <c>GET /api/dashboard/summary</c> is told, whatever their role (issue
+/// #527): the instant the figures were resolved at and the two non-financial cards.
+///
+/// The summary publishes exactly two shapes - <see cref="DashboardSummaryDto"/> for a caller whose
+/// role grants <c>Dashboard.ViewFinancials</c> and <see cref="RedactedDashboardSummaryDto"/> for one
+/// whose role does not - and this is the part they have in common. They are two types rather than
+/// one type with nullable properties because a redacted figure must be <em>absent</em> from the
+/// JSON: <c>null</c> is already a meaningful answer for <c>inventoryValueAtCost</c> ("the valuation
+/// is incomplete"), <c>0</c> would read as a known zero week, and a property a type does not have
+/// cannot be reintroduced by a later change to a serializer option, a converter or an attribute.
+/// The inventory card is deliberately not on this interface: its two shapes differ.
+/// </summary>
+public interface IDashboardSummaryDto
+{
+    /// <summary>The single instant every metric in the summary was resolved against.</summary>
+    DateTime AsOfUtc { get; }
+
+    /// <summary>The business date that instant falls on, in the business's own time zone.</summary>
+    DateTime BusinessDate { get; }
+
+    DashboardRefillSummaryDto NeedsRefill { get; }
+
+    DashboardOrderingSummaryDto NeedsOrdering { get; }
+}
+
+/// <summary>
 /// The authoritative home Dashboard summary contract (issue #459): the backend owns every sales,
 /// refill, ordering and valuation decision behind these cards, and a caller displays the figures and
-/// the completeness flags as returned. It is additive - no existing endpoint, response or figure
-/// changes - and read-only.
+/// the completeness flags as returned. It is read-only.
+///
+/// Since issue #527 this is the shape a caller whose role grants <c>Dashboard.ViewFinancials</c> -
+/// a Manager or an Owner - receives, unchanged. A caller whose role does not is answered
+/// <see cref="RedactedDashboardSummaryDto"/> instead.
 ///
 /// <see cref="AsOfUtc"/> is the single instant every metric was resolved against, and
 /// <see cref="BusinessDate"/> the business date it falls on, so a caller can
@@ -110,4 +154,20 @@ public sealed record DashboardSummaryDto(
     DashboardSalesThisWeekDto SalesThisWeek,
     DashboardRefillSummaryDto NeedsRefill,
     DashboardOrderingSummaryDto NeedsOrdering,
-    DashboardInventorySummaryDto Inventory);
+    DashboardInventorySummaryDto Inventory) : IDashboardSummaryDto;
+
+/// <summary>
+/// The summary as a caller without <c>Dashboard.ViewFinancials</c> receives it (issue #527): the
+/// contract above with no <c>salesThisWeek</c> object and no <c>inventory.inventoryValueAtCost</c>.
+///
+/// Both are absent from the serialized response rather than <c>null</c> or <c>0</c>, and the sales
+/// figures are never calculated for such a caller at all - <see cref="GetDashboardSummary"/> does
+/// not read them. Everything else is the same figure the same request would have produced for a
+/// Manager or an Owner: redaction removes two amounts and changes nothing else.
+/// </summary>
+public sealed record RedactedDashboardSummaryDto(
+    DateTime AsOfUtc,
+    DateTime BusinessDate,
+    DashboardRefillSummaryDto NeedsRefill,
+    DashboardOrderingSummaryDto NeedsOrdering,
+    RedactedDashboardInventorySummaryDto Inventory) : IDashboardSummaryDto;

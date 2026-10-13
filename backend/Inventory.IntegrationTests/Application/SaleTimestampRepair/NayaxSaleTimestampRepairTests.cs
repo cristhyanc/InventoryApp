@@ -67,8 +67,8 @@ public class NayaxSaleTimestampRepairTests : IDisposable
         using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
         setup.Businesses.AddRange(
-            new Business { Id = BusinessA, Name = "Vending A", CreatedAtUtc = Now },
-            new Business { Id = BusinessB, Name = "Vending B", CreatedAtUtc = Now });
+            new Business { Id = BusinessA, Name = "Vending A", Status = BusinessStatus.Active, CreatedAtUtc = Now },
+            new Business { Id = BusinessB, Name = "Vending B", Status = BusinessStatus.Active, CreatedAtUtc = Now });
         setup.SaveChanges();
     }
 

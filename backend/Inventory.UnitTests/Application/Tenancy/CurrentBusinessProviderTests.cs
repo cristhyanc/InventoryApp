@@ -26,9 +26,15 @@ public class CurrentBusinessProviderTests
     private static ActorBusinessMembership Membership(
         int businessId,
         bool isActive = true,
-        bool businessIsActive = true,
+        BusinessStatus businessStatus = BusinessStatus.Active,
         BusinessRole role = BusinessRole.Owner) =>
-        new(BusinessId.From(businessId), role, isActive, businessIsActive);
+        new(
+            BusinessId.From(businessId),
+            role,
+            isActive,
+            businessStatus,
+            StatusChangedAtUtc: new DateTime(2026, 10, 11, 0, 0, 0, DateTimeKind.Utc),
+            BusinessRejectionReason: null);
 
     [Fact]
     public async Task Identified_actor_with_one_active_membership_resolves_to_that_business()
@@ -222,7 +228,7 @@ public class CurrentBusinessProviderTests
             new FakeBusinessMembershipStore(Membership(7), Membership(8))),
         BusinessAccessDenialReason.BusinessInactive => new CurrentBusinessProvider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
-            new FakeBusinessMembershipStore(Membership(7, businessIsActive: false))),
+            new FakeBusinessMembershipStore(Membership(7, businessStatus: BusinessStatus.Deactivated))),
         BusinessAccessDenialReason.RoleUnrecognised => new CurrentBusinessProvider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
             new FakeBusinessMembershipStore(Membership(7, role: (BusinessRole)0))),

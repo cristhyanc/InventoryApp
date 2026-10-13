@@ -25,11 +25,13 @@ namespace InventoryApi.Tests.Controllers;
 /// membership-not-required marker, the controller, and relational SQLite with the real migration
 /// history.
 ///
-/// <para>Four identities in the same deployment are in the four states today's schema can hold -
-/// a member, a person with no membership at all, a person whose membership was revoked, and a
-/// member of a deactivated business - and each is answered with their own state. A second, fully
-/// active business exists throughout, so an answer could only have come from the caller's own
-/// records, and the response must mention neither it nor the caller's own business.</para>
+/// <para>Six identities in the same deployment are in the six states the schema can hold since
+/// issue #540 added the business lifecycle status - a member, a person with no membership at all,
+/// a person whose membership was revoked, a member of a deactivated business, a member of a
+/// business whose application is pending, and the revoked member of a business whose application
+/// was rejected - and each is answered with their own state. A second, fully active business
+/// exists throughout, so an answer could only have come from the caller's own records, and the
+/// response must mention neither it nor the caller's own business.</para>
 ///
 /// <para><c>MembershipAmbiguous</c> is deliberately not here: since issue #522 the database
 /// refuses to hold two active memberships for one identity, so it is covered where it can still
@@ -49,11 +51,12 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
         { ApiFactory.StrangerObjectId, "NoMembership" },
         { ApiFactory.RevokedObjectId, "MembershipRevoked" },
         { ApiFactory.DeactivatedBusinessObjectId, "BusinessDeactivated" },
+        { ApiFactory.PendingBusinessObjectId, "ApplicationPending" },
     };
 
     /// <summary>
-    /// Every state this slice reports, each with the exact three-field response: the same
-    /// deployment and the same database answer each identity with its own state.
+    /// Every state that carries no rejection reason, each with the exact three-field response: the
+    /// same deployment and the same database answer each identity with its own state.
     /// </summary>
     [Theory]
     [MemberData(nameof(IdentitiesAndStates))]
@@ -75,6 +78,53 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
     }
 
     /// <summary>
+    /// The one state that carries a reason (issue #540): the revoked member of a rejected business
+    /// is told their application was rejected, with the reason an operator recorded on the
+    /// business, through the real pipeline and the real migration history. The reason is the only
+    /// thing about that business the response says - it still carries no name and no id.
+    /// </summary>
+    [Fact]
+    public async Task A_rejected_applicant_is_told_the_recorded_reason()
+    {
+        await _factory.SeedAsync();
+
+        var response = await _factory.Authenticated(ApiFactory.RejectedBusinessObjectId).GetAsync(Uri);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await ReadJsonAsync(response);
+
+        Assert.Equal(
+            ["onboardingEnabled", "rejectionReason", "state"],
+            json.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.Equal("ApplicationRejected", json.GetProperty("state").GetString());
+        Assert.Equal(ApiFactory.RejectionReason, json.GetProperty("rejectionReason").GetString());
+        Assert.False(json.GetProperty("onboardingEnabled").GetBoolean());
+    }
+
+    /// <summary>
+    /// A pending or rejected business grants its members nothing, exactly as a deactivated one
+    /// does: the lifecycle status tells the states apart for this endpoint alone, and the
+    /// resolution that decides access denies every status but <c>Active</c>.
+    /// </summary>
+    [Theory]
+    [InlineData(ApiFactory.PendingBusinessObjectId)]
+    [InlineData(ApiFactory.RejectedBusinessObjectId)]
+    public async Task A_member_of_a_pending_or_rejected_business_reaches_nothing_else(string objectId)
+    {
+        await _factory.SeedAsync();
+        var client = _factory.Authenticated(objectId);
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(Uri)).StatusCode);
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/me/access")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/products")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/business/current")).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await client.PostAsJsonAsync("/api/categories", new { name = "Should not be created" })).StatusCode);
+    }
+
+    /// <summary>
     /// The response says which state the account is in and nothing else. No business name, no
     /// identifier for either business or for the caller, and no trace of the other business that
     /// exists in the same deployment - a person the application has not approved is not thereby
@@ -84,6 +134,8 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
     [InlineData(ApiFactory.MemberObjectId)]
     [InlineData(ApiFactory.RevokedObjectId)]
     [InlineData(ApiFactory.DeactivatedBusinessObjectId)]
+    [InlineData(ApiFactory.PendingBusinessObjectId)]
+    [InlineData(ApiFactory.RejectedBusinessObjectId)]
     [InlineData(ApiFactory.StrangerObjectId)]
     public async Task Never_names_a_business_its_identifier_or_the_caller(string objectId)
     {
@@ -94,6 +146,8 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
         Assert.DoesNotContain(ApiFactory.BusinessName, body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(ApiFactory.OtherBusinessName, body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(ApiFactory.DeactivatedBusinessName, body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(ApiFactory.PendingBusinessName, body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(ApiFactory.RejectedBusinessName, body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("businessId", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(objectId, body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(ApiFactory.DirectoryTenantId, body, StringComparison.OrdinalIgnoreCase);
@@ -153,16 +207,26 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
     /// The middleware's public 403 body is unchanged: it still carries the same single sentence
     /// and no hint of which state the caller is in. The account-state endpoint is the only place
     /// that distinction is visible, and only for the caller's own identity.
+    ///
+    /// <para>It is probed through <c>GET /api/me/access</c>, which is the endpoint the middleware
+    /// still answers for these callers. Since issue #525 most business endpoints also declare a
+    /// capability, and the authorization middleware - which runs first - refuses a caller with no
+    /// resolved role before this body is ever written; see
+    /// <see cref="A_capability_endpoint_refuses_the_same_caller_with_no_body_at_all"/>. The claim
+    /// here is about the middleware's body, so it is asked of an endpoint the middleware decides.
+    /// </para>
     /// </summary>
     [Theory]
     [InlineData(ApiFactory.StrangerObjectId)]
     [InlineData(ApiFactory.RevokedObjectId)]
     [InlineData(ApiFactory.DeactivatedBusinessObjectId)]
+    [InlineData(ApiFactory.PendingBusinessObjectId)]
+    [InlineData(ApiFactory.RejectedBusinessObjectId)]
     public async Task The_public_403_body_is_unchanged(string objectId)
     {
         await _factory.SeedAsync();
 
-        var response = await _factory.Authenticated(objectId).GetAsync("/api/products");
+        var response = await _factory.Authenticated(objectId).GetAsync("/api/me/access");
         var json = await ReadJsonAsync(response);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
@@ -173,10 +237,44 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
         Assert.Equal(403, json.GetProperty("status").GetInt32());
 
         var body = await response.Content.ReadAsStringAsync();
-        foreach (var state in new[] { "MembershipRevoked", "BusinessDeactivated", "NoMembership", "Member" })
+        foreach (var state in new[]
+        {
+            "MembershipRevoked",
+            "BusinessDeactivated",
+            "ApplicationPending",
+            "ApplicationRejected",
+            "NoMembership",
+            "Member",
+        })
         {
             Assert.DoesNotContain(state, body, StringComparison.Ordinal);
         }
+
+        // Nor the reason an application was refused, which only the caller's own account state
+        // reports (issue #540).
+        Assert.DoesNotContain(ApiFactory.RejectionReason, body, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The one thing issue #525 changed about what these callers are told, recorded here rather
+    /// than left as a silent difference between endpoints: on an endpoint that declares a
+    /// capability the authorization middleware refuses them first, with no body at all. That is
+    /// strictly less than the sentence above and still names no business and no account state, so
+    /// the account-state endpoint remains the only place the distinction is visible.
+    /// </summary>
+    [Theory]
+    [InlineData(ApiFactory.StrangerObjectId)]
+    [InlineData(ApiFactory.RevokedObjectId)]
+    [InlineData(ApiFactory.DeactivatedBusinessObjectId)]
+    public async Task A_capability_endpoint_refuses_the_same_caller_with_no_body_at_all(string objectId)
+    {
+        await _factory.SeedAsync();
+
+        var response = await _factory.Authenticated(objectId).GetAsync("/api/products");
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Empty(body);
     }
 
     /// <summary>
@@ -207,6 +305,14 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
         public const string BusinessName = "Vending Co";
         public const string OtherBusinessName = "Second Vending Co";
         public const string DeactivatedBusinessName = "Offboarded Vending Co";
+        public const string PendingBusinessName = "Applicant Vending Co";
+        public const string RejectedBusinessName = "Refused Vending Co";
+
+        /// <summary>
+        /// The reason an operator recorded when refusing an application. It deliberately names no
+        /// business, because it is reported verbatim to the applicant.
+        /// </summary>
+        public const string RejectionReason = "The ABN provided belongs to another entity.";
 
         public const string DirectoryTenantId = "99999999-9999-9999-9999-999999999999";
         public const string MemberObjectId = "11111111-1111-1111-1111-111111111111";
@@ -214,10 +320,14 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
         public const string RevokedObjectId = "33333333-3333-3333-3333-333333333333";
         public const string DeactivatedBusinessObjectId = "44444444-4444-4444-4444-444444444444";
         public const string RevocationObjectId = "55555555-5555-5555-5555-555555555555";
+        public const string PendingBusinessObjectId = "77777777-7777-7777-7777-777777777777";
+        public const string RejectedBusinessObjectId = "88888888-8888-8888-8888-888888888888";
 
         private const int BusinessId = 1;
         private const int OtherBusinessId = 2;
         private const int DeactivatedBusinessId = 3;
+        private const int PendingBusinessId = 4;
+        private const int RejectedBusinessId = 5;
 
         private static readonly DateTime CreatedAt = new(2026, 2, 10, 4, 0, 0, DateTimeKind.Utc);
         private static readonly DateTime RevokedAt = new(2026, 6, 1, 4, 0, 0, DateTimeKind.Utc);
@@ -279,7 +389,13 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
             db.Businesses.AddRange(
                 Business(BusinessId, BusinessName),
                 Business(OtherBusinessId, OtherBusinessName),
-                Business(DeactivatedBusinessId, DeactivatedBusinessName, isActive: false));
+                Business(DeactivatedBusinessId, DeactivatedBusinessName, BusinessStatus.Deactivated),
+                Business(PendingBusinessId, PendingBusinessName, BusinessStatus.Pending),
+                Business(
+                    RejectedBusinessId,
+                    RejectedBusinessName,
+                    BusinessStatus.Rejected,
+                    rejectionReason: RejectionReason));
 
             db.BusinessMemberships.AddRange(
                 Membership(BusinessId, MemberObjectId),
@@ -288,6 +404,16 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
                 // is the one StatusChangedAtUtc records rather than its creation instant.
                 Membership(BusinessId, RevokedObjectId, isActive: false, statusChangedAtUtc: RevokedAt),
                 Membership(DeactivatedBusinessId, DeactivatedBusinessObjectId),
+                // The applicant's membership is active while the application waits, which is what
+                // makes the application theirs (issue #540).
+                Membership(PendingBusinessId, PendingBusinessObjectId),
+                // Rejecting an application revokes its memberships, so the refused applicant's
+                // row is inactive - which is the record the precedence reads the rejection from.
+                Membership(
+                    RejectedBusinessId,
+                    RejectedBusinessObjectId,
+                    isActive: false,
+                    statusChangedAtUtc: RevokedAt),
                 // The other business has its own member, so it is a real business in this
                 // deployment rather than an empty row.
                 Membership(OtherBusinessId, "66666666-6666-6666-6666-666666666666"));
@@ -296,13 +422,18 @@ public sealed class MeAccountStateApiTests : IClassFixture<MeAccountStateApiTest
             _seeded = true;
         }
 
-        private static Business Business(int id, string name, bool isActive = true) =>
+        private static Business Business(
+            int id,
+            string name,
+            BusinessStatus status = BusinessStatus.Active,
+            string? rejectionReason = null) =>
             new()
             {
                 Id = id,
                 Name = name,
                 TimeZoneId = "Australia/Sydney",
-                IsActive = isActive,
+                Status = status,
+                RejectionReason = rejectionReason,
                 CreatedAtUtc = CreatedAt,
             };
 

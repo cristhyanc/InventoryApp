@@ -1,6 +1,8 @@
 import { Component, EventEmitter, Input, OnDestroy, OnInit, Output } from '@angular/core';
 import { NavigationEnd, Router, RouterLink } from '@angular/router';
-import { Subject, filter, takeUntil } from 'rxjs';
+import { Subject, catchError, combineLatest, filter, of, startWith, takeUntil } from 'rxjs';
+import { AccessService, MemberAccessState } from '../access/access.service';
+import { CapabilitySet } from '../access/capabilities';
 import { IconComponent } from '../components/shared/icon.component';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, navigationFor } from './navigation';
@@ -25,10 +27,12 @@ export const PRIMARY_NAVIGATION_ID = 'primary-navigation';
  * only reports the intent: the shell keeps the one `isSidebarOpen` flag that decides what
  * `expanded` means on each layout.
  *
- * It owns no access decision either (issue #335). It starts with the navigation every operator
- * gets and adds the super-admin diagnostics link only when the diagnostics API itself confirms
- * platform-admin access, which is why the link is composed from `navigationFor` rather than
- * conditioned in this template.
+ * It owns no access decision (issues #335 and #528). The destinations it renders come from
+ * `navigationFor`, which is given the capability set `GET /api/me/access` reported for the
+ * signed-in member and the diagnostics API's separate answer about platform-admin access; this
+ * component decides neither and conditions nothing in its template. Until the capability set has
+ * been read it renders no destination at all, because a menu that offered everything and then
+ * removed what the role cannot use would show entries that were never this member's.
  *
  * The host renders as `display: contents` (issue #455) so it contributes no box of its own: the
  * shell's `items-stretch` row needs to stretch the actual white `<nav>` panel to the row's full
@@ -64,8 +68,11 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
   /** The header row's collapse/expand control was used (issue #456). */
   @Output() readonly collapseToggled = new EventEmitter<void>();
 
-  /** Starts without the diagnostics link: an unanswered probe must never show it. */
-  navigation: readonly NavItem[] = navigationFor(false);
+  /**
+   * Starts empty: no destination is offered before the member's capabilities are known, and the
+   * diagnostics link is never shown on an unanswered probe.
+   */
+  navigation: readonly NavItem[] = [];
 
   activeRoute?: string;
 
@@ -74,26 +81,34 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
 
   constructor(
     private readonly router: Router,
+    private readonly access: AccessService,
     private readonly diagnosticsAccess: PlatformDiagnosticsAccessService
   ) {}
 
   ngOnInit(): void {
     this.applyActiveRoute(this.router.url);
 
-    this.diagnosticsAccess
-      .isGranted()
+    // The diagnostics probe starts as a refusal and the menu is not held back for it: it answers
+    // a different question, on its own schedule, and an unanswerable probe must leave the menu
+    // the member's capabilities already decided. Both failures are silent - a navigation menu is
+    // not the place to report that an access check could not be made.
+    //
+    // `granted$` keeps following the signed-in identity (issue #605) rather than answering once:
+    // it reports `false` again the moment the identity changes, so a previous identity's granted
+    // `Super Admin` group is removed on the switch itself and reappears only if the new identity's
+    // own probe confirms access.
+    const hasDiagnosticsAccess = this.diagnosticsAccess.granted$.pipe(
+      catchError(() => of(false)),
+      startWith(false)
+    );
+
+    combineLatest([this.access.access$, hasDiagnosticsAccess])
       .pipe(takeUntil(this.destroying$))
-      .subscribe({
-        next: (granted) => {
-          this.navigation = navigationFor(granted);
-          // A diagnostics page opened by URL before the probe answered becomes the active entry
-          // once the link exists, so the Admin group reflects where the operator actually is.
-          this.applyActiveRoute(this.router.url);
-        },
-        // Fail closed and silently: an unanswerable probe leaves the navigation everyone gets,
-        // and a navigation menu is not the place to report that one capability could not be
-        // checked.
-        error: () => undefined
+      .subscribe(([access, diagnosticsGranted]) => {
+        this.navigation = navigationFor(renderedCapabilities(access), diagnosticsGranted);
+        // A page opened by URL before the answers arrived becomes the active entry once its link
+        // exists, so the owning group reflects where the operator actually is.
+        this.applyActiveRoute(this.router.url);
       });
 
     this.router.events
@@ -114,7 +129,7 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
   }
 
   isGroupActive(group: NavGroup): boolean {
-    return group.children.some((child) => this.isLinkActive(child));
+    return group.children.some((child) => child.kind === 'link' && this.isLinkActive(child));
   }
 
   isGroupOpen(group: NavGroup): boolean {
@@ -155,4 +170,25 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
       this.openGroups.add(group.label);
     }
   }
+}
+
+const NO_CAPABILITIES: CapabilitySet = new Set();
+
+/**
+ * The capability set to render the menu from, for each of the three things the access read can
+ * say:
+ *
+ * - **granted** - the member's own capabilities, which is the whole point;
+ * - **unread** - nothing yet. An empty set offers no destination, so the menu fills in once the
+ *   answer arrives rather than offering every entry and then taking some away;
+ * - **unavailable** - `undefined`, which offers every destination. The capability set is not
+ *   known, the API refuses what the role may not do regardless, and an empty menu would strand a
+ *   member whose capability read happened to fail (see `AccessService`).
+ */
+function renderedCapabilities(state: MemberAccessState): CapabilitySet | undefined {
+  if (state.status === 'granted') {
+    return state.access.capabilities;
+  }
+
+  return state.status === 'unread' ? NO_CAPABILITIES : undefined;
 }

@@ -13,9 +13,15 @@ public class BusinessMembershipResolutionPolicyTests
     private static ActorBusinessMembership Membership(
         int businessId,
         bool isActive = true,
-        bool businessIsActive = true,
+        BusinessStatus businessStatus = BusinessStatus.Active,
         BusinessRole role = BusinessRole.Owner) =>
-        new(BusinessId.From(businessId), role, isActive, businessIsActive);
+        new(
+            BusinessId.From(businessId),
+            role,
+            isActive,
+            businessStatus,
+            StatusChangedAtUtc: new DateTime(2026, 10, 11, 0, 0, 0, DateTimeKind.Utc),
+            BusinessRejectionReason: null);
 
     [Fact]
     public void Single_active_membership_in_an_active_business_resolves_that_business()
@@ -91,7 +97,7 @@ public class BusinessMembershipResolutionPolicyTests
         Assert.Equal(
             BusinessAccessDenialReason.BusinessInactive,
             BusinessMembershipResolutionPolicy
-                .Resolve([Membership(7, businessIsActive: false, role: unrecognised)])
+                .Resolve([Membership(7, businessStatus: BusinessStatus.Deactivated, role: unrecognised)])
                 .DenialReason);
     }
 
@@ -172,13 +178,56 @@ public class BusinessMembershipResolutionPolicyTests
         Assert.Equal(BusinessId.From(8), resolution.ResolvedBusinessId);
     }
 
-    [Fact]
-    public void Active_membership_in_a_deactivated_business_is_denied()
+    /// <summary>
+    /// Only <see cref="BusinessStatus.Active"/> resolves (issue #540). A business that has applied
+    /// and is waiting, one whose application was refused, and one that was offboarded are all
+    /// denied with the same existing reason: the lifecycle status tells those situations apart for
+    /// the account-state screen, and <em>never</em> for access.
+    /// </summary>
+    [Theory]
+    [InlineData(BusinessStatus.Pending)]
+    [InlineData(BusinessStatus.Rejected)]
+    [InlineData(BusinessStatus.Deactivated)]
+    public void Active_membership_in_a_business_that_is_not_active_is_denied(BusinessStatus status)
     {
-        var resolution = BusinessMembershipResolutionPolicy.Resolve(
-            [Membership(7, businessIsActive: false)]);
+        var resolution = BusinessMembershipResolutionPolicy.Resolve([Membership(7, businessStatus: status)]);
 
         AssertDenied(resolution, BusinessAccessDenialReason.BusinessInactive);
+    }
+
+    /// <summary>
+    /// A stored status this code does not declare - <c>0</c> from a column an older schema never
+    /// filled, a hand-written value, or a status a newer deployment wrote - denies access, for the
+    /// same reason an undeclared role does: resolving it would grant access on a business state
+    /// nobody here can reason about. The deny direction is the default rather than a case somebody
+    /// has to remember to add.
+    /// </summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(99)]
+    [InlineData(-1)]
+    public void An_undeclared_stored_business_status_is_denied(int storedStatus)
+    {
+        var resolution = BusinessMembershipResolutionPolicy.Resolve(
+            [Membership(7, businessStatus: (BusinessStatus)storedStatus)]);
+
+        AssertDenied(resolution, BusinessAccessDenialReason.BusinessInactive);
+    }
+
+    /// <summary>
+    /// The membership rules are unchanged by the status: a revoked membership in an active
+    /// business is still denied as inactive, and the denial an operator is shown stays the one
+    /// they can act on.
+    /// </summary>
+    [Fact]
+    public void A_membership_denial_still_outranks_a_business_that_is_not_active()
+    {
+        Assert.Equal(
+            BusinessAccessDenialReason.MembershipInactive,
+            BusinessMembershipResolutionPolicy
+                .Resolve([Membership(7, isActive: false, businessStatus: BusinessStatus.Pending)])
+                .DenialReason);
     }
 
     private static void AssertDenied(BusinessMembershipResolution resolution, BusinessAccessDenialReason expected)

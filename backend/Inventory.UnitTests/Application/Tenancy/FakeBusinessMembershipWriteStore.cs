@@ -42,12 +42,21 @@ public sealed class FakeBusinessMembershipWriteStore : IBusinessMembershipWriteS
     /// <summary>How the fake answers "is this the unique index refusing a second active row?".</summary>
     public Func<Exception, bool> DuplicateActiveMembership { get; set; } = _ => false;
 
+    /// <summary>
+    /// Runs before the transaction is handed back, which is how a test stands in for the time a
+    /// writer spends blocked on <c>BEGIN IMMEDIATE</c> while another writer holds the lock. A test
+    /// that advances a <c>FakeClock</c> here is describing exactly that wait, with no wall-clock
+    /// sleep: whatever the operation decided before this point was decided at the old instant.
+    /// </summary>
+    public Action? WhileWaitingForTheWriteLock { get; set; }
+
     /// <summary>Records an operation the test itself performed, so it appears in order.</summary>
     public void Record(string operation) => _operations.Add(operation);
 
     public Task<IBusinessMembershipWriteTransaction> BeginWriteTransactionAsync(
         CancellationToken cancellationToken)
     {
+        WhileWaitingForTheWriteLock?.Invoke();
         _operations.Add(Begin);
         return Task.FromResult<IBusinessMembershipWriteTransaction>(new Transaction(_operations));
     }

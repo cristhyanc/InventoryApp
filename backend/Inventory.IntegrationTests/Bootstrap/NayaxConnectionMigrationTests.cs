@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Nayax;
@@ -887,7 +888,7 @@ public sealed class NayaxConnectionMigrationTests
             {
                 Name = name,
                 TimeZoneId = "Australia/Sydney",
-                IsActive = true,
+                Status = BusinessStatus.Active,
                 CreatedAtUtc = MigratedAt,
             });
             await context.SaveChangesAsync();

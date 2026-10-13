@@ -838,9 +838,10 @@ InventoryApp/
 │   ├── InventoryApi/                HTTP boundary and composition root only; the folder set is frozen by ApiLayerOwnershipTests (issue #154)
 │   │   ├── Adapters/Mapping/        Response-DTO projections only; no persistence adapter since issue #309
 │   │   ├── Adapters/Nayax/          E2ETestNayaxLynxClient, the test double the E2ETest host registers (issue #46)
+│   │   ├── Adapters/PlatformAdmin/  The ILogger audit adapter for the Super Admin's business decisions, here for the same reason (issue #544)
 │   │   ├── Adapters/PlatformDiagnostics/  The ILogger audit adapter, here because the event carries the request correlation id (issue #336)
 │   │   ├── App_Data/jobs/           The App Service WebJob that triggers the backup command (issue #333)
-│   │   ├── Auth/                    Authentication, authorization, BusinessScopeMiddleware, the E2E test host's scheme and fixture
+│   │   ├── Auth/                    Authentication, the capability policies (issue #525), BusinessScopeMiddleware, the E2E test host's scheme and fixture
 │   │   ├── Bootstrap/               DatabaseSchemaStartup and the human-invoked commands (host-owned, calling Infrastructure services)
 │   │   ├── Controllers/
 │   │   ├── DTOs/                    API-owned transport contracts
@@ -1040,6 +1041,7 @@ Contains:
 - HTTP error/result mapping.
 - The persistence *provider* decision: the `Microsoft.EntityFrameworkCore.Sqlite` reference, the single `options.UseSqlite(ConnectionStrings:DefaultConnection)` call in `Program.cs`, and the `Microsoft.EntityFrameworkCore.Design` reference the `dotnet ef` tooling needs. The model itself is not here (issue #307).
 - The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents`, `migrate-nayax-connection` and the database backup commands.
+- The one hosted background drain, `Auth/MemberProfileRefreshWorker` (issue #524): it opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it. Hosting glue, not a use case — it holds no rule, resolves no `DbContext`, and logs only the outcome. See [Member display name and email](#member-display-name-and-email-issue-524).
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
 
@@ -1408,10 +1410,10 @@ web-request-pipeline surface that must stay confined to `InventoryApi`.
 
 Authentication/authorization is an `InventoryApi`/frontend boundary concern (issue #38). Identity-provider types stay confined to that boundary:
 
-- **Backend.** `Program.cs` calls `AddInventoryApiAuthentication(...)`, which registers `AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"))` for every environment except the dedicated end-to-end testing host (see [End-to-end testing authentication](#end-to-end-testing-authentication-issue-46) below), and calls `UseAuthentication()` before `UseAuthorization()`. Every controller carries `[Authorize]` plus `[RequiredScope("access_as_user")]` (`Microsoft.Identity.Web.Resource`), so a request without a bearer token is rejected `401 Unauthorized` and a request whose token lacks the delegated `access_as_user` scope is rejected `403 Forbidden`, both by ASP.NET Core's authentication/authorization middleware before any controller action runs. The non-secret `AzureAd` configuration (`Instance`, `TenantId`, `ClientId`, `Scopes`) lives in `appsettings.json`; the `ClientId` is the API app registration's public application ID, used only to validate the token audience, never a client secret. `Microsoft.Identity.Web`/`Microsoft.AspNetCore.Authorization`/JWT types are used only in `InventoryApi` (`Program.cs` and controllers) and must never appear in `Inventory.Domain` or `Inventory.Application`; if a use case ever needs the caller's identity, define a narrow neutral Application port instead of exposing Microsoft identity-provider types across that boundary.
+- **Backend.** `Program.cs` calls `AddInventoryApiAuthentication(...)`, which registers `AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"))` for every environment except the dedicated end-to-end testing host (see [End-to-end testing authentication](#end-to-end-testing-authentication-issue-46) below), and calls `UseAuthentication()` before `UseAuthorization()`. Every controller carries `[Authorize]` plus `[RequiredScope("access_as_user")]` (`Microsoft.Identity.Web.Resource`), so a request without a bearer token is rejected `401 Unauthorized` and a request whose token lacks the delegated `access_as_user` scope is rejected `403 Forbidden`, both by ASP.NET Core's authentication/authorization middleware before any controller action runs. Every business endpoint additionally declares the capability their caller's role must grant, enforced by the same middleware — see [Capability authorization](#capability-authorization-issue-525) and [Capability authorization on the Manager and Owner endpoints](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526); the only endpoints that declare none are `GET /api/me/access`, `GET /api/me/account-state` and the platform diagnostics surface, each for its own recorded reason — and `UseAuthorization()` deliberately runs before `BusinessScopeMiddleware`, which is why the capability handler resolves membership itself rather than waiting for the scope that middleware publishes. The non-secret `AzureAd` configuration (`Instance`, `TenantId`, `ClientId`, `Scopes`) lives in `appsettings.json`; the `ClientId` is the API app registration's public application ID, used only to validate the token audience, never a client secret. `Microsoft.Identity.Web`/`Microsoft.AspNetCore.Authorization`/JWT types are used only in `InventoryApi` (`Program.cs` and controllers) and must never appear in `Inventory.Domain` or `Inventory.Application`; if a use case ever needs the caller's identity, define a narrow neutral Application port instead of exposing Microsoft identity-provider types across that boundary.
 - **Frontend.** The Angular SPA authenticates through MSAL (`@azure/msal-angular`, `@azure/msal-browser`). `frontend/inventory-app/src/app/auth-config.ts` defines the SPA/API Entra application IDs, the delegated `access_as_user` scope (`loginRequest`), and `buildProtectedResourceMap(apiBaseUrl)`, which keys MSAL's protected-resource map off `ConfigService.apiBaseUrl` rather than a hard-coded host. `src/app/auth/browser-auth-providers.ts` wires `MsalInterceptor` (attaches `Authorization: Bearer <token>` to matching requests), `MsalGuard` (redirect-based route protection), and `MSAL_INTERCEPTOR_CONFIG` (built from that dynamic map), and `app.config.ts` spreads those providers into the application config, so the bearer token is attached correctly whether `ConfigService.apiBaseUrl` resolves to the local dev proxy (`/api`) or the deployed Azure API's absolute URL — see [Runtime configuration and API contracts](#runtime-configuration-and-api-contracts). `app.routes.ts` applies `MsalGuard` to every application route except the public `/auth` callback route (`AuthCallbackComponent`), which must stay reachable without authentication so the Entra redirect can complete. `AppComponent` drives sign-in/sign-out (`MsalService.loginRedirect`/`logoutRedirect`) and reflects the active account in the header.
 - **Protected documents.** Static-file middleware does not run controller authorization, so an uploaded document under `wwwroot` would be downloadable by anyone who knew its generated file name no matter what `[Authorize]` says. `Program.cs` therefore registers no static-file middleware at all — the API serves no public assets, since the Angular application is a separate Azure Static Web App — and `Inventory.Infrastructure.Documents.FileSystemDocumentStorage` stores purchase documents and operating-expense supporting documents under `{ContentRoot}/protected-files/{category}/`, outside the web root. The only way to read one is `GET /api/purchases/{id}/file` or `GET /api/operating-expenses/{id}/attachment` — the sole, canonical OperatingExpense attachment route; the legacy `GET /api/operating-expenses/{id}/receipt` alias was removed (issue #61) once verification confirmed no in-repository or external caller used it, with no deprecation period. Documents uploaded before this rule still sit in `wwwroot/{category}` and stay readable and deletable through the same endpoints (the adapter falls back to that location) but no longer have an anonymous URL. Because these endpoints require a bearer token, the frontend must fetch them through `HttpClient` (`PurchaseService.getFile`, `OperatingExpenseService.getAttachment`, both `responseType: 'blob'`) and render them from an object URL; an `<a href>`/`<img src>` pointing straight at the endpoint is a plain browser request that carries no token and gets `401`.
-- **Authentication is not ownership.** Accepting users from multiple Microsoft Entra tenants (`TenantId: "common"`) establishes *who* the caller is. *What they may see* is decided separately by business ownership, described below.
+- **Authentication is not ownership.** Accepting users from multiple Microsoft Entra tenants (`TenantId: "common"`) establishes *who* the caller is. *Whose data they may see* is decided separately by business ownership, described below, and *what they may do with it* by their membership role's capabilities — see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521) and [Capability authorization](#capability-authorization-issue-525).
 
 #### End-to-end testing authentication (issue #46)
 
@@ -1431,29 +1433,33 @@ There is exactly one exception to the two bullets above, and it exists so the br
 
 Authentication answers "who is this?". Tenant ownership answers "whose data is this?", and the two are deliberately not the same question. An Entra directory tenant is not a vending business: the mapping between them is application-owned data, so the business a caller belongs to is a decision this application makes and can audit, not one inherited from the token.
 
-**Identity and membership.** The actor is identified by the validated `(tid, oid)` claim pair — never by email, display name, or the Entra directory tenant alone, all of which are mutable or shared. `BusinessMembership` rows map an actor to one application-owned `Business`. `BusinessMembershipResolutionPolicy` (Domain) decides the outcome: exactly one active membership on an active business resolves; none, or several, denies. Ambiguity is denied rather than resolved by picking one, because silently choosing a business is how data ends up in the wrong ledger. Since issue #522 the database also refuses to *create* that ambiguity, so the resolution denial is the second line of defence rather than the first — see [One active membership per identity](#one-active-membership-per-identity-issue-522).
+**Identity and membership.** The actor is identified by the validated `(tid, oid)` claim pair — never by email, display name, or the Entra directory tenant alone, all of which are mutable or shared. Since issue #524 the membership row does *store* a display name and an email address, refreshed from that same validated token, and they are display-only personal data that decides nothing: see [Member display name and email](#member-display-name-and-email-issue-524). `BusinessMembership` rows map an actor to one application-owned `Business`. `BusinessMembershipResolutionPolicy` (Domain) decides the outcome: exactly one active membership on a business whose lifecycle status is `Active` resolves; none, or several, or any other business status, denies — see [Business lifecycle status and profile](#business-lifecycle-status-and-profile-issue-540). Ambiguity is denied rather than resolved by picking one, because silently choosing a business is how data ends up in the wrong ledger. Since issue #522 the database also refuses to *create* that ambiguity, so the resolution denial is the second line of defence rather than the first — see [One active membership per identity](#one-active-membership-per-identity-issue-522).
 
 **Layering.** Claims parsing stays at the API boundary (`EntraActorIdentityAccessor`, the only implementation of the Application's `IAuthenticatedActorAccessor` port). `ICurrentBusinessProvider` is the Application-facing abstraction; `Inventory.Domain` and `Inventory.Application` never reference ASP.NET claims or principals. EF query filters and `SaveChanges` enforcement are persistence concerns and live with the `AppDbContext` adapter.
 
-**Per-request resolution.** `BusinessScopeMiddleware` runs after authentication and before the endpoint, resolves membership once, and publishes the answer into the request-scoped `BusinessScope`. An authenticated caller with no usable membership gets `403` and never reaches an action; the response carries no detail about why, because telling an unrecognised caller whether a business exists is information they have not earned. `IBusinessScope` exists as a separate synchronous port because query filters and `SaveChanges` cannot await a membership lookup. Two endpoint markers, and only two, are eligible to proceed without a membership — the platform diagnostics surface of issue #336 and the account-state family of issue #523 — and a request that does carries the same *denied* scope, so neither reads business data; see [Platform diagnostics](#platform-diagnostics-issue-336) and [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523).
+**Per-request resolution.** `BusinessScopeMiddleware` runs after authentication and authorization and before the endpoint, resolves membership once, and publishes the answer into the request-scoped `BusinessScope`. The resolution is memoised in the request's own scope, so the capability policies that run earlier in the pipeline (see [Capability authorization](#capability-authorization-issue-525)) and this middleware read one membership lookup between them and cannot disagree about the caller's role. An authenticated caller with no usable membership gets `403` and never reaches an action; the response carries no detail about why, because telling an unrecognised caller whether a business exists is information they have not earned. `IBusinessScope` exists as a separate synchronous port because query filters and `SaveChanges` cannot await a membership lookup. Two endpoint markers, and only two, are eligible to proceed without a membership — the platform diagnostics surface of issue #336 and the account-state family of issue #523 — and a request that does carries the same *denied* scope, so neither reads business data; see [Platform diagnostics](#platform-diagnostics-issue-336) and [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523).
 
 **Fail closed.** `BusinessScope` starts denied and can only move forward to a resolved business, once. A denied scope yields a `null` business ID, and the filters compare with `==`, so an unresolved caller matches no row. "No current business" must never be read as "no filter" — that would convert a resolution bug into a cross-business leak. A scope cannot be repointed mid-request.
 
-**Tenant-owned versus global.** Everything persisted is tenant-owned — products, categories, suppliers, purchases and items, stock adjustments, supplier orders and allocations, sales, imports and their children, expenses, commissions, fee rates, costing transition records, each business's own Nayax credentials (issue #518) and report facts — except three structural exceptions: `Business` (the boundary itself), `BusinessMembership` (what resolves the boundary, so filtering it would be circular), and `BusinessBackfillAudit` (operational evidence about the rollout, which must stay readable precisely when a run assigned rows to the wrong business). There is no "global reference data": the enum-like constants live in code as C# enums, not tables. `BusinessOwnershipCoverageTests` enforces this — a new entity with no ownership fails the build rather than quietly arriving unfiltered.
+**Tenant-owned versus global.** Everything persisted is tenant-owned — products, categories, suppliers, purchases and items, stock adjustments, supplier orders and allocations, sales, imports and their children, expenses, commissions, fee rates, costing transition records, each business's own Nayax credentials (issue #518) and report facts — except **four** structural exceptions: `Business` (the boundary itself), `BusinessMembership` (what resolves the boundary, so filtering it would be circular), `BusinessBackfillAudit` (operational evidence about the rollout, which must stay readable precisely when a run assigned rows to the wrong business), and `MemberInvite` (the reviewed decision on issue #532: the redemption has to find an invite by the token a caller with no membership presents, and under the denied scope such a request carries a filtered read matches no row at all — see [Invite redemption](#invite-redemption-issue-532)). There is no "global reference data": the enum-like constants live in code as C# enums, not tables. `BusinessOwnershipCoverageTests` enforces this — a new entity with no ownership fails the build rather than quietly arriving unfiltered — and it asserts the exemption list itself, so a fifth table is a visible edit rather than an addition nobody reviewed.
+
+**"Not tenant-owned" never means "not owned".** Each of the three exempt tables that is not the `Business` itself carries a `BusinessId`, and the boundary for it is that column named in **every** statement over it, by the adapter rather than by the central filter: `EfBusinessMemberStore` and `EfMemberProfileWriteStore` for memberships, `EfMemberInviteStore` and `EfMemberInviteRedemptionStore` for invites. The id is only ever one tenancy resolution produced from the authenticated actor's membership, or — for the redemption alone — the one the invite row itself reports; it never comes from a route, query, body or header. That is deliberately *not* the per-controller `Where` clause this section warns against: those adapters have no central mechanism to defer to, and each keeps its statements behind one private helper so the owner cannot be omitted on one method.
 
 **Central read enforcement.** `AppDbContext.ConfigureBusinessOwnership` walks the model rather than naming entities: every `IBusinessOwned` type gets a required business key, an index leading with it, and a global query filter. A new tenant-owned entity is protected the day it implements the interface. There is no per-entity list to forget and no controller `Where` clause that could be omitted on one endpoint — which is why adding redundant filters in controllers or services is discouraged rather than merely unnecessary.
 
 **Central write enforcement.** Query filters protect reads only. `BusinessOwnershipEnforcer` runs on both `SaveChanges` overloads and enforces four rules: new rows are **stamped** with the caller's business (callers never supply it); inserts, updates, and deletes of another business's row are **rejected**, which is what stops a detached entity attached by ID from slipping through to an `UPDATE`; the business key is **immutable**, so a record cannot be moved between businesses; and every foreign key between tenant-owned entities must **stay inside one business**. The relationship rule is driven by EF model metadata, not a hand-written list, so a new foreign key is covered as soon as it is mapped. Resolving a principal's owner deliberately uses `IgnoreQueryFilters`, because a principal in another business must be reported as a boundary violation rather than mistaken for "does not exist".
 
-**Tenant-scoped uniqueness.** Constraints over externally supplied values are scoped by business, because two businesses may legitimately hold the same external value: Nayax transaction IDs, import file hashes, site commission agreements, fee effective dates, and costing baselines. `NayaxSales` consequently has its own local key with `TransactionID` unique *per business* — a remote identifier is an external identity, not a primary key. This also keeps import de-duplication correct: one business must never be told its own import is a duplicate because another imported the same bytes first, and a shared remote ID must never cause one business's import to update another's row. The one-active-membership index of issue #522 is deliberately *not* scoped this way, and is not an exception to this rule: `BusinessMembership` is one of the three structural non-tenant-owned tables above, and the value it constrains is an Entra identity that must mean the same person everywhere rather than an externally supplied value two businesses may legitimately share.
+**Tenant-scoped uniqueness.** Constraints over externally supplied values are scoped by business, because two businesses may legitimately hold the same external value: Nayax transaction IDs, import file hashes, site commission agreements, fee effective dates, and costing baselines. `NayaxSales` consequently has its own local key with `TransactionID` unique *per business* — a remote identifier is an external identity, not a primary key. This also keeps import de-duplication correct: one business must never be told its own import is a duplicate because another imported the same bytes first, and a shared remote ID must never cause one business's import to update another's row. The one-active-membership index of issue #522 is deliberately *not* scoped this way, and is not an exception to this rule: `BusinessMembership` is one of the four structural non-tenant-owned tables above, and the value it constrains is an Entra identity that must mean the same person everywhere rather than an externally supplied value two businesses may legitimately share. The invite token hash *is* scoped this way — `(BusinessId, TokenHash)` — even though the invite table is now non-tenant-owned too, because that value is not an identity: a global constraint over it would let one business's row deny another's, and 256 bits of cryptographic randomness is what makes a token unambiguous.
 
 **Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. No endpoint accepts a file name or path as input, and `FileSystemDocumentStorage` reduces any stored name with `Path.GetFileName` and then proves the result is inside the category folder, so a crafted value cannot escape it. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
 
-**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). Being a human-invoked command is not what grants it: `migrate-nayax-connection` (issue #519) is a fourth such command and constructs no unrestricted context at all, because it needs none — the tenancy tables it reads to resolve the target business carry no tenant filter, and the credential itself is read and written through a context scoped to that one business (see [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context. The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
+**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). Being a human-invoked command is not what grants it: `migrate-nayax-connection` (issue #519) is a fourth such command and constructs no unrestricted context at all, because it needs none — the tenancy tables it reads to resolve the target business carry no tenant filter, and the credential itself is read and written through a context scoped to that one business (see [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context, and issue #544 extended that test to the platform-admin store below — it is registered scoped and its only constructor dependency is the request's own `AppDbContext`, so nothing can hand it anything else. The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
+
+**The one reviewed `IgnoreQueryFilters` in a request path (issue #544).** The Super Admin's business directory reports whether each business has stored Nayax credentials, `BusinessNayaxConnection` is tenant-owned, and the request carries a denied scope — so the central filter matches none of its rows and the fact is otherwise unreadable. `EfPlatformBusinessDirectoryStore` makes exactly one `IgnoreQueryFilters` statement, projecting `BusinessId` alone, and the rest of the adapter is ordinary reads and writes of the structurally non-tenant-owned tables. It is a *narrowed* exception rather than a loosened rule: the column it reads is the ownership key, not business data, and the alternatives — an unscoped request context, a second read-only cross-business connection, or resolving each business into the request scope in turn — were each strictly worse. See [Super Admin businesses API](#super-admin-businesses-api-issue-544).
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). What is still outstanding before a second business goes live is the rest of #328's self-service work, above all the Owner-facing connection wizard and re-test endpoints of issue #506: today a business's credential reaches the database only through that human-run command, so there is no supported way for a second business to connect its own Nayax account. Running the command is a human step, described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Nayax Settings, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
 
 #### Membership roles and capabilities (issue #521)
 
@@ -1467,11 +1473,118 @@ Ownership answers "whose data is this?". A role answers "what may this member do
 
 **One capability table.** `Inventory.Application.Access.RoleCapabilities` is the single role → capability definition, over the fifteen-capability `Capability` vocabulary (`Dashboard.View`, `Dashboard.ViewFinancials`, `PickList.View`, `Inventory.Operate`, `Purchasing.Operate`, `Suppliers.ManageGstDefaults`, `Expenses.Manage`, `Reports.View`, `Imports.Run`, `SiteCommissions.Manage`, `Integration.Manage`, `Data.Repair`, `Members.Manage`, `Roles.View`, `Business.Manage`). An Operator holds the four operational ones; a Manager adds the financial, expense, import and commission work; an Owner adds the business's own configuration — integration, data repair, members, roles and the business record. Each role's set is written out in full, so the table reads the way the agreed table in #328 reads, and the hierarchy it happens to describe is asserted by a test rather than assumed by the code. There is no second table, no per-controller list and no capability derived from a role's stored value.
 
-**Defining a capability is not enforcing one.** Issue #521 stores the role, publishes the vocabulary and reports it. No endpoint checks a capability yet — that is issue #502's work, and it will read `RoleCapabilities.Allows` so that enforcement and the reported list cannot drift apart. Until then every member reaches what they reached before.
+**Defining a capability is not enforcing one.** Issue #521 stores the role, publishes the vocabulary and reports it, and enforces nothing. Enforcement is [Capability authorization](#capability-authorization-issue-525) below, which reads `RoleCapabilities.Allows` so that what an endpoint enforces and what `GET /api/me/access` reports cannot drift apart.
 
-**`GET /api/me/access`** returns the caller's role, that role's capability names, and their business's name and time zone (issue #499). It takes no parameter of any kind and describes the caller alone: no other member, no other business, and no identifier for either. It carries the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and deliberately no capability requirement of its own — a member must be able to ask what they may do whatever role they hold. `GET /api/business/current` keeps its own contract.
+**`GET /api/me/access`** returns the caller's role, that role's capability names, and their business's name and time zone (issue #499). It takes no parameter of any kind and describes the caller alone: no other member, no other business, and no identifier for either. It carries the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and deliberately no capability requirement of its own — a member must be able to ask what they may do whatever role they hold. `GET /api/business/current` keeps its own contract (and since issue #525 requires `Dashboard.View`, which every role holds).
 
-**A role only ever arrives from a reviewed path.** `bootstrap-business` accepts an optional `Role` name per configured member, validated against the same vocabulary and defaulting to `Owner`; an unrecognised name refuses the whole run and writes nothing. Re-running never changes the role an existing member already holds, for the same reason it never resurrects a revoked approval. The additive migration backfilled every pre-existing membership to `Owner`, so no existing member's access changed. Changing a role afterwards is the member management of issue #524; no request path writes a role today, and no role is ever accepted from client input.
+**A role only ever arrives from a reviewed path.** `bootstrap-business` accepts an optional `Role` name per configured member, validated against the same vocabulary and defaulting to `Owner`; an unrecognised name refuses the whole run and writes nothing. Re-running never changes the role an existing member already holds, for the same reason it never resurrects a revoked approval. The additive migration backfilled every pre-existing membership to `Owner`, so no existing member's access changed. Changing a role afterwards is the Owner-only member management of issue #533, on one endpoint — `PUT /api/members/{membershipId}/role` — which accepts the role's published *name*, checked against this same vocabulary before anything is stored, and never a stored value; see [Member management](#member-management-list-role-revoke-and-reinstate-issue-533). That is still the only request path that writes a role onto a *membership*. One other path accepts a role from client input: creating an invite link (issue #531) records the role its redemption will grant, on the invite row rather than on a membership, and checks the submitted name against this same vocabulary in the same way — see [Invite links](#invite-links-create-list-and-cancel-issue-531). No endpoint anywhere accepts a stored role value.
+
+#### Capability authorization (issue #525)
+
+A role that nothing checks is a label. Issue #525 is where the capability table starts deciding requests: the everyday business endpoints declare the capability they need, and an architecture test stops a new endpoint from quietly defaulting to "every active member may call it". It is the first of #502's two enforcement slices; the Manager- and Owner-only controllers it deliberately left open are [issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526) below, and the dashboard's financial redaction — the one capability that decides part of a *response* rather than an endpoint — is [issue #527](#dashboard-financial-redaction-issue-527).
+
+**Where it is enforced: the authorization middleware, from one table.** `InventoryApi.Auth.CapabilityPolicy` names one ASP.NET Core authorization policy per declared `Capability` (`Capability:Inventory.Operate`, and so on for all fifteen), `Program.cs` registers every one of them, and `BusinessCapabilityAuthorizationHandler` answers them all by asking `RoleCapabilities.Allows`. A controller or action declares one with `[RequireCapability(Capability.InventoryOperate)]`, which is an `AuthorizeAttribute` carrying that policy's name, so the decision is made by the authorization middleware before any action runs — not by a filter each controller has to remember, and not inside a use case. Every capability is registered even where no endpoint declares it yet, so #526 added attributes and nothing else, and the member-management issues will do the same. `Dashboard.ViewFinancials` is the one capability that is deliberately **not** an endpoint requirement: what a role without it may not see is two figures inside a response every role may request, which an `AuthorizeAttribute` cannot express — see [Dashboard financial redaction](#dashboard-financial-redaction-issue-527).
+
+**Controllers reference capabilities, never roles.** Which roles hold a capability is `RoleCapabilities`'s single answer, and it is the same answer `GET /api/me/access` reports, so the API and the frontend's rendering decisions cannot disagree. An architecture test fails the build if any controller attribute names a `BusinessRole` at all.
+
+**The role comes from the request's memoised membership resolution.** The handler resolves it through `ICurrentBusinessProvider` — the same per-request scoped provider `BusinessScopeMiddleware` uses — so the capability decision and the business the request then acts in come from one membership lookup and cannot disagree, and a role change applies on the member's next request exactly as it already did. Resolving it in the handler rather than reading a `BusinessScope` the middleware published is deliberate: `UseAuthorization()` runs **before** `UseMiddleware<BusinessScopeMiddleware>()`, so a policy that waited for the published scope would be able to pass before any membership had been checked. This is the same reasoning the diagnostics bypass follows in re-evaluating its own policy instead of inferring one from pipeline position. The order is stated in `Program.cs` and pinned by `CapabilityAuthorizationApiTests`; the handler's independence from it is pinned by `BusinessCapabilityAuthorizationHandlerTests`.
+
+**A refusal is a bare `403`.** It names no capability, no role, and none of the roles that would have been allowed; the reason — which capability, which role, or that the membership did not resolve — is logged for an operator instead. Because authorization runs first, a caller with no usable membership gets that bare `403` on a capability endpoint rather than `BusinessScopeMiddleware`'s "not associated with a business" sentence, which is strictly less than they were told before; endpoints that declare no capability yet are unchanged, and `GET /api/me/account-state` remains the only place a caller learns their own account state. The handler fails closed in every direction: an unauthenticated caller, a membership that does not resolve for any reason (missing, revoked, ambiguous, a business whose lifecycle status is not `Active`, a stored role this deployment does not declare) and a member whose role simply does not grant the capability all leave the requirement unmet, and an unmet requirement is a refusal rather than a fallback to the least-privileged role.
+
+**Requirements accumulate, so narrowing one action is additive.** A controller-level capability plus an action-level one means that action needs both. `SuppliersController` is the shape: every action needs `Purchasing.Operate`, and `PUT /api/suppliers/{id}/gst-defaults` additionally needs `Suppliers.ManageGstDefaults`, because a supplier default decides how later purchases are classified. Reading the defaults stays on `Purchasing.Operate` so an Operator recording a purchase can see which classification it will be given. Every role holding `Suppliers.ManageGstDefaults` holds `Purchasing.Operate` too, so the combination is the GST capability in effect and strictly narrower than either alone.
+
+**What this slice applies.** `Dashboard.View` on `DashboardController` and `GET /api/business/current`; `PickList.View` on `PickListController`; `Inventory.Operate` on `ProductsController`, `CategoriesController`, `InventoryCountController`, `StockController`, `StockHistoryController`, `MachinesController` (Sync Restock included) and `SitesController`; `Purchasing.Operate` on `PurchasesController`, `SupplierOrdersController` and `SuppliersController`, with the supplier GST-default edit on `Suppliers.ManageGstDefaults`. Every role holds all of these except the GST-default edit, which an Operator does not — so for the single live business, whose every member is an Owner, nothing a member reaches changes.
+
+**Four endpoint classes, and nothing else.** `EndpointAuthorizationClassificationTests` (`backend/Inventory.IntegrationTests/Architecture/`) walks every action on every controller and recognises exactly four ways an endpoint may be authorized:
+
+1. **A capability policy** — `[RequireCapability(...)]` on the action or its controller. This is what a business endpoint normally is.
+2. **The platform diagnostics surface** — `PlatformAdminPolicy` *and* `PlatformDiagnosticsEndpointAttribute` together (issue #336). Both halves are required, and such an endpoint declares no capability: `PlatformAdminPolicy` is satisfied by a configured Entra `(tid, oid)` pair that is deliberately not a membership row, so a capability there would be unsatisfiable for the only caller it exists for — and a diagnostics endpoint that declared one would be inviting a business role into a cross-business path. The test asserts both directions, and `CapabilityPolicyCompositionTests` asserts the policies themselves: `PlatformAdminPolicy` holds no capability requirement and no capability policy holds a platform-admin requirement.
+3. **The membership-not-required family** — `MembershipNotRequiredEndpointAttribute` on an endpoint named in the allowlist the test now owns (issue #523; today `api/me/account-state`, `api/invites/redeem` and `api/onboarding/business-applications`, each added by its own reviewed change). `MembershipNotRequiredEndpointAllowlistTests` reads that same single list and keeps the assertions about what the marker may never remove.
+4. **`GET /api/me/access`** — one endpoint, named explicitly rather than marked, because a marker would be a mechanism somebody could reuse. A member must be able to ask what they may do whatever role they hold.
+
+The classes are asserted to be mutually exclusive, and that there are exactly four: a fifth would be a new way for an endpoint to be authorized, which is a decision to be made here and in that test together. The test also proves no public controller method escapes the rule by carrying no HTTP method attribute.
+
+**There is no pending list.** Issue #525 left the twelve controllers it did not reach on a temporary `PendingClassification` list inside that test, as a named record of what was still open rather than an exemption. Issue #526 classified all twelve and **deleted the list**, so the rule above now holds for every action on every controller with no exception. There is nothing to add a controller to, and no such list may be reintroduced: a new endpoint fails the build until the same pull request decides what it requires.
+
+**What proves this slice.** `CapabilityAuthorizationApiTests` (the role matrix through the real pipeline and the real migration history: three members holding the three roles against every endpoint this slice protects, the expected roles written out literally from #328's table rather than read back from `RoleCapabilities`; a non-member and an undeclared stored role refused everywhere; a refusal that leaks no part of the matrix; `401` still `401`; a role change applying on the next request; the ordering contrast with an endpoint that declares no capability; and one membership lookup for a request that both checks), `BusinessCapabilityAuthorizationHandlerTests` (the grant and refuse directions per role, every denial reason, no lookup for an anonymous caller, independence from the published scope, and two requirements answered independently), `CapabilityPolicyCompositionTests` (one policy per declared capability, each denying anonymous callers, the two policy families not deciding each other's questions, and the default policy unchanged), `EndpointAuthorizationClassificationTests` (the four classes above) and `PlatformAdminAuthorizationTests`, where the configured platform administrator is still refused by every business endpoint — now over-determined, since they hold neither a membership nor any capability.
+
+#### Capability authorization on the Manager and Owner endpoints (issue #526)
+
+Issue #526 is #502's second and last enforcement slice. The twelve controllers #525 deliberately left on its `PendingClassification` list — the Manager-only financial surfaces, the Owner-only Nayax configuration and the five maintenance data repairs — now each declare the capability #328's agreed table gives them, and that list is gone. Nothing else changed: no new capability, no new policy, no schema change, no route, verb or response body, and no change to the one `RoleCapabilities` table. The mechanism is exactly the one described above; this subsection records *which capability each surface declares and why*.
+
+**The matrix, by page and endpoint.** The capability was declared on the controller in every case of this slice, because every action of each of these surfaces needed the same one. Requirements accumulate down an endpoint, so a controller-level declaration is the narrowest honest statement when that is true, and no action-level override was added anywhere in #526 itself. The table is kept complete as endpoints are added: the member management of issue #533 and the invite links of issue #531 each followed the same shape — its own controller, one capability, and a row here in the same change. Two later reviewed edits — issue #548's business settings and issue #537's Nayax connection status read — declare per action instead, for the reason given under the table.
+
+| Page | Endpoints | Capability | Operator | Manager | Owner |
+| --- | --- | --- | --- | --- | --- |
+| Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
+| Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` | ✔ | ✔ | ✔ |
+| Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
+| Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines`, `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
+| Purchases, Supplier Orders, Suppliers | `api/purchases`, `api/supplierorders`, `api/suppliers` | `Purchasing.Operate` | ✔ | ✔ | ✔ |
+| Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
+| Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
+| Reports (all of them, and their CSV/XLSX exports) | `api/reports/*`, `GET api/reports/{report}/export` | `Reports.View` | ✘ | ✔ | ✔ |
+| Admin → Imports | `api/imports/products`, `api/imports/nayax-sales`, `api/imports/pending-xml` | `Imports.Run` | ✘ | ✔ | ✔ |
+| Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
+| Admin → Nayax Settings | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
+| *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Nayax Settings → connection wizard, Test (issue #536, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Nayax Settings → connection wizard, Save and Re-test (issue #537, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Connection banners on every page that needs Nayax (issue #539) | `GET api/settings/nayax-connection/status` (issue #537) | `Dashboard.View` | ✔ | ✔ | ✔ |
+| Admin → Costing Repair | `api/admin/inventory-cost-repair/*` (preview, apply, history) | `Data.Repair` | ✘ | ✘ | ✔ |
+| Admin → Inventory AVCO Transition Baseline | `api/admin/inventory-cost-transition/*` (preview, apply, preview-all, apply-all) | `Data.Repair` | ✘ | ✘ | ✔ |
+| Admin → Historical GST Classification | `api/admin/historical-gst-classification/*` (preview, apply) | `Data.Repair` | ✘ | ✘ | ✔ |
+| Admin → Nayax Sale Timestamp Repair | `api/admin/nayax-sale-timestamp-repair/*` (preview, apply) | `Data.Repair` | ✘ | ✘ | ✔ |
+| Admin → Nayax Historical Cost Recovery | `api/sale-costing/*` (backfill, Nayax cost backfill dry run and apply) | `Data.Repair` | ✘ | ✘ | ✔ |
+| *(Users page, issue #505 — added by issue #533)* | `api/members` (list), `api/members/{membershipId}/role`, `.../revoke`, `.../reinstate` | `Members.Manage` | ✘ | ✘ | ✔ |
+| *(Users page, issue #505 — added by issue #531)* | `api/members/invites` (create, list), `api/members/invites/{inviteId}/cancel` | `Members.Manage` | ✘ | ✘ | ✔ |
+
+The table's `Business.Manage` row was added by issue #548, which is the first endpoint to declare `Business.Manage`: the capability existed in the one role → capability table from issue #521 and nothing required it until an Owner could change the business record. Its read shares its write's capability, as the next paragraph's rule says a read normally does — the settings read reports the business's contact address, ABN and GST registration, which is the business's own tax and contact detail rather than anything a page needs to render. It is nevertheless one of the two rows whose controller holds a second, weaker rule: `GET api/business/current` on the same `BusinessController` keeps `Dashboard.View`, so both are declared per action and neither inherits the other. See [Business settings API](#business-settings-api-issue-548).
+
+The other is `NayaxConnectionController` since issue #537: its test, save and re-test actions declare `Integration.Manage` and its status read declares `Dashboard.View`, each on the action, because the connection banners every member sees have to be able to ask whether Nayax is working (see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537)). Both controllers are the same shape and the same reason: because requirements accumulate, a controller-level capability beside a weaker action-level one would silently require both, so where one controller's actions genuinely differ, every action declares its own.
+
+**A read shares its surface's capability, with one deliberate exception.** `Expenses.Manage` covers the expense list and the attachment download as well as the writes, and `Reports.View` covers each report and its export: an export is the same figures in another container, and a separate capability for it would be a way to read a report that is otherwise refused. The one read/write split in the whole matrix stays #525's supplier GST defaults, because an Operator recording a purchase genuinely needs to see which classification it will be given. The site commission *report* is not split onto `Reports.View` either: it is the surface the agreements are maintained from, and a role that could read what a site is owed but not why would be shown a number it cannot check.
+
+**A preview is as restricted as its apply.** All five repair controllers put `Data.Repair` on the controller, covering preview, dry run, history read and apply alike. A preview reads exactly the financial history its apply rewrites and returns the fingerprint or plan id the apply is authorised by, and on `api/sale-costing` the only difference between projecting the change and writing it is a `dryRun` flag. Restricting the apply while leaving the preview open would restrict nothing anybody cares about and hand every member the business's costing ledger. `EndpointAuthorizationClassificationTests.Every_action_of_a_repair_controller_requires_only_the_data_repair_capability` pins that none of them drifts onto a weaker capability later.
+
+**The two endpoints no page owns, and the reviewed reasoning for each.** Issue #526 says `NayaxSalesSyncController` and `DataQualityController` follow the page that calls them:
+
+- `POST api/nayax-sales-sync` → **`Dashboard.View`**. The home Dashboard calls it on load, before Sites and Machines, so both sections calculate from one freshness boundary (issue #187). `Imports.Run` would leave an Operator's Dashboard refreshing nothing and reporting stale sales on every visit — the page broken for them rather than a decision anybody made. It surfaces no figure the Dashboard does not already show, and redacting those figures by role is [issue #527](#dashboard-financial-redaction-issue-527) below.
+- `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
+
+**What an Operator and a Manager lose, and when.** An Operator can no longer reach expenses, any report or export, the imports, the site commission surface, the Nayax fee rates, the catalogue reconciliation or any repair. A Manager additionally cannot reach the Nayax fee rates, the catalogue reconciliation or any repair — a Manager may read a report whose underlying fee rate only an Owner may change, which is the agreed table and not a defect. Routes, verbs, request shapes and success responses are unchanged; the only new answer is the bare `403` an under-privileged caller receives. Every member of the one live business is an `Owner`, so nothing anybody reaches changes until non-Owner roles are assigned.
+
+**Holding a capability is not a way across the business boundary.** The two decisions are separate and both in force: the capability says which *kind* of thing a member may do, and `AppDbContext`'s query filters plus `BusinessOwnershipEnforcer` say *whose* data they may do it to. The Owner of one business holds every capability there is and still reads nothing of another business's — `CapabilityAuthorizationApiTests` proves it in both directions over two seeded businesses, and proves the order too: a role that does not hold the capability gets the policy's bare `403` rather than the boundary's `404`, so it is never told whether an id it may not use exists somewhere.
+
+**One testing detail worth knowing.** `POST api/imports/nayax-sales`, `POST api/admin/nayax-sale-timestamp-repair/preview` and the multipart expense create/update overloads declare `[Consumes("multipart/form-data")]`. A declared content type is matched during **endpoint selection**, which runs *before* the authorization middleware, so a JSON body on one of those routes answers `415` for every caller whatever role they hold. A test that wants to assert anything about authorization there has to send a multipart body; the `415` reads no membership and leaks nothing.
+
+**What proves this slice.** `EndpointAuthorizationClassificationTests` — the four-class rule with no pending list, the same rule per controller, the 33 rows reading each Manager/Owner capability back off its route (#526's own 32, both page-following mappings included, plus issue #536's connection test added to the same theory as a reviewed edit), and the repair-controller rule above. `CapabilityAuthorizationApiTests` — every new surface in the role matrix, called as all three roles through the real pipeline and the real migration history with a second business present throughout; the write and apply actions in the one direction a test may assert without running them; a caller with no membership refused everywhere; and the three two-business isolation tests described above.
+
+#### Dashboard financial redaction (issue #527)
+
+Everything above decides whether a request is answered at all. `Dashboard.ViewFinancials` is the one capability that decides part of a *response*, and issue #527 is where it starts doing so: `GET /api/dashboard/summary` sent every member the week's sales and the inventory valuation, and the Dashboard is the landing page, so every role holds `Dashboard.View` and must keep reaching it. What an Operator may not see is two figures inside the body, which an endpoint attribute cannot express.
+
+**Two published shapes, and the role picks one.** The summary now returns `Inventory.Application.Dashboard.IDashboardSummaryDto`, the union of exactly two types:
+
+| Caller | Shape | Top-level properties | `inventory` properties |
+| --- | --- | --- | --- |
+| Role grants `Dashboard.ViewFinancials` (Manager, Owner) | `DashboardSummaryDto` (unchanged) | `asOfUtc`, `businessDate`, `salesThisWeek`, `needsRefill`, `needsOrdering`, `inventory` | `inventoryValueAtCost`, `isInventoryValueComplete`, `productsWithUnknownCost`, `productCount`, `unitsInStorage` |
+| Role does not (Operator) | `RedactedDashboardSummaryDto` | `asOfUtc`, `businessDate`, `needsRefill`, `needsOrdering`, `inventory` | `isInventoryValueComplete`, `productsWithUnknownCost`, `productCount`, `unitsInStorage` |
+
+Nothing else differs: `asOfUtc`, `businessDate`, the refill and ordering cards and every remaining inventory figure are value-for-value what the same request produces for a Manager, and a Manager's and an Owner's response is byte-for-byte what it was before — no property added, renamed, retyped or removed.
+
+**A redacted figure is absent, not `null` and not `0`.** That is why this is two types rather than one type with nullable properties and a "redacted" flag. `null` is *already* a meaningful answer for `inventoryValueAtCost` — "the valuation is incomplete, because some product's cost is unknown" ([Inventory Value tile](#dashboard-inventory-value-tile-issue-42)) — so reusing it for "you may not see this" would make an incomplete valuation and a withheld one indistinguishable. `0` would read as a known zero week, which is a financial statement about the business and a false one. A property the returned type does not have, finally, cannot be reintroduced by a later change to a serializer option, a converter or an attribute, and there is no flag anybody can forget to read. MVC serializes the object the action returned, so the absence is the type's shape rather than a serialization setting.
+
+**The figures are not calculated for a caller who may not see them.** `GetDashboardSummary` resolves the caller's role first and, when the capability is absent, does not call `IDashboardSummarySalesFactsProvider` at all: there is no week-to-date query in that request, so nothing is read and then dropped. The inventory valuation needs no extra read either way — the redacted card is projected from the same single catalogue snapshot the non-financial cards already use, through the same `InventoryValuationPolicy` — so a redacted request makes two reads instead of three and no formula is duplicated.
+
+**The decision is made in the use case, from the one capability table.** This is the deliberate exception to "capabilities are decided by the authorization middleware": the decision is about which figures are *read*, so it belongs where the reading happens. It still comes from `RoleCapabilities.Allows` — the one role → capability table `GET /api/me/access` reports from — through `ICurrentBusinessProvider`, the same per-request memoised membership resolution `BusinessCapabilityAuthorizationHandler` and `BusinessScopeMiddleware` read, so what the endpoint enforces, what the response contains and what the frontend was told cannot drift apart, and a role change applies on the member's next request. No role name appears in the decision. It fails closed: a caller whose membership does not resolve, for any denial reason, is refused with `BusinessAccessDeniedException` before anything is read, rather than being treated as the least-privileged role — unreachable through the endpoint, whose `Dashboard.View` policy refuses them first, and fail-closed if it ever were.
+
+**The controller stays thin.** `DashboardController` keeps `[RequireCapability(Capability.DashboardView)]` exactly as #525 left it, returns whichever shape the use case built, and strips, recomputes and re-decides nothing. No endpoint's authorization class changed and nothing was added to `EndpointAuthorizationClassificationTests`. The Development-only Swagger document describes the union's common properties; the two concrete shapes are documented here rather than as an OpenAPI `oneOf`, because no generated client exists ([API documentation policy](#api-documentation-policy)).
+
+**The Angular Dashboard renders the redacted shape since issue #528.** `DashboardSummary` in `models.ts` types `salesThisWeek` and `inventory.inventoryValueAtCost` as optional, and the page hides the "Sales this week" and "Inventory" cards when they are absent, rendering the two non-financial cards alone. It keys off the response rather than off the capability, so this API's decision stays the only one there is and no card can read a figure it was not given. An incomplete valuation (`inventoryValueAtCost: null`) is present, so that card stays and reports "Unavailable" as it always did; a still-loading or failed summary keeps all four cards, because not knowing a figure yet is not the same as having been told it is not this caller's to see. The fix was never for the API to send `null` instead. See [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528).
+
+**What proves this slice.** `DashboardSummaryRedactionApiTests` (the exact serialized property sets through the real request pipeline and the real migration history, with three members of one business holding the three roles over one seeded fleet, catalogue and completed sale: an Operator's top-level and `inventory` sets, that neither property name nor either figure appears anywhere in their body, the full sets plus the seeded valuation for a Manager and an Owner, and an Operator's remaining figures matching a Manager's value for value) and `GetDashboardSummaryRedactionTests` (the decision over a fixed clock, with the roles written out literally from #328's table: the redacted shape for an Operator, zero calls to the sales port and no period handed to it, the non-financial figures identical to an Owner's, the incomplete-valuation flag and unknown-cost count surviving redaction, every figure for a Manager and an Owner, and every denial reason refused with nothing read). `GetDashboardSummaryTenancyTests` additionally covers, relationally, that an unresolved membership reads neither the sales, the catalogue nor the fleet.
 
 #### One active membership per identity (issue #522)
 
@@ -1485,15 +1598,15 @@ A person belongs to one business at a time. That was always the resolution rule 
 
 **`MembershipEligibility` (Domain) is the one rule**: an identity may gain or regain an active membership only while it holds no other active membership, in any business — Pending and Deactivated ones included. It never reads the owning business's state, so a future business status cannot quietly become an exception to it. The check takes an optional membership id to **exclude**, which is the membership the operation is itself about: approving an applicant's own membership (#509) or changing a member's role (#504) must not be refused by the very row being changed. The exclusion leaves out one row, not the rule — a second active membership elsewhere still refuses the operation. `BusinessOwnerRetention` is its companion: a business must keep at least one active Owner, because only an Owner may manage members, roles, the integration and the business record, so a business that loses its last active Owner cannot be administered by anybody inside it and has no repair path short of a human editing the database. A revoked Owner, a Manager and a stored role this code does not declare are all "not an Owner".
 
-**`Inventory.Application.Tenancy.MembershipWriteGuard` is the one write path**, and every operation that creates, reactivates or deactivates a membership or changes a role goes through it — the invite redemption, reinstatement, revocation and role change of #504, the self-service application of #507, and the approval and rejection of #509. It opens a SQLite `BEGIN IMMEDIATE` transaction, re-checks eligibility *inside* it, runs the operation's own write, re-reads the business and checks the Owner rule on the state that write left behind, and commits only then; a refusal rolls the write back with the transaction. The authoritative read, the rule and the mutation are deliberately one operation, because a check-then-write rule that is not serialised is not a rule: two simultaneous requests otherwise both read "no active membership", or both read "there is another Owner", and both write. `BEGIN IMMEDIATE` rather than the default deferred transaction is the whole point — a deferred transaction takes its write lock at the first write, which is after the check it is supposed to protect. The guard writes no row itself: what belongs in a membership row is the calling operation's business, what must be true around it is the guard's, and an operation declares which rules apply through `MembershipWriteIntent` rather than having them inferred from the rows it changed.
+**`Inventory.Application.Tenancy.MembershipWriteGuard` is the one write path**, and every operation that creates, reactivates or deactivates a membership or changes a role goes through it — the invite redemption, reinstatement, revocation and role change of #504, the self-service business application of #507/#541, and the approval and rejection of #509. It opens a SQLite `BEGIN IMMEDIATE` transaction, re-checks eligibility *inside* it, runs the operation's own write, re-reads the business and checks the Owner rule on the state that write left behind, and commits only then; a refusal rolls the write back with the transaction. The authoritative read, the rule and the mutation are deliberately one operation, because a check-then-write rule that is not serialised is not a rule: two simultaneous requests otherwise both read "no active membership", or both read "there is another Owner", and both write. `BEGIN IMMEDIATE` rather than the default deferred transaction is the whole point — a deferred transaction takes its write lock at the first write, which is after the check it is supposed to protect. The guard writes no row itself: what belongs in a membership row is the calling operation's business, what must be true around it is the guard's, and an operation declares which rules apply through `MembershipWriteIntent` rather than having them inferred from the rows it changed.
 
 **One refusal, one status code.** Both rules refuse with `DomainConflictException` carrying a fixed Domain message, which the API boundary's `DomainExceptionHandler` publishes verbatim as `409 Conflict` (see [Domain and application error mapping](#domain-and-application-error-mapping)): "This person is already a member of a business." and "A business must keep at least one active Owner. Give another member the Owner role first." Neither names another business, member or role — a person told they may not join is not thereby entitled to know which business they already belong to. The filtered index refusing a write becomes the same first message rather than an unexplained `500`: `EfBusinessMembershipWriteStore` recognises that one constraint violation (told apart from the per-`(actor, business)` index by the `BusinessId` that index also names) and nothing else, so every other database failure keeps propagating untranslated, and the SQLite exception type never crosses into the Application layer.
 
-**Nothing calls the guard yet.** Issue #522 provides the index, the rules and the write path; the endpoints that use them are #504, #507 and #509, and no request path creates, revokes or reactivates a membership today — `bootstrap-business` and the end-to-end fixture are still the only paths that create one, and both now stamp `StatusChangedAtUtc` on creation. What proves this slice: `OneActiveMembershipPerIdentityTests` (the index, including reactivation and the revoked rows it must allow), `AddOneActiveMembershipPerIdentityMigrationTests` (the additive upgrade, and the abort leaving the database untouched), `MembershipEligibilityTests`/`BusinessOwnerRetentionTests` (the two rules), `MembershipWriteGuardTests` (the order the rules are checked in around a write) and `BusinessMembershipWriteTransactionTests`, which runs two writers against a real SQLite file: two simultaneous activations of one identity leave exactly one, and two Owners demoting each other leave one Owner standing. Both of those fail with a deferred transaction.
+**What calls the guard.** Issue #522 provides the index, the rules and the write path. Its callers today are the Owner-only member management of issue #533 — the role change, the revocation and the reinstatement, see [Member management](#member-management-list-role-revoke-and-reinstate-issue-533) — the invite redemption of issue #532, which is the **first request path that creates a membership at all** (see [Invite redemption](#invite-redemption-issue-532)), the self-service business application of issue #541, which is the first path that creates a **business** (see [Self-service business application](#self-service-business-application-issue-541)), and the Super Admin's approval and rejection of issue #544, which is the first *platform-admin* caller of the guard and the one that uses the exclusion (see [Super Admin businesses API](#super-admin-businesses-api-issue-544)); #509's deactivation, reactivation and member release are still outstanding. `bootstrap-business` and the end-to-end fixture remain the only *other* paths that create one, and all of them stamp `StatusChangedAtUtc` on creation. What proves this slice: `OneActiveMembershipPerIdentityTests` (the index, including reactivation and the revoked rows it must allow), `AddOneActiveMembershipPerIdentityMigrationTests` (the additive upgrade, and the abort leaving the database untouched), `MembershipEligibilityTests`/`BusinessOwnerRetentionTests` (the two rules), `MembershipWriteGuardTests` (the order the rules are checked in around a write) and `BusinessMembershipWriteTransactionTests`, which runs two writers against a real SQLite file: two simultaneous activations of one identity leave exactly one, and two Owners demoting each other leave one Owner standing. Both of those fail with a deferred transaction.
 
 #### Account state and the membership-not-required marker (issue #523)
 
-The boundary above fails closed, and until this slice it also failed *silently*: an authenticated person with no usable membership got the same public `403` whether nobody had ever approved them, their membership had been revoked, their business had been deactivated, or their records were ambiguous. That response is right for every business endpoint — the caller has earned no detail — but it leaves the frontend nothing to show them but a bare error. Issue #523 adds one endpoint that tells the caller about their own account, and the marker that lets them reach it.
+The boundary above fails closed, and until this slice it also failed *silently*: an authenticated person with no usable membership got the same public `403` whether nobody had ever approved them, their membership had been revoked, their business had been deactivated — or, since issue #540's lifecycle status, was still awaiting a decision on its application or had been refused — or their records were ambiguous. That response is right for every business endpoint — the caller has earned no detail — but it leaves the frontend nothing to show them but a bare error. Issue #523 adds one endpoint that tells the caller about their own account, and the marker that lets them reach it.
 
 **`GET /api/me/account-state`** returns exactly three fields and nothing else:
 
@@ -1501,30 +1614,261 @@ The boundary above fails closed, and until this slice it also failed *silently*:
 { "state": "Member", "onboardingEnabled": false, "rejectionReason": null }
 ```
 
-`state` is a published `Inventory.Domain.Tenancy.AccountState` name. `onboardingEnabled` is `false` until issue #507 adds the `SelfServiceOnboarding:Enabled` flag it will report, and `rejectionReason` is non-null only for `ApplicationRejected`, which also arrives with #507. The response names **no business** — not a name, not an id, not whether one exists — because the caller may be somebody no business has approved, and the state alone is what decides the screen. The middleware's public `403` body is unchanged: this endpoint is the only place the distinction is visible, and only for the caller's own identity.
+`state` is a published `Inventory.Domain.Tenancy.AccountState` name. `onboardingEnabled` is the deployment's `SelfServiceOnboarding:Enabled` flag, read through the same `ISelfServiceOnboardingFlag` port the apply endpoint reads (issue #541, see [Self-service business application](#self-service-business-application-issue-541)) — it describes the deployment and never the caller, so a member sees it too while the endpoint still refuses them — and `rejectionReason` is non-null only for `ApplicationRejected`, which issue #540's business lifecycle status made reachable — it is the business's own recorded reason, and the only thing about that business the response ever carries. The response names **no business** — not a name, not an id, not whether one exists — because the caller may be somebody no business has approved, and the state alone is what decides the screen. The middleware's public `403` body is unchanged: this endpoint is the only place the distinction is visible, and only for the caller's own identity.
 
 **The precedence is the rule, and first match wins.** `AccountStatePolicy` (Domain) decides:
 
 1. `MembershipAmbiguous` — more than one active membership.
-2. `Member` — one active membership in an active business.
-3. `ApplicationPending` — one active membership in a pending business (issue #507's business status).
-4. `BusinessDeactivated` — one active membership in a deactivated business.
-5. No active membership — the most recent inactive record decides: in a rejected business `ApplicationRejected` (issue #507), any other `MembershipRevoked`.
+2. `Member` — one active membership in an `Active` business.
+3. `ApplicationPending` — one active membership in a `Pending` business (issue #540's business status).
+4. `BusinessDeactivated` — one active membership in a business that is neither `Active` nor `Pending`.
+5. No active membership — the most recent inactive record decides: in a `Rejected` business `ApplicationRejected` with that business's recorded reason, any other `MembershipRevoked`.
 6. `NoMembership` — no rows.
 
-The ordering is the whole rule: a person's history may hold any number of revoked rows, and an old revocation must never describe an account that works today, so the active membership is examined before the inactive ones rather than merged with them. Steps 3 and 5's rejected case read a business status no business carries yet, so today step 3 cannot match and every inactive record falls to `MembershipRevoked` — which is also why "the most recent inactive record" is currently unobservable rather than unimplemented: with one possible answer for an inactive record, which record is most recent cannot change the state. `BusinessMembership.StatusChangedAtUtc` is already stored and filled (issue #522), so #507 adds the status to `ActorBusinessMembership`, the ordering and the two application states together. `MembershipAmbiguous` is only reachable for legacy data: since #522 the database refuses to create it, and that migration refuses to run while any identity holds two active memberships.
+The ordering is the whole rule: a person's history may hold any number of revoked rows, and an old revocation must never describe an account that works today, so the active membership is examined before the inactive ones rather than merged with them. Issue #540 made steps 3 and 5's rejected case reachable by adding the lifecycle status to `Business` and to `ActorBusinessMembership`, and the ordering with them. Step 4 is deliberately written as "neither `Active` nor `Pending`" rather than as a list: a status this deployment does not declare — and an active membership in a `Rejected` business, which the approval workflow does not produce because rejecting an application revokes its memberships in the same operation — reports the state that promises nothing instead of falling through to one that claims the account works. Step 5 orders the inactive records by `BusinessMembership.StatusChangedAtUtc` (stored and filled since issue #522), so an old rejection never outranks a newer revocation, and a tie resolves towards `MembershipRevoked`, the state that claims less about what happened, rather than depending on the order persistence returned the rows in. `MembershipAmbiguous` is only reachable for legacy data: since #522 the database refuses to create it, and that migration refuses to run while any identity holds two active memberships.
 
 **The state describes; it grants nothing.** `BusinessMembershipResolutionPolicy` remains the only rule that decides access, and no account state is consulted by it. That is also why a current membership whose stored role this code does not declare is still `Member` here while every business endpoint refuses it (`RoleUnrecognised`, see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)): the account exists and the undeclared role is an operator's problem, not a different account state. `GetAccountState` (Application) reads the caller's membership records through `IBusinessMembershipStore` rather than through `ICurrentBusinessProvider`, because a resolution is one access decision while this precedence is about the records themselves, including the inactive ones a resolution has no use for. A caller whose token identifies nobody — no authenticated actor, or no usable `(tid, oid)` pair — is reported as `NoMembership` without any lookup, which is their situation exactly: an identity nothing can be recorded against has no membership.
 
-**The marker is eligibility, not permission.** `MembershipNotRequiredEndpointAttribute` (`InventoryApi/Auth/`) is honoured by `BusinessScopeMiddleware` only on the endpoint carrying it, and a marked request keeps the `[Authorize]` requirement and the delegated `access_as_user` scope — "membership not required" is not "anonymous", and an unauthenticated request is still left to the authentication middleware's `401`. The request runs with a **denied** `BusinessScope` and no business time zone, exactly as a diagnostics request does, so the tenant query filters and `BusinessOwnershipEnforcer` stay fully in force and a marked endpoint reads no business data at all through `AppDbContext`; the membership table it does read is one of the three structural non-tenant-owned tables above. Membership is not resolved for a marked endpoint at all, rather than resolved and ignored, so there is no business for anything downstream to pick up. Unlike the diagnostics marker it evaluates no policy, because the only thing such an endpoint may answer is a fact about the caller's own identity; an endpoint carrying both markers stays a diagnostics endpoint, decided by `PlatformAdminPolicy`.
+**The marker is eligibility, not permission.** `MembershipNotRequiredEndpointAttribute` (`InventoryApi/Auth/`) is honoured by `BusinessScopeMiddleware` only on the endpoint carrying it, and a marked request keeps the `[Authorize]` requirement and the delegated `access_as_user` scope — "membership not required" is not "anonymous", and an unauthenticated request is still left to the authentication middleware's `401`. The request runs with a **denied** `BusinessScope` and no business time zone, exactly as a diagnostics request does, so the tenant query filters and `BusinessOwnershipEnforcer` stay fully in force and a marked endpoint reads no business data at all through `AppDbContext`; the membership table it does read is one of the four structural non-tenant-owned tables above. Membership is not resolved for a marked endpoint at all, rather than resolved and ignored, so there is no business for anything downstream to pick up. Unlike the diagnostics marker it evaluates no policy, because the only thing such an endpoint may answer is a fact about the caller's own identity; an endpoint carrying both markers stays a diagnostics endpoint, decided by `PlatformAdminPolicy`.
 
-**Which endpoints may carry it is reviewed.** `MembershipNotRequiredEndpointAllowlistTests` fails the build when the marker appears on an endpoint that is not on its allowlist — today `api/me/account-state` alone — and also asserts that every marked endpoint still requires authentication and the delegated scope and carries no `[AllowAnonymous]`. Issue #502 folds that allowlist into its endpoint-classification test as class 3, alongside #504's invite redemption and #507's application endpoints. Do not mark an endpoint that serves business data, and do not add a third bypass to the middleware.
+**Which endpoints may carry it is reviewed.** The build fails when the marker appears on an endpoint that is not on its allowlist, and every marked endpoint is also asserted to require authentication and the delegated scope and to carry no `[AllowAnonymous]`. Issue #525 folded that allowlist into `EndpointAuthorizationClassificationTests` as class 3 of the four endpoint classes, which is where it now lives; `MembershipNotRequiredEndpointAllowlistTests` reads that same single list and keeps the assertions about the marker itself. It holds three endpoints: `api/me/account-state` above; `api/invites/redeem` (issue #532, the reviewed second entry and the first that writes — see [Invite redemption](#invite-redemption-issue-532)); and `api/onboarding/business-applications` (issue #541, the reviewed third entry and the one behind a deployment flag — see [Self-service business application](#self-service-business-application-issue-541)). Do not mark an endpoint that serves business data, and do not add a third bypass to the middleware.
 
-**What proves this slice.** `AccountStatePolicyTests` (the precedence, including that old revocations never override a current membership and that the two application states are unreachable today), `GetAccountStateTests` (the use case, including the ambiguous case the database no longer allows and the always-`false`/always-null fields), `BusinessScopeMiddlewareMembershipNotRequiredTests` (the marker: a denied scope, no policy evaluated, nothing granted on an unmarked endpoint, `401` still `401`), `MeAccountStateApiTests` (every state today's schema can hold, through the real pipeline and the real migration history, with a second active business present throughout — plus the unchanged `403` body and the same callers still reaching nothing else) and the allowlist test above.
+**What proves this slice.** `AccountStatePolicyTests` (the precedence, including that old revocations never override a current membership, the two application states and the ordering and tie-break of the inactive records), `GetAccountStateTests` (the use case, including the ambiguous case the database no longer allows, the onboarding flag reported off and on for every state alike, and a reason reported for `ApplicationRejected` and for no other state), `BusinessScopeMiddlewareMembershipNotRequiredTests` (the marker: a denied scope, no policy evaluated, nothing granted on an unmarked endpoint, `401` still `401`), `MeAccountStateApiTests` (every state the schema can hold, through the real pipeline and the real migration history, with a second active business present throughout — plus the rejected applicant's recorded reason, the unchanged `403` body, and the same callers, pending and rejected alike, still reaching nothing else) and the allowlist test above.
+
+#### Member display name and email (issue #524)
+
+Everything above is about what decides access. This subsection is about the one thing in the membership row that decides nothing: since issue #524 `BusinessMembership` also stores a `DisplayName` and an `Email`, so an Owner can see who their members are instead of a list of Entra object ids. The table deliberately held no personal data until now, and the rule that made that true has not changed — it has been written down instead.
+
+**Display only, and never an identity.** The actor is still identified by the validated `(tid, oid)` pair alone, and `BusinessMembershipResolutionPolicy` still resolves access from the membership row's business, state and role. Neither new column is read by any authorization, membership, role, capability or eligibility decision, and no lookup, invitation or reconciliation may key off either: an email address is mutable, is reassignable to a different person, and may legitimately be the same string in two Entra directories, which is exactly why issue #64 made the claim pair the identity. `Inventory.Domain.Tenancy.MemberProfile` is the type they travel in, and it is the opposite of `ActorIdentity` by design: it normalises two display values and answers nothing about who anybody is.
+
+**Refreshed from the sign-in token, not entered.** Both values come from the claims the caller's own validated token carried — `name` for the display name, and `preferred_username` or, where a tenant issues that instead, `email` for the address — read at the API boundary by `EntraActorProfileAccessor` (`InventoryApi/Auth/`). It is a second, deliberately separate claims adapter: it takes the identity half of its answer from `EntraActorIdentityAccessor`, so there is one implementation of "who is calling" and no possibility of two that disagree, and a token whose `(tid, oid)` pair identifies nobody yields no profile at all. Both claim spellings a host with inbound claim mapping on or off produces are accepted, the first spelling present wins (they are two spellings of one fact), a blank claim is the same as an absent one, and a value longer than `MemberProfile.MaxLength` (256) is dropped rather than truncated — a cut-off email address is a wrong email address, and half a name presented as somebody's name is wrong in the same way. A membership whose member has never signed in simply has both columns `null`, which is why they are nullable; `bootstrap-business` sets neither.
+
+**A dedicated narrow write path, outside the request.** `BusinessScopeMiddleware` *schedules* a refresh after `await _next(context)` — after the response has been decided — and writes nothing itself. `ScheduleMemberProfileRefresh` (Application) decides whether to queue one, and `MemberProfileRefreshQueue` is a bounded (64) in-process channel whose only write is a synchronous `TryEnqueue` that never blocks and never throws: a full queue drops the newest refresh and says so. `MemberProfileRefreshWorker` (`InventoryApi/Auth/`, the one hosted service this application runs) drains it, one refresh at a time, and opens a **new service scope** per refresh to invoke the `RefreshMemberProfile` use case in it. That new scope is what "outside the request's business scope" means concretely: its `BusinessScope` is a fresh, *denied* one, so the tenant query filters and `BusinessOwnershipEnforcer` are fully in force over an `AppDbContext` that can read no business's data at all, and the request's own scope and context are gone by then. The refresh works under a denied scope because `BusinessMembership` is one of the four structural non-tenant-owned tables above — a cosmetic write must not be the thing that needs a resolved tenant — and what keeps it to the caller's own row is the identity in the `WHERE` clause, which is the pair the request authenticated as and which nothing a request supplies can choose.
+
+**It cannot delay, change or fail a request.** Scheduling is a dictionary read and a non-blocking queue write; anything unexpected in that path is swallowed and logged rather than turned into a failed response, because a display value is never worth that. One refresh at a time rather than a task per sign-in is a consequence of the store: the production database is a single SQLite file with one writer ([SQLite operating assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)), so cosmetic writes must not contend with interactive ones.
+
+**At most once an hour per membership.** `MemberProfileRefreshThrottle` claims the slot *before* the write is queued, so several simultaneous requests from one member produce one refresh rather than several, and a member working in the application queues one write an hour rather than one per request. The slot is keyed by `ActorIdentity`, which since issue #522 has at most one active membership, so "per identity" and "per membership" are the same set. It is in-process state rather than a third column: the two columns say what is stored, not when it was last checked, and a restart costing one extra refresh per member is a better trade than a column plus a write on every request to maintain it. A token carrying neither claim queues nothing and does **not** consume the slot, so the next token that does carry a claim is stored immediately. A clock that moves backwards leaves the slot closed — the fail-safe direction for this rule is not to refresh.
+
+**Never on a support session.** A request carrying the `X-Support-Session` header (`InventoryApi.Auth.SupportSessionHeader`, the name defined here for issue #512) schedules no refresh at all. A support session is somebody from outside the business looking at the business's data to help with a problem, and their token's name and email address are not the member's: refreshing from it would quietly overwrite the row. The header's *presence* decides it and its value is not read, which is safe in this one direction because the only thing it can do is stop a cosmetic write; when #512 defines what a support session is and how it is authorised, that authorisation goes there and the header name stays here as the one spelling both sides use.
+
+**Never logged, and not on the diagnostics surface.** Neither value appears in a log message, a structured log property or an exception: `RefreshMemberProfile` returns an outcome (`Refreshed`, `NoRowChanged`, `NothingToStore`) and the drain logs that outcome, never the member or the values, and the failure path logs the failure alone. `PlatformDiagnosticsDataSurface` excludes `BusinessMemberships` entirely, so neither column is reachable there either — see [Platform diagnostics](#platform-diagnostics-issue-336).
+
+**The write is one statement, and the schema change is additive.** `EfMemberProfileWriteStore` issues a single `ExecuteUpdateAsync` naming the two display columns, matching the identity's *active* membership, and including "the stored values differ from these" in the `WHERE` clause: there is no window between deciding and writing, two refreshes of one membership cannot both conclude a write is needed, and the steady state - the row already matches the token - changes no row at all. Naming two columns is also what makes it unable to touch the role, the revocation flag or either instant, even by mistake, and no membership entity is tracked. A revoked row keeps the details it was revoked with, because it is history. The `AddMemberDisplayNameAndEmail` migration adds two nullable columns and nothing else: no table rebuilt, no index touched, nothing backfilled, and no row read or written — there is nothing in the database a person's name could honestly be inferred from.
+
+**Idempotency and failure recovery.** A refresh is idempotent by construction (the same claims rewrite nothing), and its failure-recovery mode is **self-healing**: a failed, dropped or shutdown-abandoned refresh is never retried in place, and the member's next request after the hour schedules a fresh one from the claims they present then. That is also why this work is in-process rather than a WebJob or a Function: it is triggered by a request, bounded, and worth nothing once stale — see [Implementing a background workload under the current decision](#implementing-a-background-workload-under-the-current-decision).
+
+**Who reads these columns.** Since issue #533 exactly one surface does: the Owner-only members API below reports both values so a members list shows people rather than object ids — see [Member management](#member-management-list-role-revoke-and-reinstate-issue-533). Nothing else reads them, no other API response carries either value, and the Users page that will display the list is issue #505.
+
+**What proves this slice.** `MemberProfileTests` (normalising, blank and over-long claim values), `MemberProfileRefreshThrottleTests` (the hourly rule, per identity, including a backwards clock and the bounded bookkeeping), `ScheduleMemberProfileRefreshTests` (what a request queues, what it does not, and a full queue dropping rather than blocking or throwing), `RefreshMemberProfileTests` (the outcomes), `EntraActorProfileAccessorTests` (both claim spellings, precedence, missing and blank claims, and no profile without an identity), `BusinessScopeMiddlewareMemberProfileRefreshTests` (scheduled only after the response, only for a resolved membership, never with the support header, and never able to fail the request), `MemberProfileRefreshWorkerTests` (the drain in its own denied scope against real SQLite, a failure abandoned without stopping the drain, shutdown finishing what is queued, the hosted-service path, and the logging proof on both the success and failure paths), `EfMemberProfileWriteStoreTests` (the relational write: first refresh, change, cleared claim, unchanged row, revoked row, another identity's row, another directory's same object id, and `NOCASE` matching), `AddMemberDisplayNameAndEmailMigrationTests` (the additive upgrade, every pre-existing value preserved, both indexes and the filtered one intact) and `MemberProfileRefreshApiTests` (the whole pipeline: the refresh, the hourly rule, the support header, a claimless token, callers with no usable membership, the account-state endpoint, and the logging rule).
+
+#### Member management: list, role, revoke and reinstate (issue #533)
+
+Everything above either decides access or describes it. This subsection is where an Owner finally *changes* it: issue #533, one slice of #504 under #328, is the first request path in the application that writes a membership. Until it, a role could only be set when `bootstrap-business` created the row, and a revocation meant a human editing the database.
+
+**Four endpoints, Owner-only, scoped to the caller's own business.**
+
+```text
+GET  /api/members                              the roster: display name, email, role, active, joined
+PUT  /api/members/{membershipId}/role          { "role": "Manager" }
+POST /api/members/{membershipId}/revoke
+POST /api/members/{membershipId}/reinstate
+```
+
+`MembersController` declares `Members.Manage` on the controller, which #328's table gives to an Owner alone, so a Manager and an Operator get the capability policy's bare `403` before any action runs (see [Capability authorization](#capability-authorization-issue-525)). **The read is as restricted as the writes**: the list is the roster the changes are made from, and it carries the display name and email address of every member of the business, so a separate weaker capability for it would be a way to read the staff list without being trusted with it. `EndpointAuthorizationClassificationTests` pins all four onto that one capability.
+
+**No endpoint takes a business identifier, and no response carries one.** The business is resolved from the authenticated actor's membership through `ICurrentBusinessProvider`, exactly as everywhere else. The membership key each change takes is looked up by **business and key together**, so another business's key is "not found" rather than refused in a way that confirms it exists — the boundary's `404`, which an Owner holding every capability there is still receives for a member of any other business. The response carries the membership key and never the member's Entra `(tid, oid)` pair: that pair is what every access decision is made from, and publishing it would put the one value that matters into a response a later request could try to send back.
+
+**`BusinessMembership` has no tenant query filter, so the business id is in every statement.** It is one of the four structural non-tenant-owned tables above — filtering the table that resolves the boundary would be circular — so `EfBusinessMemberStore` is deliberately the kind of adapter that names the owner in its `WHERE` clause. That is not the per-controller `Where` clause § Tenant ownership warns against: there is no central mechanism for this one table to defer to, and the id it names only ever came from tenancy resolution. Since issue #532 the invite adapters are the same kind of adapter, for the same reason.
+
+**Every change runs in issue #522's shared write transaction**, and the authoritative read is *inside* it. `MemberChangeWriter` is the one place that is arranged: it resolves the business, reads the target once outside the transaction for two **immutable** facts only (whether this business holds that membership, and the Entra identity the eligibility rule is re-checked for), then opens `MembershipWriteGuard`, **re-reads the role and the active flag inside the write lock**, compares, writes, and lets the guard judge the resulting state before anything commits. The comparison and the mutation are therefore one operation: a membership revoked between the two reads refuses the role change it was about to get, rather than receiving it.
+
+**Which rule each change declares.** The operation states its intent rather than the guard inferring it (`MembershipWriteIntent`, see [One active membership per identity](#one-active-membership-per-identity-issue-522)):
+
+| Change | Eligibility (`MembershipEligibility`) | Last Owner (`BusinessOwnerRetention`) |
+| --- | --- | --- |
+| Role change | not checked — it activates nothing | **checked**, with the business named |
+| Revoke | not checked | **checked**, with the business named |
+| Reinstate | **checked** for that member's identity, with their own row excluded | not checked — it cannot remove an Owner |
+
+**The business always keeps an active Owner, including against its own Owner.** A revocation or a demotion that would leave none is refused with `409` and the Domain's fixed sentence, and that holds when the Owner is acting on themselves: an Owner may step down or revoke themselves while another active Owner remains, and may not when they are the last one. The rule is judged on the state the write left behind rather than on who performed it, so no list of "operations that could remove an Owner" has to be kept complete. A revoked Owner row does not satisfy it, because a revoked approval administers nothing. This matters because it is unrepairable from inside the application: only an Owner may manage members, roles, the integration and the business record, so a business with no active Owner has no path back short of a human editing the database — which is exactly why it is checked as part of the write, under the write lock, and not reported afterwards.
+
+**Reinstating is refused when the person now belongs elsewhere.** A person belongs to one business at a time, so a revoked member who has since joined another business cannot be reinstated here: that would give them a second active membership and deny them both. The refusal is `409` with "This person is already a member of a business." — it names no business, member or role, because the Owner being told this is not thereby entitled to know where that person went. `MemberManagementConcurrencyTests` proves both halves against a real SQLite file with two writers: two Owners revoking each other at the same instant leave one active Owner, and two businesses reinstating one person at the same instant leave exactly one active membership.
+
+**Changes apply on the target's next request.** Membership resolution is memoised per request only, so a demoted member's next call is answered with their new role, a revoked member's next call is refused, and a reinstated member's next call works again. There is no cache to wait for, no token to re-issue and no sign-out to force — including for the Owner who changed their own role.
+
+**Three refusals, and what each one is.** An unsupported role name is `400` with `BusinessRoles.UnsupportedMessage` and nothing is stored: the vocabulary check is `BusinessRoles.TryParse`, the same one `bootstrap-business` applies, so a declared name is accepted case-insensitively and a bare number such as `40` is refused — a stored representation is not something a request supplies. The two membership rules and the two local rules below are `409` through `DomainConflictException` (see [Domain and application error mapping](#domain-and-application-error-mapping)). The local rules are that **a revoked membership's role is not edited** — reinstating restores the role the row holds, so changing it while the approval is revoked would queue up access nobody reviewed, and the Owner reinstates first and then changes the role, both steps audited — and that a membership whose stored `(tid, oid)` pair is not an Entra identity at all is not reinstated, because that would mean skipping the one-active-membership check the pair is the subject of. Only a hand-written row can produce the latter, and such a row never resolves at sign-in anyway.
+
+**A role change and a state change write different columns.** A role change writes `Role` alone and deliberately leaves `StatusChangedAtUtc` untouched: it moves what a member may do, not whether their membership is current, which is the fact that column records (issue #522). A revocation or a reinstatement writes `IsActive` and that instant **in one statement**, so the row never records a state-change instant for a state it does not hold. Both are targeted `ExecuteUpdate` statements naming only those columns, so a member change cannot touch the display name, the email address, the identity pair or the created instant even by mistake. A request that asks for the state a membership already holds writes nothing at all — no column, no instant, and no audit event.
+
+**One audit event per committed change, and no personal data in it.** `IMemberManagementAudit` is a log port implemented at the API boundary (`LoggingMemberManagementAudit`), the same shape as the diagnostics audit of issue #336 and for the same reasons: an audit row in the database the change was made in would need its own non-tenant-owned table and would be evidence kept inside the thing it is evidence about. The event records the actor's Entra `(tid, oid)` pair, the business id, the membership id, which change it was, and the old → new role and active flag. It carries **no display name and no email address** — a structural guarantee, since `MemberChangeAuditEntry` has no field for either, which is what keeps issue #524's never-logged rule in force even for a sink that printed the whole entry — and no business name, no role matrix, no capability and no Entra pair for the member who was changed: within the business the event names, the membership id identifies them. It is emitted **after the commit and only for a real change**, so a refused or no-op request is never recorded as one; the refusal is still visible, as the `DomainExceptionHandler` conflict warning. Destination and retention are the host's logging pipeline, which is platform configuration a human must verify rather than something this application can assert.
+
+**What this slice does not do.** No invitation — that is [Invite links](#invite-links-create-list-and-cancel-issue-531) below — and no membership *creation* (#532), no self-service application (#507/#541), no approval or rejection (#509), and no Users page (#505) — nothing in `frontend/inventory-app/src` calls these routes yet. There is no schema change: the four endpoints read and write columns that already existed.
+
+**What proves this slice.** `MembersApiTests` (the whole pipeline over three seeded businesses and the real migration history: the roster's shape and ordering, a member with no stored name or email, a Manager and an Operator refused every action, `401`, a missing scope and a non-member, another business's membership key not found and left untouched, a role change and a revocation and a reinstatement each applying on the target's next request, every unsupported role name, a revoked membership's role refused, the replayed requests that write nothing, the last active Owner refused both self-revocation and self-demotion, a revoked Owner not counting, the reinstatement refused with `409` for a person who moved on, and the audit event carrying none of the sixteen seeded names and addresses), `MemberManagementConcurrencyTests` (the two races above through the real use cases and adapters against a real SQLite file, plus the committed sequential write and its single audit event), `EfBusinessMemberStoreTests` (the relational adapter: one business's rows in creation order with an undeclared stored role reported as none, another business's key answering nothing, the stored identity normalised and an unusable one reported as none, each write naming only its own columns, and a write for another business changing nothing), `MemberManagementTests` (the decisions over fakes: the vocabulary check before anything is read, the operation order that puts the authoritative read inside the transaction, a membership revoked between the two reads, which rule each change declares, and nothing audited for a refused or no-op change) and `EndpointAuthorizationClassificationTests` (all four endpoints on `Members.Manage` and nothing weaker).
+
+#### Invite links: create, list and cancel (issue #531)
+
+Member management above changes the access of somebody who already has a membership row. This subsection is how a row comes to exist for somebody new: issue #531, one slice of #504 under #328, is the first path by which a person can be given access to a business without a human running `bootstrap-business` with hand-entered Entra ids. It creates the *offer*; redeeming one is #532's separate step, and nothing here creates a membership.
+
+**Three endpoints, Owner-only, scoped to the caller's own business.**
+
+```text
+POST /api/members/invites                      { "role": "Manager", "note": "New site manager" } → 201 { token, invite }
+GET  /api/members/invites                      every invite, in every state
+POST /api/members/invites/{inviteId}/cancel
+```
+
+`MemberInvitesController` declares `Members.Manage` on the controller, exactly as `MembersController` does, so a Manager and an Operator get the capability policy's bare `403` before any action runs. **The read is as restricted as the writes**: an invite list is the record of who was offered access to the business. `EndpointAuthorizationClassificationTests` pins all three onto that one capability, in the same theory as the member-management four.
+
+**The invite model, and what is derived rather than stored.** `Inventory.Infrastructure.Models.MemberInvite` is **structurally non-tenant-owned**, on `BusinessMembership`'s pattern — the reviewed ownership decision on issue #532, which replaced the tenant-owned stamp this slice first shipped with; see [Invite redemption](#invite-redemption-issue-532) for the structural reason and what replaced the filter. Every statement in `EfMemberInviteStore` therefore names the owning business, and that id is only ever one tenancy resolution produced from the Owner's own membership. The row holds the role it grants, the Owner's optional note, the token's hash, the status, the creating Entra `(tid, oid)` pair, the created and expiry instants, the used and cancelled instants, and the membership a redemption created (a restricted foreign key to `BusinessMembership`, so the column cannot name a membership that does not exist). `Inventory.Domain.Tenancy.MemberInviteStatus` declares the four agreed states — `Pending` (10), `Used` (20), `Expired` (30), `Cancelled` (40), spaced like `BusinessRole`'s and with no `0` — but **`Expired` is never written**: `MemberInvitePolicy.EffectiveStatus` derives it from the expiry instant, so an invite stops being usable the moment it expires, on every read path at once, with no sweep to run and no row that could be left claiming otherwise. The boundary is inclusive of the expiry instant, because seven days of validity is the promise. A stored status this deployment does not declare is reported as **unknown** and is never live, for the reason an undeclared stored role is reported as no role: naming a state nobody recorded is how an invite comes to look usable when nothing says it is.
+
+**The token is 256 bits of randomness, returned once, and stored only as a hash.** `CreateMemberInvite` draws `MemberInviteToken.EntropyBytes` bytes from the platform's cryptographic generator — not `Random` and not a `Guid` — and renders them URL-safe so the whole token can sit in a link. What crosses the persistence port is `MemberInviteToken.Hash`'s output, so no adapter, no row and no log ever sees the plaintext; what crosses the audit port is neither. The creation response is the only carrier of the token in the whole application: there is no single-invite read, because the only thing such a read could add to the list is the token. `MemberInviteToken.Hash` is a plain SHA-256 and deliberately not a password KDF — the secret is machine-generated entropy with nothing to guess, and a salted per-row hash would make #532's "which invite is this token?" lookup impossible without hashing against every row. The hash's uniqueness index is `(BusinessId, TokenHash)`, per-business like every other uniqueness rule on tenant-owned data; global uniqueness is not what makes a token unambiguous, 256 bits of entropy is.
+
+**The seven-day lifetime is fixed, not configured, and not submitted.** `MemberInvitePolicy.Lifetime` is a constant: an invite's lifetime is a security property of the link, and a configurable one would be a way to create a link that never expires. The request carries the role and an optional note and nothing else — no business id, no creator, no expiry, no token. The role is checked against `BusinessRoles.TryParse` before anything is resolved, generated or written, so an unsupported value (a bare `40` included) is `400` with nothing stored; an over-long note is `400` on the same terms, and a blank one normalises to no note at all.
+
+**Cancelling is one conditional statement, and that is the point.** `CancelMemberInvite` reads the invite once — only to tell "this business has no such invite" (`404`) from "it has one, and here is what became of it" — and then `IMemberInviteStore.CancelAsync` cancels it **only while it is still live**, with the status and the expiry condition in the `WHERE` clause and the status and cancellation instant set in the same `UPDATE`. The decision and the mutation are therefore one operation: an invite redeemed between the read and the write is not cancelled on the strength of the stale read, the statement matches nothing, and the use case re-reads and answers from what the invite actually is. That race is the one that matters here — without it a used invite would be recorded as cancelled while the membership it created carried on existing. A replayed cancellation of an already-cancelled invite is accepted and writes nothing (no second instant, no second audit event); a **used** invite and an **expired** one are refused with `409` and the Domain's own sentence, because neither is a state a cancellation may overwrite — the first would make the record disown a membership that exists, the second would claim a deliberate decision where an invite simply ran out.
+
+**One store method cancels all of a business's live invites**, for #509's deactivation to call: `CancelAllLiveAsync` is a single conditional `ExecuteUpdate`, so it commits or rolls back inside the caller's own transaction, it leaves used, already-cancelled and expired invites exactly as they are, and a second call changes nothing — a restarted deactivation is safe. Deactivating a business whose outstanding links still worked would be a way back in after the door was closed, which is why the method exists before its caller does.
+
+**Both cancellations carry the owning business in their own `WHERE` clause.** `ExecuteUpdate` runs in the database and does not pass through `SaveChanges`, so `BusinessOwnershipEnforcer` never sees it — and since issue #532 there is no query filter behind it either. The business id is therefore a parameter of every method on `IMemberInviteStore`, contributed by one private helper the adapter routes all five statements through, so an `UPDATE` here cannot reach another business's invites and cannot be written without an owner at all. (Before #532 the same statements inherited the filter and the adapter instead refused to run without a resolved scope, the way `EfNayaxConnectionTestDraftStore` still does; the protection moved from the scope into the port's signature, which is what the non-tenant-owned pattern requires.)
+
+**One audit event per committed change, and the token is structurally absent from it.** `IMemberInviteAudit` is a log port implemented at the API boundary (`LoggingMemberInviteAudit`), the same shape as the member-management audit above. The event records the actor's Entra `(tid, oid)` pair, the business id, the invite id, which change it was and the role the invite grants. `MemberInviteAuditEntry` has **no field for the token** — in plaintext or hashed — and none for the Owner's note, which is free text that may well name the person being invited; no display name, email address, business name or role matrix appears either. It is emitted after the write and only for a real change, so a refused creation, a refused cancellation and a replayed one are audited as nothing.
+
+**What this slice does not do.** Redeeming is [Invite redemption](#invite-redemption-issue-532) below, which is what sets `UsedAtUtc` and `RedeemedByMembershipId`; this slice creates the offer and no membership. There is no email sending either, so the Owner delivers the link themselves, and no UI (#505's tasks), so nothing in `frontend/inventory-app/src` calls these routes. The response carries the **token** rather than a complete URL: the API has no authoritative knowledge of the web application's address, and adding a configured public base URL would be a deployment-configuration decision outside this issue, so the Owner-facing page composes the link from the token. The migration is purely additive — one new table and its indexes — and no existing row, column or access changes.
+
+**What proves this slice.** `MemberInvitesApiTests` (the whole pipeline over two seeded businesses and the real migration history: the creation response's shape and its once-only token, the token stored only as a hash with the business, creator, role and expiry all server-decided, a distinct token of at least the agreed entropy per invite, every unsupported role name and an over-long note refused with nothing stored, note trimming and blank-note normalisation, the list reporting all four states with expiry derived and nothing rewritten, a Manager and an Operator refused every action, `401`, a missing scope and a non-member, another business's invite neither listed nor cancellable and left untouched, the cancellation and its replay, the used and expired refusals, and the audit events carrying neither the token nor the note), `EfMemberInviteStoreTests` (the relational adapter: the business the insert is stored against, one business's invites in creation order, another business's invite neither read nor cancellable in either direction, the business id in the statement confining it whatever scope the context carries, the conditional cancellation declining for every non-live state, the bulk cancellation's scope and idempotency, a rolled-back caller transaction taking the cancellations with it, the per-business token-hash uniqueness, and the redeemed-by foreign key), `MemberInviteTests` (the decisions over fakes: the vocabulary and note checks before anything is written, the store receiving only the hash, token entropy and uniqueness, the audit entry's contents, an invite redeemed between the read and the write, and nothing audited for a refused or replayed change), `MemberInvitePolicyTests` and `MemberInviteTokenTests` (the deterministic rules: the seven-day lifetime, the inclusive expiry boundary, a closed invite keeping its state past the expiry, an undeclared state reported as unknown and never live, note normalisation, and the hash being one-way, deterministic and case-sensitive) and `EndpointAuthorizationClassificationTests` (all three endpoints on `Members.Manage` and nothing weaker).
+
+#### Invite redemption (issue #532)
+
+The slice above creates the *offer*. This one is how a person accepts it: issue #532, one slice of #504 under #328, is the first path by which somebody becomes a member of a business without a human running `bootstrap-business` with hand-entered Entra ids, and the first **request** path that creates a membership at all.
+
+**One endpoint, reached by somebody who belongs nowhere.**
+
+```text
+POST /api/invites/redeem    { "token": "…" } → 200 { "role": "Manager" }
+```
+
+`InviteRedemptionController` is deliberately its own controller rather than an action on `MemberInvitesController`: that one declares `Members.Manage`, a capability the person redeeming could not hold, because they have no membership and therefore no role. This endpoint has the opposite authorization shape, so it gets its own, with the whole story in one place.
+
+**The authorization shape, in full.** The action carries `MembershipNotRequiredEndpointAttribute` and is named on that marker's reviewed allowlist in `EndpointAuthorizationClassificationTests` — class 3 of the four endpoint classes, and the allowlist's second entry (see [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523)). It still requires authentication and the delegated `access_as_user` scope, and a request without either is `401`/`403` exactly as anywhere else. It still runs with a **denied** `BusinessScope`: nothing resolves a business for it, the tenant query filters and `BusinessOwnershipEnforcer` stay fully in force, and the same caller is refused by every other endpoint with the unchanged `403` — the Owner-facing invite endpoints included, because being able to redeem a link must not be a way to read or create one.
+
+**It is the first marked endpoint that writes, and that is why the invite table's ownership changed.** The two tables it reaches, `BusinessMemberships` and `MemberInvites`, are both structurally non-tenant-owned, and the invite became so for this path (the decision recorded on issue #532, replacing issue #531's tenant-owned stamp). The reason is forced: the caller presents a **token** and nothing else, so the invite has to be found by its token hash; a business id can never come from the request (§ Tenant ownership); and under a denied scope the central query filter `!TenantFilteringEnabled || e.BusinessId == CurrentBusinessId` matches no row, so a filtered invite is unfindable by the only key the caller has. The alternatives were worse: `IgnoreQueryFilters` or an unscoped context in a request path are boundary violations, and resolving the inviting business into the request scope would hand the caller that business's whole API. Making the table the fourth on `BusinessMembership`'s pattern introduces **no new exception class** and needed **no schema change** — the `BusinessId` and `(BusinessId, TokenHash)` indexes are now declared explicitly in `AppDbContext.ConfigureMemberInvites`, which is the same index set the original migration created. What replaced the filter is the business id named in every statement, and for this path it comes from the invite row the token identified, never from the request.
+
+**A deliberately tiny persistence surface.** `IMemberInviteRedemptionStore` (`Inventory.Application/Members/`) is five methods over three things — invites, memberships and the inviting business's status column — and `EfMemberInviteRedemptionStore` is the whole of what a caller with no business can reach. Only the lookup takes no business id, because the token is all the caller has; every other statement names the one the lookup reported. There is no `IgnoreQueryFilters`, no raw SQL and no unscoped context anywhere in the path, and nothing business-owned is reachable through it: an adapter test asserts that the same denied context still reads no `Categories` row and still has a tenant-owned write refused with `CrossBusinessAccessException`.
+
+**Eligibility is `MembershipEligibility` and nothing else; the account state only chooses the sentence.** A person may hold one active membership, in any business, so `NoMembership`, `MembershipRevoked` and `ApplicationRejected` callers may redeem and `Member`, `ApplicationPending`, `BusinessDeactivated` and `MembershipAmbiguous` callers may not — but that mapping is a *consequence* of the one rule rather than a second rule written over `AccountState`: all four refused states hold an active membership and all three admitted ones do not. `RedeemMemberInvite` reads the caller's membership records once, asks `MembershipEligibility.AllowsActiveMembership` of them, and uses `AccountStatePolicy` only to pick the wording; `MembershipEligibility` gained one overload over those records so the endpoint's immediate refusal and the guard's authoritative one are the same rule, which a unit test asserts agree on the same data. The refusal is `409` with `MembershipEligibility.AlreadyAMemberMessage`, except for `BusinessDeactivated`, which gets `MemberInviteRedemptionPolicy.ReleaseRequiredMessage` — "it must first be released by the platform administrator" — because releasing a membership is normally an Owner's doing and a deactivated business has no reachable Owner. Neither sentence names a business.
+
+**One generic refusal for every unusable invite.** `MemberInviteRedemptionPolicy.IsRedeemable` is the one rule: live by `MemberInvitePolicy.IsLive` (so the inclusive seven-day expiry is derived, not stored), in a business whose status **is** `Active`, granting a role this deployment declares. An expired, used, cancelled or unknown token, a missing or blank one, an invite of a `Pending`, `Rejected`, `Deactivated` or undeclared-status business, an invite granting an undeclared role, and a token two businesses somehow both hold are therefore all the same `400` with `MemberInviteRedemptionPolicy.InvalidInviteMessage`, and all write nothing. One sentence for all of them is the point: a token is a secret somebody may be guessing at, and any difference between "no such invite" and "that one was used" confirms which links exist and that some business issued one. The undeclared-role case is a fail-closed refusal rather than an omission — honouring it would create a membership that `BusinessMembershipResolutionPolicy` denies everywhere, letting a person in and locking them out in one operation. The ambiguous-token case is denied rather than resolved by picking one, exactly as an ambiguous membership is.
+
+**The whole redemption is one transaction, and its authoritative read is inside it.** `RedeemMemberInvite` runs through issue #522's `MembershipWriteGuard` (see [One active membership per identity](#one-active-membership-per-identity-issue-522)) with `IdentityGainingAnActiveMembership` set and no exclusion — a redemption either creates a row or reactivates a revoked one, and neither is an active row that could count against itself — and no business keeping an Owner, because a redemption can only add access. Inside the `BEGIN IMMEDIATE` transaction, in order: the invite is read by token hash, the policy is applied to it, the membership is created (or the business's revoked row for that person reactivated, with the invite's role, since the invite is the new decision about what they may do), and the invite is marked used against that membership. Both writes are **conditional**: the reactivation matches only a row that is still revoked, and the close matches only an invite that is still live, with the status, the used instant and `RedeemedByMembershipId` set in that one statement. So the decision and the mutation are one operation twice over, and a close that matches nothing refuses the whole redemption and takes its membership write back with the transaction. Without that, two people would both be let in on one single-use link and the row would record only one of them.
+
+**The instants it is judged at are inside the transaction too (issue #608).** A conditional statement is only as authoritative as the values in its `WHERE` clause, and the expiry half of this one is compared against a *time*. `RedeemMemberInvite` therefore reads `IClock` twice, both times inside the write transaction, and never before it:
+
+- **The decision instant** is sampled at the top of the in-transaction delegate, with `BEGIN IMMEDIATE` already granted. It is what `MemberInviteRedemptionPolicy.IsRedeemable` judges the invite at, and what the created or reactivated membership records as its creation and state-change instant.
+- **The consumption instant** is sampled again immediately before `MarkUsedAsync`, and is both the expiry the conditional `UPDATE` compares `ExpiresAtUtc` against and the `UsedAtUtc` it writes. The audit event reports it too.
+
+The defect this replaced was reading the clock once, when the request entered the process, and carrying that one instant through all three steps. Between that read and the write there is a **wait**: `BEGIN IMMEDIATE` blocks for as long as any other membership write holds the write lock, and preparing the membership takes further statements. A link that expired during either gap still satisfied the stale instant — including `ExpiresAtUtc > usedAtUtc`, which compared the row to a time that had already passed — so an **expired invite could still grant access**, and `UsedAtUtc` and the audit event would then describe the moment the request arrived rather than the moment it was admitted. Two instants rather than one is deliberate: the membership row records when the business admitted the person, the invite records when it was actually spent, and the refusal in between is why those are different facts. The boundary stays `MemberInvitePolicy`'s inclusive one — an invite is expired *at* `ExpiresAtUtc` — so a redemption admitted exactly then is refused.
+
+A late refusal is the same refusal as every other unusable invite: the generic `400`, with the whole transaction rolled back. That covers a membership row this attempt inserted *and* a revoked row it reactivated, and because the audit event is recorded after the commit, a refused redemption still emits none. Nothing about the guard, the one-active-membership rule, the denied scope, the token hashing or the single-use race changes; the only thing that moved is *when* the clock is read.
+
+**One audit event per committed redemption.** `IMemberInviteAudit` gains `MemberInviteChange.Redeemed`, and the event carries the actor's Entra `(tid, oid)` pair, the business id (from the invite row — the actor was not a member of it a moment earlier), the invite id and the role granted. `MemberInviteAuditEntry` still has **no field for the token**, hashed or not, and none for the note, the display name or the email address, so the structural guarantee is unchanged. It is emitted after the commit and only for a real redemption: a refused one is audited as nothing, and the refusal is still visible as the `DomainExceptionHandler` warning.
+
+**What the response says, and what it refuses to say.** `200 { "role": "…" }`, and nothing else — no business name, no business id, no membership key, no token. The caller is a member from the next request onwards and reads their business's name from `GET /api/me/access` like everybody else, which keeps the one endpoint a person with no membership may call from publishing a business in *any* of its three answers.
+
+**What this slice does not do.** No invite creation or cancellation (#531 above), no member management (#533), and no self-service application or approval (#507/#509/#541). The invite acceptance page is issue #535's task, which is what now calls this route — see [Invite acceptance page](#invite-acceptance-page-issue-535). There is **no schema change**: the ownership change is declared in the model and the index set is the one the `AddMemberInvites` migration already created, which `MigrationRelocationTests`' no-pending-model-changes assertion confirms.
+
+**What proves this slice.** `InviteRedemptionApiTests` (the whole pipeline over two seeded businesses and the real migration history: the Owner-creates-then-stranger-joins workflow end to end with the account state before and after, the response carrying only the role, the joiner's own display name and email stored on the new membership, a revoked member rejoining by reactivating their own row rather than gaining a second, the invite deciding which business is joined, every unusable invite and every blank or near-miss token answered with one `400` and writing nothing, the same link refused the second time, an existing member and a pending-business member refused with `409` while keeping their own access and leaving the invite live, the deactivated-business caller's own sentence, a rejected applicant admitted, `401` unauthenticated, `403` without the delegated scope, the same business-less caller refused by every other endpoint, and the audit event carrying neither the token nor any name while a refused redemption is audited as nothing), `EfMemberInviteRedemptionStoreTests` (the relational adapter under the denied scope every redemption carries: the lookup by hash and not by the token, an unknown and an ambiguous token both not found, closed invites and closed businesses reported exactly as stored, the membership lookup confined to one business and one identity, the creation's columns and instants, the filtered index still refusing a second active membership, the conditional reactivation declining for an active row and another business's, display values refreshed without erasing what a silent token did not report, the conditional close declining for every non-live state and another business's invite, a rolled-back transaction leaving no membership and no used invite, and the denied context still reading and writing no business data), `MemberInviteRedemptionConcurrencyTests` (two real writers on a real SQLite file through the shared `MembershipWriteRaceHarness`: the same invite twice leaving exactly one membership and one correctly-attributed row, two invites from two businesses for one identity leaving one membership and one *unused* invite, the same race on two revoked rows reactivating exactly one, and the sequential replay changing nothing), `RedeemMemberInviteTests` (the decisions over fakes: the order of the reads and writes inside the transaction, every write naming the business the invite reported, the lookup by hash and never the token, the three admitted and four refused account states with their two sentences, an invite used or a row reactivated between the read and the write granting nothing, and nothing audited for a refused redemption — and issue #608's timing regressions, where a hook moves a `FakeClock` past the expiry while the write lock is awaited and again between the authoritative read and the consumption, at the expiry instant and one tick past it, with a still-live redemption recording the instants it really happened at), `MemberInviteRedemptionExpiryTests` (the same boundary against a real SQLite file and the real stores, which is where the rollback is actually proved: a membership this attempt inserted and a revoked row it reactivated are both gone when the consumption is refused, the invite is exactly as it was seeded, nothing is audited, and a live redemption persists the admission instant on the membership and the consumption instant on the invite and the audit event) and `MemberInviteRedemptionPolicyTests` plus `BusinessOwnershipCoverageTests` (the deterministic rules, and the ownership decision itself: four declared global tables, the invite carrying no query filter, and its token hash still unique per business).
+
+#### Business lifecycle status and profile (issue #540)
+
+Whether a business may be reached used to be a boolean. `Business.IsActive` could say "yes" or "no" and so could not tell a business that has applied and is waiting from one that was refused or one that was offboarded — three different screens for the person signing in and three different situations for an operator. Issue #540, one slice of #507 under #328, replaces the flag with a lifecycle status and adds the profile details the application form collects.
+
+**`Business.Status` is the single source of truth, and only `Active` grants anything.** `Inventory.Domain.Tenancy.BusinessStatus` declares four values — `Pending` (10), `Active` (20), `Rejected` (30), `Deactivated` (40) — spaced like `BusinessRole`'s so a further state can be declared between two of them without renumbering a persisted value, and with no `0`, because `0` is what an unfilled integer column and a default-constructed enum both hold. `BusinessMembershipResolutionPolicy` resolves a business only while its status is `Active` and denies **every** other value with the existing `BusinessInactive` reason, including a status a newer deployment wrote that this code does not declare: the check is written as "not `Active`" rather than as a list of the statuses that deny, so the fail-closed direction is the default rather than a case somebody has to remember to add. There is no CHECK constraint, for the same reason `BusinessMembership.Role` has none — SQLite cannot add one without rebuilding the table, and an undeclared value has to fail closed in the policy anyway.
+
+**Nothing mirrors it.** `IsActive` is removed rather than kept in step as a computed read-only copy: two columns describing whether a business may be reached is one too many, and the next write path to update only one of them would leave the access decision reading a value nobody maintained. `BusinessStatusSingleSourceOfTruthTests` (`backend/Inventory.IntegrationTests/Architecture/`) is the standing rule — the property is gone from the entity, the column is gone from the schema the migrations produce, and `ActorBusinessMembership` carries the status instead of a business active boolean, so a code path that tried to read the old flag would not compile and could not query. The membership's *own* `IsActive` is untouched: whether a person's approval is current is a different fact, and the resolution rule still reads it.
+
+**Every reader uses the status.** `EfBusinessMembershipStore` projects it (with the business's rejection reason and the membership's `StatusChangedAtUtc`) in the one query the resolution and the account-state precedence are both decided from, so a status and a reason that no longer belong together cannot reach a decision. `bootstrap-business` creates an `Active` business, states that status itself rather than relying on any default (there is none left to rely on — see [Explicit business status on creation](#explicit-business-status-on-creation-issue-584)), and refuses to assign data to a business in any other status, naming the status in its message. `TenantOwnershipReadiness` counts a business as active only while its status is `Active`, so a pending or rejected business never reports a usable membership. `PlatformDiagnosticsDataSurface` still exposes `Businesses.Id` alone: neither the status nor any profile column — nor the rejection reason — is reachable through diagnostics, exactly as `IsActive` was not.
+
+**The profile columns invent nothing.** `ContactEmail`, `GstRegistered`, `Abn`, `AppliedAtUtc`, `DecidedAtUtc` and `RejectionReason` are all nullable, and the migration backfills none of them: the application's existing business predates the application form, so it has no contact address of its own (a member's address is a different fact about a different party), no recorded GST registration, no ABN this migration could verify, and no application or decision instant — deriving one from `CreatedAtUtc` would claim a business event that never happened. `GstRegistered` is deliberately three-state, because "registered", "not registered" and "not recorded" are different facts and registration is never inferred from an ABN, which an unregistered entity may legitimately hold. What a non-registered business's GST report does is a deliberate follow-up; nothing reads the flag yet.
+
+**The ABN is checksum-validated wherever it is set.** `Inventory.Domain.Tenancy.AustralianBusinessNumber` holds the one rule — 11 digits, modulus 89 over the published weights with 1 subtracted from the leading digit — and `Inventory.Infrastructure.Data.BusinessAbnEnforcer` applies it on `SaveChanges`, beside the time-zone enforcer and for the same reason: the ABN appears on tax invoices and in the GST accounting aid, so "the write path remembered to validate it" is not a strong enough guarantee. A refusal is a `DomainValidationException`, which the API boundary answers with `400`. The check proves the digits are well-formed and never that the ABN is registered, current or this business's. "Not recorded" is `null` and nothing else: a blank string is refused, and so is a value still carrying the spaces a person typed, because normalising inside a `SaveChanges` hook would silently rewrite what a caller submitted — `AustralianBusinessNumber.TryNormalize` is what the write path that accepted it uses first.
+
+**Account state gained its two application states.** `AccountStatePolicy` now returns an `AccountStateDecision` — the state and the rejection reason together, so neither can be reported without the other — and `GET /api/me/account-state` answers `ApplicationPending` for an active membership in a `Pending` business and `ApplicationRejected`, with the business's recorded reason, for an inactive membership in a `Rejected` one. See [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523) for the full precedence.
+
+**What this slice does not do.** The application endpoint that creates a `Pending` business is issue #541's (which also added the `SelfServiceOnboarding:Enabled` flag `onboardingEnabled` reports — see [Self-service business application](#self-service-business-application-issue-541)), approve/reject/deactivate are #509's, and the owner settings page is #549's. Nothing wrote a status other than `Active` when this slice shipped: the status, the columns and the rules are what it provides. The profile columns stayed unwritten until [Business settings API](#business-settings-api-issue-548) below, which is the one request path that *edits* them — and it still writes no status.
+
+**The migration.** `AddBusinessLifecycleStatusAndProfile` adds `Status`, maps every existing row from the flag it already carries (`IsActive = 1` → `Active`, `0` → `Deactivated`) while that flag is still readable, and only then drops it, so no business's access changes across the upgrade and nothing is inferred from anything else. It drops the column in place with `ALTER TABLE ... DROP COLUMN`, which SQLite has supported for an unindexed, unconstrained column since 3.35, rather than through the provider's table rebuild: rebuilding the table that decides who may reach a business's financial data is risk this change does not need. `Down` restores the flag from the status by the same mapping read backwards — only `Active` becomes `1`, so a pending or rejected business reverts to inactive, the fail-closed direction. `BusinessLifecycleStatusMigrationTests` proves the mapping both ways on a relational database, that the profile columns arrive holding nothing, that no business is invented when there is none to map, and that access after the upgrade is decided from the mapped status through the real adapter and the real policy; `BusinessAbnPersistenceTests` proves the ABN refusal on insert and on update and the profile round-trip.
+
+#### Explicit business status on creation (issue #584)
+
+Issue #540 left `Active` in two places as a convenience: as the `Business.Status` property's initialiser, and as the `Businesses.Status` column's database default. Both were true of every business that existed — the migrated one and the bootstrapped one — but together they made the single value that decides whether a tenant's financial data may be reached the one value a write could set by *forgetting* to set it. A future write path that never mentioned the status would have created a trading business, and it would have done so silently. Issue #584 is preventive hardening rather than a fix for an observed defect: nothing in the application creates a business without stating a status today, and the point is that nothing *can* start to.
+
+**An omitted status is now a compile error.** `Business.Status` is a `required` member with no initialiser, so every construction states it: `bootstrap-business` states `Active` because it adopts a business that is already trading, and the self-service application of #541 states `Pending`. Nothing about who may create a business changed, and no existing path changed what it writes — the status those paths already chose is now the status the compiler makes them choose. `BusinessStatusExplicitOnCreationTests` (`backend/Inventory.IntegrationTests/Architecture/`) is the standing rule, asserted structurally because the paths it protects are the ones nobody has written yet: the property carries `RequiredMemberAttribute`, an instance created without a status holds no declared status at all, and the migrated schema has no `Active` default left.
+
+**A status nobody declared is refused on the way into the database.** `Inventory.Domain.Tenancy.BusinessStatuses` is the declared vocabulary — the status counterpart of `BusinessRoles`, and the mirror image of it: `BusinessRoles` guards a value arriving from outside the code on its way into an access decision, while this guards a value arriving from inside the code on its way into storage. `Inventory.Infrastructure.Data.BusinessStatusEnforcer` applies it on `SaveChanges`, beside the time-zone and ABN enforcers and for the strongest version of their reason, and refuses an `Added` or `Modified` business whose status is not declared. That covers what `required` cannot: a cast integer, and a row that an out-of-band `INSERT` left at the column default and a later save would otherwise carry forward. The refusal is an `InvalidOperationException`, not a `DomainValidationException`, because no caller submits a business status — no route, query, body or header names one — so reaching it is a programming error that the boundary answers with its generic `500` rather than a `400` blaming the caller. `BusinessStatusPersistenceTests` proves the refusal on insert and on update, that nothing is stored either way, and that an explicit `Pending` business stores as `Pending` and still reaches nothing.
+
+**The database default is no longer a status.** `RemoveBusinessStatusActiveDatabaseDefault` replaces the column's `DEFAULT 20` with `DEFAULT 0`, a value `BusinessStatuses` declares no status at and `BusinessMembershipResolutionPolicy` denies like any other non-`Active` value: an `INSERT` from outside the application — a maintenance script, a future repair command — now creates a business that is unreachable rather than trading. `0` rather than `Pending` deliberately, because `Pending` is a real business event that `GET /api/me/account-state` reports to the business's members, and a row that merely omitted a column has not applied for anything. No default at all would be stronger still, and SQLite cannot drop one in place: reaching that state needs the provider's rebuild of `Businesses`, the table every tenant-owned row's foreign key points at, which is the risk issue #540 declined when it dropped `IsActive` in place and which would also discard the `TimeZoneId` default this change has no business touching. So the migration does it in four in-place statements instead — add the replacement column with the new default, copy each row's status, drop the old column, rename the replacement into place, with SQLite's `RENAME COLUMN` carrying the default across — and every existing business keeps its exact status: `Active` businesses keep their access, `Deactivated`, `Pending` and `Rejected` ones stay denied, and only the column's position in the table changes. `Down` restores issue #540's schema, default included, preserving every status again, so a rollback reactivates, deactivates and reclassifies nothing. `BusinessStatusDatabaseDefaultMigrationTests` proves the default before and after, all four statuses preserved in both directions, the empty-database upgrade, that an insert without a status is not active afterwards, and that access across the upgrade is unchanged through the real adapter and the real policy.
+
+**What this does not change.** Who may create a business, who may grant membership, and what makes a `Pending` business usable are all untouched — approve/reject/deactivate remain #509's, and the application endpoint arrived with #541, behind its `SelfServiceOnboarding:Enabled` flag and stating `Pending` exactly as this slice requires. No existing business row's status, profile column or access changed, there is still no CHECK constraint on the column (an undeclared value fails closed in the policy, which is what matters), and the status remains the single source of truth with nothing mirroring it.
+
+#### Business settings API (issue #548)
+
+Issue #540 added the columns a business records about itself and left them unwritten. Issue #548, one slice of #511 under #328, is the one request path that writes them: an Owner can change their business's name, contact address, ABN, GST registration and time zone. The page that calls it is #549's; this slice is the API, and it adds no column and no migration.
+
+**Two endpoints, both `Business.Manage`, both on the trusted current business.** `GET /api/business/settings` returns `{ name, contactEmail, abn, gstRegistered, timeZoneId }` and `PUT /api/business/settings` accepts the same five and answers with what was stored. Neither takes a route, query, body or header value naming a business: the business is resolved from the authenticated actor's membership through the issue #64 current-business abstraction, so there is no surface a caller could aim at another business — which is also why the response carries no business id. The capability is declared on each action rather than on `BusinessController`, because the controller's other action is the shell read `GET /api/business/current`, which every role holds `Dashboard.View` for; the settings **read** is restricted with the write rather than following it, because it reports the business's own contact address, ABN and GST registration rather than anything a page needs to render. See [Capability authorization on the Manager and Owner endpoints](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526) for the matrix row.
+
+**A save is the whole set, validated before anything is stored.** `Inventory.Domain.Tenancy.BusinessSettingsPolicy` is the one rule: a name is required and bounded at 200 characters, a contact address must be a single well-formed address (`Inventory.Domain.Tenancy.BusinessContactEmail`, a format check that never claims the mailbox exists — see [The contact-address format rule](#the-contact-address-format-rule-issue-593) below), the ABN is optional but checksum-validated whenever it is present, and the GST registration must be *stated* — an absent `gstRegistered` is a `400` and never `false`, because "registered", "not registered" and "not recorded" are three different facts and a missing form field must not record a tax one. The three profile columns stay nullable in the schema for the business that predates the application form, so the read reports "not recorded" honestly, while a save is narrower: it may leave the ABN unrecorded (`null`, its single representation of absence — a blank string is refused) and may not leave the address or the registration unstated. A refusal stores nothing at all, so the five settings move together.
+
+##### The contact-address format rule (issue #593)
+
+`BusinessContactEmail.TryNormalize` is the one contact-address rule, read by `BusinessSettingsPolicy` and by nothing else: the controller holds no email check of its own, and adding a second one anywhere would be two answers to one question. It is a **format** rule and claims nothing more — no SMTP, DNS, mailbox-ownership or deliverability check runs, and a well-formed address is never a reachable one.
+
+Issue #548's first version checked that the domain's dot-separated labels were non-empty, which was not the same question: `owner@!.com` and `owner@example.com>` both passed it, so `PUT /api/business/settings` could store them as the business's published contact address. Issue #593 replaced that check with what the rule was always meant to be, in the same two-part shape:
+
+- **The mailbox** is dot-separated parts, each non-empty, of ASCII letters, digits and RFC 5322's unquoted symbols (``!#$%&'*+-/=?^_`{|}~``). The characters that set leaves out are the point: `<`, `>`, `(`, `)`, `[`, `]`, `:`, `;`, `,`, `"` and `\` are how a mail client delimits an address, a display name, a comment or a second recipient, so one arriving in this field is a paste that brought its surroundings with it. A quoted local part (`"owner name"@example.com`) is legal in RFC 5322 and refused here deliberately, because accepting quotes is what lets a pasted `"Owner" <owner@example.com>` through.
+- **The domain** must be able to be a host name: at least two labels, each non-empty, made of ASCII letters, digits and interior hyphens, ending in an alphabetic top-level label of at least two characters. So `example.com`, `ex-ample.co.uk` and `e.co`, and not `example`, `.com`, `example..com`, `!.com`, `exa_mple.com`, `-example.com` or `example.c0m`. An internationalised domain must be submitted in its ASCII-compatible (punycode) form, and a bracketed IP literal is refused: neither is how a business publishes its own contact address.
+
+Everything issue #548 already refused is still refused — a missing or blank value, whitespace anywhere inside the address, two addresses in one field, a second `@`, an empty domain label, and anything longer than the 254 characters an SMTP envelope allows — and every supported valid example is still accepted unchanged: `owner@example.com`, `owner.name@example.com`, `owner+vending@example.com.au`, `o@e.co` and `Owner@Example.com`. Surrounding whitespace is still the only thing removed, and the submitted case is still stored exactly as typed, because case is meaningful to a local part. A refusal is the same `DomainValidationException` with the same message, which names the rule and never echoes the submitted address, so the endpoint's `400`, its response shape, the Owner-only capability, the trusted current-business resolution, the ABN/GST/time-zone handling and the audit redaction are all unchanged. Nothing reads or rewrites an address already stored: the rule applies to what a save submits, and issue #593 backfilled, cleared and corrected nothing.
+
+**The time zone's resolvability is still decided centrally.** The policy checks only that an id was submitted; whether the host's time-zone database can keep a calendar in it is answered by `Inventory.Infrastructure.Data.BusinessTimeZoneEnforcer` on `SaveChanges`, exactly as it is for the bootstrap and any other write path (see [Per-business time zone](#per-business-time-zone-issue-499)). Both refusals are a `DomainValidationException` and so the same `400`. That is also why `EfBusinessSettingsStore` writes through a tracked entity and `SaveChanges` rather than an `ExecuteUpdate`: a set-based update would write straight past that enforcer and past `BusinessAbnEnforcer`. The row is read, compared and written inside one transaction, so the audit trail's change set describes the state the write actually replaced.
+
+**Changing the zone re-derives every business day, and rewrites nothing.** This is the decision recorded on issue #499 and now reachable: the zone is resolved per request from the business's own record, so from the next request onwards *all* business days and report boundaries — past data as much as future — are derived in the new zone, including that zone's own daylight-saving transitions. **On the next request, and not during the saving one:** `BusinessScopeMiddleware` publishes the zone into the request's `BusinessTimeZoneScope` before the action runs, and that scope can only move forward once, so a `PUT` that changes the zone still *runs* in the old one. That is deliberate rather than incidental — a request deriving two different business dates depending on how far through itself it was would be worse than a change that lands cleanly at a request boundary — and it is why the submitted zone is a value this endpoint *stores*, never the zone the request itself reports in. The repository rule that a business's reporting timezone is never taken from route, query, body or header input is therefore unchanged: resolution still reads the business record and nothing else. No stored instant, sale, purchase, expense, commission, costing row or document changes, because nothing stored is a business date: a business date is derived from a stored UTC instant through `IBusinessCalendar` every time it is needed. The visible consequence is that a figure already printed for a Sydney business day may fall on the adjacent day once the business is in another zone, which is why the page that will call this endpoint (#549) is the one that has to show the warning #499 asked for - the API refuses nothing on that account, because the re-derivation is the agreed behaviour rather than an accident to be guarded against. `BusinessSettingsPersistenceTests` proves both halves on a relational database: an already-stored sale's business date and its business day's UTC boundaries move with the saved zone, the stored instant is unchanged, and a past transition day becomes 23 hours long in the new zone while the other business in the same database is untouched.
+
+**Every change is audited, and the audit carries no values.** `Inventory.Application.Businesses.IBusinessSettingsAudit` takes one entry per stored change — the actor's Entra `(tid, oid)` pair, the business id, the instant from `IClock`, and which settings changed as the closed `BusinessSettingsField` vocabulary — and `InventoryApi.Adapters.Businesses.LoggingBusinessSettingsAudit` emits it as one structured `ILogger` event with the request's correlation id. It is a log port rather than a table for the reason the diagnostics audit is (see [Platform diagnostics](#platform-diagnostics-issue-336)); destination and retention are platform configuration a human verifies. The event deliberately names fields and never values: no contact address, no ABN, no business name and no before-or-after of anything, so the audit trail cannot become a second, unprotected copy of the business's contact and tax detail. A save that changed nothing is not audited, because the event is evidence about a change rather than about an attempt; a rejected save and a save against a business row that has gone are not audited either, for the same reason. The actor is read **before** the write, so a change that could not be attributed is refused rather than stored with an anonymous event.
+
+**What this slice does not do.** It writes no lifecycle status (approve, reject and deactivate are #509's), touches no membership, no role and no Nayax setting, and deletes or transfers nothing. It does not change what a GST report does with `GstRegistered` — still nothing reads that flag, which stays the deliberate follow-up issue #540 described.
+
+**What proves this slice.** `BusinessSettingsPolicyTests` and `BusinessContactEmailTests` (the validation and change-set rules, including that a present zone id is deliberately *not* resolved there, that a refusal never echoes the submitted address or ABN, and — for issue #593 — both reported malformed addresses with the malformed-domain and pasted-delimiter families they belong to, beside the supported valid examples and the trimming and case-preserving behaviour they must not disturb), `BusinessSettingsUseCaseTests` (the business coming from the membership and never the submission, validation before any write, the audit entry's contents, and nothing audited for an unchanged save, a refused one, a missing business or an unattributable actor), `BusinessSettingsPersistenceTests` (the relational read and write with two businesses present: the other business untouched, both central enforcers still refusing and storing nothing, the change set, and the zone re-derivation above), `BusinessSettingsApiTests` (the whole pipeline: an Owner's read and save, a Manager and an Operator refused on both, `401` and the missing-scope `403`, every validation rule answering `400` and storing nothing — including each malformed address of issue #593, against a business whose five settings have all been recorded, leaving every one of them and the audit trail alone — the ABN cleared, the saved zone visible in `/api/me/access` and `/api/business/current` on the next request, and the audit event's contents including the two values it must never carry) and `EndpointAuthorizationClassificationTests`/`CapabilityAuthorizationApiTests` (the capability on each endpoint, and the role matrix).
+
+#### Self-service business application (issue #541)
+
+Until this slice a business existed in exactly one way: a human ran `bootstrap-business`, which adopts the one Australian vending operation this application was built for. Issue #541, one slice of #507 under #328, is the second and only other way — a person signing in for the first time applies to start a business, and the application waits as a `Pending` business until the Super Admin decides on it. It adds no table and no migration: issue #540's lifecycle status and profile columns are what it writes.
+
+**An application *is* the business.** There is no separate application entity, and deliberately so: a `Pending` business row carries the submitted details, `AppliedAtUtc`, and the applicant's own active Owner membership from the moment it is created, so approving it later changes a status rather than copying anything anywhere. `Inventory.Application.Onboarding.BusinessApplication` is what the Application layer reports about one — the business id, the stored `BusinessSettings`, the status and the submission instant — and `Inventory.Application.Onboarding.IBusinessApplicationStore` is the narrow port it runs on, implemented by `Inventory.Infrastructure.Persistence.EfBusinessApplicationStore`.
+
+**`POST /api/onboarding/business-applications`, class 3, denied scope.** `InventoryApi.Controllers.OnboardingController`'s one action carries `MembershipNotRequiredEndpointAttribute` and is the reviewed third entry on that marker's allowlist (see [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523)). It is its own controller for the reason the invite redemption is: `BusinessController` declares capabilities a person with no membership could not possibly hold, so an endpoint with the opposite authorization shape gets its own story rather than an exception inside somebody else's. The request still requires authentication and the delegated `access_as_user` scope — "membership not required" is not "anonymous" — and still runs with a **denied** `BusinessScope`, so the tenant query filters and `BusinessOwnershipEnforcer` stay fully in force and it reads no business data at all. The two tables it writes, `Businesses` and `BusinessMemberships`, are two of the four structurally non-tenant-owned ones (see [Tenant ownership](#tenant-ownership-issue-64)), and the business id in every statement comes from the server's own side of the operation: the key the database assigns the row being created, or — for a resubmission — the id the caller's *own* membership row reported. Never from the request, which carries no identifier of any kind.
+
+**The request carries the business's details and nothing else.** `name`, `contactEmail`, `abn`, `gstRegistered` and `timeZoneId`: the same five an Owner can later edit through `PUT /api/business/settings`, validated by the same rule. `Inventory.Domain.Tenancy.BusinessApplicationPolicy.Validate` delegates to `BusinessSettingsPolicy.Validate` rather than restating it, because a second validation would eventually disagree with the first about what a business may record about itself — so a missing or over-long name, an address that cannot be an address, an unstated `gstRegistered`, a malformed ABN and a missing time zone are refused with that policy's own `400` sentences, and the zone's resolvability is still decided centrally on the way into the database by `BusinessTimeZoneEnforcer`. Everything else is the server's: the identifier, the `Pending` status (stated explicitly, as issue #584 requires), the Owner role, and who the applicant is — the validated `(tid, oid)` claim pair, with the display name and email address from the same token (issue #524).
+
+**Eligibility is `MembershipEligibility` and nothing else.** An applicant becomes the new business's Owner, so applying is a membership gain, and the states the issue lists as eligible — `NoMembership`, `MembershipRevoked` (including somebody released from a deactivated business) and `ApplicationRejected` — are exactly the states with no active membership. A caller holding one anywhere, in an `Active`, `Pending` or `Deactivated` business alike, gets `409`; the state their own account is in chooses only the *wording*, through `BusinessApplicationPolicy.IneligibleMessage`, which returns the same two sentences the invite redemption uses from the same two constants, so a caller attached to a deactivated business is told to be released by the platform administrator rather than sent looking for an Owner who cannot be reached. No refusal names a business, a role or another member.
+
+**The write is one operation.** `MembershipWriteGuard` opens the `BEGIN IMMEDIATE` transaction, re-checks `MembershipEligibility` inside it, and only then is the business and its Owner membership created and committed — one `SaveChanges` through the business's own navigation, so there is no moment at which a `Pending` business exists with no Owner, and a refusal at any step takes both rows back. The application instant is sampled *inside* the transaction, after the write lock was granted (issue #608's lesson), and is stamped as the business's `AppliedAtUtc` and `CreatedAtUtc` and the membership's creation and state-change instant alike. The write goes through tracked entities rather than an `ExecuteUpdate` for the reason `EfBusinessSettingsStore`'s does: `BusinessStatusEnforcer`, `BusinessTimeZoneEnforcer` and `BusinessAbnEnforcer` run on `SaveChanges`, and a set-based insert would write straight past all three.
+
+**Resubmitting the identical application returns the one already waiting.** A lost response or a double submission must not create a second business or refuse the person looking at the same screen again, so an identical submission while an application is `Pending` is answered with that application — same name, same status, same `appliedAtUtc` — and writes nothing, not even an audit event. The comparison is `BusinessApplicationPolicy.IsResubmission`, which is `BusinessSettingsPolicy.ChangedFields` over the *validated* values, so retyped whitespace and ABN spacing are not part of an application while a corrected capitalisation is. A submission that **differs** is `409` with its own sentence: changing details an operator is reviewing is a different request, and this slice does not implement it. That comparison writes nothing, so there is nothing about it to serialise — what has to be one operation is the creation, and that is what runs inside the guard's transaction. **Which answer two *simultaneous* identical submissions get is therefore the interleaving's to decide — and the answer is the only thing it decides:** the second attempt's read either runs after the first committed, sees the application waiting and reports it back as a second `200` for that one application, or runs before it and reaches the guard, whose re-check refuses it as `409`. Both are correct answers to one form submitted twice, and what is fixed either way is the state they leave: exactly one `Pending` business with exactly one active Owner membership, because the creation is serialised by the guard's `BEGIN IMMEDIATE` transaction and the filtered unique index behind it. A refused attempt leaves nothing — not a business row — and succeeds on its next try as the ordinary idempotent resubmission.
+
+**The new business is not usable, and nothing existing changes.** Only `Active` resolves, so the applicant's very next request is answered with the same `403` as before and `GET /api/me/account-state` reports `ApplicationPending`. The business starts completely empty — no machine, product, purchase, sale, site, invite or `BusinessNayaxConnection` row, so its Nayax status is `NotConfigured` by virtue of nothing being stored — and no `DecidedAtUtc` or `RejectionReason` is written, because nobody has decided anything. The business that was already trading is untouched in every respect, including its members' own access. Approving and rejecting arrived with issue #544 (see [Super Admin businesses API](#super-admin-businesses-api-issue-544)) and deactivating remains #545's work; after a rejection a new application creates a **new** business while the rejected one is kept as the record of what happened.
+
+**Behind a flag that is off by default.** `Inventory.Application.Onboarding.ISelfServiceOnboardingFlag` is read **first**, before an actor is read, a submission is validated, an allowance is spent or a membership is looked up, and a deployment with it off answers the framework's generic `404` with no detail of any kind — so a prober cannot tell a disabled deployment from one where the feature does not exist, or a malformed submission from an ineligible caller. "First" includes model binding: `[ApiController]` answers a body it cannot bind (malformed JSON, an empty body, a field of the wrong type) with its automatic `400` before the action runs, so the endpoint also carries `InventoryApi.Http.SelfServiceOnboardingGateAttribute`, a resource filter that reads the **same port** after authentication and the delegated scope have decided and before the body is bound, and short-circuits to that `404`. The use case keeps its own check, so it is closed whoever calls it; there is still one flag and one source. `InventoryApi.Adapters.Onboarding.ConfiguredSelfServiceOnboardingFlag` reads `SelfServiceOnboarding:Enabled` once at startup, because only the composition root reads configuration, and an absent, blank or unparseable value is **off**: the one answer that must never come from a mistyped setting is "yes, strangers may create tenants here". The same port is what `GetAccountState` reports as `onboardingEnabled`, so the screen that offers "Start a new business" and the endpoint behind it cannot disagree — and that field describes the *deployment*, never the caller, because whether a particular account may apply is this use case's decision from their own membership records and must not be duplicated. Switching the flag on in production is a human decision with a verified release gate in front of it; see [docs/tenant-rollout.md § Enabling self-service onboarding](tenant-rollout.md#enabling-self-service-onboarding-issue-541).
+
+**Rate-limited per applicant, and audited.** `Inventory.Application.Onboarding.BusinessApplicationRateLimiter` is a sliding window — five submissions per identity per ten minutes — claimed *before* the membership read and the write, so simultaneous submissions cost one allowance each rather than all passing a count nothing has incremented yet. The identity is the bucket because there is no business to rate-limit by and the validated `(tid, oid)` pair is the only thing a request cannot choose; validation failures are deliberately *not* counted, so correcting a typo in a form is not what runs somebody out of attempts. It is in-process state, like `NayaxConnectionTestRateLimiter` and `MemberProfileRefreshThrottle`, and holds one lock over the whole table because this endpoint is called a handful of times per person in a lifetime and an indivisible "expire, decide, record, clear out" is worth more than concurrency here. The refusal is `429` with `Retry-After` and a fixed sentence naming no count, no window and no business. `Inventory.Application.Onboarding.IBusinessApplicationAudit`, emitted by `InventoryApi.Adapters.Onboarding.LoggingBusinessApplicationAudit` as one structured `ILogger` event with the request's correlation id, records one committed application: the actor's `(tid, oid)` pair, the new business id and the instant — and structurally **no business name, contact address, ABN, GST registration, display name or email address**, because the entry type has no field for any of them. A refused submission and a resubmission are audited as nothing, since neither created a business.
+
+**What this slice does not do.** Approving or rejecting an application (#509), the application and waiting user interface (#508 — nothing in `frontend/inventory-app/src` calls this route yet), email notifications, billing and tenant switching are all out of scope. It changes no existing business, no membership but the applicant's own new one, and no schema.
+
+**What proves this slice.** `BusinessApplicationPolicyTests` (the delegation to the settings policy including its own length bound, the resubmission comparison over validated values, and the refusal wording for every account state — none of which names a business, a role or a member), `ApplyForBusinessTests` (the decisions over fakes with the real write guard: the flag checked before anything is read or validated, validation before an allowance is spent, the creation happening inside the transaction in the order `begin → eligibility read → create → commit`, the application instant sampled after the write lock was granted, one audit event after the commit, every refusal and its sentence, the pending-business row missing or no longer `Pending` refused rather than reported back, and the rate limit refusing without reading or writing anything), `BusinessApplicationRateLimiterTests` (the window, its edge, the per-identity bucket including two GUID spellings of one identity, a clock that moved backwards, and the clear-out never resetting a live allowance), `EfBusinessApplicationStoreTests` (the relational adapter under the denied scope every application carries: the created columns and instants, the applicant's display values stored and absent ones left absent, no Nayax connection and no business data created, the existing business untouched, the filtered one-active-membership index still refusing, both central enforcers refusing and storing nothing, the read reporting a business that never applied and an undeclared status exactly as stored, and the denied context still reading and writing no business data), `BusinessApplicationConcurrencyTests` (two real writers on a real SQLite file through the shared `MembershipWriteRaceHarness`: an invite and an application by one identity leaving exactly one active membership with the loser leaving nothing behind, the same race for a revoked identity, two applications by one identity creating exactly one business whichever way they interleave — with every attempt answered either by that one application or by the membership conflict, and the conflicting interleaving itself proved deterministically by an application whose eligibility read missed a committed one, which is refused and leaves no business row behind — two applications by two identities both succeeding, and the sequential resubmission changing nothing), `BusinessApplicationApiTests` (the whole pipeline on a host with the flag on: the first-sign-in workflow end to end with the account state before and after, the response naming no business id or contact detail, the applicant's own display values on the new membership, every validation rule answering `400` and writing nothing, the same unbindable bodies still answering `[ApiController]`'s `400` (and `401`/`403` without authentication or scope) with the flag on, each refusal with its sentence and the existing member keeping their own access, the released and the rejected applicant both admitted with the rejected application kept, the resubmission answered with the waiting application and the differing one refused, `401`, the missing-scope `403`, the same business-less caller refused by every other endpoint, a pending applicant refused by every normal endpoint, the `429` with `Retry-After`, and the audit event carrying no name or email address while a refusal and a resubmission are audited as nothing), `BusinessApplicationDisabledApiTests` (the shipped default on its own host: the generic `404` for a well-formed, a malformed and an ineligible submission alike, and for every body MVC cannot bind — truncated JSON, a wrongly typed field, an empty body and one with no media type — with nothing written, authentication and the scope still required and still `401`/`403` for those unbindable bodies, `onboardingEnabled` reported as `false`, and the existing business unaffected) and `EndpointAuthorizationClassificationTests`/`MembershipNotRequiredEndpointAllowlistTests` (the reviewed allowlist entry and the marker's own rules).
 
 ### Platform diagnostics (issue #336)
 
-The tenant boundary above fails closed, and that is exactly why it is hard to investigate a problem *in* it: a row assigned to the wrong business, or a child row whose parent is in another business, is invisible to the only caller who would notice. Issue #336 adds one explicitly authorized, read-only, audited path for that investigation, and nothing else. It is the single documented exception to "no cross-business request path", and every sentence below is part of the boundary rather than a description of it.
+The tenant boundary above fails closed, and that is exactly why it is hard to investigate a problem *in* it: a row assigned to the wrong business, or a child row whose parent is in another business, is invisible to the only caller who would notice. Issue #336 adds one explicitly authorized, read-only, audited path for that investigation, and nothing else. It is the single documented exception to "no cross-business *query* path", and every sentence below is part of the boundary rather than a description of it. The platform administrator's other surface, the business directory and the two decisions of issue #544, is a separate and much narrower one — a fixed set of columns and two status writes, not a statement — and is documented in [Super Admin businesses API](#super-admin-businesses-api-issue-544).
 
 **Who. A separately configured identity, held outside the data.** Authority is an Entra `(tid, oid)` pair in configuration (`PlatformAdmin:DirectoryTenantId`, `PlatformAdmin:ObjectId`), resolved once at startup through the same `ActorIdentity.TryCreate` normalisation the membership lookup uses, so every spelling of a GUID matches and a malformed or half-filled setting identifies nobody. It is deliberately **not** a `BusinessMembership` row, a business role, an email address or a display name: the point is that this authority cannot be created, moved or destroyed by the rows it exists to investigate, and that it is not reachable from any request input. **Both values empty is the shipped state and means nobody is a platform administrator** — the policy then denies every caller, including a legitimate business member.
 
@@ -1541,7 +1885,16 @@ POST /api/admin/diagnostics/query    { sql } -> a bounded, truncation-flagged re
 
 `access` exists for the UI in issue #335 and exposes no tenant data at all — reaching it *is* the signal, and the body carries only the server's limits. `query` takes one statement and nothing else: no page size, no row count, no timeout and no business identifier, so there is no request input that could widen or loosen anything. `crossBusinessScope` is `true` in both contracts because this path reads across every business by design, and saying so in the contract is what keeps it from being a surprise.
 
-**The super-admin page (issue #335).** `/admin/diagnostics` is the Angular page in front of those two endpoints, and it is presentation only: it adds no authority, no limit and no second access rule. The sidebar's `Admin` group offers its link only while `GET /api/admin/diagnostics/access` has confirmed the signed-in actor, and the page itself asks the same endpoint on arrival and renders a refusal instead of the query form when it is refused — but **neither is the boundary, and the design depends on that rather than on hiding the link**. Entering the URL directly reaches the page, and reaches nothing else: `MsalGuard` requires only a signed-in actor, exactly as on every other route, and the policy on `POST /api/admin/diagnostics/query` re-decides authority on every single request. There is deliberately no frontend role, claim, flag or cached verdict that could grant access and then diverge from the configured Entra `(tid, oid)` identity: `PlatformDiagnosticsAccessService` asks the API, treats a refusal, a failure, an unanswered probe and a body that does not confirm access all as "no", and never reports a capability the API did not confirm.
+**The super-admin page (issue #335, moved under its own top-level group in issue #546).** `/super-admin/diagnostics` is the Angular page in front of those two endpoints, and it is presentation only: it adds no authority, no limit and no second access rule. `/admin/diagnostics` is its old address and now only redirects there. The sidebar's top-level `Super Admin` group offers its link only while `GET /api/admin/diagnostics/access` has confirmed the signed-in actor, and the route itself carries `platformAdminGuard`, which asks the same probe and sends a refusal to the dashboard; the page then asks the same endpoint again on arrival and renders a refusal instead of the query form when it is refused — but **neither guard nor page is the boundary, and the design depends on that rather than on hiding the link**. Entering either URL directly reaches the page (through the redirect for the old one), and reaches nothing else: the policy on `POST /api/admin/diagnostics/query` re-decides authority on every single request regardless of what the frontend guard or page decided. There is deliberately no frontend role, claim, flag or cached verdict that could grant access and then diverge from the configured Entra `(tid, oid)` identity: `PlatformDiagnosticsAccessService` asks the API, treats a refusal, a failure, an unanswered probe and a body that does not confirm access all as "no", and never reports a capability the API did not confirm. Unlike every business route, `/super-admin/diagnostics` carries no `accountStateGuard`: platform-admin authority has nothing to do with business membership, so a refusal belongs on the dashboard, never on a membership-handling destination.
+
+**The cached probe belongs to one signed-in identity (issue #605).** `PlatformDiagnosticsAccessService` coalesces **one** `GET /api/admin/diagnostics/access` per current identity — the sidebar and the guard share it however often they ask — and that answer is bound to the identity it was asked as, because a browser outlives a session: one memoised probe for the service's lifetime would carry the administrator's grant onto the next person who signs in, and an ordinary member's refusal onto the administrator. The cache is dropped on sign-in, sign-out and an MSAL active-account change, observed from MSAL's own account events and from `inProgress$` settling together — the same two signals [`AccessService`](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) watches, deliberately not read through it, because this answer has nothing to do with membership or capabilities — and acted on only when the identity the answer was asked for actually changed, so a duplicate notification costs nothing. The two members say what each consumer needs:
+
+| Member | Answers | Used by |
+| --- | --- | --- |
+| `granted$` | `false` until the current identity's own probe confirms access, and `false` again the moment the identity changes | The sidebar's `Super Admin` group, so a previous identity's granted group is gone on the switch itself |
+| `isGranted()` | Once, with the answer for whoever is signed in when it is asked, waiting for that identity's probe | `platformAdminGuard`, which must not refuse the administrator over an answer that has not arrived yet |
+
+**A superseded probe decides nothing.** Every invalidation bumps a generation: an answer that arrives for an identity that is already gone is discarded instead of published, and a probe whose request has not been sent yet — one still waiting for a sign-in interaction to settle — is never sent at all. Neither an A → B → C switch nor a sign-out during a pending probe can therefore restore an earlier grant. Nobody signed in is an *answer* (`false`) rather than a request, so no protected probe is issued while signed out or while sign-in is in progress, and a refused or failed probe stays the same quiet `false` it always was: unreported, unlogged and never retried behind the operator's back. None of this is a boundary either — it decides which menu entry and which route redirect an identity is shown, while the policy on both endpoints re-decides authority per request.
 
 The page says what it is before it knows who is asking: cross-business scope, read-only, repair out of scope, every query audited. It publishes the server's own limits — the 5-second ceiling, the 500-row cap, the 1 MiB response cap and the 16 KiB SQL cap — from the `access` body rather than restating them, lists the permitted table/column surface as help text while saying the server is what decides, and offers only read-only examples. Every outcome the contract can report has its own visible state: a complete result, a timeout, a refusal with its denial reason, a provider failure, and a truncated read labelled **incomplete** with the cap that stopped it — the row cap and the response-byte cap separately, because a byte cap reached before 500 rows is exactly the case a row count alone would misrepresent. Result values and server messages are rendered through Angular interpolation only, never as markup. The statement and its results live in component state while the page is open and nowhere else: no `localStorage`, `sessionStorage`, cookie, URL, toast or console, because they describe data across every business. The query-shape fingerprint the response carries is shown so a result on screen can be matched to its audit entry without the statement appearing in either. Per [Page composition boundary](#page-composition-boundary-issue-191) the routed `PlatformDiagnosticsComponent` resolves the capability and composes `PlatformDiagnosticsQueryComponent`, which owns the statement, the submission and every outcome.
 
@@ -1580,6 +1933,44 @@ The authorizer is why the acceptance criterion "do not rely on regex rejection a
 
 **What proves it.** `Inventory.UnitTests/Application/PlatformDiagnostics` covers the surface contract, the shape check, the limits and their clamping, and the use case's audit behaviour. `Inventory.IntegrationTests/Infrastructure/PlatformDiagnostics/SqliteDiagnosticsQueryExecutorTests` runs against a real migrated SQLite file: permitted reads across two businesses, forbidden columns and tables through joins, subqueries, aliases and expressions, forbidden functions, every write and DDL shape refused with the row counts proving nothing changed, `PRAGMA`/`ATTACH`/transaction control refused, the row and byte caps, a costly permitted query interrupted at its deadline with the next query still working, request cancellation, and a column added to a permitted table after the fact staying inaccessible — including one named `rowid`, `oid` or `_rowid_`, which must be refused rather than mistaken for the internal row identifier. `Inventory.IntegrationTests/Auth/PlatformAdminAuthorizationTests`, `PlatformAdminCompositionTests`, `PlatformDiagnosticsResponseSizeTests` and `BusinessScopeMiddlewarePlatformDiagnosticsTests` cover the HTTP boundary, the shipped unconfigured state, the serialized-byte cap, and the middleware's independent policy re-check.
 
+### Super Admin businesses API (issue #544)
+
+Until this slice the platform administrator could only *look* (the read-only diagnostics API above), and nobody could decide a business application at all: issue #541 creates a `Pending` business and leaves it waiting. Issue #544, one slice of #509 under #328, is the first write-capable platform-admin path — the Super Admin sees every business and approves or refuses an application — and the whole design is about keeping "write-capable" from meaning "unrestricted".
+
+**Who, and how it is enforced. Exactly the diagnostics surface's answer, reused rather than re-invented.** `SuperAdminBusinessesController` carries `[Authorize]`, `[Authorize(Policy = PlatformAdminPolicy.Name)]`, `[RequiredScope("access_as_user")]` and `PlatformDiagnosticsEndpointAttribute`. That is class 2 of the four [endpoint authorization classes](#capability-authorization-issue-525) — **not** a fifth class and **not** a second marker, which is the point: a platform surface that writes must not also be a new mechanism to review. Authority is the separately configured Entra `(tid, oid)` pair, held outside the database, and both values empty — the shipped state — means nobody reaches this controller at all. An Owner holds the strongest business role there is and is refused here exactly as any other member is, because this controller declares no capability any role could satisfy. Both policies are enforced, and both attributes are needed: the named policy *replaces* the default one rather than adding to it, so a controller with only `[Authorize(Policy = …)]` would leave the delegated scope undemanded — platform authority is an additional requirement on a delegated API call, never a replacement for one.
+
+**The four endpoints.**
+
+```text
+GET  /api/super-admin/businesses                        every business, pending applications first
+GET  /api/super-admin/businesses/pending-count          { pendingCount }
+POST /api/super-admin/businesses/{businessId}/approve   Pending -> Active, + DecidedAtUtc
+POST /api/super-admin/businesses/{businessId}/reject    Pending -> Rejected, + reason, + DecidedAtUtc,
+                                                        and the applicant's membership released
+```
+
+**The business id in a route is the subject of a decision, not a tenancy scope.** Every other endpoint in this application resolves its business from the authenticated actor's membership and accepts no owner from a request ([Tenant ownership](#tenant-ownership-issue-64)). A platform decision has to name the application it is about, so these two routes carry the id — and that is the whole of what it does: it resolves no business for the request, which still runs with a **denied** `BusinessScope`; it is never stamped on a row; it cannot reach a tenant-owned table; and it is checked against the stored rows on every call, so an unknown id is `404` and an already-decided one is `409`. The directory response carries the id for the same reason, and it is the only response in the application that carries a tenant key. Neither shape may be copied onto a business endpoint.
+
+**A deliberately tiny persistence surface — this is what bounds the write.** `IPlatformBusinessDirectoryStore` (`Inventory.Application/PlatformAdmin/`) is five methods, and `EfPlatformBusinessDirectoryStore` is the whole of what a platform administrator can reach through `AppDbContext`: a fixed set of `Businesses` columns, the count of active `BusinessMemberships` per business, a yes/no for whether a `BusinessNayaxConnection` row exists, and two writes — the business's `Status`/`DecidedAtUtc`/`RejectionReason` and the applicant membership's `IsActive`/`StatusChangedAtUtc`. No method takes a table name, a predicate, a column list, a filter, a page or a statement, and the list deliberately takes no caller-supplied filter, sort or search at all: a caller-supplied predicate over a cross-business read is how a fixed list stops being a list and becomes a query engine. Nothing tenant-owned is readable or writable through it — an adapter test asserts that the same denied context still reads no `Products` or `Categories` row and still has a tenant-owned write refused with `CrossBusinessAccessException`. Both writes go through `SaveChanges` on tracked entities on purpose, so `BusinessStatusEnforcer`, `BusinessTimeZoneEnforcer`, `BusinessAbnEnforcer` and `BusinessOwnershipEnforcer` all run; a set-based `ExecuteUpdate` would write past all four.
+
+**The one bypass, and why it is a single column.** The Nayax yes/no is the only fact here that lives on a tenant-owned table, so under the denied scope the central filter `!TenantFilteringEnabled || e.BusinessId == CurrentBusinessId` hides every row of it. The adapter therefore makes exactly one `IgnoreQueryFilters` statement, projecting `BusinessId` and nothing else — the ownership key itself, which is not business data. The credential columns are not in the projection, are not materialised and do not appear in the generated SQL; no operator id, connection status, key id or ciphertext can reach a response. The rejected alternatives are recorded in [Tenant ownership](#tenant-ownership-issue-64) § The unrestricted-context rule. A second `IgnoreQueryFilters`, a wider projection or any predicate over a tenant-owned table in this adapter is a boundary change needing its own reviewed issue.
+
+**What the directory reports, and what it deliberately does not.** Ten fields per business: `businessId`, `name`, `status`, `createdAtUtc`, `appliedAtUtc`, `decidedAtUtc`, `contactEmail`, `abn`, `activeMemberCount`, `nayaxConfigured`. No sale, stock, cost, purchase, product, machine, site, document or report value — nothing tenant-owned — and no member's display name, email address or Entra identifier. `contactEmail` is the business's own published detail as its application recorded it, not a member's personal address. `activeMemberCount` counts the memberships that are currently active, which is the question the directory answers — how many people can reach this business now — so a refused application reads `0` because its rejection released the applicant. `status` is the published `BusinessStatus` name rather than a number a renumbering would silently change, and a stored value this code does not declare is reported as it is rather than presented as something decidable.
+
+**Only a `Pending` business may be decided.** `Inventory.Domain.Tenancy.BusinessDecisionPolicy` is the rule, and the deny direction is the default: an already-active business, an already-refused one, a deactivated one and an undeclared stored value are each refused with one sentence that names no status. Approving an Active business, reviving a Deactivated one, deactivating, reactivating and releasing members are **#545's** work and are deliberately absent. The rejection reason is validated there too — trimmed, at most 500 characters, and a blank reason stored as `null`, which is the single representation of "no reason"; an over-long reason refuses the decision before anything is read or written rather than being truncated into the applicant's own explanation. A rejection with no reason is still a rejection.
+
+**The authoritative read, the comparison and the mutation are one operation.** Both decisions run inside issue #522's shared [`MembershipWriteGuard`](#one-active-membership-per-identity-issue-522) transaction — SQLite `BEGIN IMMEDIATE`, so the write lock is held before anything is decided — and `BusinessApplicationDecisionWriter` re-reads the business and its applicant **inside** it. The read the use case takes before the transaction opens decides nothing: it exists to answer "no such business" with a `404`, to refuse a stale view before a write lock is taken on the caller's behalf, and to supply the immutable fact the eligibility re-check needs. A simultaneous approve and reject therefore resolves to one recorded decision and one `409`, never to two writes — which would otherwise leave a trading tenant whose applicant has been released, or a refused application whose applicant is still a member of it. A relational race test over two connections to one real SQLite file asserts exactly that, and asserts the resulting state rather than which decision won.
+
+**Approving is a membership gain, so `MembershipEligibility` is re-checked — with the applicant's own membership excluded.** The applicant is already the `Pending` business's active Owner (that is what makes the application theirs), but approval makes it a membership in a *trading* business, and a person belongs to one business at a time. The check therefore runs with `MembershipWriteIntent.ExcludedMembershipId` set to that membership: without the exclusion the applicant's own row would count against them and **no application could ever be approved**. The exclusion is sound because the in-transaction read refuses unless the applicant is still the very membership it names — an exclusion granted for one membership key is never spent on another. An applicant who can no longer be approved — their membership in the application is inactive, the business has no single identifiable applicant, or the stored Entra pair is not a usable identity — is refused with one sentence that describes the application rather than the person. Rejecting activates nothing, so it runs no eligibility check and requires no active Owner afterwards: a refused application is not a business that has to stay reachable.
+
+**Rejecting releases the applicant, and that is what lets them apply again.** While they hold an active membership anywhere, `MembershipEligibility` refuses them a second one, so a rejection that left the membership active would refuse the applicant their own next application and leave them attached to a business nobody can reach. The rejected business row is kept rather than deleted; `GET /api/me/account-state` reports `ApplicationRejected` with the stored reason, to that applicant's own identity and nobody else's. A membership that is already inactive is left exactly as it is, state-change instant included — rewriting it would claim a transition that never happened.
+
+**Audit: one structured log event per committed decision, and no table.** `LoggingPlatformBusinessDecisionAudit` writes one `ILogger` `Information` event carrying the deciding administrator's `(tid, oid)`, the business id, the old → new status, whether a reason was recorded, the instant and the request/correlation id. It never carries the business name, the contact address, the ABN, the applicant's identity or the rejection reason's *text* — `PlatformBusinessDecisionAuditEntry` has no field for any of them, so even a sink that printed the whole entry could not emit one. A refused decision is not audited, because nothing happened. There is deliberately no audit table and no migration, for the reasons the diagnostics audit has none; **the log destination and retention period are platform configuration a human must verify**, exactly as for that one.
+
+**No schema change.** Issue #540's lifecycle status, `DecidedAtUtc` and `RejectionReason` are the columns this writes; nothing is added, and there is no migration in this slice.
+
+**What proves it.** `Inventory.UnitTests/Domain/Tenancy/BusinessDecisionPolicyTests` covers the decidable statuses, the reason bounds and the refusal wording. `Inventory.UnitTests/Application/PlatformAdmin/BusinessApplicationDecisionTests` runs both decisions over the real `MembershipWriteGuard`: the exclusion that makes an approval possible, the refusals for an applicant who joined elsewhere or cannot be identified, the status and applicant changing while the write lock is awaited, and what each refusal leaves unwritten and unaudited. `Inventory.IntegrationTests/Adapters/Persistence/EfPlatformBusinessDirectoryStoreTests` is the relational half over two businesses and a denied scope: the cross-business list, the active-member counts, the Nayax flag beside the proof that the ordinary read of that table still sees nothing, the tenant-owned read and write still refused, and a membership of another business that cannot be released by a decision on this one. `PlatformBusinessDecisionConcurrencyTests` is the race. `Inventory.IntegrationTests/Controllers/SuperAdminBusinessesApiTests` is the HTTP boundary: every endpoint refused for an Owner, a Manager, the applicant, a stranger, an anonymous caller and a caller without the delegated scope; the administrator still refused by every business endpoint; the applicant reaching their own business only once it is approved; the response carrying exactly the ten declared properties and neither a product name nor a token ciphertext; and the unconfigured host refusing everyone. `BusinessScopeCompositionTests` pins the store's registration and dependencies, and `EndpointAuthorizationClassificationTests` pins all six platform-admin endpoints as class 2 with no capability.
+
 ### Per-business Nayax connection (issue #518)
 
 Issue #518 — a slice of #500, under the contract of #328 — added the **storage** a per-business
@@ -1591,7 +1982,10 @@ this section describes the storage, and
 
 **One row per business, owned centrally.** `BusinessNayaxConnection` (`Inventory.Infrastructure/Models`)
 holds the operator id, the encrypted access token, the id of the key that encrypted it, the
-connection status, the credential revision, and the last-tested and updated instants. It implements
+connection status, the credential revision, whether the last completed check left the machine checks
+unverified (`MachineChecksPending`, added additively by issue #537 — see
+[Save and re-test](#saving-a-tested-connection-and-re-testing-it-issue-537)), and the last-tested
+and updated instants. It implements
 `IBusinessOwned`, so it is filtered, indexed and stamped by the same mechanisms as every other
 tenant-owned entity, with no predicate of its own anywhere; the additive
 `AddBusinessNayaxConnections` migration creates the table and a **unique index on `BusinessId`**, so
@@ -1626,9 +2020,9 @@ Nayax features fail closed until a human provisions one — and nothing else doe
 **`CredentialRevision` is what makes a status write safe.** The Application port is
 `Inventory.Application.Nayax.INayaxConnectionStore`, implemented by
 `Inventory.Infrastructure.Persistence.EfNayaxConnectionStore`. A credential save increments the
-revision in the database, resets the status to `PendingPermissions` and clears the last-tested
-instant, so a newly stored token can never inherit the previous token's test result; the first save
-creates the row at revision 1. A save is atomic, and it takes part in a transaction its caller has
+revision in the database, resets the status to `PendingPermissions`, and clears the last-tested
+instant and the pending-machine-checks flag, so a newly stored token can never inherit the previous
+token's test result; the first save creates the row at revision 1. A save is atomic, and it takes part in a transaction its caller has
 already begun on the same context instead of committing on its own, which is what lets
 `migrate-nayax-connection` make the save and the status write that follows it one change (see
 [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)); with no transaction in
@@ -1638,6 +2032,9 @@ CredentialRevision = @r`, where the business predicate is contributed by the cen
 and the revision predicate by the caller's expected value. Zero rows matched means an operator saved
 different credentials while the test was running: the result is discarded, not written, and one
 structured `ILogger` warning records it with the business id and the two revisions and nothing else.
+A status result that also knows about the machine checks writes `MachineChecksPending` in that same
+statement, and one that does not — the `401` an ordinary Nayax call reports, which never ran those
+checks — leaves that column exactly as it is rather than claiming they passed (issue #537).
 That is also why this adapter refuses to run without a single resolved business —
 `ExecuteUpdate` executes in the database without passing through `BusinessOwnershipEnforcer`, so an
 unscoped context would be the one way such a statement could carry no business predicate at all.
@@ -1889,6 +2286,468 @@ request is in flight* leaving the new revision's status alone, and an existing c
 registration needs no credential and registers none, and that the registered client is built from the
 provider.
 
+### Nayax connection checks and the Test endpoint (issue #536)
+
+Issue #536 — one slice of #506, under the contract of #328 — is how an Owner finds out whether a
+Nayax token works *before* it becomes the business's connection. The problem it solves is specific:
+new Lynx app tokens frequently authenticate perfectly and lack one or more of the permissions this
+application needs, and until now the only way to discover that was for a feature to fail in
+production. So the server runs the reads the application actually makes, reports each one on its own
+line, and holds the tested credentials as a short-lived **encrypted draft** that nothing has
+accepted yet.
+
+**The checks are the endpoints the application already calls, and they are all reads.**
+`Inventory.Domain.Nayax.NayaxConnectionCheck` is the complete, declared list, and there is one check
+per endpoint rather than one per feature — a token missing one permission is the ordinary case, and
+collapsing two endpoints into one line would hide which of them was refused:
+
+| Check | Endpoint | Scope |
+| --- | --- | --- |
+| `SignIn` | `GET devices` | Proves the token authenticates at all |
+| `Machines` | `GET machines` | Also decides whether the machine checks run |
+| `Machine` | `GET machines/{id}` | Machine-scoped |
+| `ProductCatalogue` | `GET operators/{operatorId}/products` | Operator-scoped |
+| `ProductGroups` | `GET operators/{operatorId}/productGroups` | Operator-scoped |
+| `MachineProducts` | `GET machines/{id}/machineProducts` | Machine-scoped |
+| `MachineLastSales` | `GET machines/{id}/lastSales` | Machine-scoped |
+| `MachineLastAlerts` | `GET machines/{id}/lastAlerts` | Machine-scoped |
+
+**`POST machines/{id}/machineProducts` is never called**, and it is absent from the vocabulary rather
+than merely unused: testing a connection must not change an operator's Nayax data.
+`NayaxConnectionCheckRunnerTests.No_check_ever_makes_a_write_call` asserts that over the wire for a
+success, a `401`, a `403` and a `5xx` alike.
+
+**With no machines, the machine lines read `NotChecked`.** A business connecting Nayax before its
+first machine exists has nothing to run `GET machines/{id}` against, and the same is true when the
+machine list itself could not be read. That is reported as its own status — never as a pass, because
+an untested permission must not look like a granted one, and never as a failure, because the
+credentials did nothing wrong. `NayaxConnectionCheckReport.NothingFailed` is therefore `true` while
+the only non-passing lines are unchecked ones, so the wizard of #538 can let such a business finish.
+The machine checks also run against the **first** machine only: a token either carries the machine
+permissions or it does not, and walking the estate would turn a connection test into a load test of
+somebody else's API.
+
+**What a Nayax answer means is one Domain table.**
+`Inventory.Domain.Nayax.NayaxConnectionCheckPolicy.Classify` is the only place it is decided, for the
+same reason `NayaxConnectionStatusGate` is: "lacks a permission" and "token expired" need completely
+different actions from an operator, and a second opinion written inline in an adapter is how the
+wrong one ends up on somebody's screen. The mapping is Nayax's own documented vocabulary
+([App tokens troubleshooting](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/app-tokens)):
+
+- **`401` → `InvalidOrExpiredToken`.** The documented "token is invalid or has expired".
+- **`403` → `PermissionNotGranted`.** The documented "Insufficient permissions to perform this
+  action" — a verdict on one endpoint, not on the token.
+- **`404` on an operator-scoped check → `OperatorIdMismatch`.** Only `.../operators/{operatorId}/...`
+  carries the submitted operator id, so only those two checks can answer "that operator is not one
+  this token covers". A `404` anywhere else is **not** reported as a mismatch: it would send an
+  operator to re-check a correct operator id.
+- **`5xx`, a timeout, a dropped connection or an open circuit → `NayaxUnavailable`.** Nothing was
+  learned about the credentials, so nothing is concluded about them.
+- **Anything else → `UnexpectedResponse`.** A `400`, the documented `429` rate limit, a `404` on a
+  check that carries no operator id, or a body that is not the documented shape. An answer nobody
+  has interpreted is never presented as one that has been.
+
+**The checks go through `NayaxLynxClient`, with the one thing that differs swapped.** That client is
+the single place a Nayax request is built, authenticated, sent and then accepted or rejected, and the
+runner needs exactly that — the same relative endpoints, the same `Authorization: Bearer` header, the
+same operator-id path parameter built from the same credential, the same rule that an upstream body
+is never read or logged. What differs is **only** where the credential comes from, so only the
+credential provider differs: `Inventory.Infrastructure.Nayax.NayaxConnectionCheckRunner` constructs
+the client over a private `INayaxRequestCredentialProvider` that answers with the pasted pair. Its
+status is `PendingPermissions` — the truth about a token nothing has stored or tested, and what makes
+the client report a `403` as the per-feature permission answer the test needs per line — and its
+`ReportUnauthorizedAsync` is a **no-op**: a `401` here is a verdict on credentials that have never
+been stored, so there is no revision it belongs to and no row it may touch. **A test of a bad token
+therefore cannot move a working stored connection to `NeedsAttention`**, and cannot change its
+operator id, status, revision or last-tested instant either. It gets its own `HttpClient` from the
+same base address with the same `NayaxResilienceHandler`, because "Nayax is unavailable" has to mean
+the same thing on a test as on a sync. This is **not** the gate-free re-test read of
+[issue #520](#per-business-nayax-credentials-issue-520): nothing here reads the stored connection at
+all.
+
+**The draft: encrypted, tenant-owned, actor-bound, one per business, fifteen minutes.**
+`POST /api/settings/nayax-connection/test` takes `{ operatorId, token }`, runs the checks, and stores
+the pair in the additive `NayaxConnectionTestDrafts` table through
+`Inventory.Application.Nayax.INayaxConnectionTestDraftStore`. It is deliberately **not**
+`BusinessNayaxConnections`: a draft holds credentials nothing has accepted, no Nayax call may resolve
+one, it carries no `NayaxConnectionStatus` and no credential revision, and promoting one into the
+connection is issue #537's separate, reviewed step.
+
+- **The token is stored only as ciphertext**, through #518's `INayaxTokenProtector`, with the key id
+  beside it. Holding a plaintext token for fifteen minutes to achieve a pre-flight check would defeat
+  the point of the check. The response body carries the operator id's draft but never the token, and
+  neither do the stored results, a log line or an exception.
+- **It is tenant-owned by the central mechanism.** The entity implements `IBusinessOwned`, so the
+  `AppDbContext` query filters scope every read and `BusinessOwnershipEnforcer` stamps the insert; the
+  adapter adds no business predicate of its own and refuses to run at all without a single resolved
+  business, because the replacing `DELETE` executes in the database without passing through
+  `SaveChanges`.
+- **It is bound to the Owner who created it**, by the validated Entra `(tid, oid)` pair. A draft id
+  naming another business's draft, another member's draft, or an expired one all read as *there is no
+  such draft*: distinguishing them would tell a caller that somebody else's draft exists.
+- **One draft per business, replaced by the next test.** A unique index on the ownership column makes
+  that a schema guarantee rather than a convention, so a second decryptable token cannot exist for a
+  business however the write path is called, and a superseded ciphertext is not left behind. The
+  delete and the insert are one transaction, so a failed replacement leaves the previous draft in
+  place rather than leaving the business with none.
+- **It expires after fifteen minutes** (`TestNayaxConnection.DraftLifetime`) — long enough to read
+  eight result lines and decide, short enough that an abandoned browser tab does not leave a
+  decryptable token in the database for the rest of the day. Expiry is a **read** rule, not a sweep:
+  past the instant the draft stops existing for every caller, and the row goes when the next test
+  replaces it.
+- **The returned `draftId` is opaque.** A random GUID carrying nothing about the business, the actor
+  or the credentials.
+- **It is excluded from platform diagnostics**, like `BusinessNayaxConnections` and for the same
+  reason. `PlatformDiagnosticsDataSurface` is an allow-list of table/column pairs, so a new table is
+  denied automatically until a separately reviewed change adds it — and this one must never be added.
+
+**Owner only, through the ordinary capability mechanism.** `NayaxConnectionController` declares
+`[RequireCapability(Capability.IntegrationManage)]`, which #328's table grants to an Owner alone, the
+same capability `api/settings/nayax-processing-fee-rates` carries and for the same reason. The action
+is a `POST`: it submits a secret in a body rather than a URL, it calls out to Nayax, it writes the
+draft, and a cached `GET` response would hand a caller a verdict about credentials it never tested.
+
+**The rate limit is per business, and spent before anything is sent.**
+`Inventory.Application.Nayax.NayaxConnectionTestRateLimiter` allows five runs per business per rolling
+ten minutes. The bucket is the **business**, not the actor: one run is eight calls against somebody
+else's API, a Test button is trivially clickable in a loop, and rate-limiting the actor would let a
+second Owner start again from zero against the same operator account. The window **slides**, because
+a fixed ten-minute bucket would allow five runs at the end of one and five at the start of the next.
+The allowance is claimed *before* the runner, so a refused request makes no Nayax call and stores
+nothing, and a failing run is not refunded — a failing test is exactly the run that gets repeated.
+The refusal is `429` with a `Retry-After` in seconds and a fixed sentence that names neither the
+count, the window nor the token. The window lives in memory rather than in a column, like
+`MemberProfileRefreshThrottle`'s hour: what the record of a connection holds is the connection, not
+how often somebody pressed Test, and on a single instance
+([SQLite operating assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53)) in-process
+state is the whole truth.
+
+**The allowance is the business's, and clearing out memory never changes it** (issue #606). The
+limiter remembers one claim history per business and, once more than `MaxTrackedBusinesses` (256) are
+remembered, each granted claim also clears out what has gone stale. That housekeeping is bounded by
+one rule: it expires the attempts that have **left** the window and forgets only a business left with
+none of them. A business whose oldest attempt has expired while later ones are still live keeps those
+live attempts and so keeps exactly the slots they have freed — dropping its history wholesale would
+restart its window and let five more runs reach Nayax inside the same ten minutes, which is the
+regression issue #606 fixed and `NayaxConnectionTestRateLimiterTests` now pins with a deterministic
+one-attempt-then-four sequence. The threshold is therefore a hint about memory, never a cap: crossing
+it neither grants, denies nor resets any business's allowance, and a business that really has been
+quiet for a whole window is still forgotten. Expiring, counting and recording a claim are one
+operation on the history that business is tracked by, so a claim racing the clear-out is still counted
+against the window rather than landing in a forgotten history — test and re-test share that one
+history, so the pair of them is five runs per business per rolling ten minutes in any mix.
+
+**Nothing is logged that should not be.** The runner logs nothing itself; the underlying client's one
+`Error` line for an ordinary upstream failure carries the operation, method, relative endpoint and
+status code and never the token, the authorization header or the upstream body, exactly as before.
+`NayaxConnectionCheckRunnerTests.The_token_and_the_upstream_body_never_reach_the_report_or_a_log`
+sweeps both for a success and for each refusal.
+
+**What is deliberately not here.** The connection banners (#539), the permanent credential store and
+provider (#500's own slices), and anything that creates a Nayax token or requests a permission
+automatically. Saving a draft and re-testing the stored credentials arrived with issue #537,
+immediately below, and the Owner-facing wizard over all of it with issue #538 — see
+[The Nayax connection wizard](#the-nayax-connection-wizard-issue-538).
+
+**What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionCheckPolicyTests` — every
+documented status on every check, the two `404` readings, no answer at all, and the vocabulary itself,
+so a check, status or cause added later has to make a decision there.
+`Inventory.UnitTests/Application/Nayax/NayaxConnectionTestRateLimiterTests` — the fifth run allowed
+and the sixth refused, the sliding boundary and its `Retry-After`, a clock that moved backwards not
+reopening a slot, one business not spending another's allowance, and, above the tracking threshold
+(issue #606), clearing out keeping a mixed history's live attempts over repeated passes, forgetting a
+fully idle business, leaving an unrelated business's allowance alone, and a coordinated race of claims
+against clearing out granting the five runs exactly once.
+`TestNayaxConnectionTests` — the submitted credentials reaching the runner, pasted whitespace trimmed,
+a blank field refused before any call or allowance, no token in the result or the stored results,
+the fifteen-minute expiry, the opaque id, replacement, actor binding, and a rate-limited request
+calling Nayax not at all. `Inventory.IntegrationTests/Infrastructure/Nayax/NayaxConnectionCheckRunnerTests`
+— the eight endpoints called once each with the submitted bearer token, no write call ever, each
+status mapping over a fake handler, zero machines, the first machine only, a transport failure, an
+unreadable body, caller cancellation, and the token/body log sweep.
+`Adapters/Persistence/EfNayaxConnectionTestDraftStoreTests` — relational SQLite with two businesses:
+ciphertext at rest and no plaintext in any column, replacement, expiry, actor binding, cross-business
+isolation in both directions, an unscoped write refused, and a protector that cannot encrypt leaving
+the previous draft alone. `Adapters/Persistence/AddNayaxConnectionTestDraftsMigrationTests` — the
+table and its unique index arrive, a second draft per business is refused by SQLite, the stored
+connection is byte-for-byte unchanged, and nothing is backfilled.
+`Controllers/NayaxConnectionTestApiTests` — the published response shape through the real pipeline and
+the real migration history, the token never echoed, the draft encrypted and bound, a second test
+replacing the first, the stored connection untouched, `400` for a missing field, and the `429` with
+its `Retry-After`. `CapabilityAuthorizationApiTests` and
+`EndpointAuthorizationClassificationTests` carry the endpoint's capability row.
+
+### Saving a tested connection and re-testing it (issue #537)
+
+Issue #537 — the next slice of #506, under the contract of #328 — is what turns a completed test into
+the business's connection, and what lets an Owner run those checks again later against the token the
+business is actually using. It adds three endpoints to `NayaxConnectionController` and one additive
+column, and nothing else: no banners (#539). The Owner-facing wizard that drives these endpoints
+arrived separately with issue #538 — see
+[The Nayax connection wizard](#the-nayax-connection-wizard-issue-538).
+
+| Endpoint | Capability | What it does |
+| --- | --- | --- |
+| `POST api/settings/nayax-connection/save` | `Integration.Manage` | Promotes one draft into the connection and deletes it |
+| `POST api/settings/nayax-connection/retest` | `Integration.Manage` | Runs the same checks with the **stored** token and writes what they concluded |
+| `GET api/settings/nayax-connection/status` | `Dashboard.View` | Reports the status and whether the machine checks are still pending |
+
+**Save takes a draft id and never a token.** That is the whole point of the two-step shape: the
+credentials being stored are exactly the ones the server tested, so one token's successful test can
+never be presented as evidence for another, and a request cannot store a credential nothing has
+tried. `NayaxConnectionSaveRequest` is one nullable `Guid` and **must never gain** an operator id, a
+token, a status, a check result or a business id. The operator id, the token and the results all come
+out of the claimed draft; the business comes from the caller's membership and the actor from the
+validated Entra `(tid, oid)` pair, so another business's draft and another member's draft are not
+saveable.
+
+**Claiming the draft and writing the credential are one transaction.** `Inventory.Application.Nayax.SaveNayaxConnection`
+opens it through the narrow `INayaxConnectionSaveTransactions` port — named for this one operation
+because the transaction spans *both* Nayax connection ports, so putting it on either would imply the
+other's writes were outside it — and `EfNayaxConnectionSaveTransactions` opens it on the request's own
+`AppDbContext`, the scoped unit of work both EF adapters are constructed with. It asks SQLite for
+`BEGIN IMMEDIATE`, the second place in the application to do so and for the same reason as
+`EfBusinessMembershipWriteStore` (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)):
+a deferred transaction takes its write lock at the first write, which is *after* the read the claim is
+decided on, so two simultaneous saves would meet each other at their deletes — where one is already
+waiting to commit and SQLite can only answer "busy". With the lock taken at `BEGIN`, the second
+caller waits and then reads the first one's committed state, and the refusal is the deliberate `409`.
+Inside it:
+
+- **The claim is a conditional delete that must remove exactly one row.**
+  `INayaxConnectionTestDraftStore.TryClaimAsync` reads the row (id, owning business from the central
+  query filter, creating actor, `ExpiresAt > @now`), decrypts the token, and then deletes under that
+  same predicate; the claim succeeds only when the `DELETE` removed one row. The delete — not the
+  read — is what the caller branches on, because a test-then-delete would leave exactly the race this
+  is for open. Decryption happens *before* the delete so a key-configuration failure consumes
+  nothing.
+- **Two saves of one draft therefore end as one save and one refusal**, with `CredentialRevision`
+  increased exactly once. The refusal is `409` with the fixed sentence *"This test result was already
+  used or has expired. Run the test again."* — the same answer for an unknown id, an expired draft,
+  another business's, another member's, and one a previous save already claimed, because
+  distinguishing them would tell a caller that somebody else's draft exists.
+- **A refusal commits nothing.** The transaction is simply not committed, so a save refused for a
+  failed sign-in, or one whose credential write fails, puts the claimed draft back rather than
+  destroying a tested token the Owner can no longer save.
+
+**The status comes from that draft's own results, through one Domain rule.**
+`Inventory.Domain.Nayax.NayaxConnectionCheckOutcomePolicy` is the only place a completed run is
+interpreted, beside `NayaxConnectionCheckPolicy` and `NayaxConnectionStatusGate` and for the same
+reason: "this token works", "this token is missing a permission" and "this token is dead" need
+completely different actions from an operator. It takes the three facts it needs — the sign-in line's
+status, its failure cause, and whether any other executed check failed — so the Domain keeps no
+dependency on the Application layer's report type; the projection lives on
+`NayaxConnectionCheckReport.Outcome`.
+
+| Run | Outcome | Status it concludes | May be saved |
+| --- | --- | --- | --- |
+| Every executed check passed | `Ready` | `Ready` | ✔ |
+| Sign-in passed, another executed check failed | `PendingPermissions` | `PendingPermissions` | ✔ |
+| Sign-in refused with `401` | `TokenRejected` | `NeedsAttention` | ✘ |
+| Sign-in did not pass and gave no verdict | `Inconclusive` | *(none — status unchanged)* | ✘ |
+
+**Only a `401` is a verdict on the token.** That is Nayax's own documented meaning — "the token is
+invalid or has expired", against a `403`'s "Insufficient permissions to perform this action", a
+verdict on one endpoint's scope
+([App tokens](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/app-tokens), confirmed
+for this change). Every other way a sign-in can fail to pass — Nayax unavailable, an answer nobody
+has interpreted, the sign-in endpoint itself refused for lack of a scope, a line never checked —
+concludes **nothing**: the issue spells out the `401` and the `5xx` cases, and this is the fail-closed
+reading of the rest, because concluding anything from an answer nobody interpreted would either break
+a working connection or bless a dead one. A save is refused whenever the sign-in did not pass (`400`,
+*"The tested token did not sign in to Nayax, so it was not saved…"*): a token that has never been
+shown to authenticate must not replace what the business is using today.
+
+**"Not checked" machine lines do not block `Ready`, and the saved connection records them.** A
+business connecting Nayax before its first machine exists has nothing to run `GET machines/{id}`
+against, which is a fact about the account and not a fault of the credentials. The save stores
+`Ready` and sets `MachineChecksPending`, computed from the report as "any machine-scoped line was
+never checked" — which checks need a machine stays `NayaxConnectionCheckPolicy.RequiresMachine`'s
+answer. A later re-test that reaches them clears it. `false` is therefore both "the machine checks
+passed" and "no check has ever run", deliberately: the flag exists to ask an Owner to re-test once
+their machines are set up, so the additive migration backfills nothing and the connection the
+human-run `migrate-nayax-connection` command stored — which has been authenticating in production —
+reports "not pending" rather than being made to look incomplete.
+
+**Re-test is the one ordinary consumer of the gate-free credential read.**
+`Inventory.Application.Nayax.RetestNayaxConnection` resolves the stored token through
+`INayaxConnectionRetestCredentialProvider` ([issue #520](#per-business-nayax-credentials-issue-520)),
+which deliberately ignores `NayaxConnectionStatusGate` — a connection in `NeedsAttention` is exactly
+the one an operator has to recover, and the gate that refuses ordinary calls in that state would make
+recovery impossible. It is listed in `NayaxRetestCredentialBoundaryTests`' allow-list as the reviewed
+exception that boundary always anticipated, and nothing else may join it. It runs the same read-only
+checks through the same `INayaxConnectionCheckRunner`, so a re-test makes exactly the same eight
+`GET`s and no write.
+
+**Every result is bound to the revision it tested — whatever it concluded — and a run that learned
+nothing writes nothing.** The credential read reports the revision the token was read at. A concluded
+status is written by #518's conditional `UPDATE … WHERE CredentialRevision = @r`, and a run that
+concluded nothing compares that revision with the stored one before its report is accepted
+([issue #607](https://github.com/cristhyanc/InventoryApp/issues/607)). An Owner who saves a
+replacement token while a re-test is in flight therefore keeps the replacement's own status in both
+cases: the older run describes credentials that no longer exist, so its result is discarded — never
+returned beside the replacement's summary — and the caller gets `409` with the fixed sentence *"The
+connection changed while testing. Run the test again."* A connection that has been removed by then is
+the same answer as a replaced one. When the sign-in produced no verdict at all — a `5xx`, a timeout,
+an open circuit — **nothing is written** either way, not even a last-tested instant that would claim
+the current credentials had been checked: at the tested revision the response is `200` with
+`statusUpdated: false`, the stored status read back from the row, and the lines that say Nayax was
+unavailable; at any other revision it is the `409` above, with no completed stale report and the
+replacement's status, token, revision, last-tested instant and machine-check flag all untouched. That
+comparison and the summary returned with it come from **one** read of the row
+(`INayaxConnectionStore.FindAsync`, one statement), for the same reason #520's snapshot exists: two
+reads could pair the old run's report with the new credentials' state. A business with no stored
+credentials has nothing to re-test and gets the stable `nayax_not_connected` `409`.
+
+**Test and re-test share one per-business allowance.** A re-test is the same eight calls against the
+same upstream, so it claims from the same `NayaxConnectionTestRateLimiter` singleton, before the
+runner, and the two count together: five runs per business per rolling ten minutes in any mix, then
+`429` with a `Retry-After` and no Nayax call at all.
+
+**The status read is for every member, and answers two things.** The banners of #539 are shown to a
+Manager and an Operator, who cannot open the Owner-only integration settings at all, so
+`GET …/status` carries `Dashboard.View` and returns the status name and `machineChecksPending` and
+**nothing else** — no operator id, no credential revision, no last-tested instant, no check lines. It
+never decrypts the stored token. A business with no row reads `NotConfigured`, which is also what a
+caller whose business does not resolve reads. Because capability requirements accumulate down an
+endpoint, the capability is declared **per action** on `NayaxConnectionController` rather than on the
+controller: a controller-level `Integration.Manage` would mean this read required both and so be
+Owner-only (issues #525 and #526).
+
+**What proves it.** `Inventory.UnitTests/Domain/Nayax/NayaxConnectionCheckOutcomePolicyTests` — every
+row of the table above, each unstated sign-in failure concluding nothing, a failed sign-in deciding
+the outcome whatever else failed, and an undeclared status or outcome refused rather than defaulted.
+`Inventory.UnitTests/Application/Nayax/SaveNayaxConnectionTests` — the status from the draft's own
+results, the stored credentials being the tested ones, unchecked machine lines saved `Ready` with the
+flag set, a failed sign-in refused with nothing stored and nothing committed, a draft saved only once
+with the revision increased once, expiry and actor binding refused identically, and a missing draft id
+refused before a transaction is begun. `RetestNayaxConnectionTests` — each outcome from each of
+`Ready`, `PendingPermissions` and `NeedsAttention`, an unavailable Nayax leaving the row
+byte-for-byte, the revision the checks ran with, the pending machine checks recorded and then
+cleared, a replacement saved mid-run keeping its own status for a concluded *and* for an inconclusive
+run (each cause that concludes nothing, plus a connection removed mid-run), an unchanged revision
+comparing and reporting from one read, no stored credentials, and the shared allowance.
+`GetNayaxConnectionStatusTests` — the two fields, `NotConfigured`, and no token decrypted.
+`Adapters/Persistence/NayaxConnectionSaveTransactionTests` — relational SQLite over a database
+*file*, so two saves of one draft are genuinely concurrent: exactly one succeeds, the other is the
+`409`, the revision increases once, and the draft is consumed once; plus a refused save and a failed
+credential write both leaving the draft in place.
+`Adapters/Persistence/EfNayaxConnectionTestDraftStoreTests` — the claim returning the decrypted
+credential and deleting the row, a second claim finding nothing, a draft that disappears between the
+read and the delete claiming nothing, cross-business and unscoped claims refused, and an
+undecryptable token failing closed without consuming the draft.
+`Adapters/Persistence/EfNayaxConnectionStoreTests` — the machine-checks column written only by a
+result that states it, and cleared by a credential save.
+`Adapters/Persistence/AddNayaxConnectionMachineChecksPendingMigrationTests` — the column arrives, no
+other column or index changes, the existing connection is byte-for-byte unchanged and reads "not
+pending", and nothing is backfilled. `Controllers/NayaxConnectionSaveRetestApiTests` — the whole flow
+through the real pipeline and the real migration history: test then save, the token as ciphertext and
+never echoed, every refusal's status and sentence, the re-test outcomes including the recovery from
+`NeedsAttention` and both the concluded and the inconclusive re-test overtaken by a save — the `409`,
+its exact sentence and the replacement's row byte-for-byte unchanged — the shared `429`, the status
+read for each role with exactly two fields, and a non-Owner neither saving nor re-testing.
+`CapabilityAuthorizationApiTests` and `EndpointAuthorizationClassificationTests` carry the three
+endpoints' capability rows.
+
+### The Nayax connection wizard (issue #538)
+
+Issue #538 — the Owner-facing slice of #506, under #328 — is the screen over the endpoints above: a
+six-step wizard on Admin → Nayax Settings, beside the processing-fee editor it did not replace. It is
+**frontend only**: it adds no endpoint, changes no contract and holds no rule of its own.
+
+`NayaxConnectionWizardComponent` and the presentational `NayaxConnectionChecklistComponent`
+(`frontend/inventory-app/src/app/components/admin/nayax-settings/`) are composed by the routed
+`NayaxSettingsComponent` per [Page composition boundary](#page-composition-boundary-issue-191): the
+steps, the token field, the checklist, the support request and the save/re-test lifecycle belong to
+the wizard, not to the page. `NayaxConnectionService` is the one client for the four endpoints.
+
+**The token field is write-only, and that is the point of the whole shape.** Step 3's input is bound
+to no component state — no `ngModel`, no signal, no field — because a component property holding a
+Lynx token is exactly what must not exist. It is read from the DOM when Test is pressed, passed once
+to `POST …/test`, and cleared the instant that call returns, on a success, a refusal and a transport
+failure alike. Nothing writes it to `localStorage`, `sessionStorage`, a cookie, the URL or a toast,
+and nothing re-sends it: Save carries the server's own opaque draft id, so the credentials stored are
+the ones the server tested (see
+[Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537)).
+`NayaxConnectionWizardComponent`'s spec asserts the absence - the token in no own property, in
+neither storage, and the field emptied on both paths - because "we do not keep it" is a claim only a
+test can keep true.
+
+**It concludes nothing about the connection.** Every check line, cause sentence, machine count and
+status on screen is the server's own finding, read through the one area/cause vocabulary the
+checklist and the support request share. A `NotChecked` line is rendered as neither a pass nor a
+failure, and it says *why* from the machine count: zero machines reads "no machines in this Nayax
+account yet", while no count at all reads "the machine list could not be read" — a business that has
+machines must not be sent to set them up. The checklist also states that the restock write call is
+never tested and is checked on first real use, because a connection test must not change an
+operator's Nayax data.
+
+**Step 5 exists because the fix is usually Nayax's to make.** When any line failed, the wizard
+composes a ready-to-copy request naming the operator id and every refused area with its cause, links
+the Nayax support portal (`https://nayax.service-now.com/csm`) and offers
+`integration-support@nayax.com` as the secondary contact. The request names no token. Step 5 is
+skipped entirely when the server reported nothing failed.
+
+**Save and re-test say what the server said.** Save is not offered for a run whose sign-in did not
+pass, or whose draft has expired — the server refuses both, and this only avoids spending a request
+on a known refusal. A consumed or refused draft is withdrawn from the screen, so a second save is
+impossible here as well as refused. The stored-connection panel reads `GET …/status` on arrival,
+shows the status, prompts "Re-test once your machines are set up" while the machine checks are
+pending, and offers Re-test in every status including `NeedsAttention`. A re-test that concluded
+nothing says the stored status is left exactly as it was; a `409` shows the server's own *"The
+connection changed while testing. Run the test again."*, and the component carries that sentence
+itself for a refusal that arrives with no body.
+
+**Owner only in three places, authoritative in neither of the first two.** The route requires
+`Integration.Manage` (`app.routes.ts`), the wizard hides itself and refuses its own actions without
+that capability, and each endpoint checks it and refuses the request regardless. The capability read
+starts granted, so an unanswered read leaves the wizard as it was before roles were rendered.
+
+**What is deliberately not here.** The connection banners on other screens (#539) and any backend
+change.
+
+### Nayax connection status banners (issue #539)
+
+Issue #539 — the last slice of #506, under #328 — is the explanation every other Nayax-dependent
+screen was missing: Machines (`MachineListComponent`, `MachineDetailComponent`), Sites
+(`SiteListComponent`, `SiteProductsComponent`), Pick List (`PickListComponent`) and the Sync Restock
+workflow (`MachineRestockSyncComponent`) all read a live Nayax projection through
+`INayaxLynxClient` (`ListMachineDashboard`, `ListMachineProducts`, `GetSiteSummaries`,
+`GetSiteProducts`, the Pick List projection and `SyncMachineStockFromNayax`), so each of them now
+composes the one shared `NayaxStatusBannerComponent`
+(`frontend/inventory-app/src/app/components/shared/nayax-status-banner/`) just under its page header
+(and, on `MachineRestockSyncComponent`, inside its own card beside the Sync Restock button, since
+that is the workflow a Manager or Operator actually triggers). It is **frontend only**: it adds no
+endpoint and decides no rule of its own.
+
+**It reads the same status the wizard reads, once, and adds nothing to it.** The banner calls
+`NayaxConnectionService.status()` (`GET …/nayax-connection/status`, issue #537, `Dashboard.View` -
+every role) on its own `ngOnInit` and shows nothing until that answer is known. It is hidden while
+the status is `Ready` and while the read could not be answered at all - a page's own data load
+already reports its own failure, and a banner built on a probe nobody could answer would only add a
+second, possibly wrong, explanation beside it - and shown for every other published status
+(`NotConfigured`, `PendingPermissions`, `NeedsAttention`).
+
+**Who sees the setup link is `Integration.Manage`, not a role string.** That capability is the one
+`RoleCapabilities` grants to an Owner alone, so the banner reads it through
+`AccessService.allows('Integration.Manage')` exactly as `NayaxConnectionWizardComponent` does, and
+with the same fail-open default (`canManage` starts `true`) so an unanswered capability read never
+hides a link an Owner's role would show once the identity is known. An Owner sees "Nayax isn't fully
+connected for this business." with a link to the wizard (`/admin/nayax-settings`, independently
+guarded by the same capability); a Manager or Operator sees the fixed sentence "Nayax isn't fully
+connected for this business. Ask a business Owner to finish the Nayax connection." with no link at
+all - never a derived "ask your admin" message, because this is the one sentence #328 agreed on.
+
+**What is deliberately not here.** The wizard itself (#538) and making these screens usable without
+Nayax at all, which is #329's release-gated work - the banner only explains the failure these
+screens already have; it does not give any of them a working degraded mode.
+
+**What proves it.** `NayaxStatusBannerComponent`'s own spec - every published status for an Owner
+and for a non-Owner, hidden on `Ready`, hidden while unread and while the status call fails, the
+Owner's link target, and the Manager/Operator sentence verbatim. Each host component's own spec
+proves the banner is composed and reacts to the same `NotConfigured`/`Ready` stub the banner's own
+spec already covers in full, rather than re-asserting that matrix six more times.
+
 ### Document storage
 
 Uploaded business documents reach storage through one Application port,
@@ -2101,8 +2960,9 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | Area | Current responsibility |
 | --- | --- |
 | `app.component.*` | Application shell: header with the sidebar collapse control and the signed-in user control, the sidebar, the routed page region, MSAL redirect/account handling, and the toast/loading hosts |
-| `layout/` | Primary navigation: `navigation.ts` (the navigation data and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
-| `app.routes.ts` | Product, stock, supplier, machine, site, purchase, report, expense, and administration routes |
+| `layout/` | Primary navigation: `navigation.ts` (the navigation data, each destination's capability, and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
+| `access/` | What the signed-in member may do (issue #528) and which account state they are in (issue #529): the capability vocabulary, the cached `GET /api/me/access` and `GET /api/me/account-state` reads, the two route guards, the "access not allowed" and "access unavailable" pages, and the interceptors that keep the caches current and show the global `403` notice |
+| `app.routes.ts` | Product, stock, supplier, machine, site, purchase, report, expense, and administration routes, each with the capability its page needs |
 | `components/` | Routed feature pages plus a small set of shared components |
 | `services/` | Typed HTTP calls, runtime configuration, toast state, and feature-specific client behavior |
 | `models/models.ts` | Shared inventory, purchase, site, and machine contracts |
@@ -2136,7 +2996,10 @@ and they are the first realized part of the target `layout/` folder described be
 | `app.component.*` | The shell layout, the sidebar open/collapsed state and its handlers, the narrow layout's top-bar opener, the wide-versus-narrow layout decision, and the MSAL identity it passes to the user menu |
 
 `primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Machines`,
-`Sites`, `Expenses`) and expandable groups (`Products`, `Purchases`, `Reports`, `Admin`). A group
+`Sites`, `Expenses`) and expandable groups (`Products`, `Purchases`, `Reports`, `Admin`). Each
+destination also declares the capability its own page needs, and the sidebar renders only the ones
+the signed-in member holds — see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)
+below. A group
 heading is a `<button>` that toggles its children and is deliberately not a destination, so no
 group needs an overview page. **Every `route` must be a real page already declared in
 `app.routes.ts`**: `navigation.spec.ts` compares the two and fails on a destination invented ahead
@@ -2148,18 +3011,28 @@ pages (six at issue #391, joined by `Historical GST Classification` in issue #43
 remains a valid bookmark that the home Dashboard's "Open Admin" action and each dedicated page's
 "Back to Admin" link still reach.
 
-**One conditional destination (issue #335).** `Platform Diagnostics` (`/admin/diagnostics`) is the
-only entry that is not in `primaryNavigation`: `navigationFor(hasPlatformDiagnosticsAccess)`
-appends it to the end of the `Admin` group, and only `GET /api/admin/diagnostics/access` can say
-yes. `SidebarNavComponent` starts from `navigationFor(false)`, asks
-`PlatformDiagnosticsAccessService` once, and re-resolves the active entry when the answer arrives;
-a refusal, a failure and an unanswered probe all leave the navigation everyone else gets, silently,
-because a navigation menu is not the place to report that one capability could not be checked. The
-link is presentation and never a boundary — the route and both endpoints are independently
-authorized, so a hidden link hides a page rather than protecting one (see [Platform
+**One conditional group (issue #335, given its own top-level group in issue #546).** `Super Admin`
+is the only entry that is not in `primaryNavigation`: `navigationFor(hasPlatformDiagnosticsAccess)`
+appends the whole group, last, and only `GET /api/admin/diagnostics/access` can say yes. It holds
+`Platform Diagnostics` (`/super-admin/diagnostics`, moved out of the business `Admin` group, which
+`/admin/diagnostics` now only redirects to) and a Businesses placeholder (issue #547 builds the real
+page) — a `NavPlaceholder` that renders as inert text, because `navigation.ts`'s one rule, that
+every `route` must be a real page already declared in `app.routes.ts`, leaves no route to give it
+before that page exists. Neither child declares a capability, because no business role grants
+either. `SidebarNavComponent` starts from `navigationFor(false)`, follows
+`PlatformDiagnosticsAccessService.granted$`, and re-resolves the active entry whenever that answer
+changes; a refusal, a failure and an unanswered probe all leave the navigation everyone else gets,
+silently, because a navigation menu is not the place to report that one capability could not be
+checked. **The group follows the signed-in identity (issue #605):** that answer is cached per
+identity, so changing the active account, signing out or signing in removes a granted `Super Admin`
+group on the switch itself — not when some other identity's answer happens to arrive — and the
+group comes back only if the new identity's own probe confirms access, with a late answer for a
+superseded identity discarded (see [Platform diagnostics](#platform-diagnostics-issue-336)). The
+group is presentation and never a boundary — the route and both endpoints are independently
+authorized, so a hidden group hides a page rather than protecting one (see [Platform
 diagnostics](#platform-diagnostics-issue-336)). Everything else about the shell is unchanged: the
-groups, their order, the matching rules and the active-state behaviour below all stay as issue #391
-left them.
+`primaryNavigation` groups, their order, the matching rules and the active-state behaviour below all
+stay as issue #391 left them.
 
 **Active state.** `activeNavRoute` resolves the current URL to the most specific matching entry,
 rather than relying on `routerLinkActive`, because several destinations are prefixes of each other:
@@ -2214,6 +3087,37 @@ sidebar or the sticky header.
 account resolution and `loginRedirect`/`logoutRedirect` calls; `UserMenuComponent` is presentation
 only and reports the two intents the application actually has. It invents no profile or account
 destination. The public `/auth` callback route and `MsalGuard` on every other route are untouched.
+
+**The shell follows the identity signed in now (issue #604).** `AppComponent` watches the shared
+`signedInAccountMayHaveChanged` trigger (`access/signed-in-account.ts`) — MSAL's own account
+events, `ACTIVE_ACCOUNT_CHANGED` among them, as well as `inProgress$` settling — rather than the
+interaction status alone. A direct Microsoft active-account switch raises only the event, because
+no interaction is involved and `inProgress$` never leaves `None`: a shell watching the interaction
+status alone therefore kept the previous account's displayed name, `businessAccountKey` and
+published business time zone for the rest of the session, and the new account-state answer could
+not repair it because the lookup that would have read it had already completed. The identity is
+compared through the same `activeAccountKey` the access caches key their answers on, so the shell
+and they cannot disagree about who is signed in. When it has actually changed, the shell does all
+of this in one step, before anything is read for the new account:
+
+- shows the new account in the header;
+- calls `BusinessService.reset()`, which drops the cached business and clears the published zone,
+  so no date is rendered in the previous business's zone and none is rendered in a guessed one;
+- cancels the lookup in flight for the previous account, including a retry still waiting;
+- closes the routed-page gate (`isBusinessContextReady`), so the page waits again instead of
+  rendering the new account's data against the previous business's calendar.
+
+It then waits for the new identity's own account state and reads its business once — see
+[Account-state routing](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529)
+below. A superseded lookup answering late can neither publish a zone (`BusinessService`'s
+generation check refuses it) nor open the gate (its subscription is gone); a further notification
+for the identity already loaded reads nothing again and does not restart a settled context; a
+sign-out clears the context with no authenticated call; and the MSAL listeners end with the
+component. `app.component.spec.ts` covers a direct event-only switch between two business zones
+(`Australia/Sydney` to `Europe/London`, against the real `BusinessService` and
+`BusinessTimeZoneService`), the new identity answering `NoMembership`, an unreadable new state,
+the previous account's response arriving after the switch, the sign-out event, a duplicate
+notification, and the cleanup on destroy.
 
 Adding a navigation entry is therefore a data change in `layout/navigation.ts` once the page and
 its route exist — not a template change in the shell.
@@ -2278,6 +3182,449 @@ its route exist — not a template change in the shell.
   template, not something the shell imposes or forbids.
 - **Sign-in callback.** `auth-callback.component.ts` centres a `.card` on the canvas background
   instead of a bare paragraph; its logic is still just the static "Signing you in..." message.
+
+### Member access: capability-built navigation, guards and hidden actions (issue #528)
+
+Until issue #528 the sidebar showed every entry to every member and every route was behind
+`MsalGuard` alone: the API refused what a role could not do, and the menu did not know. This slice
+teaches the frontend what the member may do, from the one place that can say — `GET /api/me/access`
+(issue #521) — and renders it. It is one slice of #503, which keeps the full agreed contract for
+this area under #328.
+
+**Nothing here is a boundary, and nothing may be moved behind it.** Every capability the frontend
+reads is also checked by the endpoint behind the page, which answers a bare `403` whatever the
+browser rendered ([Capability authorization](#capability-authorization-issue-525)). A hidden menu
+entry, a redirected route and a hidden button therefore hide a page rather than protect one, for
+exactly the reason the conditional `Platform Diagnostics` link already did. There is deliberately
+no frontend role source: no claim, flag, stored value or second table, because a second source
+could only diverge from `Inventory.Application.Access.RoleCapabilities`.
+
+| File | Responsibility |
+| --- | --- |
+| `access/capabilities.ts` | The fifteen published `Area.Action` capability names, mirrored from `Inventory.Application.Access.Capabilities`, and `capabilitySet`, which keeps only the names this build declares |
+| `access/access.service.ts` | `AccessService`: the cached `GET /api/me/access` read, its refresh triggers, and the `allows`/`allowsAny` answers everything else renders from |
+| `access/capability.guard.ts` | `requireCapability(...)`, the `CanActivateFn` every authenticated route declares |
+| `access/access-not-allowed.component.ts` | The page a route the member's role does not allow sends them to |
+| `access/access-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the cache, and nothing else |
+| `access/member-endpoint.ts` | `classifyMemberRequest`, the one answer to "is this refused request a member endpoint?" that all three `403` interceptors read (issue #602) |
+| `access/forbidden-interceptors.ts` | `FORBIDDEN_INTERCEPTORS`: the three `403` interceptors in the order `app.config.ts` installs them, so the composed chain is testable as a whole |
+| `layout/navigation.ts` | Each destination's `capability`, and `navigationFor(capabilities, hasPlatformDiagnosticsAccess)` |
+
+**One cached answer per signed-in identity.** The read is lazy — issued when something first asks,
+which in practice is the shell's sidebar — and only once MSAL reports `InteractionStatus.None`,
+because a protected request issued while a redirect is still being handled would have
+`MsalInterceptor` start an interactive sign-in of its own on the public `/auth` landing route. Every
+consumer shares the one answer; a read already in flight is reused rather than duplicated. The cache
+is dropped or read again on exactly these triggers:
+
+| Trigger | What happens |
+| --- | --- |
+| Sign-in | The previous answer is dropped and the capabilities are read as the newly signed-in identity |
+| Sign-out | Cleared without reading again — there is nobody to read it for |
+| MSAL active-account change | The previous identity's answer is dropped immediately and the capabilities are read again, unconditionally, because an answer in flight may have been issued as the previous identity |
+| Any `403` from a member endpoint | Read again unless a read is already in flight. Only a refusal `classifyMemberRequest` calls a `member` one counts: both cache probes, the platform diagnostics surface, `/assets/*` and every other origin are excluded, so a refusal can never drive a refresh loop |
+| Window focus more than 5 minutes after the last answer | Read again, so a tab left open all day stops rendering a menu built from a role somebody has since changed |
+| An explicit `refresh()` | Read again, unconditionally. This is what other work calls after changing something relevant |
+
+Sign-in, sign-out and the active-account change are observed from two signals together — MSAL's
+`msalSubject$` account events and `inProgress$` settling, the shared trigger the shell watches too
+(issue #604) — and are acted on only when the signed-in identity the cache was read for actually
+changed. An answer from a read a later one superseded is discarded by a generation check when it
+arrives, so a slow read for the previous identity can never build somebody else's menu.
+
+**The identity signed in now owns the answer, from the moment it changes** (issue #603). An actual
+change of identity publishes `unread` again *before* the new read is issued or even waited for, so
+there is no window in which the previous account's capabilities are still the published answer:
+
+- a guard or any other subscriber arriving while the new read is pending waits for the new
+  identity's own answer, because `unread` ("nothing has been asked yet") stays deliberately
+  different from `unavailable` ("asked, and could not be answered"), and only the second one is the
+  documented fail-open case;
+- a subscriber that is *already* holding an answer is told the grant is withdrawn rather than left
+  with the previous member's `true`, which is what takes the supplier GST editor's Save control
+  away the moment the account changes;
+- the sidebar's long-lived subscription re-renders with no destination at all for that window,
+  rather than keeping the previous member's menu — the same empty menu it renders before the first
+  answer, and for the same reason;
+- the cache then belongs to no identity until the new read reaches one, which is what makes the
+  MSAL account event and the settling interaction that both report one change read the new identity
+  **once** rather than twice;
+- a late answer for a superseded identity — including after rapid A→B→C switches — is discarded by
+  the generation check and cannot clear the current read's pending state either, so it neither
+  publishes nor makes the new read look finished;
+- a same-identity re-read (an explicit `refresh()`, the `403` trigger, the stale-window focus) is
+  unchanged and keeps its own answer published while it runs: it is re-reading the same person's
+  capabilities, and blanking the menu on a routine refresh would help nobody.
+
+**A live `allows(...)` answer is withdrawn, never left standing.** The two consumers of that
+boolean need opposite things from a pending read, and `allowsAny` gives each of them theirs:
+
+- a subscriber that has **never** had an answer receives nothing while the read is pending. That is
+  what lets `requireCapability` wait for the new identity instead of deciding a navigation from an
+  answer nobody has given yet, and it is why emitting the fail-open `true` for a pending read would
+  be wrong.
+- a subscriber that has **already** received `true` is corrected. Once an answer has been
+  published, a return to `unread` reports `false` until the new identity's own answer arrives,
+  because another answer is the only way to tell a control that is already rendered that the grant
+  it was given belonged to somebody else. The one capability-gated control, the supplier GST
+  defaults editor, therefore loses its Save control the moment the signed-in account changes, and
+  gets it back only if the new member's own capability set holds `Suppliers.ManageGstDefaults`; a
+  late answer for the superseded identity restores nothing, and `save()` issues no `PUT` in the
+  meantime.
+
+The fail-open rule is unchanged, and it belongs to the identity signed in now: an `unavailable`
+answer for *that* identity reports `true` again, exactly as it always has.
+
+**"A member endpoint" is one classification, read from the configured API base URL** (issue #602).
+`access/member-endpoint.ts` answers it once, for all three `403` interceptors, by normalising the
+request URL and the API base URL that `ConfigService` resolved and comparing them explicitly:
+
+| Classification | What it covers | What a `403` from it does |
+| --- | --- | --- |
+| `member` | Every endpoint under the configured API base that is not named below | Refreshes the capability cache and the account-state cache, and shows the global `403` notice |
+| `access-probe` | `GET /api/me/access`, this cache's own read | Refreshes the account state only, one way (issue #529) |
+| `account-state-probe` | `GET /api/me/account-state`, the sibling cache's own read | Nothing |
+| `platform-admin` | `/api/admin/diagnostics/*` (issue #336), authorized by the configured Entra `(tid, oid)` pair and by no business role | Nothing |
+| `non-api` | `/assets/*`, any other origin (MSAL's own traffic), and any path outside the API base | Nothing |
+
+The classification is by path **segment**, so a query string, a trailing slash, a doubled slash and
+the API's own case-insensitive routing cannot defeat an exclusion, and a path that merely starts
+with the same letters (`/apiary/...`) is not the API. A request counts as an API call only when its
+origin is the configured API's and its path starts with the API's own segments; the default for
+anything else under that base stays `member`, because an endpoint this build has never heard of
+still refuses a member whose role has changed. The other `/api/admin/*` controllers — historical GST
+classification, the repairs — are ordinary capability-policy member endpoints and are deliberately
+**not** part of `platform-admin`.
+
+**The refresh reads are bounded, and the table above is why.** `member` refreshes both caches,
+`access-probe` refreshes the account state, and `account-state-probe` refreshes nothing: the edges
+form a dead end rather than a cycle. A refused member request therefore costs at most one capability
+read and two account-state reads — one from the refusal itself, one from the refused capability
+probe, depending on how the two responses interleave — and the chain then goes quiet whatever keeps
+refusing. Before issue #602 each interceptor excluded only its *own* probe, so a refused account-state
+probe refreshed the capabilities, whose refused probe refreshed the account state, and two refusals
+alternated indefinitely; and `GET /api/admin/diagnostics/access`, which is refused for everyone but
+the configured platform administrator, both started those refreshes and showed an ordinary member
+"you don't have access to this".
+
+**A read that cannot be answered hides nothing.** `unavailable` — nobody signed in, a refusal, a
+failed request — leaves every menu entry, route and action exactly as it was before capabilities
+were rendered at all. Failing closed here would lock a legitimate member out of their own page over
+a failed menu probe, while failing open shows an entry whose endpoint still refuses what the role
+may not do. (The conditional diagnostics link keeps failing *closed* on its own probe, because
+hiding a link no business role grants costs nothing.) Which screen a person with no usable
+membership is shown at all, and the global `403` handler that tells a member a request was refused,
+are issue #529's account-state routing and are deliberately not here.
+
+**The navigation is built from the capability set**, not conditioned in the sidebar's template:
+`navigationFor` drops each destination whose capability the member does not hold and drops a group
+once all of its children are gone. An Operator is therefore offered no `Expenses`, no `Reports`
+group and no `Admin` group; a Manager's `Admin` group holds `Site Commission Agreements` and
+`Imports` without `Nayax Settings` or any of the five repairs; an Owner is offered every declared
+destination. `Reports → Site Commissions` follows the API and declares `SiteCommissions.Manage`
+rather than `Reports.View` ([issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526)).
+Until the capability set has been read the sidebar renders **no** destination, because a menu that
+offered everything and then took entries away would show entries that were never this member's —
+and it renders none again from the moment the signed-in identity changes until the new identity's
+own answer arrives (issue #603); `Platform Diagnostics` is unchanged and still independent of every
+capability.
+
+**Route guards are presentation.** Every authenticated route declares
+`canActivate: [MsalGuard, requireCapability(...)]`, with `MsalGuard` first so authentication is
+still decided first, and the guard redirects to `/access-not-allowed` when the capability set is
+known and does not allow the route. Several capabilities mean "any of these", which is what
+`/admin` needs: the Admin hub owns no workflow, so holding `Imports.Run`, `SiteCommissions.Manage`,
+`Integration.Manage` or `Data.Repair` is enough to be shown it. Two routes deliberately carry no
+capability and that is the whole list — `/access-not-allowed`, because a member sent there must not
+be sent away from their own explanation, and `/super-admin/diagnostics`, whose authority is the
+diagnostics API's per request and no business role's (issue #335); it carries `platformAdminGuard`
+instead (issue #546), not a capability guard. `app.routes.spec.ts` asserts both
+the exceptions and the ordering. A guard decides one navigation, from the answer that navigation was
+made with; a later refresh re-renders the menu and the hidden actions rather than re-evaluating a
+page the member is already on, which the API keeps authorizing on every request anyway.
+
+**The `/access-not-allowed` page teaches no part of the role matrix.** It names no capability, no
+role and none of the roles that would have been allowed, for the same reason the API's refusal is a
+bare `403`, and it offers the Dashboard so it is never a dead end. It is not the "access
+unavailable" page of issue #529, which is for a person whose *membership* is unusable.
+
+**Hidden actions.** The supplier GST defaults editor is the one action this slice hides, and it
+mirrors the one read/write split in the whole capability matrix: reading the defaults stays on
+`Purchasing.Operate`, because an Operator recording a purchase needs to see which classification it
+will be given, while changing them needs `Suppliers.ManageGstDefaults`. Without that capability the
+three pickers are read-only and no Save control is rendered;
+`PUT /api/suppliers/{id}/gst-defaults` refuses the write itself either way. The Admin hub's eight
+cards are **not** filtered by capability yet — `/admin` is guarded, so an Operator never reaches it,
+but a Manager still sees the six cards their role cannot open and gets `/access-not-allowed` from
+the guard rather than a page of refusals.
+
+**The Dashboard renders the redacted summary.** `DashboardSummary.salesThisWeek` and
+`inventory.inventoryValueAtCost` are optional in `models.ts`, because a role without
+`Dashboard.ViewFinancials` is not sent them at all
+([issue #527](#dashboard-financial-redaction-issue-527)). The page hides the "Sales this week" and
+"Inventory" cards when the figures are **absent** and renders the two non-financial cards alone. It
+keys off the response rather than off the capability, so the API's decision is the only one there
+is and no card can ever read a figure it was not given. An *incomplete* valuation is
+`inventoryValueAtCost: null`, which is present: that card stays and reports "Unavailable" exactly as
+before, and a still-loading or failed summary keeps all four cards for the same reason — not
+knowing a figure yet is a different thing from having been told it is not this member's to see.
+
+**What proves this slice.** `access.service.spec.ts` (the cached read, the fifteen-name vocabulary,
+an undeclared name dropped, the MSAL wait, every refresh trigger including the five-minute focus
+boundary either side, the refusal trigger coalescing, a superseded answer discarded, the fail-open
+answer for every unreadable case, and — for issue #603 — the withdrawal a long-lived `allows(...)`
+subscriber is told about: the permission cleared while the new identity's read is still pending, a
+late answer for the previous identity unable to restore it, the fail-open `true` returning for the
+new identity's own unreadable read, and a subscriber arriving in the window still waiting),
+`identity-cache.spec-helpers.ts` (the identity-change suite both caches are asserted against,
+written once because they are siblings: the previous answer dropped before the new read answers, a
+subscriber arriving mid-read answered from the new identity, rapid A→B→C switches, a previous
+identity answering last, one read for the duplicated MSAL notifications, a sign-out with a read in
+flight, and a same-identity refresh keeping its own answer),
+`navigation.spec.ts` (the per-role menus, written out literally from #328's table, a partly-allowed
+group, the empty and unknown capability sets, and the diagnostics link's independence),
+`sidebar-nav.component.spec.ts` (the rendered menu per role, no destination before the first answer,
+a re-render when the capabilities change, and the menu emptied and rebuilt across an account change
+against the real service), `capability.guard.spec.ts` (allowed, refused, any-of, fail-open, waiting
+for an unread answer, waiting for the new account instead of deciding from the previous account's
+capabilities, and the page naming no capability or role), `app.routes.spec.ts` (every authenticated
+route guarded, the two exceptions, and `MsalGuard` first),
+`access-forbidden.interceptor.spec.ts` (the `403`
+trigger, the excluded probes, diagnostics surface and assets, and every other status ignored),
+`member-endpoint.spec.ts` (every classification, for the local and the deployed API base URL, with
+query strings, trailing slashes, other origins and the member `/api/admin/*` controllers),
+`forbidden-interceptor-chain.spec.ts` (the composed chain: the asserted request count for
+persistent probe refusals, coalescing, the silent diagnostics probe and the preserved notice),
+`supplier-gst-defaults.component.spec.ts` (the hidden Save, the read-only pickers, no `PUT`, the
+control returning on a refresh, and — against the real service — the Save control taken away the
+moment the signed-in account changes, no `PUT` issued in that window, a late answer for the
+previous account restoring nothing, and the control returning only on the new account's own
+answer) and `dashboard.component.spec.ts` (the redacted summary rendering
+the two non-financial cards, with no `$0.00` and no withheld figure anywhere).
+
+### Account-state routing, the access-unavailable page and the global 403 handler (issue #529)
+
+Until issue #529 the app called no endpoint that could tell a signed-in person apart from a
+member: every business call for an account with no usable membership answered the same bare `403`
+`BusinessScopeMiddleware` gives today, and nothing routed that person anywhere. This slice reads
+`GET /api/me/account-state` (issue #523) on start-up, before any business call, and routes from
+its answer. It is one slice of #503, which keeps the full agreed contract for this area under
+#328; #528's capability cache and route guards are the sibling slice this one is built the same
+way as.
+
+| File | Responsibility |
+| --- | --- |
+| `access/account-state.service.ts` | `AccountStateService`: the cached `GET /api/me/account-state` read, built and invalidated exactly like `AccessService` |
+| `access/account-state.guard.ts` | `accountStateGuard`, the `CanActivateFn` every business route declares, and `ACCOUNT_STATE_ROUTE`/`ACCOUNT_STATE_BYPASS_PATHS` |
+| `access/access-unavailable.component.ts` | The page `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` are routed to |
+| `access/onboarding-placeholder.component.ts` | The one stand-in component `/welcome`, `/application-pending` and `/application-rejected` load until #508's tasks replace each with its own page; `/invite/:token` carried this placeholder until issue #535 replaced it with `InviteAcceptanceComponent` |
+| `access/account-state-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the account-state cache, mirroring `accessForbiddenInterceptor` |
+| `access/member-forbidden-notice.interceptor.ts` | The global `403` handler: "you don't have access to this", except on a bypass route or for a refusal `classifyMemberRequest` does not call a member one |
+| `app.component.ts` | Waits for the account state before looking up the business at all |
+
+**The routing contract** (agreed under #328, with its contract corrections of 10 Oct 2026):
+`Member` reaches the route it asked for; every other state redirects before that route's own
+business calls ever run.
+
+| Account state | Destination |
+| --- | --- |
+| `Member` | The route asked for |
+| `NoMembership` | `/welcome` |
+| `ApplicationPending` | `/application-pending` |
+| `ApplicationRejected` | `/application-rejected` |
+| `MembershipRevoked`, `BusinessDeactivated`, `MembershipAmbiguous` | `/access-unavailable` |
+
+`accountStateGuard` carries this table (`ACCOUNT_STATE_ROUTE`) and is declared, second after
+`MsalGuard` and before `requireCapability`, on every business route in `app.routes.ts`. It is
+presentation, not a boundary, for the same reason `requireCapability` is: `BusinessScopeMiddleware`
+refuses every business call for an account with no usable membership whatever the router did, so a
+state that could not be read lets the navigation through rather than guessing. The five
+destinations above and `/invite/:token` (issue #535's acceptance page) carry no `accountStateGuard`
+of their own - adding one would send a person this guard already routed there straight back to
+themselves, or away from the one explanation their state has - and `/access-not-allowed` stays the
+exception issue #528 already documents. `/super-admin/diagnostics` carries no `accountStateGuard`
+either, for a different reason (issue #546): platform-admin authority is independent of business
+membership, so a refusal there goes to the dashboard rather than to any state in this table.
+
+**The access-unavailable page names no business.** `BusinessDeactivated` says to contact the
+business Owner, `MembershipAmbiguous` says to contact support, and `MembershipRevoked` says to
+contact the Owner too, but is also the one state the backend's membership-resolution policy treats
+as eligible under `GET /api/me/account-state`'s `onboardingEnabled` flag - so it is the one state
+the page offers **I have an invite link** for unconditionally, and **Start a new business** for
+only when `onboardingEnabled` is true, matching the API's own eligibility rule rather than a
+frontend guess. Sign-out needs no control of its own here: the application shell's header carries
+the one sign-out control on every route, this one included.
+
+**The global `403` handler** (`memberForbiddenNoticeInterceptor`) shows "you don't have access to
+this" through the toast every other failure already renders with, for any `403` from a member
+endpoint - `classifyMemberRequest`, the same classification `accessForbiddenInterceptor` uses
+([issue #528](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)), so
+the two interceptors cannot disagree about what counts as one. A `403` from
+`GET /api/admin/diagnostics/access` is therefore silent on every route: that probe is the sidebar's
+quiet platform-admin question (issue #335), its refusal is the expected answer for every ordinary
+member, and it says nothing about a business membership. It does not fire while the current route is
+`/welcome`,
+`/application-pending`, `/application-rejected`, `/access-unavailable` or `/invite/:token`
+(`ACCOUNT_STATE_BYPASS_PATHS`, matched by prefix for the invite token): a person on one of them has
+already been told, by the routing itself or by the page they are on, exactly what their situation
+is, and the shell's own eager reads on those routes (the sidebar's `GET /api/me/access` among
+them) would otherwise show a contradicting toast on top.
+
+**Cache invalidation is #528's trigger set, applied to the account state too**
+(`AccountStateService` and `account-state-forbidden.interceptor.ts`): sign-in, sign-out, an MSAL
+active-account change, any `403` from a member endpoint other than `GET /api/me/account-state`
+itself (a `403` from `GET /api/me/access` **is** included, because that read requires membership
+and its own refusal is itself a staleness signal), window focus more than five minutes after the
+last read, and an explicit `refresh()`. `AccountStateService` is a sibling cache to `AccessService`
+built the same way, rather than a shared base the two refactor into, so #528's already-tested
+caching logic is untouched by this slice.
+
+**The refresh between the two caches runs one way only** (issue #602). `GET /api/me/access`'s own
+refusal still refreshes the account state, for the reason above - a membership revoked while the tab
+was open shows up there first - but `GET /api/me/account-state`'s refusal now refreshes **nothing**:
+not the account state (it is this cache's own read) and not the capabilities either, which is the
+exclusion that was missing. The two probes can therefore no longer refresh each other, so persistent
+`403`s settle instead of alternating for as long as the tab is open; issue #528's classification
+table above lists what each kind of refusal starts, and
+`forbidden-interceptor-chain.spec.ts` asserts the exact request count the composed chain issues
+before it goes quiet.
+
+**The answer belongs to the identity signed in now** (issue #603), by the same rule and the same
+mechanism [#528's section](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)
+states for the capability cache. An actual change of signed-in identity publishes `unread` again
+before the new read is issued or waited for, so `accountStateGuard` and the shell's own business
+lookup wait for the new person's state rather than routing the new account on the previous
+account's `Member` (or `NoMembership`) answer; a late response from a read the change superseded —
+including after rapid switches — is refused by the generation check, publishes nothing, and does
+not clear the current read's pending state; a sign-out clears both answers with no authenticated
+probe; and the MSAL account event and the settling interaction that both report one change read the
+new identity once. A same-identity re-read keeps its own answer published while it runs. Pending is
+still not the same thing as the current identity's `unavailable`: only the second one is the
+documented fail-open case that lets a navigation through.
+
+**The shell waits for the account state before any business call.** `AppComponent`'s existing
+business lookup (issue #499, `GET /api/business/current`) now reads the cached account state
+first and asks for the business only when it answers `Member` - an account with no usable
+membership has no business to look up, and the call would only receive the same `403` every other
+member endpoint already gives it. An account state that could not be read still attempts the
+lookup, for the same fail-open reason the guard does: the endpoint itself remains the boundary.
+
+**And the state it waits for is the current identity's** (issue #604). The shell starts that lookup
+afresh on the same account-change trigger these caches use (see [Application shell and
+navigation](#application-shell-and-navigation-issue-391)), and the previous identity's answer has
+already gone back to `unread` by then (issue #603), so a switched-to account is never granted a
+business lookup - or refused one - by the previous account's `Member` or `NoMembership` answer.
+`GET /api/business/current` is issued for the new identity once that identity's own state has
+answered, exactly once, and not at all while it is still pending; the documented unavailable
+fallback and the bounded retries are unchanged, and a late answer from the superseded read reaches
+no shell decision at all.
+
+**What proves this slice.** `account-state.service.spec.ts` (mirroring `access.service.spec.ts`:
+the cached read, every refresh trigger, the unknown-state fallback, a superseded answer discarded,
+and issue #603's shared identity-change suite from `identity-cache.spec-helpers.ts`, asserted
+against this cache too - the previous answer dropped before the new read answers, a subscriber
+arriving mid-read answered from the new identity, rapid switches, a previous identity answering
+last, one read for the duplicated MSAL notifications, a sign-out with a read in flight, and a
+same-identity refresh keeping its own answer), `account-state.guard.spec.ts` (routing for
+every state, the fail-open answer, reading once for several navigations, and waiting for the new
+account instead of routing on the previous account's state),
+`access-unavailable.component.spec.ts` (the per-state
+message, naming no business, and the revoked page with onboarding on - both options - and off -
+invite only), `account-state-forbidden.interceptor.spec.ts` and
+`member-forbidden-notice.interceptor.spec.ts` (the respective `403` triggers and the bypass-route
+list, including that a `403` on a bypassed route never shows the generic notice and that the
+diagnostics probe is silent on an ordinary one), `forbidden-interceptor-chain.spec.ts` (the three
+interceptors composed over the real caches: persistent probe refusals settling at an asserted
+request count, the one-way refresh, and the preserved notice and suppression), and
+`app.routes.spec.ts`/`app.component.spec.ts` (`accountStateGuard`'s position on every business
+route, the five bypass routes, and the shell asking for no business before the account state is
+known).
+
+### Invite acceptance page (issue #535)
+
+`/invite/:token` carried `OnboardingPlaceholderComponent` until this slice of #505 (under #328)
+replaced it with `InviteAcceptanceComponent`: where an invited person who opens their link, signs
+in if needed, joins the business with one click. The redemption endpoint it calls,
+`POST /api/invites/redeem`, is issue #532's ([Invite redemption](#invite-redemption-issue-532));
+this slice is the one caller `frontend/inventory-app/src` has for it.
+
+| File | Responsibility |
+| --- | --- |
+| `access/invite-acceptance.component.ts` | `InviteAcceptanceComponent`: reads the token, strips it from the address bar, decides Accept-button vs. redirect from the cached account state, calls the redemption endpoint, and refreshes both caches before landing on the dashboard |
+| `access/invite-redemption.service.ts` | `InviteRedemptionService`: the one `POST /api/invites/redeem` call, with the token in the request body and nothing else |
+| `access/account-state.guard.ts` | Gained `REDEEMABLE_ACCOUNT_STATES` and `nonRedeemableAccountStateDestination`, alongside `ACCOUNT_STATE_ROUTE` |
+
+**The token never leaves memory, and the address bar is cleared before anything else runs.**
+`InviteAcceptanceComponent.ngOnInit` reads the token from the route `ActivatedRoute` already
+matched and holds it only in a component field; its very next statement, before any analytics,
+logging or navigation, is `history.replaceState(history.state, '', '/invite')`. That rewrites the
+browser's own history entry — independently of what Angular's router still thinks the current URL
+is — so the token is gone from the address bar an instant after the page loads. Application code
+never writes it to `localStorage`, `sessionStorage`, a cookie, a log line or an error report, and
+`InviteRedemptionService` sends it only in this one request's JSON body, never in a URL path or
+query string, so no HTTP or router logging of a request or route *URL* can ever carry it either —
+there is no app-level logging of either kind in this build today, and this is why there will not
+be one carrying it later.
+
+**MSAL's own transient copy is the one accepted residual.** A signed-out visitor reaches this
+component at all only after `MsalGuard` (still the route's only guard — see [Account-state
+routing](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529))
+has sent them through the login redirect, with this exact URL — token included — as its own
+default redirect start page, and brought them back to it once the round trip completes. Nothing in
+this slice starts, configures or reads that bookkeeping: it is MSAL's existing
+`BrowserCacheLocation.LocalStorage` (`auth-config.ts`), already relied on by every other bypass
+route on this guard, holding the address for exactly the length of one redirect and clearing it
+once it lands. The token is single-use, expires after seven days, and is stored only as a hash on
+the server (`MemberInviteToken.Hash`, [Invite redemption](#invite-redemption-issue-532)) — so this
+one transient, third-party copy is the full extent of what survives a sign-in round trip, and it is
+accepted rather than worked around.
+
+**Eligibility is read from the cached account state, never assumed.**
+`REDEEMABLE_ACCOUNT_STATES` — `NoMembership`, `MembershipRevoked` and `ApplicationRejected` —
+mirrors the backend's `MembershipEligibility.AllowsActiveMembership` ([Invite
+redemption](#invite-redemption-issue-532)): the three states that hold no active membership of
+their own are the three the component offers the Accept button to, and an account state that could
+not be read (`AccountStateService`'s own fail-open `unavailable` answer) is treated the same way,
+for the same reason `accountStateGuard` fails open — the redemption endpoint re-checks eligibility
+itself and is the one answer that counts. Every other state — `Member`, `ApplicationPending`,
+`BusinessDeactivated` and `MembershipAmbiguous` — is sent straight to the page its own state
+already calls for, through `nonRedeemableAccountStateDestination`: `Member` to the dashboard,
+every other one to `ACCOUNT_STATE_ROUTE`'s existing destination, rather than showing a button the
+API would only refuse.
+
+**The API's refusal is shown exactly as it is written.** `InviteRedemptionService` does not
+interpret the response body beyond the one field a successful redemption carries; a refusal's text
+comes from `error.error.message`, the `ProblemDetails` extension `DomainExceptionHandler` already
+writes, so the one generic unusable-invite sentence (expired, used, cancelled, invalid, or an
+undeclared role — [Invite redemption](#invite-redemption-issue-532)), the already-a-member
+conflict, and the deactivated-business release sentence each render verbatim rather than being
+reworded or guessed at by this component. A refusal with no readable message (a non-domain error)
+falls back to one generic sentence this component owns, and leaves the Accept button enabled again
+so the attempt can be retried.
+
+**Acceptance re-reads both caches, in order, before it lands anywhere.** On a successful
+redemption, `AccountStateService.refresh()` and then `AccessService.refresh()` are chained and
+awaited — not fired without waiting for either to answer — before the one navigation to `/`: by the
+time it runs, the dashboard's own `accountStateGuard` and capability guard read the caller's new
+`Member` state and granted capabilities already published, rather than the stale pre-redemption
+answer either cache would still be holding if the navigation ran first.
+
+**What this slice does not do.** No invite preview before acceptance (the redemption endpoint
+takes a token and returns only the granted role — there is nothing to preview), the Users page
+(#534's task), and the first-sign-in "start a new business" choice (#508's tasks).
+
+**What proves this slice.** `invite-acceptance.component.spec.ts` (the token stripped from the
+address bar before anything else, never written to a Storage API or a cookie, the token surviving
+in memory through to redemption, the Accept button for each redeemable state and fail-open for an
+unreadable one, a successful redemption for a `MembershipRevoked` and an `ApplicationRejected`
+caller, every other state sent to its own page instead of a `Member` to the dashboard, the two
+cache refreshes awaited in order before the dashboard navigation, each API refusal's message shown
+verbatim, the generic fallback for an unreadable refusal, and a failed attempt leaving the button
+enabled again), `invite-redemption.service.spec.ts` (the token posted in the body and never the
+URL, and the response's one field), the `REDEEMABLE_ACCOUNT_STATES`/
+`nonRedeemableAccountStateDestination` cases added to `account-state.guard.spec.ts`, and
+`app.routes.spec.ts` (the route now loads `InviteAcceptanceComponent`, still behind `MsalGuard`
+alone).
 
 ### Breadcrumbs (issue #457)
 
@@ -2439,7 +3786,7 @@ partial enforceable rule.
 
 ### Routing and loading
 
-Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route. Which of these routes the sidebar offers, and under which group, is navigation data in `layout/navigation.ts` (see [Application shell and navigation](#application-shell-and-navigation-issue-391)); a route always keeps working by direct URL whether or not it appears there. Separately, whether a route shows a parent breadcrumb above its page title, and under which label, is `layout/breadcrumbs/breadcrumb-routes.ts` (see [Breadcrumbs](#breadcrumbs-issue-457)) — a third piece of navigation metadata, alongside `app.routes.ts` and `layout/navigation.ts`, that a new nested page should be added to when it has a meaningful parent.
+Routes are declared centrally in `app.routes.ts`. Every top-level route loads its component with `loadComponent` (issue #65), except the public `/auth` Entra redirect callback, which stays eagerly imported because it is the landing route for an in-progress authentication redirect, not a migrated feature area. This keeps initial bundles smaller and creates an enforceable feature boundary without introducing NgModules. Preserve route URLs, guards, and parameters when adding or changing a route. Which of these routes the sidebar offers, and under which group, is navigation data in `layout/navigation.ts` (see [Application shell and navigation](#application-shell-and-navigation-issue-391)); a route the sidebar does not offer still resolves by direct URL, and since issue #528 a route the member's capability set does not allow resolves to the "access not allowed" page instead of the page itself (see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) — the guard is presentation, and the API authorizes every request behind the page regardless). Separately, whether a route shows a parent breadcrumb above its page title, and under which label, is `layout/breadcrumbs/breadcrumb-routes.ts` (see [Breadcrumbs](#breadcrumbs-issue-457)) — a third piece of navigation metadata, alongside `app.routes.ts` and `layout/navigation.ts`, that a new nested page should be added to when it has a meaningful parent. **A new authenticated route declares the capability its page needs**, alongside `MsalGuard`; `app.routes.spec.ts` fails the build if one does not, and the two documented exceptions are the only ones.
 
 `/machines` (issue #385) is a dedicated, authenticated list page, `MachineListComponent`, that reads the same `MachineService.getAll()` machine-summary contract the home dashboard already uses, applies a client-side name/number search against the loaded list (there is no server-side filter on that endpoint), and never triggers a Nayax sales sync as a side effect of opening the page — it only reads whatever summary data is already persisted. Selecting a machine on this page navigates to the existing `/machines/:id` detail route (`MachineDetailComponent`), which is unchanged; `/machines` is a drill-down entry point into that existing page, not a replacement for it. `Machines` is a top-level link in the sidebar (issue #391; see [Application shell and navigation](#application-shell-and-navigation-issue-391)).
 
@@ -2468,7 +3815,10 @@ hosting every Admin workflow that had not yet moved out and linked to the ones t
 (`SiteCommissionAgreementsComponent`) are the first two moves: each owns the form and history/
 table UI for its workflow, but calls `NayaxSettingsService`, `ReportingService`, and
 `SiteService` exactly as `AdminComponent` did, so the Nayax processing-fee and site-commission
-API boundaries, effective-dating, and financial calculations are unchanged.
+API boundaries, effective-dating, and financial calculations are unchanged. Issue #538 added the
+Nayax connection wizard to `/admin/nayax-settings` as a composed child component beside that
+unchanged fee-rate editor — see
+[The Nayax connection wizard](#the-nayax-connection-wizard-issue-538).
 
 **Admin Imports (issue #389, Admin split 2/3).** `/admin/imports` (`AdminImportsComponent`) is the
 authenticated UI entry point for the three supported import workflows, moved out of
@@ -2551,19 +3901,23 @@ rebuild-eligibility or reconciliation figure is derived in Angular. See [Nayax s
 Preview then Apply](#nayax-sale-timestamp-repair-preview-then-apply-issue-472), "The Admin page", for
 what the page offers and refuses.
 
-**Platform Diagnostics (issue #335)** adds the one Admin route that is not offered to every
-operator:
+**Platform Diagnostics (issue #335, moved under its own top-level group in issue #546)** is not an
+Admin route at all: it is the one page in the top-level `Super Admin` group, offered to nobody by
+default:
 
 | Route | Page component | Authoritative boundary it calls |
 | --- | --- | --- |
-| `/admin/diagnostics` | `PlatformDiagnosticsComponent`, composing `PlatformDiagnosticsQueryComponent` through `[limits]` | `PlatformDiagnosticsService` `access`/`query` (`GET api/admin/diagnostics/access`, `POST api/admin/diagnostics/query`, see [Platform diagnostics](#platform-diagnostics-issue-336)) |
+| `/super-admin/diagnostics` | `PlatformDiagnosticsComponent`, composing `PlatformDiagnosticsQueryComponent` through `[limits]` | `PlatformDiagnosticsService` `access`/`query` (`GET api/admin/diagnostics/access`, `POST api/admin/diagnostics/query`, see [Platform diagnostics](#platform-diagnostics-issue-336)) |
 
-Its guard is the ordinary `MsalGuard`, because platform-admin authority is not a frontend
-concern: the API decides it per request, so the route is reachable by URL and simply shows a
-refusal instead of the query form. The page resolves the capability and the server's limits from
-`access`, states the cross-business, read-only scope before it knows who is asking, and composes
-the workflow component that owns the statement and every reported outcome. The sidebar link exists
-only while that same endpoint confirms access (see [Application shell and
+Its guard is `MsalGuard` then `platformAdminGuard` (issue #546), which asks the same `access`
+endpoint the page asks on arrival and sends a refusal to the dashboard: platform-admin authority is
+not a frontend concern either way, because the API decides it per request, so the route is
+reachable by URL and simply shows a refusal instead of the query form if the guard's own probe
+somehow disagreed with the page's. The old `/admin/diagnostics` address redirects here. The page
+resolves the capability and the server's limits from `access`, states the cross-business, read-only
+scope before it knows who is asking, and composes the workflow component that owns the statement
+and every reported outcome. The sidebar's `Super Admin` group link exists only while that same
+endpoint confirms access (see [Application shell and
 navigation](#application-shell-and-navigation-issue-391)), and `PlatformDiagnosticsAccessService`
 is the only thing that answers that question — there is no frontend role source. Nothing here
 calculates, caches or persists anything: no limit is restated, no result is written to browser
@@ -2576,11 +3930,11 @@ configuration logic. It deliberately keeps its own `/admin` address rather than 
 dedicated page's "Back to Admin" link point at it. The sidebar's `Admin` group (issue #391) is now
 the primary way into the eight dedicated pages, so `AdminComponent` is a second, still valid entry
 point rather than the only one; the root shell no longer links to `/admin` itself, because the
-group heading replaced that single header link. `/admin/diagnostics` is the exception in the other
-direction: the hub links to the eight pages every operator has and not to it, because that page is
-offered only to the configured platform administrator and only the diagnostics API can say who
-that is. It is reached from the sidebar group, or by URL, and links back to the hub like every
-other dedicated page.
+group heading replaced that single header link. The hub links to only those eight pages, and never
+to `/super-admin/diagnostics`, because that page is offered only to the configured platform
+administrator, in its own group, and only the diagnostics API can say who that is. It is reached
+from the sidebar's `Super Admin` group, or by URL, and the page's own "Back to Admin" link still
+points at the business hub, the way every dedicated page's does.
 
 ### Runtime configuration and API contracts
 
@@ -2739,6 +4093,80 @@ co-located `icon-paths.ts`. Later #409 sub-issues wire it into restyled pages an
 #### Purchases table row actions (issue #449)
 
 The Purchases list (`purchase-list.component.html`) keeps its `table-cell` column widths — the `Items` column in particular can grow wide with several product lines — inside a horizontally scrolling `<table class="table min-w-[900px]">` within `overflow-x-auto`. The restyled #410 table widened enough that, without a pinned Actions column, the Edit/Delete buttons could scroll out of view and appear missing. The Actions header `<th>` and each row's Actions `<td>` are `sticky right-0` with their own opaque background (`bg-md-gray-100` on the header, matching `.table-head`; `bg-white` on each row cell) and a `border-md-gray-200` left divider, so both actions stay visible and reachable at the right edge while the rest of the row scrolls underneath, at 1440px and down to the 390px minimum width where horizontal scrolling remains expected. Sticky positioning here only changes where the cell paints; it does not change column sizing. Since issue #475 the Actions cell holds an Edit **link** to `/purchases/:id/edit` (see [Purchase edit page](#purchase-edit-page-issue-475)) beside the unchanged `remove(r)` Delete button; the sticky behaviour is the same for both.
+
+#### Needs Ordering: row navigation, sortable columns, and Delete removal (issue #498)
+
+`/products/needs-ordering` (`ProductNeedsOrderingComponent`) follows the row-navigation and
+sortable-header pattern the Products list established in issue #497
+(`product-list.component.ts`/`.html`), applied to this page's own Edit/Stock/Delete actions and
+its own column set.
+
+- **Row navigates to the same product editor Edit opened.** Clicking or tapping anywhere in a row
+  outside a nested control, or pressing Enter while one is focused, navigates to
+  `/products/:id/edit` — the destination the removed Edit button used. The product Name cell holds
+  the real `<a class="table-row-anchor" [routerLink]="['/products', p.id, 'edit']">`, which gives
+  keyboard focus, Enter activation, ctrl/cmd/middle-click and "copy link address" natively;
+  `onRowActivate` only extends that anchor's plain click to the rest of the row (`table-row-link`
+  on the `<tr>`, `(click)`/`(keydown.enter)` bound to it) and ignores anything that originated from
+  a nested `a`, `button`, `input`, `select`, `textarea` or `label` — the selection checkbox, the
+  Stock link and the Active/Inactive status badge button — or a modified/non-primary click the
+  browser should handle itself (Ctrl/Meta/Shift/Alt, or a non-left mouse button). The row carries
+  no `tabindex` or `role` of its own; the shared `.table-row-link`/`.table-row-anchor` styling
+  (`styles.css`) already supplies the hover cursor, hover underline and `:focus-within` affordance,
+  exactly as it does for the Products list and the Sites list.
+- **Stock is unchanged and isolated from row navigation.** The Stock `<a routerLink>` to
+  `/products/:id/stock` keeps its existing destination and keyboard accessibility; because it is
+  itself an `a`, `onRowActivate`'s nested-control check excludes it, so clicking or activating Stock
+  never navigates to the edit page.
+- **Delete is removed from this page only.** The Delete button and its `app-confirmation-dialog`
+  markup were removed from `ProductNeedsOrderingComponent`'s template and the now-unused
+  `confirmDelete`/`cancelDelete`/`deleteConfirmed`/`confirmingProduct` members were removed from the
+  component; `ProductService.delete` and the Products list's own Delete button are unchanged, as is
+  backend delete authorization.
+- **Every visible data column sorts ascending/descending.** Name, Category, Supplier, Price,
+  Stock, Machine need, Low Stock Threshold, Restock To, On order, Need to Order and Status each
+  have a header `<button>` toggling `sortBy(column)`; the active header's `[attr.aria-sort]`
+  reflects `ascending`/`descending` and its visible label gains the same `(ascending)`/
+  `(descending)` suffix the Products list and Site Products tables use. `sortedProducts` computes a
+  new sorted array from `products` on each read — comparing numbers numerically, everything else as
+  text, a `null`/missing value always last regardless of direction, and a tied or missing
+  comparison falling back to product id — rather than sorting or mutating the `products` array
+  itself, so sorting composes with the existing search/category/supplier filters and the row
+  checkbox selection/"Mark as ordered" workflow without changing what filtering returns or any
+  stored product data.
+
+#### Shared sorting helper for Products and Needs Ordering (issue #583)
+
+`frontend/inventory-app/src/app/components/shared/sortable-column.ts` is the one place the
+column-sort mechanics shared by `product-list.component.ts` (issue #497) and
+`product-needs-ordering.component.ts` (issue #498, above) are implemented, extracted after
+SonarCloud flagged 13.3% new-code duplication on PR #578 (threshold 3%) because the Needs Ordering
+page had copied the Products list's sort toggling, header state and non-missing-value comparator
+verbatim. It exports:
+
+- `nextSortState(currentColumn, currentDirection, requestedColumn)` — the header click/Enter rule
+  both `sortBy(column)` methods delegate to: the same column toggles direction, a different column
+  restarts ascending.
+- `sortAriaState`/`sortColumnLabel` — the `[attr.aria-sort]` value and the visible
+  `(ascending)`/`(descending)` label suffix, both pages' `ariaSort`/`sortLabel` methods delegate to.
+- `compareSortValues(left, right)` — compares two **non-missing** values: numbers and dates
+  numerically, everything else as locale-aware, case-insensitive text. Needs Ordering's
+  `sortedProducts` calls this directly on the two values once it has already decided neither is
+  missing (see below).
+- `compareSortValuesDirectionalNulls(left, right)` — the same comparison, plus the Products list's
+  own null policy: a missing value sorts after a present one in the comparator's own terms, so
+  reversing the comparator for a descending sort also reverses where the missing value lands.
+  Products' `sortedProducts` calls this directly; it has no page-local null handling left.
+
+**What stays local to each page, deliberately.** Each component keeps its own `sortValue(product,
+column)` — the column-to-field mapping — entirely private, including which `Product` fields each
+page exposes as sortable; a shared mapping would have coupled the two pages' column sets together
+for no benefit. The two pages' **missing-value placement is genuinely different and both are
+preserved as page-local policy**, not folded into the shared helper: the Products list uses
+`compareSortValuesDirectionalNulls` and lets a missing value's position flip with direction, while
+Needs Ordering's `sortedProducts` getter resolves a missing value to always sort last regardless of
+direction *before* calling `compareSortValues`, per the issue #582 regression fix — folding that
+policy into a shared function would have forced one page's behaviour onto the other.
 
 #### Reconciliation and Transaction Sales table width (issue #452)
 
@@ -3102,7 +4530,9 @@ and it never substitutes for a real purchase, correction or write-off.
   (`IBusinessOwned`, so filtered, indexed and stamped centrally) and stores the product, the UTC
   effective instant, a positive quantity, a non-negative unit cost, the total value, the reason, the
   creation time and the creating identity as the validated Entra `(tid, oid)` pair - the same
-  identity convention as `BusinessMembership`, and deliberately no email or display name. Applying
+  identity convention as `BusinessMembership`, and deliberately no email or display name of its own
+  (the display-only pair issue #524 added to the membership row is not repeated onto a repair: a
+  historical record must not carry a value that is refreshed later). Applying
   one changes `CostingQuantity`/`InventoryValue` and historical sale costs only: never
   `Product.QuantityInStock`, machine quantities, `StockAdjustment` rows, MachineRefill history or a
   transition baseline. There is no update or delete path anywhere - no use case, port method or
@@ -3269,6 +4699,14 @@ actor's membership, and every read it makes is scoped by the central `AppDbConte
 Issue #460 renders it; before it existed, `DashboardComponent` aggregated machine rows and totalled
 product quantities in TypeScript, which is exactly the duplication this endpoint removes.
 
+The contract described below is the one a caller whose role grants `Dashboard.ViewFinancials` - a
+Manager or an Owner - receives, and it is unchanged. Since issue #527 a caller without that
+capability is answered the same response **without** the `salesThisWeek` object and without
+`inventory.inventoryValueAtCost`, and those figures are not calculated for them at all; both
+properties are absent from the JSON rather than `null` or `0`. See
+[Dashboard financial redaction](#dashboard-financial-redaction-issue-527) for the exact two shapes
+and why absence is the chosen representation.
+
 `Inventory.Application.Dashboard.GetDashboardSummary` is the use case. It owns no formula of its
 own: every figure comes from an authority that already existed.
 
@@ -3359,7 +4797,10 @@ Products/Units In Stock/Inventory Value tiles and the permanent Admin tools bann
 reachable from the existing sidebar `Admin` group; issue #460 added no replacement alert system).
 `DashboardService.getSummary()` is the one HTTP call behind all four; a request failure clears the
 summary, so every card shows "Unavailable" rather than a fabricated zero, and the page shows a
-warning banner alongside the existing sales-sync-failure one. Angular performs no revenue,
+warning banner alongside the existing sales-sync-failure one. These four cards still assume the full
+API contract: a caller without `Dashboard.ViewFinancials` is no longer sent the sales figures or the
+valuation (issue #527, [Dashboard financial redaction](#dashboard-financial-redaction-issue-527)),
+and teaching the page not to ask for or render them is issue #503. Angular performs no revenue,
 percentage, refill, reorder or valuation calculation anywhere in this card section - every value
 and completeness flag is the backend's, read and displayed as returned (`DashboardComponent.money`
 is the one exception, formatting an already-known amount via `components/reports/report-formatting`'s
@@ -3495,8 +4936,8 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **Resolution is per request, from the trusted current business.** `BusinessScopeMiddleware` reads the resolved business's record through `Inventory.Application.Businesses.IBusinessProfileStore` and publishes its zone into the scoped `Inventory.Application.Time.BusinessTimeZoneScope`, exactly as it publishes the business itself into `BusinessScope` and for the same reason: converting an instant to a business date happens synchronously, deep inside a calculation, and cannot await a membership lookup. The scope can only move forward to a zone, once. `IBusinessCalendar` is registered as the scoped `Inventory.Infrastructure.Time.CurrentBusinessCalendar`, which reads that zone, memoises the resolved `TimeZoneInfo` for the request, and derives every date in it. No route, query, body or header value participates: the zone comes from the business the caller's membership resolved, and from nothing else.
 - **It fails closed.** A request with no resolved business, or a business whose stored id the host's time-zone database cannot resolve, gets `Inventory.Application.Time.BusinessTimeZoneUnavailableException` from every member of the port - never `Australia/Sydney`, never the host's zone, never UTC. A substituted zone would move sales, fees, commissions and profit between business days with nothing looking wrong. The exception is not mapped to a caller-facing status: it falls through to `GlobalExceptionHandler`, which logs it and answers a generic `500`. The middleware does not refuse the whole request when a business has no usable zone (most endpoints derive no business date at all); it logs the condition, and any business-date derivation in that request fails.
 - **Maintenance commands have no business calendar, and need none.** The human-invoked `bootstrap-business`, `migrate-database` and database-backup commands run outside a request, so no business is resolved and no zone is published: resolving `IBusinessCalendar` there succeeds but every member fails closed. None of them derives a business date. `BusinessBootstrapper` creates its business with `Australia/Sydney` stated explicitly - the zone the pre-tenancy data it adopts has always been reported in - rather than relying on a default. A maintenance command that ever does need a business date must construct a `ZonedBusinessCalendar` with the zone it means, explicitly.
-- **The frontend gets the zone from the API.** `GET /api/business/current` returns `{ name, timeZoneId }` for the trusted current business, carrying the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and no identifier in either direction. It replaced the frontend's hard-coded `BUSINESS_TIME_ZONE` constant: `BusinessService` reads it once sign-in has settled and publishes the zone into `BusinessTimeZoneService`, which `BusinessDateTimePipe` and the calendar-input components read. The shell holds the routed page back until that lookup has settled, so a page on screen is one whose business context is known; a lookup that failed renders the application with dates unavailable rather than in a guessed zone. Issue #521 also surfaces the same name and zone in `GET /api/me/access` alongside the caller's role and capabilities (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)); that endpoint does not replace this one, and the frontend still reads the zone from here.
-- **A zone change applies to all history.** The owner's decision (recorded on issue #499) is that changing a business's zone later - the Owner business-settings page of issue #511 - re-derives every historical business day in the new zone, with a warning. Nothing stored is rewritten; the boundaries simply move.
+- **The frontend gets the zone from the API.** `GET /api/business/current` returns `{ name, timeZoneId }` for the trusted current business, carrying the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and no identifier in either direction. It replaced the frontend's hard-coded `BUSINESS_TIME_ZONE` constant: `BusinessService` reads it once sign-in has settled - and again whenever the signed-in account changes, including a direct MSAL active-account switch (issue #604, see [Application shell and navigation](#application-shell-and-navigation-issue-391)) - and publishes the zone into `BusinessTimeZoneService`, which `BusinessDateTimePipe` and the calendar-input components read. The shell holds the routed page back until that lookup has settled, so a page on screen is one whose business context is known; a lookup that failed renders the application with dates unavailable rather than in a guessed zone, and a changed account publishes no zone at all until its own business has answered. Issue #521 also surfaces the same name and zone in `GET /api/me/access` alongside the caller's role and capabilities (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)); that endpoint does not replace this one, and the frontend still reads the zone from here.
+- **A zone change applies to all history.** The owner's decision (recorded on issue #499) is that changing a business's zone later re-derives every historical business day in the new zone, with a warning. Nothing stored is rewritten; the boundaries simply move. Since issue #548 that change is reachable: `PUT /api/business/settings` saves the zone, the next request resolves it from the business's own record, and every business date - for data already stored as much as for new data - is derived in the new zone, including its daylight-saving transitions. See [Business settings API](#business-settings-api-issue-548); the page that shows the warning is issue #549.
 - **Testing.** Two-business relational tests prove isolated boundaries for `Australia/Sydney` and `America/New_York`, including each zone's daylight-saving transition days in both directions (a 23-hour and a 25-hour business day), the write-path refusal, and the fail-closed read for a zone corrupted directly in the database (`PerBusinessTimeZonePersistenceTests`, `ZonedBusinessCalendarTests`, `CurrentBusinessCalendarTests`, `BusinessTimeZonesTests`, `BusinessTimeZoneMigrationTests`, `CurrentBusinessApiTests`).
 
 **No host clock inside Domain or Application (issue #310).** `Inventory.Domain` and `Inventory.Application` acquire the current time only through those two ports; the architecture test `InventoryApi.Tests.Architecture.TimeAcquisitionTests` fails if either project's source reads `DateTime.Now`, `DateTime.UtcNow` or `DateTime.Today` (see [Testing architecture](#backend-tests)). The last six such reads were removed with the guard:
@@ -6019,6 +7460,8 @@ Behaviour that depends on the business timezone is tested with a fixed clock and
 
 Most controller tests instantiate the controller directly and never exercise ASP.NET Core's middleware pipeline. Proving the `[Authorize]`/`[RequiredScope]` HTTP boundary (issue #38) instead requires a real pipeline: `AuthenticationBoundaryTests` (`backend/Inventory.IntegrationTests/Controllers/`) hosts the app with `WebApplicationFactory<Program>`, swapping `AppDbContext` for a shared open in-memory SQLite connection so `Program.cs`'s startup schema step (`DatabaseSchemaStartup.EnsureSchema`) succeeds, then asserts that an unauthenticated request to a representative protected endpoint — including the receipt and operating-expense document endpoints — returns `401`, and that a file placed in the web root has no anonymous static URL. `Program.cs` exposes a trailing `public partial class Program;` solely so `WebApplicationFactory<Program>` can reference it from the test assembly.
 
+An **authorization** rule needs the same real pipeline, plus a way to speak as a specific member. The per-role tests of issues #521, #523 and #525 (`MeAccessApiTests`, `MeAccountStateApiTests`, `CapabilityAuthorizationApiTests`) host the app the same way and register one synthetic authentication scheme that reads the caller's `(tid, oid)` pair and delegated scope from request headers, so membership resolution, the capability policies, `BusinessScopeMiddleware` and the real migration history are all exercised; only the authentication is synthetic. The expected role matrix in such a test is **written out literally** from the agreed table in #328 rather than read back from `RoleCapabilities`, because a test that asked the capability table what it allows would pass whatever that table happened to say. Where a test needs to prove *where* an answer came from — that one membership lookup serves both the capability policy and the business scope, for instance — it decorates the real `IBusinessMembershipStore` with a counting wrapper rather than replacing it, so the behaviour under test is unchanged.
+
 Financial regression tests should cover at least:
 
 - card/cash split and unknown payment type;
@@ -6106,9 +7549,10 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Nayax product catalogue import — `Inventory.Application.Imports.ImportNayaxProductCatalog` | Request-driven: `ImportsController` (#300) | Implemented, request-driven | No. |
 | Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files the operator has supplied | Implemented, request-driven | No. |
 | Historical inventory cost rebuild — `Inventory.Application.Costing.IRebuildProductCost` | In-process, invoked by the use case whose write invalidated a product's costs (for example an imported completed sale) | Implemented | No. |
+| Member display name and email refresh — `Inventory.Application.Tenancy.RefreshMemberProfile` | In-process, in the API's own single hosted drain: a request schedules it after its response is decided and the drain writes it in a new service scope, at most once an hour per membership | Implemented (#524); see [Member display name and email](#member-display-name-and-email-issue-524) | No, and nothing else could host it: it is triggered by a request, it is two display columns of that caller's own membership row, and it is worth nothing once stale (self-healing — the member's next request schedules another). An out-of-process writer is also outside the single-writer SQLite envelope. |
 | Database schema migration | `DatabaseSchemaStartup` at API startup, plus the human-run `migrate-database` command | Implemented (#54, revised by #201) | No. |
 
-Two properties of the existing automation model matter to this assessment. First, no GitHub Actions workflow in this repository runs on a schedule: workflows are triggered by pull requests, pushes, or a human dispatch, and **Deploy Production** is human-started for one exact commit (see [Build and delivery](#build-and-delivery) and `docs/automation.md`). CI is a validation and delivery mechanism, not an operational scheduler; it has no route to the production database and must not acquire one. Second, every workload above except the backup schedule is started by a human — an operator in the application, or an operator on the instance. The gap between those two facts is exactly one slot wide, and issue #333 fills it with a WebJob.
+Two properties of the existing automation model matter to this assessment. First, no GitHub Actions workflow in this repository runs on a schedule: workflows are triggered by pull requests, pushes, or a human dispatch, and **Deploy Production** is human-started for one exact commit (see [Build and delivery](#build-and-delivery) and `docs/automation.md`). CI is a validation and delivery mechanism, not an operational scheduler; it has no route to the production database and must not acquire one. Second, every workload above except the backup schedule is started by a human — an operator in the application, or an operator on the instance. The member display-name refresh of issue #524 is started by a human too, by making any request; it is only the one workload nobody *waits* for, and it finishes inside the same process moments later. The gap between those two facts is exactly one slot wide, and issue #333 fills it with a WebJob.
 
 ### Decision criteria for any future background workload
 

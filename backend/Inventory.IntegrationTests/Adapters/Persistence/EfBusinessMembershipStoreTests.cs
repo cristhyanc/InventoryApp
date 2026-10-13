@@ -35,9 +35,19 @@ public class EfBusinessMembershipStoreTests
         return actor!;
     }
 
-    private static async Task<Business> AddBusinessAsync(AppDbContext db, string name, bool isActive = true)
+    private static async Task<Business> AddBusinessAsync(
+        AppDbContext db,
+        string name,
+        BusinessStatus status = BusinessStatus.Active,
+        string? rejectionReason = null)
     {
-        var business = new Business { Name = name, IsActive = isActive, CreatedAtUtc = DateTime.UtcNow };
+        var business = new Business
+        {
+            Name = name,
+            Status = status,
+            RejectionReason = rejectionReason,
+            CreatedAtUtc = DateTime.UtcNow,
+        };
         db.Businesses.Add(business);
         await db.SaveChangesAsync();
         return business;
@@ -49,7 +59,8 @@ public class EfBusinessMembershipStoreTests
         string tid = Tid,
         string oid = Oid,
         bool isActive = true,
-        BusinessRole role = BusinessRole.Owner)
+        BusinessRole role = BusinessRole.Owner,
+        DateTime? statusChangedAtUtc = null)
     {
         db.BusinessMemberships.Add(new BusinessMembership
         {
@@ -59,6 +70,7 @@ public class EfBusinessMembershipStoreTests
             Role = role,
             IsActive = isActive,
             CreatedAtUtc = DateTime.UtcNow,
+            StatusChangedAtUtc = statusChangedAtUtc ?? DateTime.UtcNow,
         });
         await db.SaveChangesAsync();
     }
@@ -79,7 +91,8 @@ public class EfBusinessMembershipStoreTests
             var membership = Assert.Single(memberships);
             Assert.Equal(BusinessId.From(business.Id), membership.BusinessId);
             Assert.True(membership.IsActive);
-            Assert.True(membership.BusinessIsActive);
+            Assert.Equal(BusinessStatus.Active, membership.BusinessStatus);
+            Assert.Null(membership.BusinessRejectionReason);
         }
     }
 
@@ -313,23 +326,66 @@ public class EfBusinessMembershipStoreTests
         }
     }
 
-    [Fact]
-    public async Task A_membership_in_a_deactivated_business_resolves_to_a_denial()
+    /// <summary>
+    /// Every lifecycle status other than <c>Active</c> comes back as the status it is (issue #540)
+    /// and resolves to the one business denial, through the real schema and the real adapter.
+    /// </summary>
+    [Theory]
+    [InlineData(BusinessStatus.Pending)]
+    [InlineData(BusinessStatus.Rejected)]
+    [InlineData(BusinessStatus.Deactivated)]
+    public async Task A_membership_in_a_business_that_is_not_active_resolves_to_a_denial(BusinessStatus status)
     {
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
         {
             await using var db = TestAppDbContext.Unrestricted(options);
-            var business = await AddBusinessAsync(db, "Closed Vending Co", isActive: false);
+            var business = await AddBusinessAsync(db, "Closed Vending Co", status);
             await AddMembershipAsync(db, business.Id);
 
             var memberships = await new EfBusinessMembershipStore(db)
                 .FindMembershipsAsync(Actor(), CancellationToken.None);
 
-            Assert.False(Assert.Single(memberships).BusinessIsActive);
+            Assert.Equal(status, Assert.Single(memberships).BusinessStatus);
             Assert.Equal(
                 BusinessAccessDenialReason.BusinessInactive,
                 BusinessMembershipResolutionPolicy.Resolve(memberships).DenialReason);
+        }
+    }
+
+    /// <summary>
+    /// The three facts the account-state precedence needs beyond the membership itself come back
+    /// from the one query (issue #540): the business's status, its recorded rejection reason, and
+    /// the membership's own state-change instant. A second lookup for any of them could read a
+    /// status and a reason that no longer belong together.
+    /// </summary>
+    [Fact]
+    public async Task The_business_rejection_reason_and_the_membership_status_instant_come_back_together()
+    {
+        var (connection, options) = await CreateSqliteAsync();
+        await using (connection)
+        {
+            var revokedAt = new DateTime(2026, 9, 30, 4, 5, 6, DateTimeKind.Utc);
+
+            await using var db = TestAppDbContext.Unrestricted(options);
+            var business = await AddBusinessAsync(
+                db,
+                "Refused Vending Co",
+                BusinessStatus.Rejected,
+                rejectionReason: "The ABN provided belongs to another entity.");
+            await AddMembershipAsync(db, business.Id, isActive: false, statusChangedAtUtc: revokedAt);
+
+            var memberships = await new EfBusinessMembershipStore(db)
+                .FindMembershipsAsync(Actor(), CancellationToken.None);
+
+            var membership = Assert.Single(memberships);
+            Assert.Equal(BusinessStatus.Rejected, membership.BusinessStatus);
+            Assert.Equal("The ABN provided belongs to another entity.", membership.BusinessRejectionReason);
+            Assert.Equal(revokedAt, membership.StatusChangedAtUtc);
+
+            var decision = AccountStatePolicy.Determine(memberships);
+            Assert.Equal(AccountState.ApplicationRejected, decision.State);
+            Assert.Equal("The ABN provided belongs to another entity.", decision.RejectionReason);
         }
     }
 

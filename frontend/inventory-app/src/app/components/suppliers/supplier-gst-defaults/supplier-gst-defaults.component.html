@@ -26,7 +26,7 @@
         id="supplier-gst-product-lines"
         name="productLineGstDefault"
         [(ngModel)]="form.productLineGstDefault"
-        [disabled]="!loaded || saving"
+        [disabled]="!loaded || saving || !canManage"
       >
         @for (option of options; track option.value) {
           <option [ngValue]="option.value">{{ option.label }}</option>
@@ -39,7 +39,7 @@
         id="supplier-gst-delivery"
         name="deliveryGstDefault"
         [(ngModel)]="form.deliveryGstDefault"
-        [disabled]="!loaded || saving"
+        [disabled]="!loaded || saving || !canManage"
       >
         @for (option of options; track option.value) {
           <option [ngValue]="option.value">{{ option.label }}</option>
@@ -52,7 +52,7 @@
         id="supplier-gst-package"
         name="packageGstDefault"
         [(ngModel)]="form.packageGstDefault"
-        [disabled]="!loaded || saving"
+        [disabled]="!loaded || saving || !canManage"
       >
         @for (option of options; track option.value) {
           <option [ngValue]="option.value">{{ option.label }}</option>
@@ -65,12 +65,22 @@
     "No default" leaves purchases from this supplier unclassified; it is not the same as GST-free.
   </p>
 
-  <button
-    type="button"
-    class="mt-4 inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-    [disabled]="!loaded || saving"
-    (click)="save()"
-  >
-    {{ saving ? 'Saving...' : 'Save GST defaults' }}
-  </button>
+  <!--
+    No Save control for a role that may not change these defaults (issue #528): the pickers above
+    stay readable, because the classification a purchase will be given is worth seeing, but the
+    action a role cannot use is not offered. `PUT /api/suppliers/{id}/gst-defaults` refuses the
+    write itself whatever is rendered here.
+  -->
+  @if (canManage) {
+    <button
+      type="button"
+      class="mt-4 inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+      [disabled]="!loaded || saving"
+      (click)="save()"
+    >
+      {{ saving ? 'Saving...' : 'Save GST defaults' }}
+    </button>
+  } @else {
+    <p class="mt-4 text-sm text-slate-600">Your role can see these defaults but not change them.</p>
+  }
 </section>

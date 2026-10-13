@@ -7,6 +7,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Time;
 using Inventory.Domain.Costing;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Time;
@@ -680,8 +681,20 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
             }
 
             db.Businesses.AddRange(
-                new Business { Id = CallerBusinessId, Name = "Caller business", CreatedAtUtc = AppliedAt },
-                new Business { Id = OtherBusinessId, Name = "Other business", CreatedAtUtc = AppliedAt });
+                new Business
+                {
+                    Id = CallerBusinessId,
+                    Name = "Caller business",
+                    Status = BusinessStatus.Active,
+                    CreatedAtUtc = AppliedAt,
+                },
+                new Business
+                {
+                    Id = OtherBusinessId,
+                    Name = "Other business",
+                    Status = BusinessStatus.Active,
+                    CreatedAtUtc = AppliedAt,
+                });
             db.BusinessMemberships.AddRange(
                 new BusinessMembership
                 {

@@ -23,15 +23,33 @@ namespace Inventory.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("Abn")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("AppliedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContactEmail")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("TEXT");
 
-                    b.Property<bool>("IsActive")
+                    b.Property<DateTime?>("DecidedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool?>("GstRegistered")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("RejectionReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("TimeZoneId")
                         .IsRequired()
@@ -100,6 +118,14 @@ namespace Inventory.Infrastructure.Migrations
                         .HasColumnType("TEXT")
                         .UseCollation("NOCASE");
 
+                    b.Property<string>("DisplayName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("INTEGER");
 
@@ -152,6 +178,9 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.Property<DateTime?>("LastTestedAtUtc")
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("MachineChecksPending")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("OperatorId")
                         .IsRequired()
@@ -737,6 +766,112 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId");
 
                     b.ToTable("InventoryCostTransitionPreviewDrafts");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.MemberInvite", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("CancelledAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedByDirectoryTenantId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedByObjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("RedeemedByMembershipId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Role")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("UsedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("RedeemedByMembershipId");
+
+                    b.HasIndex("BusinessId", "TokenHash")
+                        .IsUnique();
+
+                    b.ToTable("MemberInvites");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxConnectionTestDraft", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AccessTokenCiphertext")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedByDirectoryTenantId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedByObjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EncryptionKeyId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OperatorId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResultsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId")
+                        .IsUnique();
+
+                    b.ToTable("NayaxConnectionTestDrafts");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxMachineStockEvent", b =>
@@ -1627,6 +1762,14 @@ namespace Inventory.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("InventoryCostTransitionBaseline");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.MemberInvite", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.BusinessMembership", null)
+                        .WithMany()
+                        .HasForeignKey("RedeemedByMembershipId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxMachineStockEvent", b =>

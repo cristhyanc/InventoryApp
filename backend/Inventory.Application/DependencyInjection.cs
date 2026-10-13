@@ -11,10 +11,13 @@ using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
+using Inventory.Application.Members;
 using Inventory.Application.Nayax;
 using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
+using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
+using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
@@ -50,6 +53,12 @@ public static class ApplicationServiceCollectionExtensions
         // tenancy-scoped: the answer belongs to one caller's membership.
         services.AddScoped<GetCurrentBusiness>();
 
+        // The Owner's own business settings (issue #548). Scoped for the same reason: both read and
+        // write act on the business one caller's membership resolved, and a saved time zone has to
+        // take effect on the next request rather than being held in a cache.
+        services.AddScoped<GetBusinessSettings>();
+        services.AddScoped<UpdateBusinessSettings>();
+
         // The signed-in member's role and capabilities (issue #521). Per request for the same
         // reason, and so a role change applies on the next request rather than being cached.
         services.AddScoped<GetCurrentAccess>();
@@ -64,6 +73,73 @@ public static class ApplicationServiceCollectionExtensions
         // operation's write has to save inside.
         services.AddScoped<MembershipWriteGuard>();
 
+        // The Owner's member management (issue #533). Scoped like the rest of tenancy: each answer
+        // belongs to one caller's resolved business, and the writer shares the request's own
+        // AppDbContext with the write guard whose transaction its writes have to run inside.
+        services.AddScoped<MemberChangeWriter>();
+        services.AddScoped<ListMembers>();
+        services.AddScoped<ChangeMemberRole>();
+        services.AddScoped<RevokeMember>();
+        services.AddScoped<ReinstateMember>();
+
+        // The Owner's invite links (issue #531). Scoped for the same reason: each answer belongs to
+        // one caller's resolved business, and the cancellation's conditional write runs on that
+        // request's own AppDbContext - which is also what lets #509's deactivation call the store's
+        // cancel-all inside its own transaction.
+        services.AddScoped<CreateMemberInvite>();
+        services.AddScoped<ListMemberInvites>();
+        services.AddScoped<CancelMemberInvite>();
+
+        // Redeeming an invite (issue #532). Scoped like every other use case, and it has to be: the
+        // membership it creates and the invite it closes are written through the request's own
+        // AppDbContext, inside the write transaction MembershipWriteGuard opens on that same
+        // context. It is the one use case here reached by a caller with no resolved business, so it
+        // takes no ICurrentBusinessProvider at all.
+        services.AddScoped<RedeemMemberInvite>();
+
+        // The self-service business application (issue #541). Scoped for the same reasons the
+        // redemption is: the business and the membership it creates are written through the
+        // request's own AppDbContext, inside MembershipWriteGuard's transaction on that same
+        // context, and it is the second use case here reached by a caller with no resolved business
+        // - so it takes no ICurrentBusinessProvider either. The rate limiter is a singleton because
+        // the window it remembers is state about the process rather than about one request: "this
+        // identity has applied five times in the last ten minutes" must be the same answer for
+        // every request, exactly as the Nayax test limiter's window is.
+        services.AddSingleton<BusinessApplicationRateLimiter>();
+        services.AddScoped<ApplyForBusiness>();
+
+        // The Super Admin's business directory and the two decisions on an application (issue
+        // #544). Scoped for the reason the two paths above are: the decision's authoritative read
+        // and its write run on the request's own AppDbContext, inside MembershipWriteGuard's
+        // transaction on that same context. They take no ICurrentBusinessProvider at all - a
+        // platform administrator has no membership, so there is no business to resolve - and the
+        // business they act on is named by the route, which is a decision's subject rather than a
+        // tenancy scope (docs/architecture.md § Super Admin businesses API).
+        services.AddScoped<ListPlatformBusinesses>();
+        services.AddScoped<CountPendingBusinessApplications>();
+        services.AddScoped<BusinessApplicationDecisionWriter>();
+        services.AddScoped<ApproveBusinessApplication>();
+        services.AddScoped<RejectBusinessApplication>();
+
+        // The member's display-only name and email address, refreshed from their sign-in token
+        // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
+        // state about the process rather than about one request: "this membership was refreshed
+        // within the hour" and "these refreshes are waiting" must be the same answer for every
+        // request. The scheduler the middleware calls is a singleton over them for the same reason,
+        // and holds nothing per request itself.
+        services.AddSingleton<MemberProfileRefreshThrottle>();
+        services.AddSingleton<MemberProfileRefreshQueue>();
+        services.AddSingleton<ScheduleMemberProfileRefresh>();
+
+        // Scoped, because it wraps the request-scoped IActorProfileAccessor: this is the one
+        // dependency the business-scope middleware injects for the whole feature.
+        services.AddScoped<MemberProfileRefreshRequestScheduler>();
+
+        // The write itself is Scoped like every other use case, and is resolved from the drain's own
+        // new scope - never the request's - so it runs with a denied business scope and its own
+        // AppDbContext (docs/architecture.md § Member display name and email).
+        services.AddScoped<RefreshMemberProfile>();
+
         // The Nayax credentials every ordinary Nayax call is made with (issue #520), resolved per
         // call from the trusted current business over #518's store. Scoped for the same reason the
         // current business is: a credential belongs to one caller's business and must never be
@@ -71,6 +147,20 @@ public static class ApplicationServiceCollectionExtensions
         // separate port, so nothing that injects the ordinary provider can reach it.
         services.AddScoped<INayaxRequestCredentialProvider, NayaxRequestCredentialProvider>();
         services.AddScoped<INayaxConnectionRetestCredentialProvider, NayaxConnectionRetestCredentialProvider>();
+
+        // The Owner-only connection test (issue #536). The rate limiter is a singleton because the
+        // window it remembers is state about the process rather than about one request: "this
+        // business has run five tests in the last ten minutes" must be the same answer for every
+        // request, exactly as MemberProfileRefreshThrottle's hour is.
+        services.AddSingleton<NayaxConnectionTestRateLimiter>();
+        services.AddScoped<TestNayaxConnection>();
+
+        // Saving a tested draft, re-testing the stored token and reporting the connection's state
+        // (issue #537). The re-test shares the singleton limiter above on purpose: a re-test is the
+        // same eight calls against the same upstream, so test and re-test runs count together.
+        services.AddScoped<SaveNayaxConnection>();
+        services.AddScoped<RetestNayaxConnection>();
+        services.AddScoped<GetNayaxConnectionStatus>();
 
         services.AddScoped<ListNayaxFeeRates>();
         services.AddScoped<SaveNayaxFeeRate>();

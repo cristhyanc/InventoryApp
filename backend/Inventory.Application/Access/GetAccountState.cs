@@ -1,3 +1,4 @@
+using Inventory.Application.Onboarding;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Tenancy;
 
@@ -35,13 +36,16 @@ public sealed class GetAccountState
 {
     private readonly IAuthenticatedActorAccessor _actorAccessor;
     private readonly IBusinessMembershipStore _membershipStore;
+    private readonly ISelfServiceOnboardingFlag _onboarding;
 
     public GetAccountState(
         IAuthenticatedActorAccessor actorAccessor,
-        IBusinessMembershipStore membershipStore)
+        IBusinessMembershipStore membershipStore,
+        ISelfServiceOnboardingFlag onboarding)
     {
         _actorAccessor = actorAccessor;
         _membershipStore = membershipStore;
+        _onboarding = onboarding;
     }
 
     public async Task<AccountStateResult> Handle(CancellationToken cancellationToken)
@@ -50,7 +54,7 @@ public sealed class GetAccountState
 
         if (actorResult.Actor is null)
         {
-            return Result(AccountState.NoMembership);
+            return Result(new AccountStateDecision(AccountState.NoMembership, RejectionReason: null));
         }
 
         var memberships = await _membershipStore
@@ -60,9 +64,14 @@ public sealed class GetAccountState
         return Result(AccountStatePolicy.Determine(memberships));
     }
 
-    // onboardingEnabled and rejectionReason are decided here rather than at the API boundary, so
-    // issue #507 adds the self-service onboarding flag and the stored rejection reason in the
-    // Application layer and the controller keeps only its mapping to JSON.
-    private static AccountStateResult Result(AccountState state) =>
-        new(state, OnboardingEnabled: false, RejectionReason: null);
+    // onboardingEnabled is decided here rather than at the API boundary, so the apply endpoint of
+    // issue #541 and this answer read one flag in one layer: a screen that offers "Start a new
+    // business" against an endpoint that answers 404 is what a second read at the boundary would
+    // eventually produce. It is reported for every state, including the ones that may not apply -
+    // it describes the deployment, not the caller, and ApplyForBusiness is the one place the
+    // caller's own eligibility is decided. The rejection reason is not decided here at all: it
+    // comes from the precedence together with the state it belongs to (issue #540), so the two
+    // cannot be reported independently.
+    private AccountStateResult Result(AccountStateDecision decision) =>
+        new(decision.State, _onboarding.IsEnabled, decision.RejectionReason);
 }

@@ -1,5 +1,7 @@
+using Inventory.Application.Access;
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
+using InventoryApi.Auth;
 using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -7,10 +9,22 @@ using Microsoft.Identity.Web.Resource;
 
 namespace InventoryApi.Controllers;
 
+/// <summary>
+/// The site commission report, the effective-dated commission agreements behind it, and the
+/// payments recorded against it.
+///
+/// Every action requires <c>SiteCommissions.Manage</c> (issue #526). An agreement is effective-dated
+/// financial configuration that decides what every later period owes a site, and the report is what
+/// the business pays from, so #328's table gives the whole surface - report, agreements and payments
+/// alike - to a Manager and an Owner. The report is not split onto <c>Reports.View</c>: it is the
+/// same surface the agreements are maintained from, and a role that may read what a site is owed but
+/// not why would be told a number it cannot check.
+/// </summary>
 [ApiController]
 [Route("api/site-commissions")]
 [Authorize]
 [RequiredScope("access_as_user")]
+[RequireCapability(Capability.SiteCommissionsManage)]
 public sealed class SiteCommissionsController : ControllerBase
 {
     private readonly IGetSiteCommissionReport _getReport;
