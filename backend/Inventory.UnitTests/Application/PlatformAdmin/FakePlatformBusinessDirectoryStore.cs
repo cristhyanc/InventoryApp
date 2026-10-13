@@ -23,6 +23,10 @@ public sealed class FakePlatformBusinessDirectoryStore : IPlatformBusinessDirect
     public const string DecisionRead = "decision-read";
     public const string Approve = "approve";
     public const string Reject = "reject";
+    public const string LifecycleRead = "lifecycle-read";
+    public const string Deactivate = "deactivate";
+    public const string Reactivate = "reactivate";
+    public const string ReleaseMember = "release-member";
 
     private readonly List<string> _operations = [];
 
@@ -34,6 +38,19 @@ public sealed class FakePlatformBusinessDirectoryStore : IPlatformBusinessDirect
 
     /// <summary>What <see cref="FindDecisionTargetAsync"/> answers, by business id.</summary>
     public Dictionary<int, PlatformBusinessDecisionTarget> Targets { get; } = [];
+
+    /// <summary>
+    /// What <see cref="FindLifecycleTargetAsync"/> answers, by business id (issue #545). A test
+    /// stands in for another write committing between the two reads by mutating it from
+    /// <c>FakeBusinessMembershipWriteStore.WhileWaitingForTheWriteLock</c>, which runs in exactly
+    /// that window - with no threads and no wall clock.
+    /// </summary>
+    public Dictionary<int, PlatformBusinessLifecycleTarget> LifecycleTargets { get; } = [];
+
+    /// <summary>The membership the last release named, and the instant it was given.</summary>
+    public int? ReleasedMembershipId { get; private set; }
+
+    public DateTime? ReleasedAtUtc { get; private set; }
 
     public DateTime? ApprovedAtUtc { get; private set; }
 
@@ -95,5 +112,64 @@ public sealed class FakePlatformBusinessDirectoryStore : IPlatformBusinessDirect
         }
 
         return Task.CompletedTask;
+    }
+
+    public Task<PlatformBusinessLifecycleTarget?> FindLifecycleTargetAsync(
+        int businessId,
+        CancellationToken cancellationToken)
+    {
+        _operations.Add(LifecycleRead);
+
+        return Task.FromResult(LifecycleTargets.TryGetValue(businessId, out var target) ? target : null);
+    }
+
+    public Task DeactivateAsync(int businessId, CancellationToken cancellationToken)
+    {
+        _operations.Add(Deactivate);
+        SetStatus(businessId, BusinessStatus.Deactivated);
+
+        return Task.CompletedTask;
+    }
+
+    public Task ReactivateAsync(int businessId, CancellationToken cancellationToken)
+    {
+        _operations.Add(Reactivate);
+        SetStatus(businessId, BusinessStatus.Active);
+
+        return Task.CompletedTask;
+    }
+
+    public Task ReleaseMemberAsync(
+        int businessId,
+        int membershipId,
+        DateTime releasedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        _operations.Add(ReleaseMember);
+        ReleasedMembershipId = membershipId;
+        ReleasedAtUtc = releasedAtUtc;
+
+        if (LifecycleTargets.TryGetValue(businessId, out var target))
+        {
+            LifecycleTargets[businessId] = target with
+            {
+                Members =
+                [
+                    .. target.Members.Select(member => member.MembershipId == membershipId
+                        ? member with { IsActive = false }
+                        : member),
+                ],
+            };
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void SetStatus(int businessId, BusinessStatus status)
+    {
+        if (LifecycleTargets.TryGetValue(businessId, out var target))
+        {
+            LifecycleTargets[businessId] = target with { Status = status };
+        }
     }
 }

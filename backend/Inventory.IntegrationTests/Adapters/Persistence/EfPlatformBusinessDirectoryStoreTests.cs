@@ -303,6 +303,170 @@ public class EfPlatformBusinessDirectoryStoreTests
 
     #endregion
 
+    #region The lifecycle read and writes (issue #545)
+
+    /// <summary>
+    /// The lifecycle read reports the business's status and <em>every</em> membership it holds -
+    /// active and revoked alike, with the role exactly as stored and the display-only name - because
+    /// two rules read them: whether an active Owner is left, and whether this business holds the
+    /// membership a release names.
+    /// </summary>
+    [Fact]
+    public async Task The_lifecycle_read_reports_the_status_and_every_membership()
+    {
+        await using var fixture = await DirectoryFixture.CreateAsync();
+        var named = await fixture.SeedMembershipAsync(
+            fixture.TradingBusinessId,
+            "77777777-7777-7777-7777-777777777777",
+            BusinessRole.Operator,
+            isActive: false,
+            displayName: "Dana Operator");
+
+        var target = await fixture.Store()
+            .FindLifecycleTargetAsync(fixture.TradingBusinessId, CancellationToken.None);
+
+        Assert.NotNull(target);
+        Assert.Equal(fixture.TradingBusinessId, target!.BusinessId);
+        Assert.Equal("Vending Co", target.Name);
+        Assert.Equal(BusinessStatus.Active, target.Status);
+
+        Assert.Equal(4, target.Members.Count);
+        var owner = target.Members.Single(member => member.MembershipId == fixture.TradingOwnerMembershipId);
+        Assert.Equal(BusinessRole.Owner, owner.StoredRole);
+        Assert.True(owner.IsActive);
+        Assert.Null(owner.DisplayName);
+
+        var revoked = target.Members.Single(member => member.MembershipId == named);
+        Assert.Equal("Dana Operator", revoked.DisplayName);
+        Assert.False(revoked.IsActive);
+
+        // Only this business's memberships: the applicant of the pending application beside it is
+        // not reachable through a read of this one.
+        Assert.DoesNotContain(
+            fixture.PendingApplicantMembershipId,
+            target.Members.Select(member => member.MembershipId));
+    }
+
+    [Fact]
+    public async Task An_unknown_business_has_no_lifecycle_target()
+    {
+        await using var fixture = await DirectoryFixture.CreateAsync();
+
+        Assert.Null(await fixture.Store().FindLifecycleTargetAsync(9999, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Deactivating writes the status column and nothing else anywhere: the application instants and
+    /// the rejection reason are untouched - a deactivation is not a decision on an application - and
+    /// so is every membership row, flag and state-change instant alike.
+    /// </summary>
+    [Fact]
+    public async Task Deactivating_writes_only_the_status()
+    {
+        await using var fixture = await DirectoryFixture.CreateAsync();
+        var before = await fixture.MembershipsAsync();
+
+        await fixture.Store().DeactivateAsync(fixture.TradingBusinessId, CancellationToken.None);
+
+        var business = await fixture.BusinessAsync(fixture.TradingBusinessId);
+        Assert.Equal(BusinessStatus.Deactivated, business.Status);
+        Assert.Null(business.DecidedAtUtc);
+        Assert.Null(business.AppliedAtUtc);
+        Assert.Null(business.RejectionReason);
+        Assert.Equal("Vending Co", business.Name);
+
+        AssertMembershipsUnchanged(before, await fixture.MembershipsAsync());
+        Assert.Equal(
+            BusinessStatus.Pending,
+            (await fixture.BusinessAsync(fixture.PendingBusinessId)).Status);
+    }
+
+    /// <summary>
+    /// Reactivating writes the status column and nothing else either - in particular it restores no
+    /// membership: a release or a revocation is a deliberate decision about a person, and a business
+    /// returning is not a reason to undo one.
+    /// </summary>
+    [Fact]
+    public async Task Reactivating_writes_only_the_status_and_restores_no_membership()
+    {
+        await using var fixture = await DirectoryFixture.CreateAsync();
+        await fixture.Store().DeactivateAsync(fixture.TradingBusinessId, CancellationToken.None);
+        await fixture.Store().ReleaseMemberAsync(
+            fixture.TradingBusinessId,
+            fixture.TradingOwnerMembershipId,
+            DecidedAt,
+            CancellationToken.None);
+        var before = await fixture.MembershipsAsync();
+
+        await fixture.Store().ReactivateAsync(fixture.TradingBusinessId, CancellationToken.None);
+
+        Assert.Equal(
+            BusinessStatus.Active,
+            (await fixture.BusinessAsync(fixture.TradingBusinessId)).Status);
+        AssertMembershipsUnchanged(before, await fixture.MembershipsAsync());
+        Assert.False((await fixture.MembershipAsync(fixture.TradingOwnerMembershipId)).IsActive);
+    }
+
+    /// <summary>
+    /// Releasing a member writes that one membership's state together with the instant it changed,
+    /// and leaves its creation instant, its role and every other row alone.
+    /// </summary>
+    [Fact]
+    public async Task Releasing_a_member_writes_the_state_and_the_instant_together()
+    {
+        await using var fixture = await DirectoryFixture.CreateAsync();
+
+        await fixture.Store().ReleaseMemberAsync(
+            fixture.TradingBusinessId,
+            fixture.TradingOwnerMembershipId,
+            DecidedAt,
+            CancellationToken.None);
+
+        var membership = await fixture.MembershipAsync(fixture.TradingOwnerMembershipId);
+        Assert.False(membership.IsActive);
+        Assert.Equal(DecidedAt, membership.StatusChangedAtUtc);
+        Assert.Equal(CreatedAt, membership.CreatedAtUtc);
+        Assert.Equal(BusinessRole.Owner, membership.Role);
+
+        // The business itself is untouched: its status is somebody else's write.
+        Assert.Equal(
+            BusinessStatus.Active,
+            (await fixture.BusinessAsync(fixture.TradingBusinessId)).Status);
+        Assert.True((await fixture.MembershipAsync(fixture.PendingApplicantMembershipId)).IsActive);
+    }
+
+    /// <summary>
+    /// A membership key is only ever released together with the business it belongs to. Naming
+    /// another business's membership on this business's release finds nothing and writes nothing -
+    /// the statement pairs the two.
+    /// </summary>
+    [Fact]
+    public async Task A_membership_of_another_business_cannot_be_released()
+    {
+        await using var fixture = await DirectoryFixture.CreateAsync();
+
+        await Assert.ThrowsAnyAsync<InvalidOperationException>(() => fixture.Store().ReleaseMemberAsync(
+            fixture.TradingBusinessId,
+            fixture.PendingApplicantMembershipId,
+            DecidedAt,
+            CancellationToken.None));
+
+        var membership = await fixture.MembershipAsync(fixture.PendingApplicantMembershipId);
+        Assert.True(membership.IsActive);
+        Assert.Equal(CreatedAt, membership.StatusChangedAtUtc);
+    }
+
+    private static void AssertMembershipsUnchanged(
+        IReadOnlyList<BusinessMembership> before,
+        IReadOnlyList<BusinessMembership> after) =>
+        Assert.Equal(
+            before.Select(membership =>
+                (membership.Id, membership.IsActive, membership.Role, membership.StatusChangedAtUtc)),
+            after.Select(membership =>
+                (membership.Id, membership.IsActive, membership.Role, membership.StatusChangedAtUtc)));
+
+    #endregion
+
     #region The fixture
 
     /// <summary>
@@ -437,7 +601,8 @@ public class EfPlatformBusinessDirectoryStoreTests
             int businessId,
             string objectId,
             BusinessRole role,
-            bool isActive)
+            bool isActive,
+            string? displayName = null)
         {
             await using var db = TestAppDbContext.Unrestricted(_options);
             var membership = new BusinessMembership
@@ -447,6 +612,7 @@ public class EfPlatformBusinessDirectoryStoreTests
                 ObjectId = objectId,
                 Role = role,
                 IsActive = isActive,
+                DisplayName = displayName,
                 CreatedAtUtc = CreatedAt,
                 StatusChangedAtUtc = CreatedAt,
             };
