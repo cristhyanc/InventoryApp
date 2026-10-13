@@ -72,7 +72,7 @@ public sealed class SupportSessionAuthorizationResultHandler : IAuthorizationMid
         problemDetails.Extensions["message"] = detail;
         problemDetails.Extensions["code"] = code;
 
-        await context.Response.WriteAsJsonAsync(problemDetails).ConfigureAwait(false);
+        await context.Response.WriteAsJsonAsync(problemDetails, context.RequestAborted).ConfigureAwait(false);
     }
 
     /// <summary>

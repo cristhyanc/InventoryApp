@@ -212,6 +212,7 @@ public sealed class BusinessCapabilityAuthorizationHandler : AuthorizationHandle
         catch (BusinessAccessDeniedException denied)
         {
             _logger.LogWarning(
+                denied,
                 "Capability {Capability} denied: the caller's business membership did not resolve. "
                     + "Reason: {DenialReason}.",
                 Capabilities.Name(capability),

@@ -339,7 +339,7 @@ public sealed class BusinessScopeMiddleware
         problemDetails.Extensions["message"] = SupportSessionAuthorizationResultHandler.SessionEndedMessage;
         problemDetails.Extensions["code"] = SupportSessionErrorCodes.SessionEnded;
 
-        await context.Response.WriteAsJsonAsync(problemDetails);
+        await context.Response.WriteAsJsonAsync(problemDetails, context.RequestAborted);
     }
 
     /// <summary>
