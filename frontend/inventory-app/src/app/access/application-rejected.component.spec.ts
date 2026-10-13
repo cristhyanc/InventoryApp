@@ -61,6 +61,12 @@ describe('ApplicationRejectedComponent (issue #542)', () => {
     expect(host.textContent).toContain('Apply again');
   });
 
+  it('links Apply again to the application form (issue #543)', async () => {
+    const { host } = await render(of(known(null, true)));
+
+    expect(host.querySelector('a[href="/apply"]')?.textContent).toContain('Apply again');
+  });
+
   it('does not offer Apply again when onboarding is disabled', async () => {
     const { host } = await render(of(known(null, false)));
 

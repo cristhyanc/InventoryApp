@@ -50,6 +50,12 @@ describe('WelcomeComponent (issue #542)', () => {
     expect(host.textContent).toContain('Start a new business');
   });
 
+  it('links Start a new business to the application form (issue #543)', async () => {
+    const { host } = await render(of(known(true)));
+
+    expect(host.querySelector('a[href="/apply"]')?.textContent).toContain('Start a new business');
+  });
+
   it('does not offer Start a new business when onboarding is disabled', async () => {
     const { host } = await render(of(known(false)));
 

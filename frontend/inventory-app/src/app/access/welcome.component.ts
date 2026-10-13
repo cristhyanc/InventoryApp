@@ -1,7 +1,7 @@
 import { AsyncPipe } from '@angular/common';
 import { Component } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { Observable, map } from 'rxjs';
 import { AccountStateService } from './account-state.service';
 import { extractInviteToken } from './invite-link-token';
@@ -20,16 +20,15 @@ import { extractInviteToken } from './invite-link-token';
  * else - reaches that same route without ever landing here, so nothing further is needed for that
  * case.
  *
- * **Start a new business has no destination yet.** The application form is #543's task; this
- * page only shows that the choice exists, gated on the same `onboardingEnabled` flag
- * `GET /api/me/account-state` reports, so what is shown here matches the deployment's own
- * eligibility rule rather than a frontend guess - the same rule `AccessUnavailableComponent`
- * already follows for a `MembershipRevoked` caller.
+ * **Start a new business opens the application form at `/apply`** (issue #543). The choice is
+ * gated on the same `onboardingEnabled` flag `GET /api/me/account-state` reports, so what is shown
+ * here matches the deployment's own eligibility rule rather than a frontend guess - the same rule
+ * `AccessUnavailableComponent` already follows for a `MembershipRevoked` caller.
  */
 @Component({
   selector: 'app-welcome',
   standalone: true,
-  imports: [AsyncPipe, FormsModule],
+  imports: [AsyncPipe, FormsModule, RouterLink],
   template: `
     <div class="page">
       <header class="page-header">
@@ -63,7 +62,8 @@ import { extractInviteToken } from './invite-link-token';
           @if (onboardingEnabled$ | async) {
             <div class="mt-6">
               <h2 class="text-md-subtitle font-medium">Start a new business</h2>
-              <p class="text-md-body">Apply to create a new business. This will be available soon.</p>
+              <p class="text-md-body">Apply to create a new business.</p>
+              <a routerLink="/apply" class="btn btn-primary mt-2 inline-flex">Start a new business</a>
             </div>
           }
         </div>

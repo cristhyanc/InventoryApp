@@ -63,6 +63,7 @@ describe('AccessUnavailableComponent (issue #529)', () => {
 
     expect(host.textContent).toContain('invite link');
     expect(host.textContent).toContain('Start a new business');
+    expect(host.querySelector('a[href="/apply"]')?.textContent).toContain('Start a new business');
   });
 
   /** AC: "only the invite option" with onboarding off. */
