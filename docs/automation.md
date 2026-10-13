@@ -78,6 +78,44 @@ an eval case relies on: either update the affected case(s)/`policyReferences` in
 request because the guardrail is intentionally changing (and say so, per `AGENTS.md` § Tests
 required by change type), or treat the failure as a regression and fix the guardrail file instead.
 
+## Optional isolated Windows/Hyper-V runner pilot (issue #635)
+
+The repository is **public**, so the default for agent implementation, architecture, review,
+repair, pull-request validation and deployment remains **GitHub-hosted**. GitHub warns that
+a persistent self-hosted runner for a public repository can retain compromise from untrusted
+code. Do not route those jobs to a home PC just by replacing `runs-on: ubuntu-latest`.
+
+The first stage supports only two low-privilege checks:
+
+1. **Manual runner diagnostic** (`.github/workflows/inventory-agent-runner-diagnostic.yml`):
+   after this workflow reaches `main`, select **Actions → Inventory agent runner diagnostic →
+   Run workflow**. It targets `[self-hosted, linux, x64, inventory-agent]` and prints runner,
+   available RAM/disk and presence of build tools. It has `permissions: {}`, performs **no
+   checkout**, accepts no arbitrary shell input and references **no secrets**. The diagnostic
+   cannot run until an online Ubuntu x64 runner bearing all four labels is registered.
+2. **Opt-in trusted issue preflight**: the *preflight job only* in
+   `.github/workflows/agent-implement.yml` uses the self-hosted runner when the repository
+   Actions variable `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` is exactly `true`. If unset
+   or any other value, it continues to use `ubuntu-latest`. This job checks out the
+   reviewed `develop` branch and reads an issue's documentation-impact declaration with
+   read-only GitHub permissions; it does not run an AI model or PR code. If the VM is offline,
+   a self-hosted job will remain queued rather than automatically falling back to GitHub.
+
+**Manual setup:** register the Ubuntu VM runner with label `inventory-agent` in
+Repository Settings → Actions → Runners; confirm it shows Online/Idle. Keep the VM dedicated
+to this runner, without host-drive mounts, personal credentials or other sensitive data.
+Prefer a fresh disposable VM per job and an isolated network. Configure GitHub's protected
+runner access and approval controls where available. The diagnostic and default-off preflight
+are **not** a certification that a persistent runner is safe for public PR or credentialed
+coding workloads.
+
+**Rollback:** remove or set `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` to `false` in
+Repository Settings → Secrets and variables → Actions → Variables. Future preflight jobs
+then use GitHub-hosted runners again. The diagnostic remains manual. Do not change the
+variable while a job is executing; inspect the Actions run to confirm its selected runner.
+Only a separately reviewed, security-hardened follow-up may consider migrating additional
+workloads, and never public PR validation onto this persistent VM.
+
 ## Desired lifecycle
 
 ### Project tracking
