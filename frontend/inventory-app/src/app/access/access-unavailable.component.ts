@@ -78,7 +78,7 @@ function toView(answer: AccountStateAnswer): AccessUnavailableView | null {
             @if (view.offersNewBusinessOption) {
               <div class="mt-4">
                 <h2 class="text-md-subtitle font-medium">Start a new business</h2>
-                <a routerLink="/welcome" class="btn btn-primary mt-2 inline-flex">Start a new business</a>
+                <a routerLink="/apply" class="btn btn-primary mt-2 inline-flex">Start a new business</a>
               </div>
             }
           }

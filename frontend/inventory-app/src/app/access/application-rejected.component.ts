@@ -1,7 +1,7 @@
 import { AsyncPipe } from '@angular/common';
 import { Component } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { Observable, map } from 'rxjs';
 import { AccountStateAnswer, AccountStateService } from './account-state.service';
 import { extractInviteToken } from './invite-link-token';
@@ -38,15 +38,14 @@ function toView(answer: AccountStateAnswer): RejectedView | null {
  * caller of the redemption endpoint - and `ApplicationRejected` is one of
  * `REDEEMABLE_ACCOUNT_STATES`, so that page offers the Accept button once it arrives there.
  *
- * **Apply again has no destination yet**, for the same reason the welcome page's start-a-new-
- * business choice does not: the application form is #543's task. This page shows the choice,
- * gated on the same `onboardingEnabled` flag, so what a rejected applicant sees matches the
- * deployment's own eligibility rule.
+ * **Apply again opens the application form at `/apply`** (issue #543), gated on the same
+ * `onboardingEnabled` flag as the welcome page's start-a-new-business choice, so what a rejected
+ * applicant sees matches the deployment's own eligibility rule.
  */
 @Component({
   selector: 'app-application-rejected',
   standalone: true,
-  imports: [AsyncPipe, FormsModule],
+  imports: [AsyncPipe, FormsModule, RouterLink],
   template: `
     <div class="page">
       <header class="page-header">
@@ -81,7 +80,8 @@ function toView(answer: AccountStateAnswer): RejectedView | null {
             @if (view.onboardingEnabled) {
               <div class="mt-6">
                 <h2 class="text-md-subtitle font-medium">Apply again</h2>
-                <p class="text-md-body">You can submit a new application. This will be available soon.</p>
+                <p class="text-md-body">You can submit a new application.</p>
+                <a routerLink="/apply" class="btn btn-primary mt-2 inline-flex">Apply again</a>
               </div>
             }
           }
