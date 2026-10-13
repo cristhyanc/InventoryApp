@@ -1,0 +1,40 @@
+name: Inventory agent runner diagnostic
+
+# Manually dispatched only. Runs no repository or pull request code and uses no secrets.
+# This is a connectivity diagnostic for an isolated Ubuntu Hyper-V runner, not authorization
+# to execute the public repository's PRs or credentialed coding agents on that runner.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: inventory-agent-runner-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    name: Check isolated Ubuntu runner
+    runs-on: [self-hosted, linux, x64, inventory-agent]
+    timeout-minutes: 5
+    steps:
+      - name: Check runner and available tools (no checkout or secrets)
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Runner: $RUNNER_NAME"
+          echo "Operating system: $(uname -s)"
+          echo "Architecture: $(uname -m)"
+          echo "Memory:"
+          free -h
+          echo "Available disk space:"
+          df -h .
+          echo "Tool availability:"
+          for tool in git curl dotnet node npm; do
+            if command -v "$tool" >/dev/null 2>&1; then
+              echo "$tool: installed"
+            else
+              echo "$tool: not installed"
+            fi
+          done
+          echo "Diagnostic completed. No repository code or secrets were used."
