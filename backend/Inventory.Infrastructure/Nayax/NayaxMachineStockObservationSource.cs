@@ -1,0 +1,50 @@
+using Inventory.Application.MachineStock;
+using Inventory.Application.Nayax;
+using Inventory.Application.Time;
+using Inventory.Domain.MachineStock;
+
+namespace Inventory.Infrastructure.Nayax;
+
+/// <summary>
+/// The machine-stock observation adapter (issue #56): what the machine itself reports it is holding,
+/// read from the live Nayax machine-product slots through the existing
+/// <see cref="INayaxLynxClient.GetMachineProductsAsync"/> port.
+///
+/// It is a translation and nothing else. It carries <c>PAR</c> and <c>MissingStockByMDB</c> across
+/// exactly as Nayax reports them - including their absence, which the published contract allows for
+/// both (each is a nullable <c>int32</c>; verified against
+/// <c>GET /v1/machines/{MachineID}/machineProducts</c> in the Nayax developer documentation) - and
+/// leaves <see cref="MachineStockObservationPolicy"/> to decide what that means. Deliberately not
+/// the <c>(PAR - MissingStockByMDB) ?? 0</c> coercion the machine product list and the Pick List
+/// apply: a zero that actually means "Nayax did not say" would read as an empty machine and invent a
+/// shrinkage.
+///
+/// A slot with no Nayax product id is dropped, because nothing can be reconciled against an
+/// unidentified selection.
+/// </summary>
+public sealed class NayaxMachineStockObservationSource : IMachineStockObservationSource
+{
+    private readonly INayaxLynxClient _nayax;
+    private readonly IClock _clock;
+
+    public NayaxMachineStockObservationSource(INayaxLynxClient nayax, IClock clock)
+    {
+        _nayax = nayax;
+        _clock = clock;
+    }
+
+    public async Task<MachineStockObservation> GetObservationAsync(
+        long machineId, CancellationToken cancellationToken)
+    {
+        var slots = await _nayax.GetMachineProductsAsync(machineId, cancellationToken);
+        var observedAtUtc = _clock.UtcNow;
+
+        return new MachineStockObservation(
+            observedAtUtc,
+            slots
+                .Where(slot => slot.NayaxProductID.HasValue)
+                .Select(slot => new MachineStockObservationSlot(
+                    slot.NayaxProductID!.Value, slot.PAR, slot.MissingStockByMDB))
+                .ToList());
+    }
+}

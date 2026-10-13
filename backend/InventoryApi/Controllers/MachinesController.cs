@@ -1,5 +1,6 @@
 using Inventory.Application.Access;
 using Inventory.Application.Machines;
+using Inventory.Application.MachineStock;
 using Inventory.Application.MachineStockSync;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.Auth;
@@ -30,6 +31,8 @@ public class MachinesController : ControllerBase
     private readonly ApplyMachineStockSync _applyMachineStockSync;
     private readonly ResolveMachineStockDuplicate _resolveMachineStockDuplicate;
     private readonly ResolveMachineStockEventsAsAlreadyRecorded _resolveMachineStockEventsAsAlreadyRecorded;
+    private readonly GetMachineStockReconciliation _getMachineStockReconciliation;
+    private readonly RecordMachineStockCount _recordMachineStockCount;
 
     public MachinesController(
         GetMachineDashboard getMachineDashboard,
@@ -38,7 +41,9 @@ public class MachinesController : ControllerBase
         SyncMachineStockFromNayax syncMachineStock,
         ApplyMachineStockSync applyMachineStockSync,
         ResolveMachineStockDuplicate resolveMachineStockDuplicate,
-        ResolveMachineStockEventsAsAlreadyRecorded resolveMachineStockEventsAsAlreadyRecorded)
+        ResolveMachineStockEventsAsAlreadyRecorded resolveMachineStockEventsAsAlreadyRecorded,
+        GetMachineStockReconciliation getMachineStockReconciliation,
+        RecordMachineStockCount recordMachineStockCount)
     {
         _getMachineDashboard = getMachineDashboard;
         _listMachineDashboard = listMachineDashboard;
@@ -47,6 +52,8 @@ public class MachinesController : ControllerBase
         _applyMachineStockSync = applyMachineStockSync;
         _resolveMachineStockDuplicate = resolveMachineStockDuplicate;
         _resolveMachineStockEventsAsAlreadyRecorded = resolveMachineStockEventsAsAlreadyRecorded;
+        _getMachineStockReconciliation = getMachineStockReconciliation;
+        _recordMachineStockCount = recordMachineStockCount;
     }
 
     [HttpGet("{id:long}")]
@@ -121,5 +128,27 @@ public class MachinesController : ControllerBase
     {
         var result = await _resolveMachineStockEventsAsAlreadyRecorded.Handle(id, dto.EventIds, ct);
         return Ok(result);
+    }
+
+    // The machine-stock ledger (issue #56): per product, what this machine is expected to be
+    // holding, what it reports it is holding, and the discrepancy/shrinkage between them. A pure
+    // read - it creates no movement, applies no correction and writes nothing.
+    [HttpGet("{id:long}/stock-ledger")]
+    public async Task<ActionResult<MachineStockReconciliationDto>> GetStockLedger(long id, CancellationToken ct)
+    {
+        var reconciliation = await _getMachineStockReconciliation.Handle(id, ct);
+        return Ok(reconciliation);
+    }
+
+    // Records an operator's physical count of one product in this machine (issue #56): the baseline
+    // the ledger counts forward from. It appends an observation only - no storage quantity, costing
+    // quantity, inventory value, stock movement or sale cost changes - and the difference it absorbs
+    // is derived by the ledger rather than written away as a correction.
+    [HttpPost("{id:long}/stock-ledger/counts")]
+    public async Task<ActionResult<MachineStockCountResultDto>> RecordStockCount(
+        long id, MachineStockCountRequestDto dto, CancellationToken ct)
+    {
+        var count = await _recordMachineStockCount.Handle(id, dto, ct);
+        return count is null ? NotFound() : Ok(count);
     }
 }

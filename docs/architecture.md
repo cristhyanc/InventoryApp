@@ -1523,7 +1523,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
-| Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines`, `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
+| Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Purchases, Supplier Orders, Suppliers | `api/purchases`, `api/supplierorders`, `api/suppliers` | `Purchasing.Operate` | ✔ | ✔ | ✔ |
 | Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
@@ -4871,7 +4871,9 @@ Physical storage stock and costing inventory answer different questions:
 - `CostingQuantity`: total business-owned quantity still carrying inventory value.
 - `InventoryValue`: remaining value used with `CostingQuantity` to derive AVCO.
 
-A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. Completed sales and explicit cost-bearing write-offs consume costing inventory. Costing inventory the business held but never recorded is restored only by an explicit [costing repair](#costing-repairs-issue-359), which changes costing quantity and value alone - never physical stock.
+A machine refill is an internal location transfer: it changes physical storage but does not consume business inventory value or create COGS. The reverse transfer - units returned from a machine to storage - is the same movement with the opposite sign and is equally costing-neutral. Completed sales and explicit cost-bearing write-offs consume costing inventory. Costing inventory the business held but never recorded is restored only by an explicit [costing repair](#costing-repairs-issue-359), which changes costing quantity and value alone - never physical stock.
+
+Physical stock inside a machine is a third quantity again, and it has its own ledger: the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) derives it from the refill movements, the completed sales and the operator's counts, and compares it with what the machine reports. It reads those facts and writes no cost of any kind, so a machine's physical position is auditable without a second source of costing truth.
 
 Historical sale cost precedence is:
 
@@ -6503,6 +6505,117 @@ change needing its own issue, ideally combined with the rest of the Purchasing a
    is what keeps them distinguishable in the audit trail. Manual restocking remains the supported
    fallback for when Nayax is unavailable or a machine/MDB is not yet mapped; Sync Restock is the
    preferred path when a Nayax stock-adjustment alert already reports the physical event.
+5. The reverse transfer - units taken back **out of** a machine and returned to storage - is the
+   same `MachineRefill` movement with a **positive** quantity change and the machine recorded on it.
+   `StockAdjustment.QuantityChange` is signed from storage's point of view throughout the
+   application, so a refill is negative and a return is positive, and both are equally
+   costing-neutral: the business owns the units in either location. A cost-bearing disposal is not
+   this movement - discarding units from a machine follows the existing Damaged/Expired write-off
+   semantics, which do consume costing inventory.
+6. What a machine is then expected to be holding, and how that compares with what the machine
+   reports, is the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56)
+   below.
+
+### Machine stock ledger and shrinkage reconciliation (issue #56)
+
+The machine-stock ledger answers one question storage inventory and costing inventory cannot:
+**how many units should be in this machine right now, how many are, and what is the difference?**
+It is a *physical* ledger for one location. It changes no costing value, creates no COGS, and
+proposes no correction - identifying shrinkage is the point, so writing it away would defeat it.
+
+**It is derived, not duplicated.** Every movement it needs is already a persisted fact:
+
+| Movement | Where the fact lives | Machine stock | Business costing inventory |
+| --- | --- | --- | --- |
+| Refill | `StockAdjustment`, reason `MachineRefill`, negative quantity, machine recorded | `+n` | unchanged |
+| Return to storage | the same movement with a positive quantity | `-n` | unchanged |
+| Completed sale | `NayaxSales` with status `12` for that machine | `-1` per transaction | reduced once, by the sale-costing path |
+| Counted reconciliation | `MachineStockCount` (the one table this feature adds) | sets the level | unchanged |
+
+`Inventory.Domain.MachineStock.MachineStockMovementPolicy` is the single place a fact becomes a
+movement and the single statement of which kinds consume costing inventory (only a completed sale -
+and the ledger never performs that consumption itself). Because the ledger *reads* the refill
+movements and the completed sales rather than writing its own copies, a refill cannot be counted
+twice and a sale cannot create COGS twice: there is only one record of each event to begin with, and
+nothing to keep in step. One completed transaction dispenses one unit, which is exactly the quantity
+`WeightedAverageCostReplay` consumes from costing inventory for that sale, so the physical and
+costing ledgers cannot disagree about quantity.
+
+**Nothing is inferred from incomplete inputs.** `Inventory.Domain.MachineStock.MachineStockLedger`
+replays a machine's movements in effective-instant order (ties: refills, returns, sales, then the
+count, which is the authority on its own instant, then source id) on top of a baseline:
+
+1. the most recent **counted reconciliation** for that machine and product; otherwise
+2. the **opening machine stock the inventory-cost transition recorded** for it
+   (`InventoryCostTransitionMachineStock`, issue #298) at that transition's cutoff, with only
+   movements strictly after the cutoff replayed on top - the same boundary the costing replay
+   applies to its own baseline; otherwise
+3. **nothing**, in which case expected stock is `null` and the product is reported as
+   `AwaitingOpeningCount`. The refilled, returned and sold quantities are still reported, because
+   they are facts; what cannot be derived from them is a physical level.
+
+A count supersedes rather than corrects: it sets the level from its own instant onward, resets the
+movement totals to "since the baseline", and reports the difference it absorbed as
+`unexplainedChangeAtLastCount` (positive means units were missing). That figure is **derived on
+every read**, never stored, so there is one authoritative number rather than a stored copy that
+could drift. An expected stock that replays below zero is reported as the negative value it is, with
+`ExpectedStockNegative`, instead of being clamped - a clamp would hide a missing refill or a sale
+attributed to the wrong machine.
+
+**The observed side keeps its own uncertainty.** `MachineStockObservationPolicy` resolves the
+quantity the machine reports as the sum over the product's slots of `PAR - MissingStockByMDB` - the
+same arithmetic the Pick List, the site dashboard and the inventory-cost transition use, with both
+fields confirmed as nullable `int32` in the published Nayax `machineProducts` contract. It returns
+`null` - unknown, never zero - when the product occupies no slot, when any slot is missing either
+value, or when any slot's quantity falls outside `0..PAR`. Deliberately *not* the
+`(PAR - MissingStockByMDB) ?? 0` coercion the machine product list applies: a zero that means "Nayax
+did not say" would read as an empty machine and invent a shrinkage. It is also deliberately separate
+from `InventoryCostTransitionPolicy.MachineQuantity`, which performs the same arithmetic and
+*refuses* incomplete data - a one-time costing cutover must be exact or not happen, while this report
+must stay readable and say what it could not confirm.
+
+`MachineStockReconciliationPolicy` then compares the two: `discrepancy = observed - expected`, with
+`shrinkageQuantity`/`overageQuantity` as its one-sided views and a
+`Balanced`/`Shortage`/`Overage`/`Unknown` status. All four are `null` whenever either side is
+unknown.
+
+**The data-quality states are the feature, not an afterthought** (`MachineStockDataQualityIssueCodes`):
+`AwaitingOpeningCount` and `ExpectedStockNegative` per product on the ledger side,
+`ObservedStockUnavailable` per product on the observed side, and three machine-level states -
+`ObservationSourceUnavailable` when the machine's own report could not be read at all,
+`PendingNayaxStockEvents` when Sync Restock still holds unprocessed events for that machine (so a
+shortage may be an unapplied refill rather than shrinkage), and `UnattributedCompletedSales` when
+completed sales on the machine match no catalogue product (so their units are missing from every
+product's expected stock). A sale is attributed with the same
+`Inventory.Domain.Reporting.ProductMatching.ProductMatcher` the costing ledger uses, so the two
+always agree about which product a transaction dispensed.
+
+**The layers.** `Inventory.Application.MachineStock.GetMachineStockReconciliation` orchestrates and
+decides nothing: it reads the machine's report through the narrow `IMachineStockObservationSource`
+port (implemented by `Inventory.Infrastructure.Nayax.NayaxMachineStockObservationSource` over the
+existing `INayaxLynxClient.GetMachineProductsAsync`), reads the persisted facts through
+`IMachineStockLedgerStore` (`Inventory.Infrastructure.Persistence.EfMachineStockLedgerStore`), and
+hands both to the Domain. `RecordMachineStockCount` appends a count at the server's instant from the
+`IClock` port - the request carries no instant, no expected quantity and no discrepancy, because the
+server derives all of them. `MachinesController`'s `GET /api/machines/{id}/stock-ledger` and
+`POST /api/machines/{id}/stock-ledger/counts` are thin and inherit the controller's
+`Inventory.Operate` capability: reconciling a machine is the refill work an Operator does.
+
+Two Nayax conditions are reported as data quality rather than as a failed request, because both mean
+"this business has no usable connection" while the expected stock is local and still available:
+`NayaxNotConnectedException` and `NayaxPermissionNotGrantedException`. Everything else propagates
+unchanged - a transport failure must not be presented as an unreadable machine, and a support
+session's Nayax refusal (issue #551) applies here exactly as it does to every other Nayax read.
+
+Tenant isolation is the central query filter's: the adapter adds no `BusinessId` predicate, which is
+also what makes the observed product ids safe to pass into it - a machine id is a remote Nayax
+identity, so two businesses can be told about the same machine number, and an observed slot resolves
+to a product only if the caller's own catalogue holds it. Unresolvable slots are dropped, the same
+exclusion the Pick List applies.
+
+**Not in this slice.** There is no Angular page yet (the API is the exposure), no back-dated count,
+no machine-level write-off, and no automatic correction of a discrepancy - by design, since
+"automatically writing corrections to hide shrinkage" is explicitly out of scope.
 
 ### Global Stock History (issue #384)
 
@@ -6625,6 +6738,13 @@ Sales reach the application two ways, and both follow those five rules: the oper
 transaction export (`POST api/imports/nayax-sales`, below), and the home dashboard synchronises each
 machine's latest transactions (see [Home dashboard coordinated Sites/Machines sales
 sync](#home-dashboard-coordinated-sitesmachines-sales-sync-issue-187)).
+
+A completed sale reduces business-owned costing inventory exactly once, here, and nowhere else. The
+[machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56) (issue #56) also
+deducts that sale from the machine's *physical* expected stock - one unit per completed transaction,
+the same quantity this path consumes from costing inventory - by reading the same completed-sale row.
+It records no movement and no cost of its own, so a machine's physical ledger can never become a
+second deduction of COGS.
 
 #### Uploaded transaction export import (issue #301)
 

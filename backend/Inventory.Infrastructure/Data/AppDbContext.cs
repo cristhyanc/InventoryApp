@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using Inventory.Application.Tenancy;
+using Inventory.Domain.MachineStock;
 using Inventory.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Inventory.Infrastructure.Models;
@@ -80,6 +81,14 @@ public class AppDbContext : DbContext
     public DbSet<Purchase> Receipts => Set<Purchase>();
     public DbSet<NayaxSales> NayaxSales => Set<NayaxSales>();
     public DbSet<NayaxMachineStockEvent> NayaxMachineStockEvents => Set<NayaxMachineStockEvent>();
+
+    /// <summary>
+    /// Append-only physical counts of what is in a vending machine (issue #56), the baseline the
+    /// machine-stock ledger counts forward from. Ordinary tenant-owned data; nothing in the
+    /// application updates or deletes a row in this set, and recording one changes nothing else -
+    /// see <see cref="MachineStockCount"/>.
+    /// </summary>
+    public DbSet<MachineStockCount> MachineStockCounts => Set<MachineStockCount>();
     public DbSet<ImportedFile> ImportedFiles => Set<ImportedFile>();
     public DbSet<ImportedReimbursement> ImportedReimbursements => Set<ImportedReimbursement>();
     public DbSet<ImportedReimbursementDevice> ImportedReimbursementDevices => Set<ImportedReimbursementDevice>();
@@ -447,6 +456,32 @@ public class AppDbContext : DbContext
             .WithMany()
             .HasForeignKey(e => e.MatchedManualStockAdjustmentId)
             .OnDelete(DeleteBehavior.SetNull);
+
+        // A machine-stock count is read by machine, then by product, in count order (issue #56), and
+        // the tenant column leads the index because every query is filtered by it first.
+        modelBuilder.Entity<MachineStockCount>()
+            .HasIndex(count => new { count.BusinessId, count.MachineId, count.ProductId, count.CountedAtUtc });
+
+        // CountedAtUtc is written from the IClock port as a UTC instant, and the SQLite provider does
+        // not round-trip DateTimeKind - see the StockAdjustment.CreatedAt comment below for the
+        // complete explanation - so it is marked UTC on every read. Without this the recorded instant
+        // serialises with no "Z" and the frontend would parse the ledger's baseline instant as
+        // browser-local time.
+        modelBuilder.Entity<MachineStockCount>()
+            .Property(count => count.CountedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        modelBuilder.Entity<MachineStockCount>()
+            .Property(count => count.Notes)
+            .HasMaxLength(MachineStockCountPolicy.MaxNotesLength);
+
+        modelBuilder.Entity<MachineStockCount>()
+            .HasOne(count => count.Product)
+            .WithMany()
+            .HasForeignKey(count => count.ProductId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         modelBuilder.Entity<Product>()
             .HasOne(p => p.Category)
