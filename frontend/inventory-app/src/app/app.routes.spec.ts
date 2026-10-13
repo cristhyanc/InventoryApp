@@ -6,7 +6,9 @@ import { platformAdminGuard } from './access/platform-admin.guard';
 import { AccessNotAllowedComponent } from './access/access-not-allowed.component';
 import { AccessUnavailableComponent } from './access/access-unavailable.component';
 import { InviteAcceptanceComponent } from './access/invite-acceptance.component';
-import { OnboardingPlaceholderComponent } from './access/onboarding-placeholder.component';
+import { WelcomeComponent } from './access/welcome.component';
+import { ApplicationPendingComponent } from './access/application-pending.component';
+import { ApplicationRejectedComponent } from './access/application-rejected.component';
 import { routes } from './app.routes';
 import { StockHistoryPageComponent } from './components/stock/stock-history-page.component';
 import { AdminImportsComponent } from './components/admin/imports/admin-imports.component';
@@ -227,11 +229,13 @@ describe('account-state routing (issue #529)', () => {
     }
   });
 
-  it('serves the welcome, application-pending and application-rejected placeholders, behind authentication alone', () => {
-    expect(route('welcome').component).toBe(OnboardingPlaceholderComponent);
-    expect(route('welcome').data).toEqual({ heading: 'Welcome' });
-    expect(route('application-pending').component).toBe(OnboardingPlaceholderComponent);
-    expect(route('application-rejected').component).toBe(OnboardingPlaceholderComponent);
+  it('serves the welcome, application-pending and application-rejected pages, behind authentication alone (issue #542)', () => {
+    expect(route('welcome').canActivate).toEqual([MsalGuard]);
+    expect(route('welcome').component).toBe(WelcomeComponent);
+    expect(route('application-pending').canActivate).toEqual([MsalGuard]);
+    expect(route('application-pending').component).toBe(ApplicationPendingComponent);
+    expect(route('application-rejected').canActivate).toEqual([MsalGuard]);
+    expect(route('application-rejected').component).toBe(ApplicationRejectedComponent);
   });
 
   it('serves the invite acceptance page behind authentication alone (issue #535)', async () => {

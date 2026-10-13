@@ -4,7 +4,9 @@ import { ACCESS_NOT_ALLOWED_PATH, requireCapability } from './access/capability.
 import { accountStateGuard } from './access/account-state.guard';
 import { platformAdminGuard } from './access/platform-admin.guard';
 import { AccessUnavailableComponent } from './access/access-unavailable.component';
-import { OnboardingPlaceholderComponent } from './access/onboarding-placeholder.component';
+import { WelcomeComponent } from './access/welcome.component';
+import { ApplicationPendingComponent } from './access/application-pending.component';
+import { ApplicationRejectedComponent } from './access/application-rejected.component';
 import { AuthCallbackComponent } from './auth/auth-callback.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
 
@@ -40,23 +42,22 @@ export const routes: Routes = [
     // Account-state routing destinations (issue #529) and the invite route it bypasses for
     // (issue #505). None of them carries `accountStateGuard` or a capability - see the comment
     // above - and all of them are also what `memberForbiddenNoticeInterceptor` bypasses
-    // (`access/account-state.guard.ts`'s `ACCOUNT_STATE_BYPASS_PATHS`).
+    // (`access/account-state.guard.ts`'s `ACCOUNT_STATE_BYPASS_PATHS`). `welcome`,
+    // `application-pending` and `application-rejected` carried `OnboardingPlaceholderComponent`
+    // until issue #542 built each one's own page.
     path: 'welcome',
     canActivate: [MsalGuard],
-    data: { heading: 'Welcome' },
-    component: OnboardingPlaceholderComponent
+    component: WelcomeComponent
   },
   {
     path: 'application-pending',
     canActivate: [MsalGuard],
-    data: { heading: 'Your application is pending' },
-    component: OnboardingPlaceholderComponent
+    component: ApplicationPendingComponent
   },
   {
     path: 'application-rejected',
     canActivate: [MsalGuard],
-    data: { heading: 'Your application was not approved' },
-    component: OnboardingPlaceholderComponent
+    component: ApplicationRejectedComponent
   },
   {
     path: 'access-unavailable',
