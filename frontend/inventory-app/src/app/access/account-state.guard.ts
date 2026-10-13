@@ -43,11 +43,15 @@ export const REDEEMABLE_ACCOUNT_STATES: ReadonlySet<AccountStateName> = new Set<
 ]);
 
 /**
- * Where a caller whose account state is not one of {@link REDEEMABLE_ACCOUNT_STATES} is sent from
- * `/invite/:token` (issue #535): `Member` to the dashboard, every other state to the page
+ * Where a caller lands once their account state is known and they are not staying on the page
+ * that asked for it: `Member` to the dashboard, every other state to the page
  * {@link ACCOUNT_STATE_ROUTE} already names for it. Written separately from that table rather than
  * folded into it, because `Member`'s destination there is "the route asked for" - meaningless on a
- * route nobody but an invite could be asking for.
+ * route nobody but these callers could be asking for.
+ *
+ * Two callers use it: `/invite/:token` (issue #535) for a caller whose state is not one of
+ * {@link REDEEMABLE_ACCOUNT_STATES}, and `ApplicationPendingComponent`'s "check again" button
+ * (issue #542) for whatever state a re-read reports once it is no longer `ApplicationPending`.
  */
 export function nonRedeemableAccountStateDestination(state: AccountStateName): string {
   return state === 'Member' ? '/' : `/${ACCOUNT_STATE_ROUTE[state]}`;

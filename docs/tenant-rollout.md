@@ -665,9 +665,10 @@ token undecryptable.
   issue #541 the *application* side of onboarding exists too, behind a flag that is off by default
   and gated as [Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541)
   describes. What is still missing is the rest of the journey: approving or rejecting an
-  application is #509's, the application and approval pages are #508's and #509's, and the
-  connection banners are #539's; the business that is live today had its credential moved in by
-  that human-run command. Do not add a second live business until the flow is complete.
+  application is #509's, the application form itself is #543's (#542 already built the welcome,
+  pending-approval and rejected pages around it), the approval page is #510's, and the connection
+  banners are #539's; the business that is live today had its credential moved in by that
+  human-run command. Do not add a second live business until the flow is complete.
 - **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred, and still
   **required**. This is an outstanding integrity step, not a decision that the constraint is
   unnecessary.

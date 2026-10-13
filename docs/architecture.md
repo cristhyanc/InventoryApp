@@ -1862,7 +1862,7 @@ Until this slice a business existed in exactly one way: a human ran `bootstrap-b
 
 **Rate-limited per applicant, and audited.** `Inventory.Application.Onboarding.BusinessApplicationRateLimiter` is a sliding window — five submissions per identity per ten minutes — claimed *before* the membership read and the write, so simultaneous submissions cost one allowance each rather than all passing a count nothing has incremented yet. The identity is the bucket because there is no business to rate-limit by and the validated `(tid, oid)` pair is the only thing a request cannot choose; validation failures are deliberately *not* counted, so correcting a typo in a form is not what runs somebody out of attempts. It is in-process state, like `NayaxConnectionTestRateLimiter` and `MemberProfileRefreshThrottle`, and holds one lock over the whole table because this endpoint is called a handful of times per person in a lifetime and an indivisible "expire, decide, record, clear out" is worth more than concurrency here. The refusal is `429` with `Retry-After` and a fixed sentence naming no count, no window and no business. `Inventory.Application.Onboarding.IBusinessApplicationAudit`, emitted by `InventoryApi.Adapters.Onboarding.LoggingBusinessApplicationAudit` as one structured `ILogger` event with the request's correlation id, records one committed application: the actor's `(tid, oid)` pair, the new business id and the instant — and structurally **no business name, contact address, ABN, GST registration, display name or email address**, because the entry type has no field for any of them. A refused submission and a resubmission are audited as nothing, since neither created a business.
 
-**What this slice does not do.** Approving or rejecting an application (#509), the application and waiting user interface (#508 — nothing in `frontend/inventory-app/src` calls this route yet), email notifications, billing and tenant switching are all out of scope. It changes no existing business, no membership but the applicant's own new one, and no schema.
+**What this slice does not do.** Approving or rejecting an application (#509) and the application form itself (#543 — nothing in `frontend/inventory-app/src` calls this route yet; #542 built the welcome, pending-approval and rejected pages around where that form will go), email notifications, billing and tenant switching are all out of scope. It changes no existing business, no membership but the applicant's own new one, and no schema.
 
 **What proves this slice.** `BusinessApplicationPolicyTests` (the delegation to the settings policy including its own length bound, the resubmission comparison over validated values, and the refusal wording for every account state — none of which names a business, a role or a member), `ApplyForBusinessTests` (the decisions over fakes with the real write guard: the flag checked before anything is read or validated, validation before an allowance is spent, the creation happening inside the transaction in the order `begin → eligibility read → create → commit`, the application instant sampled after the write lock was granted, one audit event after the commit, every refusal and its sentence, the pending-business row missing or no longer `Pending` refused rather than reported back, and the rate limit refusing without reading or writing anything), `BusinessApplicationRateLimiterTests` (the window, its edge, the per-identity bucket including two GUID spellings of one identity, a clock that moved backwards, and the clear-out never resetting a live allowance), `EfBusinessApplicationStoreTests` (the relational adapter under the denied scope every application carries: the created columns and instants, the applicant's display values stored and absent ones left absent, no Nayax connection and no business data created, the existing business untouched, the filtered one-active-membership index still refusing, both central enforcers refusing and storing nothing, the read reporting a business that never applied and an undeclared status exactly as stored, and the denied context still reading and writing no business data), `BusinessApplicationConcurrencyTests` (two real writers on a real SQLite file through the shared `MembershipWriteRaceHarness`: an invite and an application by one identity leaving exactly one active membership with the loser leaving nothing behind, the same race for a revoked identity, two applications by one identity creating exactly one business whichever way they interleave — with every attempt answered either by that one application or by the membership conflict, and the conflicting interleaving itself proved deterministically by an application whose eligibility read missed a committed one, which is refused and leaves no business row behind — two applications by two identities both succeeding, and the sequential resubmission changing nothing), `BusinessApplicationApiTests` (the whole pipeline on a host with the flag on: the first-sign-in workflow end to end with the account state before and after, the response naming no business id or contact detail, the applicant's own display values on the new membership, every validation rule answering `400` and writing nothing, the same unbindable bodies still answering `[ApiController]`'s `400` (and `401`/`403` without authentication or scope) with the flag on, each refusal with its sentence and the existing member keeping their own access, the released and the rejected applicant both admitted with the rejected application kept, the resubmission answered with the waiting application and the differing one refused, `401`, the missing-scope `403`, the same business-less caller refused by every other endpoint, a pending applicant refused by every normal endpoint, the `429` with `Retry-After`, and the audit event carrying no name or email address while a refusal and a resubmission are audited as nothing), `BusinessApplicationDisabledApiTests` (the shipped default on its own host: the generic `404` for a well-formed, a malformed and an ineligible submission alike, and for every body MVC cannot bind — truncated JSON, a wrongly typed field, an empty body and one with no media type — with nothing written, authentication and the scope still required and still `401`/`403` for those unbindable bodies, `onboardingEnabled` reported as `false`, and the existing business unaffected) and `EndpointAuthorizationClassificationTests`/`MembershipNotRequiredEndpointAllowlistTests` (the reviewed allowlist entry and the marker's own rules).
 
@@ -3446,7 +3446,6 @@ way as.
 | `access/account-state.service.ts` | `AccountStateService`: the cached `GET /api/me/account-state` read, built and invalidated exactly like `AccessService` |
 | `access/account-state.guard.ts` | `accountStateGuard`, the `CanActivateFn` every business route declares, and `ACCOUNT_STATE_ROUTE`/`ACCOUNT_STATE_BYPASS_PATHS` |
 | `access/access-unavailable.component.ts` | The page `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` are routed to |
-| `access/onboarding-placeholder.component.ts` | The one stand-in component `/welcome`, `/application-pending` and `/application-rejected` load until #508's tasks replace each with its own page; `/invite/:token` carried this placeholder until issue #535 replaced it with `InviteAcceptanceComponent` |
 | `access/account-state-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the account-state cache, mirroring `accessForbiddenInterceptor` |
 | `access/member-forbidden-notice.interceptor.ts` | The global `403` handler: "you don't have access to this", except on a bypass route or for a refusal `classifyMemberRequest` does not call a member one |
 | `app.component.ts` | Waits for the account state before looking up the business at all |
@@ -3682,6 +3681,67 @@ URL, and the response's one field), the `REDEEMABLE_ACCOUNT_STATES`/
 `nonRedeemableAccountStateDestination` cases added to `account-state.guard.spec.ts`, and
 `app.routes.spec.ts` (the route now loads `InviteAcceptanceComponent`, still behind `MsalGuard`
 alone).
+
+### Welcome, pending approval and rejected pages (issue #542)
+
+`/welcome`, `/application-pending` and `/application-rejected` - the three remaining
+account-state routing destinations `accountStateGuard` carries (issue #529) - each carried
+`OnboardingPlaceholderComponent` until this slice of #508 (under #328) replaced it with its own
+page. The application form behind "Start a new business" and "Apply again" is #543's task, which
+this slice depends on and does not build.
+
+| File | Responsibility |
+| --- | --- |
+| `access/welcome.component.ts` | `WelcomeComponent`: the `NoMembership` destination - the invite-link entry point, and, when `onboardingEnabled` is true, the start-a-new-business choice |
+| `access/application-pending.component.ts` | `ApplicationPendingComponent`: the `ApplicationPending` destination - explains the review is pending, and its "check again" button re-reads the account state |
+| `access/application-rejected.component.ts` | `ApplicationRejectedComponent`: the `ApplicationRejected` destination - the Super Admin's recorded reason when there is one, the same invite-link entry point, and, when `onboardingEnabled` is true, the apply-again choice |
+| `access/invite-link-token.ts` | `extractInviteToken`: pulls the token out of a pasted `/invite/<token>` link or a bare token, shared by the welcome and rejected pages |
+
+**I have an invite link reuses the invite acceptance route (#535) rather than redeeming anything
+itself.** Both pages hold a pasted value only in their own field, extract a token from it with
+`extractInviteToken`, and navigate to `/invite/<token>` on Continue - `InviteAcceptanceComponent` is
+still the one caller of the redemption endpoint and the one place that decides whether a token is
+actually usable. Opening the link directly, from an email or elsewhere, reaches that same route
+without ever landing on either of these pages, so nothing further is needed for that case.
+
+**Start a new business and Apply again are shown, not yet wired.** Both are gated on the same
+`onboardingEnabled` flag `GET /api/me/account-state` reports, matching the deployment's own
+eligibility rule rather than a frontend guess - the same rule `AccessUnavailableComponent` already
+follows for a `MembershipRevoked` caller - but neither has a destination yet: the application form
+is #543's task, which also makes both reachable. Until then, each page states the choice exists
+without a control behind it.
+
+**Check again re-reads the account state, never assumes an outcome.**
+`ApplicationPendingComponent`'s button calls `AccountStateService.refresh()`: a still-
+`ApplicationPending` answer stays on the page with a reminder that nothing has changed yet, an
+`unavailable` answer (the fail-open case every account-state read shares) shows a retry message
+rather than guessing, and any other known state navigates to the page
+`nonRedeemableAccountStateDestination` already names for it (`account-state.guard.ts`) - the same
+helper `InviteAcceptanceComponent` uses, now with a second caller. A `Member` answer runs
+`AccessService.refresh()` and waits for it before navigating to `/`, exactly as
+`InviteAcceptanceComponent` does after a redemption, so the dashboard's own capability guard reads
+the caller's freshly granted Owner capabilities rather than the stale pre-approval answer either
+cache would still be holding if the navigation ran first.
+
+**The rejected page shows the Super Admin's own recorded reason, verbatim, when there is one.**
+`rejectionReason` is the one field `GET /api/me/account-state` carries for `ApplicationRejected`
+(issue #523); a submission with none recorded falls back to one generic sentence this page owns
+instead of inventing a reason the API never gave.
+
+**What this slice does not do.** The application form itself (#543's task) and its wiring from
+these pages, and anything backend - this is a frontend-only slice over the existing
+`GET /api/me/account-state` and `/invite/:token` routes.
+
+**What proves this slice.** `invite-link-token.spec.ts` (the token extracted from a full link, a
+path-only link, a bare token, and surrounding whitespace, and `null` for blank input),
+`welcome.component.spec.ts` and `application-rejected.component.spec.ts` (the invite-link option
+always offered and the start-a-new-business/apply-again choice shown only when `onboardingEnabled`
+is true, the rejected page's recorded reason and its generic fallback, and a pasted link or token
+navigating to `/invite/<token>`), `application-pending.component.spec.ts` (the still-pending
+message, the fail-open retry message for an unreadable re-read, navigation to every other state's
+own page, and the access-cache refresh awaited before the dashboard navigation once approved), and
+`app.routes.spec.ts` (each route now loading its own component instead of
+`OnboardingPlaceholderComponent`, still behind `MsalGuard` alone).
 
 ### Breadcrumbs (issue #457)
 
