@@ -6,9 +6,9 @@ using Microsoft.EntityFrameworkCore;
 namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
-/// The EF Core implementation of <see cref="IPlatformBusinessDirectoryStore"/> (issue #544). Like
-/// every other adapter in this folder it lives beside the <see cref="AppDbContext"/> and the
-/// persistence models it reads and writes.
+/// The EF Core implementation of <see cref="IPlatformBusinessDirectoryStore"/> (issue #544, extended
+/// with the lifecycle transitions of issue #545). Like every other adapter in this folder it lives
+/// beside the <see cref="AppDbContext"/> and the persistence models it reads and writes.
 ///
 /// <para><strong>It is the whole of the Super Admin's business surface, in one file.</strong> Two
 /// tables it reads and writes - businesses and memberships, the structurally non-tenant-owned ones
@@ -34,13 +34,21 @@ namespace Inventory.Infrastructure.Persistence;
 /// <c>IgnoreQueryFilters</c>, a widened projection or a predicate over a tenant-owned table here is
 /// a boundary change, not an implementation detail.</para>
 ///
-/// <para><strong>Both writes go through <c>SaveChanges</c> on tracked entities, deliberately.</strong>
+/// <para><strong>Every write goes through <c>SaveChanges</c> on tracked entities, deliberately.</strong>
 /// The central enforcers that validate a business row - <see cref="BusinessStatusEnforcer"/>,
 /// <see cref="BusinessTimeZoneEnforcer"/> and <see cref="BusinessAbnEnforcer"/> - and
 /// <c>BusinessOwnershipEnforcer</c> itself run there, and a set-based <c>ExecuteUpdate</c> would
 /// write straight past all four. They run inside the caller's <c>BEGIN IMMEDIATE</c> transaction and
 /// save before returning, because <c>MembershipWriteGuard</c> re-reads afterwards to judge the state
-/// the write left behind.</para>
+/// the write left behind and because a deactivation's own next statement has to see the status it
+/// just wrote.</para>
+///
+/// <para><strong>What the lifecycle transitions may write is one column.</strong> A deactivation and
+/// a reactivation write <c>Businesses.Status</c> and nothing else - no decision instant, no rejection
+/// reason, no membership, no invite - and a release writes one membership's <c>IsActive</c> and
+/// <c>StatusChangedAtUtc</c> together, paired with the business it must belong to. The deactivation's
+/// invite cancellation is deliberately not here: it is issue #531's single conditional statement on
+/// its own port, which this adapter has no part in.</para>
 /// </summary>
 public sealed class EfPlatformBusinessDirectoryStore : IPlatformBusinessDirectoryStore
 {
@@ -203,6 +211,112 @@ public sealed class EfPlatformBusinessDirectoryStore : IPlatformBusinessDirector
             // it reached at some other time (issue #522).
             membership.StatusChangedAtUtc = decidedAtUtc;
         }
+
+        await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
+    public async Task<PlatformBusinessLifecycleTarget?> FindLifecycleTargetAsync(
+        int businessId,
+        CancellationToken cancellationToken)
+    {
+        var row = await _db.Businesses
+            .AsNoTracking()
+            .Where(business => business.Id == businessId)
+            .Select(business => new
+            {
+                business.Id,
+                business.Name,
+                business.Status,
+                // Every membership of this business, active and inactive alike: a reactivation has
+                // to judge whether an active Owner is left, and a release has to find the one
+                // membership it names. The Entra pair is deliberately not projected - no decision
+                // here is made from an identity, so it is not read.
+                Members = business.Memberships
+                    .OrderBy(membership => membership.Id)
+                    .Select(membership => new
+                    {
+                        membership.Id,
+                        membership.DisplayName,
+                        membership.Role,
+                        membership.IsActive,
+                    })
+                    .ToList(),
+            })
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return row is null
+            ? null
+            : new PlatformBusinessLifecycleTarget(
+                row.Id,
+                row.Name,
+                row.Status,
+                [.. row.Members.Select(member => new PlatformBusinessMember(
+                    member.Id,
+                    member.DisplayName,
+                    member.Role,
+                    member.IsActive))]);
+    }
+
+    /// <inheritdoc />
+    public Task DeactivateAsync(int businessId, CancellationToken cancellationToken) =>
+        SetStatusAsync(businessId, BusinessStatus.Deactivated, cancellationToken);
+
+    /// <inheritdoc />
+    public Task ReactivateAsync(int businessId, CancellationToken cancellationToken) =>
+        SetStatusAsync(businessId, BusinessStatus.Active, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task ReleaseMemberAsync(
+        int businessId,
+        int membershipId,
+        DateTime releasedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        var membership = await _db.BusinessMemberships
+            // Paired with the business id, exactly as the rejection's release is, so a membership
+            // key belonging to some other business could not be released by this call even if the
+            // caller named one.
+            .SingleAsync(
+                candidate => candidate.Id == membershipId && candidate.BusinessId == businessId,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        membership.IsActive = false;
+
+        // Written in the same operation as the state change, so the row never describes a state it
+        // reached at some other time (issue #522).
+        membership.StatusChangedAtUtc = releasedAtUtc;
+
+        await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The one write both lifecycle transitions make: a business's status column, and nothing else
+    /// anywhere (issue #545).
+    ///
+    /// <para>No decision instant and no rejection reason: those record what became of an
+    /// <em>application</em> (issue #540), and a business being switched off or on is not a decision
+    /// on one. No membership and no invite either - the deactivation's invite cancellation is its
+    /// own statement on its own port, and a reactivation touches neither.</para>
+    ///
+    /// <para>Through <c>SaveChanges</c> on the tracked entity, like the two decisions above, so
+    /// <see cref="BusinessStatusEnforcer"/>, <see cref="BusinessTimeZoneEnforcer"/>,
+    /// <see cref="BusinessAbnEnforcer"/> and <c>BusinessOwnershipEnforcer</c> all run; it saves
+    /// before returning because the caller's transaction continues with statements that must see
+    /// this write.</para>
+    /// </summary>
+    private async Task SetStatusAsync(
+        int businessId,
+        BusinessStatus status,
+        CancellationToken cancellationToken)
+    {
+        var business = await _db.Businesses
+            .SingleAsync(candidate => candidate.Id == businessId, cancellationToken)
+            .ConfigureAwait(false);
+
+        business.Status = status;
 
         await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }

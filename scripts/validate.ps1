@@ -149,9 +149,12 @@ Invoke-ExternalCommand -Label "Build backend ($Configuration)" -Command {
     & dotnet build $BackendSolution --configuration $Configuration --no-restore
 }
 
+# A test that runs past the hang timeout is a hang, not a slow test (see scripts/validate.sh): the
+# run stops with a full dump of the test host and a sequence file under the project's TestResults.
 Invoke-ExternalCommand -Label "Test backend with coverage ($Configuration)" -Command {
     & dotnet test $BackendSolution --configuration $Configuration --no-build --no-restore `
-        --collect:"XPlat Code Coverage"
+        --collect:"XPlat Code Coverage" `
+        --blame-hang --blame-hang-timeout 90s --blame-hang-dump-type full
 }
 
 Invoke-Step -Label 'Check vulnerable NuGet packages' -Command {

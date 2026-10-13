@@ -81,6 +81,12 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
 
     public int ApplicantMembershipId { get; private set; }
 
+    /// <summary>The trading business's Owner membership - the one a reactivation needs to exist.</summary>
+    public int TradingOwnerMembershipId { get; private set; }
+
+    /// <summary>The trading business's Manager membership, which no rule requires to stay active.</summary>
+    public int TradingManagerMembershipId { get; private set; }
+
     protected virtual bool ConfigurePlatformAdministrator => true;
 
     /// <summary>An unrestricted context for arranging and verifying state outside the boundary.</summary>
@@ -158,6 +164,9 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         await using var db = Database();
         db.BusinessNayaxConnections.RemoveRange(await db.BusinessNayaxConnections.ToListAsync());
         db.Products.RemoveRange(await db.Products.ToListAsync());
+        // Before the memberships: a redeemed invite names the membership it created with a
+        // restricted foreign key, so the invites have to go first.
+        db.MemberInvites.RemoveRange(await db.MemberInvites.ToListAsync());
         await db.SaveChangesAsync();
         db.BusinessMemberships.RemoveRange(await db.BusinessMemberships.ToListAsync());
         await db.SaveChangesAsync();
@@ -201,9 +210,11 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         RejectedBusinessId = rejected.Id;
 
         var applicant = Membership(pending.Id, ApplicantObjectId, BusinessRole.Owner, isActive: true);
+        var tradingOwner = Membership(trading.Id, TradingOwnerObjectId, BusinessRole.Owner, isActive: true);
+        var tradingManager = Membership(trading.Id, TradingManagerObjectId, BusinessRole.Manager, isActive: true);
         db.BusinessMemberships.AddRange(
-            Membership(trading.Id, TradingOwnerObjectId, BusinessRole.Owner, isActive: true),
-            Membership(trading.Id, TradingManagerObjectId, BusinessRole.Manager, isActive: true),
+            tradingOwner,
+            tradingManager,
             applicant,
             // The refused application's applicant was released by its rejection, which is why that
             // business has no active membership at all.
@@ -211,8 +222,105 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         await db.SaveChangesAsync();
 
         ApplicantMembershipId = applicant.Id;
+        TradingOwnerMembershipId = tradingOwner.Id;
+        TradingManagerMembershipId = tradingManager.Id;
 
         ClearLog();
+    }
+
+    /// <summary>
+    /// One more business in the state a test needs - a second trading business for somebody released
+    /// from a deactivated one to join, for example (issue #545).
+    /// </summary>
+    public async Task<int> SeedBusinessAsync(string name, BusinessStatus status)
+    {
+        await using var db = Database();
+        var business = new Business
+        {
+            Name = name,
+            TimeZoneId = "Australia/Sydney",
+            Status = status,
+            CreatedAtUtc = CreatedAt,
+        };
+
+        db.Businesses.Add(business);
+        await db.SaveChangesAsync();
+        return business.Id;
+    }
+
+    /// <summary>One more membership, in whichever business and state a test needs (issue #545).</summary>
+    public async Task<int> SeedMembershipAsync(
+        int businessId,
+        string objectId,
+        BusinessRole role,
+        bool isActive,
+        string? displayName = null,
+        string? email = null)
+    {
+        await using var db = Database();
+        var membership = Membership(businessId, objectId, role, isActive);
+        membership.DisplayName = displayName;
+        membership.Email = email;
+
+        db.BusinessMemberships.Add(membership);
+        await db.SaveChangesAsync();
+        return membership.Id;
+    }
+
+    /// <summary>
+    /// One invite of one business, stored exactly as the Owner-facing creation stores it: the token
+    /// only as its hash, so a test can present the plaintext to the redemption endpoint while the row
+    /// holds nothing usable (issue #545).
+    ///
+    /// <para>The expiry defaults to a week from <em>now</em> rather than from the seeded creation
+    /// instant, because whether an invite is still live is judged against the host's real clock: an
+    /// invite created at the fixture's historical instant would already have run out, and "expired"
+    /// is the one state a deactivation deliberately leaves alone. A test that wants an expired invite
+    /// passes <paramref name="expiresAtUtc"/> in the past.</para>
+    /// </summary>
+    public async Task<int> SeedInviteAsync(
+        int businessId,
+        string token,
+        BusinessRole role = BusinessRole.Operator,
+        MemberInviteStatus status = MemberInviteStatus.Pending,
+        DateTime? createdAtUtc = null,
+        DateTime? expiresAtUtc = null)
+    {
+        await using var db = Database();
+        var created = createdAtUtc ?? CreatedAt;
+        var invite = new MemberInvite
+        {
+            BusinessId = businessId,
+            Role = role,
+            TokenHash = MemberInviteToken.Hash(token),
+            Status = status,
+            CreatedByDirectoryTenantId = DirectoryTenantId,
+            CreatedByObjectId = TradingOwnerObjectId,
+            CreatedAtUtc = created,
+            ExpiresAtUtc = expiresAtUtc ?? MemberInvitePolicy.ExpiresAt(DateTime.UtcNow),
+            CancelledAtUtc = status == MemberInviteStatus.Cancelled ? created : null,
+            UsedAtUtc = status == MemberInviteStatus.Used ? created : null,
+        };
+
+        db.MemberInvites.Add(invite);
+        await db.SaveChangesAsync();
+        return invite.Id;
+    }
+
+    public async Task<MemberInvite> InviteAsync(int inviteId)
+    {
+        await using var db = Database();
+        return await db.MemberInvites.AsNoTracking().SingleAsync(invite => invite.Id == inviteId);
+    }
+
+    public async Task<IReadOnlyList<BusinessMembership>> MembershipsOfAsync(int businessId)
+    {
+        await using var db = Database();
+        return await db.BusinessMemberships
+            .AsNoTracking()
+            .Where(membership => membership.BusinessId == businessId)
+            .OrderBy(membership => membership.Id)
+            .ToListAsync();
     }
 
     /// <summary>
