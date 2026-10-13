@@ -18,6 +18,7 @@ using InventoryApi.Adapters.Onboarding;
 using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.SupportSessions;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using InventoryApi.Auth.E2ETesting;
@@ -234,12 +235,21 @@ builder.Services.AddScoped<IPlatformBusinessDecisionAudit, LoggingPlatformBusine
 // membership id and an invite count and no rejection reason, and because its entry type has no
 // field for a name of any kind - not the business's, and not the released member's.
 builder.Services.AddScoped<IPlatformBusinessLifecycleAudit, LoggingPlatformBusinessLifecycleAudit>();
-// What else happens when a business is deactivated (issue #545's hook point). Nothing does today,
-// and this is the one registration issue #512's support sessions replace: the hook runs inside the
+// The support-session audit trail (issue #550): one event when a session starts and one per session
+// ended. A separate port again, on the same terms as the three above, because a session is a
+// different event with different fields - and because this is the one platform trail that carries the
+// administrator's typed reason, which is the fact that makes read access to somebody else's business
+// reviewable. Its entry type still has no field for a session id, a business name or anybody else's
+// identity, which is what keeps all three out of the trail structurally rather than by a sink's
+// discretion.
+builder.Services.AddScoped<ISupportSessionAudit, LoggingSupportSessionAudit>();
+// What else happens when a business is deactivated (issue #545's hook point): since issue #550, every
+// active support session for that business ends. It is the single registration #545 declared this
+// hook for, replaced here rather than by editing that transition - the hook runs inside the
 // deactivation's own transaction, so a session ended by a deactivation that rolled back never
-// happened and a committed deactivation cannot leave one running. A single registration rather than
-// a collection, so "what runs here?" has exactly one answer, visible in this file.
-builder.Services.AddScoped<IBusinessDeactivationHook, NoBusinessDeactivationHook>();
+// happened and a committed deactivation cannot leave one running. A single registration rather than a
+// collection, so "what runs here?" has exactly one answer, visible in this file.
+builder.Services.AddScoped<IBusinessDeactivationHook, EndSupportSessionsOnBusinessDeactivation>();
 
 // Whether self-service onboarding is switched on at all (issue #541). Read once here, because only
 // the composition root reads configuration, and published as the Application layer's narrow flag

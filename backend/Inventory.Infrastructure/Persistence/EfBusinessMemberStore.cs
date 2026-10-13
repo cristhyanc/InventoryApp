@@ -11,7 +11,7 @@ namespace Inventory.Infrastructure.Persistence;
 /// it reads and writes.
 ///
 /// <para><strong>Why the business id is in every statement.</strong> <c>BusinessMembership</c> is
-/// one of the four structural non-tenant-owned tables (docs/architecture.md § Tenant ownership):
+/// one of the five structural non-tenant-owned tables (docs/architecture.md § Tenant ownership):
 /// it is what resolves the tenant boundary, so filtering it centrally would be circular and it
 /// carries no global query filter. The boundary for this one table is therefore the business id in
 /// the <c>WHERE</c> clause - and it is only ever one tenancy resolution produced from the

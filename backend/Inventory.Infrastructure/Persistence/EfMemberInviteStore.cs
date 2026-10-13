@@ -12,7 +12,7 @@ namespace Inventory.Infrastructure.Persistence;
 /// beside the <see cref="AppDbContext"/> and the persistence model it reads and writes.
 ///
 /// <para><strong>Why the business id is in every statement.</strong> <c>MemberInvite</c> is one of
-/// the four structural non-tenant-owned tables (docs/architecture.md § Tenant ownership): the
+/// the five structural non-tenant-owned tables (docs/architecture.md § Tenant ownership): the
 /// redemption of issue #532 has to find an invite by the token a caller with no membership presents,
 /// and a central query filter keyed to a resolved business can never match that - so the table
 /// carries no filter, and the boundary for it is the business id in the <c>WHERE</c> clause. It is
