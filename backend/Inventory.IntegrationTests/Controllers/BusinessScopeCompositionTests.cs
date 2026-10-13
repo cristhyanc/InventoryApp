@@ -1,5 +1,6 @@
 using System.Net;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Persistence;
@@ -30,7 +31,9 @@ namespace InventoryApi.Tests.Controllers;
 /// <para>Issue #544 extended it to the Super Admin's business store, the first write-capable
 /// platform-admin adapter and the only request path that reads across every business through
 /// <see cref="AppDbContext"/>: it is registered scoped, takes nothing but the request's own
-/// context, and no registration anywhere offers a request path an unscoped one.</para>
+/// context, and no registration anywhere offers a request path an unscoped one. Issue #550's
+/// support-session store is held to the same three things for the same reason: it is the second
+/// adapter a platform administrator's denied-scope request reaches.</para>
 /// </summary>
 public sealed class BusinessScopeCompositionTests : IClassFixture<BusinessScopeCompositionTests.ApiFactory>
 {
@@ -137,6 +140,54 @@ public sealed class BusinessScopeCompositionTests : IClassFixture<BusinessScopeC
         Assert.True(db.TenantFilteringEnabled);
         Assert.Null(db.CurrentBusinessId);
         Assert.Empty(db.Products.ToList());
+    }
+
+    /// <summary>
+    /// The support-session store is not an exception either (issue #550). It is the second adapter a
+    /// platform administrator's denied-scope request reaches, and the only one that writes a row
+    /// about access to another business, so the same three things are checked: the port is satisfied
+    /// by the Infrastructure adapter as a <em>scoped</em> registration, its only constructor
+    /// dependency is <see cref="AppDbContext"/> - so nothing can hand it a scope, a context factory
+    /// or options of its own - and the context it therefore receives is the request's own, which
+    /// starts denied and filters every tenant-owned read.
+    /// </summary>
+    [Fact]
+    public void The_support_session_store_gets_the_request_scoped_context_and_nothing_else()
+    {
+        using var scope = _factory.Services.CreateScope();
+
+        var store = scope.ServiceProvider.GetRequiredService<ISupportSessionStore>();
+
+        Assert.IsType<EfSupportSessionStore>(store);
+
+        var dependencies = typeof(EfSupportSessionStore)
+            .GetConstructors()
+            .SelectMany(constructor => constructor.GetParameters())
+            .Select(parameter => parameter.ParameterType)
+            .ToArray();
+
+        Assert.Equal([typeof(AppDbContext)], dependencies);
+
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.True(db.TenantFilteringEnabled);
+        Assert.Null(db.CurrentBusinessId);
+        Assert.Empty(db.Products.ToList());
+    }
+
+    /// <summary>
+    /// The deactivation hook the composition root registers is the support-session end (issue #550),
+    /// not the no-op issue #545 shipped. It is asserted here because the registration is the whole
+    /// mechanism: there is exactly one implementation, the lifecycle transition calls whatever it is
+    /// given inside its own transaction, and a deactivation that silently went back to doing nothing
+    /// would leave a supporter reading a business that had just been switched off.
+    /// </summary>
+    [Fact]
+    public void The_business_deactivation_hook_ends_support_sessions()
+    {
+        using var scope = _factory.Services.CreateScope();
+
+        Assert.IsType<EndSupportSessionsOnBusinessDeactivation>(
+            scope.ServiceProvider.GetRequiredService<IBusinessDeactivationHook>());
     }
 
     /// <summary>

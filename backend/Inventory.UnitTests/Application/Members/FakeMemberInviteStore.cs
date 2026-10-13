@@ -8,7 +8,7 @@ namespace InventoryApi.Tests.Application.Members;
 /// on issue #532).
 ///
 /// It is keyed by business, because the real adapter now names the business in every statement:
-/// <c>MemberInvite</c> is one of the four structural non-tenant-owned tables, so there is no central
+/// <c>MemberInvite</c> is one of the five structural non-tenant-owned tables, so there is no central
 /// query filter for it to defer to. A fake that ignored the business id would be modelling a
 /// mechanism the adapter does not have, and would let a use case that passed the wrong business - or
 /// none - still pass its tests. The relational proof stays where it belongs

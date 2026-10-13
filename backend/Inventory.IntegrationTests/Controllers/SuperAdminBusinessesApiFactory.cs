@@ -164,6 +164,10 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         await using var db = Database();
         db.BusinessNayaxConnections.RemoveRange(await db.BusinessNayaxConnections.ToListAsync());
         db.Products.RemoveRange(await db.Products.ToListAsync());
+        // Support sessions (issue #550) go with the rest: a session left behind by one test would
+        // make the next one's "one active session per administrator" check refuse a start it should
+        // have allowed.
+        db.SupportSessions.RemoveRange(await db.SupportSessions.ToListAsync());
         // Before the memberships: a redeemed invite names the membership it created with a
         // restricted foreign key, so the invites have to go first.
         db.MemberInvites.RemoveRange(await db.MemberInvites.ToListAsync());
@@ -311,6 +315,57 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
     {
         await using var db = Database();
         return await db.MemberInvites.AsNoTracking().SingleAsync(invite => invite.Id == inviteId);
+    }
+
+    /// <summary>
+    /// One support session of one business, stored exactly as the start endpoint stores it: the id
+    /// only as its hash, so a test can stage a session that already exists - another
+    /// administrator's, an expired one, or one that was already ended - without going through the
+    /// endpoint (issue #550).
+    ///
+    /// <para>The instants default to a session that started a moment ago and is still running,
+    /// because whether a session is active is judged against the host's real clock. A test that wants
+    /// an expired one passes <paramref name="expiresAtUtc"/> in the past.</para>
+    /// </summary>
+    public async Task<int> SeedSupportSessionAsync(
+        int businessId,
+        string objectId,
+        string sessionId = "a-seeded-support-session-id",
+        DateTime? startedAtUtc = null,
+        DateTime? expiresAtUtc = null,
+        DateTime? endedAtUtc = null,
+        string reason = "Investigating a reported error")
+    {
+        await using var db = Database();
+        var startedAt = startedAtUtc ?? DateTime.UtcNow.AddMinutes(-5);
+        var session = new SupportSession
+        {
+            BusinessId = businessId,
+            SessionIdHash = SupportSessionId.Hash(sessionId),
+            ActorDirectoryTenantId = DirectoryTenantId.ToUpperInvariant(),
+            ActorObjectId = objectId.ToUpperInvariant(),
+            Reason = reason,
+            StartedAtUtc = startedAt,
+            ExpiresAtUtc = expiresAtUtc ?? SupportSessionPolicy.ExpiresAt(startedAt),
+            EndedAtUtc = endedAtUtc,
+        };
+
+        db.SupportSessions.Add(session);
+        await db.SaveChangesAsync();
+        return session.Id;
+    }
+
+    /// <summary>Every stored support session, oldest first (issue #550).</summary>
+    public async Task<IReadOnlyList<SupportSession>> SupportSessionsAsync()
+    {
+        await using var db = Database();
+        return await db.SupportSessions.AsNoTracking().OrderBy(session => session.Id).ToListAsync();
+    }
+
+    public async Task<SupportSession> SupportSessionAsync(int sessionKey)
+    {
+        await using var db = Database();
+        return await db.SupportSessions.AsNoTracking().SingleAsync(session => session.Id == sessionKey);
     }
 
     public async Task<IReadOnlyList<BusinessMembership>> MembershipsOfAsync(int businessId)
