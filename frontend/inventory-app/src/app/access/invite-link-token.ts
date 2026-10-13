@@ -11,6 +11,6 @@ export function extractInviteToken(pastedValue: string): string | null {
     return null;
   }
 
-  const match = trimmed.match(/\/invite\/([^/?#]+)/);
+  const match = /\/invite\/([^/?#]+)/.exec(trimmed);
   return match ? match[1] : trimmed;
 }
