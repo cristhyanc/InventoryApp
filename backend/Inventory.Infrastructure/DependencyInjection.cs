@@ -12,6 +12,7 @@ using Inventory.Application.Gst;
 using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
 using Inventory.Application.Machines;
+using Inventory.Application.MachineStock;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Members;
 using Inventory.Application.Nayax;
@@ -225,6 +226,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
         services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
         services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
+        services.AddScoped<IMachineStockLedgerStore, EfMachineStockLedgerStore>();
+        // What the machine itself reports it is holding (issue #56). Scoped because reading it spends
+        // the current business's own Nayax credentials, which are resolved per request.
+        services.AddScoped<IMachineStockObservationSource, NayaxMachineStockObservationSource>();
         services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
         services.AddScoped<IPickListStorageStockStore, EfPickListStorageStockStore>();
         services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
