@@ -201,6 +201,20 @@ jobs:
       - name: Validate repository
         run: bash scripts/validate.sh
 
+      # Evidence for a hung backend test: scripts/validate.sh stops a test that runs past its hang
+      # timeout and leaves a memory dump of the test host and the list of tests in flight under
+      # TestResults. Nothing is uploaded when validation passes or fails for any other reason.
+      - name: Upload hung-test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: hung-test-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            backend/*/TestResults/**/*.dmp
+            backend/*/TestResults/**/Sequence_*.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
   report-status:
     name: Report validation status
     if: always() && needs.context.result == 'success' && needs.context.outputs.publish_status == 'true'

@@ -32,6 +32,17 @@
     <ProjectReference Include="..\InventoryApi\InventoryApi.csproj" />
   </ItemGroup>
 
+  <!-- xUnit runner settings: test collections in this assembly run one at a time. xUnit 2's
+       parallel runner starts every collection at once and queues all their synchronous work
+       (host startups, SQLite migrations, synchronous tests) on a few test threads. A TestServer
+       response read that resumes on one of those threads can wait behind that whole backlog,
+       long enough to hit HttpClient's 100-second timeout in tests that have nothing wrong with
+       them (inferred from CI logs; see docs/architecture.md § Test projects). The file must be
+       copied to the output directory, or the runner silently falls back to its defaults. -->
+  <ItemGroup>
+    <None Update="xunit.runner.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- Test doubles shared with Inventory.UnitTests (issue #311). They depend only on
        Inventory.Domain and Inventory.Application, so they live in the unit test project and are
        compiled into this one as linked source files, at the same relative path and namespace.
