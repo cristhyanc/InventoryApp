@@ -20,6 +20,7 @@ import { HistoricalGstClassificationComponent } from './components/admin/histori
 import { NayaxSaleTimestampRepairComponent } from './components/admin/nayax-sale-timestamp-repair/nayax-sale-timestamp-repair.component';
 import { PlatformDiagnosticsComponent } from './components/admin/diagnostics/platform-diagnostics.component';
 import { AdminUsersComponent } from './components/admin/users/admin-users.component';
+import { RolesComponent } from './components/admin/roles/roles.component';
 import { PurchaseEditPageComponent } from './components/purchases/purchase-edit/purchase-edit-page.component';
 import { PurchaseListComponent } from './components/purchases/purchase-list.component';
 import { PurchaseUploadComponent } from './components/purchases/purchase-upload.component';
@@ -83,6 +84,13 @@ describe('Admin Users route (issue #534)', () => {
   it('serves the dedicated Admin Users page at /admin/users, behind authentication', async () => {
     expect(route('admin/users').canActivate).toContain(MsalGuard);
     await expect(loadedComponent('admin/users')).resolves.toBe(AdminUsersComponent);
+  });
+});
+
+describe('Admin Roles route (issue #530)', () => {
+  it('serves the dedicated Admin Roles page at /admin/roles, behind authentication and Roles.View', async () => {
+    expect(route('admin/roles').canActivate).toContain(MsalGuard);
+    await expect(loadedComponent('admin/roles')).resolves.toBe(RolesComponent);
   });
 });
 

@@ -93,7 +93,8 @@ const adminChildRoutes: { label: string; route: string }[] = [
   { label: 'Costing Repair', route: '/admin/costing-repair' },
   { label: 'Historical GST Classification', route: '/admin/historical-gst-classification' },
   { label: 'Nayax Sale Timestamp Repair', route: '/admin/nayax-sale-timestamp-repair' },
-  { label: 'Users', route: '/admin/users' }
+  { label: 'Users', route: '/admin/users' },
+  { label: 'Roles', route: '/admin/roles' }
 ];
 
 describe('primary navigation (issue #391)', () => {
@@ -157,15 +158,15 @@ describe('primary navigation (issue #391)', () => {
   });
 
   /**
-   * The navigation may only point at pages that exist: no placeholder Roles/Audit/Settings/Profile
+   * The navigation may only point at pages that exist: no placeholder Audit/Settings/Profile
    * destination, and no route invented ahead of the page that would serve it. Users is a real
-   * destination since issue #534.
+   * destination since issue #534, and Roles since issue #530.
    */
   it('points only at routes declared in app.routes.ts', () => {
     expect(undeclaredRoutes(primaryNavigation)).toEqual([]);
   });
 
-  it('adds no Settings, profile or role destination', () => {
+  it('adds no Settings, profile or audit destination', () => {
     const labels = [
       ...primaryNavigation.map((entry) => entry.label),
       ...navLinks(primaryNavigation).map((link) => link.label)
@@ -173,7 +174,6 @@ describe('primary navigation (issue #391)', () => {
 
     expect(labels).not.toContain('Settings');
     expect(labels).not.toContain('Profile');
-    expect(labels).not.toContain('Roles');
     expect(labels).not.toContain('Audit');
   });
 
@@ -341,6 +341,15 @@ describe('navigationFor capabilities (issue #528)', () => {
     expect(navLinks(ownerNavigation()).map((entry) => entry.route)).toEqual(
       navLinks(primaryNavigation).map((entry) => entry.route)
     );
+  });
+
+  /** The Admin → Roles page (issue #530): visible only to the role that holds `Roles.View`. */
+  it('offers Roles to an Owner and hides it from a Manager and an Operator', () => {
+    expect(childRoutes('Admin', ownerNavigation())).toContainEqual({ label: 'Roles', route: '/admin/roles' });
+    expect(childRoutes('Admin', navigationFor(MANAGER, false))).not.toContainEqual(
+      expect.objectContaining({ route: '/admin/roles' })
+    );
+    expect(navLinks(navigationFor(OPERATOR, false)).map((link) => link.route)).not.toContain('/admin/roles');
   });
 
   /**

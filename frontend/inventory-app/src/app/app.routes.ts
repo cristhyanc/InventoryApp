@@ -337,6 +337,13 @@ export const routes: Routes = [
     loadComponent: () => import('./components/admin/users/admin-users.component').then((m) => m.AdminUsersComponent)
   },
   {
+    // The Admin → Roles page (issue #530): a read-only explanation of what each role can access,
+    // Owner-only.
+    path: 'admin/roles',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Roles.View')],
+    loadComponent: () => import('./components/admin/roles/roles.component').then((m) => m.RolesComponent)
+  },
+  {
     path: 'expenses',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
     loadComponent: () => import('./components/expenses/operating-expense.component').then((m) => m.OperatingExpenseComponent)
