@@ -2,7 +2,8 @@ name: Inventory agent runner diagnostic
 
 # Manually dispatched only. Runs no repository or pull request code and uses no secrets.
 # This is a connectivity diagnostic for an isolated Ubuntu Hyper-V runner, not authorization
-# to execute the public repository's PRs or credentialed coding agents on that runner.
+# to run unreviewed PR code or credentialed coding agents on a persistent runner.
+# Repository visibility is private, but does not replace runner isolation.
 on:
   workflow_dispatch:
 
