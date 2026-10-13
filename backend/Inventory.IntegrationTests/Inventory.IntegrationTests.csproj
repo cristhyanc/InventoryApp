@@ -16,6 +16,12 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
     <PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.2.0" />
 
+    <!-- Transitive security pin: the test host's package graph otherwise resolves 10.0.10, which has
+         high-severity advisories (GHSA-r955-8q5j-3h83, GHSA-7hqp-7c5m-4vq6, GHSA-c399-9853-6jmj).
+         System.Security.Cryptography.Pkcs is pinned in InventoryApi.csproj and flows here through the
+         project reference. Remove once a direct dependency brings a patched version itself. -->
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.13" />
+
     <!-- Architecture tests: asserts the Clean Architecture dependency direction against the
          compiled assemblies (see Architecture/CleanArchitectureDependencyTests.cs). -->
     <PackageReference Include="NetArchTest.Rules" Version="1.3.2" />

@@ -64,7 +64,9 @@ for (const provider of ['claude']) {
     const selection = prepare(provider);
     assert.equal(selection.triage, true);
     assert.equal(resolveSelection(selection, { tier: 'low', reason: 'One local change' }).tier, 'low');
-    assert.equal(resolveSelection(selection, { tier: 'standard', reason: 'Several related components' }).tier, 'standard');
+    const standard = resolveSelection(selection, { tier: 'standard', reason: 'Several related components' });
+    assert.equal(standard.tier, 'standard');
+    assert.equal(standard.maxTurns, 250);
     const high = resolveSelection(selection, { tier: 'high', reason: 'Broad structural change' });
     assert.equal(high.tier, 'high');
     assert.equal(high.model, resolveSelection(prepare(provider, '-high')).model);

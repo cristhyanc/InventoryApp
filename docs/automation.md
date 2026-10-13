@@ -78,6 +78,53 @@ an eval case relies on: either update the affected case(s)/`policyReferences` in
 request because the guardrail is intentionally changing (and say so, per `AGENTS.md` § Tests
 required by change type), or treat the failure as a regression and fix the guardrail file instead.
 
+## Optional isolated Ubuntu VM runner pilot on Hyper-V (issue #635)
+
+The repository was switched to **private** on 14 October 2026. That reduces exposure
+to untrusted outside contributors, but **private visibility is not a runner sandbox**:
+malicious or accidentally unsafe branch code, compromised collaborator accounts and leaked
+credentials can still put a persistent home runner at risk. The default for agent
+implementation, architecture, review, repair, pull-request validation and deployment remains
+**GitHub-hosted**. Do not route those jobs to a home PC just by replacing
+`runs-on: ubuntu-latest`.
+
+The first stage supports only two low-privilege checks:
+
+1. **Manual runner diagnostic** (`.github/workflows/inventory-agent-runner-diagnostic.yml`):
+   after this workflow reaches `main`, select **Actions → Inventory agent runner diagnostic →
+   Run workflow**. It targets `[self-hosted, linux, x64, inventory-agent]` and prints runner,
+   available RAM/disk and presence of build tools. It has `permissions: {}`, performs **no
+   checkout**, accepts no arbitrary shell input and references **no secrets**. The diagnostic
+   cannot run until an online Ubuntu x64 runner bearing all four labels is registered.
+2. **Opt-in trusted issue preflight**: the *preflight job only* in
+   `.github/workflows/agent-implement.yml` uses the self-hosted runner when the repository
+   Actions variable `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` is exactly `true`. If unset
+   or any other value, it continues to use `ubuntu-latest`. This job checks out the
+   reviewed `develop` branch and reads an issue's documentation-impact declaration with
+   read-only GitHub permissions; it does not run an AI model or PR code. If the VM is offline,
+   a self-hosted job will remain queued rather than automatically falling back to GitHub, and
+   the issue keeps its readiness label with nothing running. To recover, cancel the queued
+   **Agent implementation** run, either bring the VM back online or set the variable to
+   `false` (see Rollback below), then remove and re-apply the readiness label.
+
+**Manual setup:** register the Ubuntu VM runner with label `inventory-agent` in
+Repository Settings → Actions → Runners; confirm it shows Online/Idle. Keep the VM dedicated
+to this runner, without host-drive mounts, personal credentials or other sensitive data.
+Prefer a fresh disposable VM per job and an isolated network. Configure GitHub's protected
+runner access and approval controls where available. The diagnostic and default-off preflight
+are **not** a certification that a persistent runner is safe for arbitrary PR code or credentialed
+coding workloads, even when the repository is private.
+
+**Rollback:** remove or set `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` to `false` in
+Repository Settings → Secrets and variables → Actions → Variables. Future preflight jobs
+then use GitHub-hosted runners again. The diagnostic remains manual. Do not change the
+variable while a job is executing; inspect the Actions run to confirm its selected runner.
+Only a separately reviewed, security-hardened follow-up may consider migrating additional
+workloads. Before moving any credentialed coding agent, protect the GitHub runner from
+untrusted pull-request branches, provision an ephemeral/resettable VM or equivalent
+isolation, limit GitHub App/token permissions, and verify that GitHub Actions secrets do
+not become accessible to code under review. Private visibility alone is not sufficient.
+
 ## Desired lifecycle
 
 ### Project tracking
@@ -253,7 +300,7 @@ These tiers apply only to the initial implementation invocation. Architecture ch
 | Human readiness label | Implementation selection |
 | --- | --- |
 | `agent-ready-claude-low` | Claude `haiku`, at most 300 turns; no triage |
-| `agent-ready-claude` | A short read-only Haiku triage chooses `haiku` (300 turns), `sonnet` (150 turns) or `opus` (400 turns) |
+| `agent-ready-claude` | A short read-only Haiku triage chooses `haiku` (300 turns), `sonnet` (250 turns) or `opus` (400 turns) |
 | `agent-ready-claude-high` | Claude `opus`, at most 400 turns; no triage |
 
 The existing labels remain the default tier. Apply exactly one readiness label per issue (the three labels above and the `agent-ready-full-claude` fallback label all count; the full label has no fixed tier and uses the same Haiku triage as the unsuffixed label); remove an existing readiness/state label before choosing another. The default tier selects low, standard or high automatically, choosing the least expensive tier adequate for the task; high is chosen for complex cross-cutting design, broad structural changes, or difficult concurrency, security or data correctness. Needing a stronger model is not a reason to stop. Triage returns `clarification-required` only when the requirements, acceptance criteria or exclusions are materially ambiguous; the selection job then fails before implementation or label mutation, and the run log gives the reason. Clarify the issue, then remove and re-apply the readiness label. Use the explicit `-low` or `-high` label to skip triage. A low-tier agent that cannot finish within its model must report the limitation and stop for a human; it cannot upgrade itself. Model tier does not lower the task's risk classification, testing requirements or review gate.
@@ -324,7 +371,7 @@ Deploying the API restarts the process, and that restart applies its database sc
 - A separate **`preflight`** job runs first with only `contents: read` and `issues: read`. It checks out trusted `develop` with `persist-credentials: false`, reads the issue body with `gh issue view --json body`, and runs `node scripts/validate-documentation-impact.mjs --issue-body` on it. It has no Anthropic credential, runs no Claude step, creates no branch, and changes no label or comment. When it fails, it emits an `::error` annotation stating exactly what to fix (edit the issue's documentation impact decision/details, then remove and re-apply `agent-ready-claude`), and the implementation job is skipped because it depends on both `preflight` and the separate read-only `model` selection job, with successful results required from both. The check is deliberately not a step inside the implementation job: that job's always-running outcome step would otherwise relabel the issue `agent-blocked` after a preflight failure.
 - The implementation job permissions are `contents: read`, `pull-requests: write`, and `issues: write`. Claude receives only the job-scoped `GITHUB_TOKEN` for read/comment operations; checkout persists no Git credential. A deterministic post-Claude step separately receives the short-lived App token for push/PR creation. The implementation job has no `actions: write`; a separate no-checkout dispatcher job holds `actions: write` only long enough to invoke trusted `agent-architecture.yml` from `main`.
 - Checks out `develop` at its latest commit, installs .NET 10 and Node.js 20, and moves the issue from `agent-ready-claude` to `agent-working`.
-- Runs Claude Code with a fixed prompt that requires it to read the issue, restate the acceptance criteria, exclusions and documentation impact decision/details, create `agent/issue-<n>-<slug>` from the checked-out `develop`, make the smallest change with tests, follow the issue's documentation impact decision (update every listed documentation file, and any documentation the change would otherwise contradict), perform all inspection and implementation in the single foreground invocation without Claude sub-agents or the `Agent` tool, run `bash scripts/validate.sh` synchronously in the foreground and wait for its exit result, commit the completed branch locally and prepare validated untracked PR title/body scratch files. Tool permissions allow file edits, `dotnet`, `npm --prefix frontend/inventory-app`, exact foreground `bash scripts/validate.sh`, the documentation-impact validator, read-only Git inspection, scoped `git rm --`/`git restore --staged --`/`mkdir -p` under normal project directories, local branch creation, `git add`/`commit`, and read/comment GitHub operations. Claude itself cannot push, create/edit a PR, edit labels, call `gh api`/`gh workflow`, reset/rebase, switch to protected branches, use web access, or delegate to another Claude agent. After Claude exits, deterministic steps verify the local package, mint the short-lived App token, push the branch, create the PR, and verify that the App-authored PR head matches the local HEAD. The separate architecture workflow applies the same foreground-only execution rule to its own Claude invocation.
+- Runs Claude Code with a fixed prompt that requires it to read the issue, restate the acceptance criteria, exclusions and documentation impact decision/details, create `agent/issue-<n>-<slug>` from the checked-out `develop`, make the smallest change with tests, follow the issue's documentation impact decision (update every listed documentation file, and any documentation the change would otherwise contradict), perform all inspection and implementation in the single foreground invocation without Claude sub-agents or the `Agent` tool, run `bash scripts/validate.sh` synchronously in the foreground and wait for its exit result, commit the completed branch locally and prepare validated untracked PR title/body scratch files. Tool permissions allow file edits, `dotnet`, `npm --prefix frontend/inventory-app` (also with the absolute workspace path), exact foreground `bash scripts/validate.sh`, the documentation-impact validator, read-only Git inspection, scoped `git rm --`/`git restore --staged --`/`mkdir -p` under normal project directories (`mkdir -p` also with the absolute workspace path), local branch creation, `git add`/`commit`, and read/comment GitHub operations. Because each refused command costs a turn, the prompt names the exact frontend command forms the allowlist accepts (`npm --prefix frontend/inventory-app test -- <jest arguments>`, `run lint`, `run build`) and tells the agent not to use `cd`, `npx`, a bare `npm test`/`jest` or chained commands; issues #547 and #549 ran out of turns on those refusals. Claude itself cannot push, create/edit a PR, edit labels, call `gh api`/`gh workflow`, reset/rebase, switch to protected branches, use web access, or delegate to another Claude agent. After Claude exits, deterministic steps verify the local package, mint the short-lived App token, push the branch, create the PR, and verify that the App-authored PR head matches the local HEAD. The separate architecture workflow applies the same foreground-only execution rule to its own Claude invocation.
 - When the coder succeeds and the local branch, clean working tree and commit match a verified open pull request targeting `develop` from an `agent/issue-<n>-*` branch, the implementation job outputs its PR number and implementation head SHA and leaves the issue in `agent-working`. If coding or publication fails, it moves the issue to `agent-blocked`. The separate architecture workflow owns the next state transition: success moves the issue and pull request to `agent-review`; failure moves the issue to `agent-blocked`.
 - A separate `dispatch-architecture` job has `actions: write`, `pull-requests: read`, and `issues: write`, but no checkout and no Anthropic or deployment secret. It reverifies the open, non-draft, same-repository, bot-authored `agent/issue-*` PR, exact current SHA, `develop` base, issue-number branch identity and workflow-file exclusion, then dispatches `agent-architecture.yml` from trusted `main`. It cannot label the PR or dispatch validation; its issue-write authority exists only so that any failure before the dispatch succeeds (a failed guard, an unavailable GitHub API, or the dispatch itself) moves the issue from `agent-working` to `agent-blocked` with a comment, instead of leaving it stuck.
 - `agent-architecture.yml` has five jobs: a read-only context guard, the read-only Copilot architecture check (`copilot-check`), the read-only SonarCloud read (`sonar`, see [SonarCloud issues in the architecture stage](#sonarcloud-issues-in-the-architecture-stage)), the Claude fix job (`architecture`, which runs only when Copilot reported findings or SonarCloud reported open issues), and a deterministic finalizer that records Copilot's findings and the SonarCloud issues on the PR. The findings travel from the checker to the fix job and the finalizer as a run-bound artifact (see the architecture findings transport bullet in [Review workflow](#review-workflow)). The context guard verifies the exact PR head, App-bot author, `develop` base, same-repository `agent/issue-<n>-*` branch, linked `agent-working` issue and workflow-file exclusion. The architecture job checks out the exact SHA with no persisted credentials, may commit narrowly scoped structural edits locally, and only a post-Claude GitHub App step can push them. The finalizer re-fetches the current PR head; only after architecture succeeds does it apply `agent-review` to both PR and issue and dispatch `validate.yml` from trusted `main` with `dispatch_review: true`. The finalizer runs even when the context guard rejects the target, and any failure before validation is dispatched (a rejected target, a failed architecture job, a PR head that moved, or a failed dispatch) moves the issue to `agent-blocked` with a comment and removes any `agent-review` it applied. It only blocks an issue that is still `agent-working` or that it labelled itself, so a stale or mistaken manual dispatch cannot block an issue already in review. Like the repair dispatcher, it skips the dispatch when the final SHA already has an `agent-validation` status, because the architecture push can also reach `agent-head-update.yml`; it therefore also needs `statuses: read`. `scripts/agent-architecture-handoff.test.mjs` runs both trusted steps against a fake `gh` to prove these paths. It also runs each checker's real package step and the fix job's real store step together, and the finalizer against missing, tampered and mismatched findings artifacts.
