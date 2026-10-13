@@ -127,9 +127,10 @@ public sealed record BusinessApplicationOutcome
 /// <para><strong>The new business starts empty.</strong> No machine, product, purchase, sale, site,
 /// invite or Nayax connection record is created, so its Nayax status is <c>NotConfigured</c> by
 /// virtue of nothing being stored, and no decision instant or rejection reason is written - nobody
-/// has decided anything. Approving or rejecting it is #509's work, and until then no endpoint
-/// serves its data: only <see cref="BusinessStatus.Active"/> resolves, so the applicant's very next
-/// request is answered with the ordinary <c>403</c> and their own account state reports
+/// has decided anything. Approving or rejecting it is the Super Admin's, through issue #544's
+/// narrow platform-admin path, and until a decision is recorded no endpoint serves its data: only
+/// <see cref="BusinessStatus.Active"/> resolves, so the applicant's very next request is answered
+/// with the ordinary <c>403</c> and their own account state reports
 /// <see cref="AccountState.ApplicationPending"/>.</para>
 ///
 /// <para><strong>Nothing about the existing businesses is touched.</strong> This use case reads no

@@ -17,6 +17,7 @@ using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
+using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
@@ -106,6 +107,19 @@ public static class ApplicationServiceCollectionExtensions
         // every request, exactly as the Nayax test limiter's window is.
         services.AddSingleton<BusinessApplicationRateLimiter>();
         services.AddScoped<ApplyForBusiness>();
+
+        // The Super Admin's business directory and the two decisions on an application (issue
+        // #544). Scoped for the reason the two paths above are: the decision's authoritative read
+        // and its write run on the request's own AppDbContext, inside MembershipWriteGuard's
+        // transaction on that same context. They take no ICurrentBusinessProvider at all - a
+        // platform administrator has no membership, so there is no business to resolve - and the
+        // business they act on is named by the route, which is a decision's subject rather than a
+        // tenancy scope (docs/architecture.md § Super Admin businesses API).
+        services.AddScoped<ListPlatformBusinesses>();
+        services.AddScoped<CountPendingBusinessApplications>();
+        services.AddScoped<BusinessApplicationDecisionWriter>();
+        services.AddScoped<ApproveBusinessApplication>();
+        services.AddScoped<RejectBusinessApplication>();
 
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are

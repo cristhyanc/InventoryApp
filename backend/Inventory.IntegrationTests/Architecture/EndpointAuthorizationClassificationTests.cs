@@ -25,10 +25,13 @@ namespace InventoryApi.Tests.Architecture;
 /// <list type="number">
 ///   <item><b>A capability policy.</b> <c>[RequireCapability(...)]</c> on the action or its
 ///   controller. This is what a business endpoint normally is.</item>
-///   <item><b>The platform diagnostics surface.</b> <c>PlatformAdminPolicy</c> <em>and</em>
+///   <item><b>The platform-admin surface.</b> <c>PlatformAdminPolicy</c> <em>and</em>
 ///   <see cref="PlatformDiagnosticsEndpointAttribute"/> together (issue #336). Both are required:
 ///   the marker alone grants nothing and the policy alone would not be eligible for the membership
-///   bypass.</item>
+///   bypass. It held only the read-only diagnostics API until issue #544 added the Super Admin's
+///   business directory and its two decisions - the same class, the same marker and the same
+///   policy, which is the point: a write-capable platform surface is not a fifth way to be
+///   authorized.</item>
 ///   <item><b>The membership-not-required family.</b>
 ///   <see cref="MembershipNotRequiredEndpointAttribute"/> on an endpoint named in
 ///   <see cref="MembershipNotRequiredAllowlist"/> below (issue #523). The allowlist lives here so
@@ -507,6 +510,38 @@ public class EndpointAuthorizationClassificationTests
                 $"{endpoint.Route} carries the diagnostics marker without the platform-admin policy.");
             Assert.Empty(CapabilitiesOf(endpoint));
         }
+    }
+
+    /// <summary>
+    /// The class-2 surface, endpoint by endpoint, as the two issues that created it list them: the
+    /// read-only diagnostics API of #336 and the Super Admin's business directory and decisions of
+    /// #544. It is kept beside the rule above because the rule would still pass if one of these
+    /// routes quietly moved to a capability policy - and a platform-admin endpoint on a business
+    /// capability would be unsatisfiable for the only caller it exists for, while a business role
+    /// would have become a second way into a cross-business path.
+    /// </summary>
+    [Theory]
+    [InlineData("api/admin/diagnostics/access", "GET")]
+    [InlineData("api/admin/diagnostics/query", "POST")]
+    [InlineData("api/super-admin/businesses", "GET")]
+    [InlineData("api/super-admin/businesses/pending-count", "GET")]
+    [InlineData("api/super-admin/businesses/{businessId:int}/approve", "POST")]
+    [InlineData("api/super-admin/businesses/{businessId:int}/reject", "POST")]
+    public void The_platform_admin_endpoints_are_class_two_and_nothing_else(string route, string httpMethod)
+    {
+        var endpoint = Endpoint(route, httpMethod);
+
+        Assert.Equal([EndpointClass.PlatformDiagnostics], ClassesOf(endpoint));
+        Assert.True(HasPlatformDiagnosticsMarker(endpoint));
+        Assert.True(HasPlatformAdminPolicy(endpoint));
+        Assert.Empty(CapabilitiesOf(endpoint));
+        Assert.False(HasMembershipNotRequiredMarker(endpoint));
+
+        // Platform authority is an additional requirement on a delegated API call, never a
+        // replacement for one, so the ordinary authentication and scope requirements stay.
+        Assert.True(HasAttribute<AuthorizeAttribute>(endpoint));
+        Assert.True(HasAttribute<RequiredScopeAttribute>(endpoint));
+        Assert.False(HasAttribute<AllowAnonymousAttribute>(endpoint));
     }
 
     /// <summary>

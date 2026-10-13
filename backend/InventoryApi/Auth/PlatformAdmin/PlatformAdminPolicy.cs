@@ -4,8 +4,9 @@ using Microsoft.AspNetCore.Authorization;
 namespace InventoryApi.Auth.PlatformAdmin;
 
 /// <summary>
-/// The one named authorization policy that lets a caller reach the platform diagnostics API
-/// (issue #336).
+/// The one named authorization policy that lets a caller reach a platform-admin API - the read-only
+/// diagnostics surface (issue #336) and the Super Admin's business directory and decisions (issue
+/// #544).
 ///
 /// Nothing else in the application uses it, and it decides nothing else: ordinary business
 /// endpoints keep the authorization they already had - <c>[Authorize]</c>, the
@@ -20,13 +21,20 @@ public static class PlatformAdminPolicy
 }
 
 /// <summary>
-/// Marks an endpoint as part of the platform diagnostics surface.
+/// Marks an endpoint as part of the platform-admin surface - the diagnostics API it was introduced
+/// for (issue #336), and the Super Admin businesses API that joined it (issue #544).
 ///
 /// <see cref="BusinessScopeMiddleware"/> looks for this metadata to decide which endpoints are even
 /// eligible to skip the membership requirement, and then re-evaluates
 /// <see cref="PlatformAdminPolicy"/> itself before skipping it. The attribute is therefore a
 /// marker, not a permission: on its own it grants nothing, and an endpoint carrying it without the
 /// policy is still refused.
+///
+/// It keeps its original name on purpose: it is the same marker, decided the same way, and a second
+/// one for a second platform surface would be a second mechanism to review rather than one. What a
+/// marked endpoint may do is bounded by its own use case, not by this attribute - which is why the
+/// Super Admin's write path is a narrow business-status store and nothing wider
+/// (docs/architecture.md § Super Admin businesses API).
 /// </summary>
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
 public sealed class PlatformDiagnosticsEndpointAttribute : Attribute;
@@ -87,7 +95,7 @@ public sealed class PlatformAdminAuthorizationHandler : AuthorizationHandler<Pla
         // seeing, and whose it was belongs in the audited success path, not in a warning about a
         // caller the application has decided to tell nothing.
         _logger.LogWarning(
-            "Platform diagnostics access denied. A platform administrator {IsConfigured} configured.",
+            "Platform-admin access denied. A platform administrator {IsConfigured} configured.",
             _configuredAdmin.IsConfigured ? "is" : "is not");
 
         return Task.CompletedTask;

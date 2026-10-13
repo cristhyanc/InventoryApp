@@ -19,6 +19,7 @@ using Inventory.Application.NayaxFeeSettings;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
+using Inventory.Application.PlatformAdmin;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
@@ -166,6 +167,14 @@ public static class InfrastructureServiceCollectionExtensions
         // applicant's own membership row supplied, and the business it creates is its own owner, so
         // no statement here names an id that came from a request.
         services.AddScoped<IBusinessApplicationStore, EfBusinessApplicationStore>();
+        // The Super Admin's business directory and the two decisions on an application (issue
+        // #544) - the first platform-admin surface that writes, and the only request path that
+        // reads across every business through AppDbContext. A separate, deliberately tiny adapter
+        // again, and for a stronger reason than the two above: the whole of what a platform
+        // administrator can reach has to be one reviewable file. It is scoped like every other
+        // adapter here, so it runs on the request's own denied-scope context and inside
+        // MembershipWriteGuard's transaction on it; nothing hands it an unscoped context.
+        services.AddScoped<IPlatformBusinessDirectoryStore, EfPlatformBusinessDirectoryStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has
