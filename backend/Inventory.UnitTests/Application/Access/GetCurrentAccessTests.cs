@@ -1,20 +1,24 @@
 using Inventory.Application.Access;
 using Inventory.Application.Businesses;
+using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.SupportSessions;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Access;
 
 /// <summary>
-/// The use case behind <c>GET /api/me/access</c> (issue #521), without ASP.NET Core or EF Core.
+/// The use case behind <c>GET /api/me/access</c> (issue #521, extended by issue #551), without
+/// ASP.NET Core or EF Core.
 ///
-/// What it has to show is where each half of the answer comes from: the role from the caller's
-/// resolved membership, the name and zone from the business that membership resolved to, and
-/// nothing at all from a caller-supplied value - the use case takes no argument but a cancellation
-/// token.
+/// What it has to show is where each part of the answer comes from: for a member, the role from
+/// their resolved membership and that role's capabilities; for a platform administrator in a
+/// support session, no role at all and the session's own read-only set; the name and zone from the
+/// business the request acts in either way; and nothing at all from a caller-supplied value - the
+/// use case takes no argument but a cancellation token.
 /// </summary>
 public class GetCurrentAccessTests
 {
@@ -22,8 +26,17 @@ public class GetCurrentAccessTests
 
     private static GetCurrentAccess Create(
         ICurrentBusinessProvider currentBusiness,
-        IBusinessProfileStore? store = null) =>
-        new(currentBusiness, new GetCurrentBusiness(currentBusiness, store ?? new FakeBusinessProfileStore()));
+        IBusinessProfileStore? store = null,
+        ISupportSessionAccessor? supportSession = null)
+    {
+        var session = supportSession ?? new FakeSupportSessionAccessor();
+
+        return new(
+            currentBusiness,
+            new CurrentCapabilities(session, currentBusiness),
+            session,
+            new GetCurrentBusiness(currentBusiness, store ?? new FakeBusinessProfileStore()));
+    }
 
     [Theory]
     [InlineData(BusinessRole.Operator)]
@@ -36,12 +49,52 @@ public class GetCurrentAccessTests
 
         Assert.Equal(role, access.Role);
         Assert.Equal(RoleCapabilities.For(role), access.Capabilities);
+        Assert.Null(access.SupportSession);
+    }
+
+    /// <summary>
+    /// The criterion: in a support session the answer is that session's exact capability set, no
+    /// role at all, and the session block saying whose data it is and when it runs out.
+    /// </summary>
+    [Fact]
+    public async Task In_a_support_session_reports_the_support_set_no_role_and_the_session()
+    {
+        var expiresAt = new DateTime(2026, 10, 13, 9, 30, 0, DateTimeKind.Utc);
+
+        var access = await Create(
+                FakeCurrentBusinessProvider.SupportSession(BusinessId),
+                new FakeBusinessProfileStore(
+                    new BusinessProfile("Vending Co", "Australia/Sydney", BusinessStatus.Active)),
+                FakeSupportSessionAccessor.Active(BusinessId, expiresAtUtc: expiresAt))
+            .Handle(CancellationToken.None);
+
+        Assert.Null(access.Role);
+        Assert.Equal(SupportSessionAccessPolicy.Capabilities, access.Capabilities);
+        Assert.Equal("Vending Co", access.BusinessName);
+        Assert.Equal(new CurrentSupportSession("Vending Co", expiresAt, ReadOnly: true), access.SupportSession);
+    }
+
+    /// <summary>
+    /// The two exclusions, asserted as absences rather than implied by the set above: the GST
+    /// defaults guard only an edit, and the members list carries people's names and addresses.
+    /// </summary>
+    [Fact]
+    public async Task A_support_session_reports_neither_member_management_nor_gst_defaults()
+    {
+        var access = await Create(
+                FakeCurrentBusinessProvider.SupportSession(BusinessId),
+                supportSession: FakeSupportSessionAccessor.Active(BusinessId))
+            .Handle(CancellationToken.None);
+
+        Assert.DoesNotContain(Capability.MembersManage, access.Capabilities);
+        Assert.DoesNotContain(Capability.SuppliersManageGstDefaults, access.Capabilities);
     }
 
     [Fact]
     public async Task Reports_the_name_and_time_zone_of_the_business_the_membership_resolved_to()
     {
-        var store = new FakeBusinessProfileStore(new BusinessProfile("Vending Co", "Australia/Sydney"));
+        var store = new FakeBusinessProfileStore(
+            new BusinessProfile("Vending Co", "Australia/Sydney", BusinessStatus.Active));
 
         var access = await Create(new FakeCurrentBusinessProvider(BusinessId), store).Handle(CancellationToken.None);
 
@@ -90,7 +143,7 @@ public class GetCurrentAccessTests
         public FakeBusinessProfileStore(BusinessProfile? profile) => _profile = profile;
 
         public FakeBusinessProfileStore()
-            : this(new BusinessProfile("Vending Co", "Australia/Sydney"))
+            : this(new BusinessProfile("Vending Co", "Australia/Sydney", BusinessStatus.Active))
         {
         }
 

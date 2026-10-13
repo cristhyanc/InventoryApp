@@ -1,7 +1,8 @@
 namespace InventoryApi.DTOs;
 
 /// <summary>
-/// What the signed-in member may do, as <c>GET /api/me/access</c> returns it (issue #521).
+/// What the signed-in caller may do, as <c>GET /api/me/access</c> returns it (issue #521, extended
+/// by issue #551).
 ///
 /// It describes the caller and nobody else: no member list, no other business, and no identifier
 /// for the caller or their business. The role and the capabilities are spelled as their published
@@ -9,21 +10,50 @@ namespace InventoryApi.DTOs;
 /// is an internal representation a client would have to map and a renumbering would silently
 /// change.
 /// </summary>
-/// <param name="Role">The caller's role: <c>Owner</c>, <c>Manager</c> or <c>Operator</c>.</param>
+/// <param name="Role">
+/// The caller's role - <c>Owner</c>, <c>Manager</c> or <c>Operator</c> - or <see langword="null"/>
+/// when they hold none because they are a platform administrator reading this business through a
+/// support session (issue #551). Serialized as an explicit <c>null</c> rather than omitted, so the
+/// field is a stable part of the shape.
+/// </param>
 /// <param name="Capabilities">
-/// Every capability that role grants, as its <c>Area.Action</c> name, in the vocabulary's own
-/// order. A capability that is absent is not granted; there is no wildcard.
+/// Every capability this request holds, as its <c>Area.Action</c> name, in the vocabulary's own
+/// order - the role's, or a support session's fixed read-only set. A capability that is absent is
+/// not granted; there is no wildcard.
 /// </param>
 /// <param name="BusinessName">The business's display name; never an identifier.</param>
 /// <param name="TimeZoneId">
 /// The business's IANA time zone (issue #499), the same value <c>GET /api/business/current</c>
 /// reports, so a client that reads access does not need a second call to render dates.
 /// </param>
+/// <param name="SupportSession">
+/// The support session this request is inside, or <see langword="null"/> for an ordinary member,
+/// which is every request today's UI makes. Its presence is how a client knows the data on screen
+/// belongs to somebody else and that nothing on it can be changed.
+/// </param>
 public sealed record MeAccessResponse(
-    string Role,
+    string? Role,
     IReadOnlyList<string> Capabilities,
     string BusinessName,
-    string TimeZoneId);
+    string TimeZoneId,
+    MeSupportSessionResponse? SupportSession);
+
+/// <summary>
+/// The support session a request is inside, as <c>GET /api/me/access</c> reports it (issue #551).
+///
+/// It deliberately carries no session id - that value is a credential, reported once by the start
+/// endpoint and never again - and no business or actor identifier.
+/// </summary>
+/// <param name="BusinessName">Whose data is being looked at.</param>
+/// <param name="ExpiresAtUtc">
+/// When the session stops being usable. The server fixed it when the session started; no request can
+/// choose or extend it.
+/// </param>
+/// <param name="ReadOnly">
+/// Always <see langword="true"/>, stated rather than implied so a client never has to infer that a
+/// support session means a read-only one.
+/// </param>
+public sealed record MeSupportSessionResponse(string BusinessName, DateTime ExpiresAtUtc, bool ReadOnly);
 
 /// <summary>
 /// Which state the signed-in person's account is in, as <c>GET /api/me/account-state</c> returns

@@ -42,4 +42,22 @@ public enum BusinessScopeState
     /// run unscoped.
     /// </summary>
     Unscoped = 2,
+
+    /// <summary>
+    /// A business was resolved from a platform administrator's support session (issue #551), and
+    /// its data, and only its data, may be <em>read</em>.
+    ///
+    /// For every tenant-owned read this is exactly <see cref="Resolved"/>: the query filters
+    /// compare against the same <see cref="IBusinessScope.BusinessId"/>, so a support request sees
+    /// the chosen business and nothing else. What differs is the write side -
+    /// <c>BusinessOwnershipEnforcer</c> refuses every <c>SaveChanges</c> in this state, and
+    /// document storage refuses to write or delete - so "read-only" is a property of the
+    /// persistence boundary rather than of each endpoint that happens to remember it.
+    ///
+    /// It is never a default and never arrives by omission: the API boundary publishes it only
+    /// after a caller that passes <c>PlatformAdminPolicy</c> has presented the session id of an
+    /// active, unexpired session of their own, for a business that is still active. See
+    /// docs/architecture.md § Support sessions.
+    /// </summary>
+    SupportReadOnly = 3,
 }

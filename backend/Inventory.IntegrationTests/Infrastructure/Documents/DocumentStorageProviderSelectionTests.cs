@@ -176,7 +176,7 @@ public sealed class DocumentStorageProviderSelectionTests
         using var provider = Build(new DocumentStorageOptions { Provider = "FileSystem" });
         using var scope = provider.CreateScope();
 
-        Assert.IsType<FileSystemDocumentStorage>(scope.ServiceProvider.GetRequiredService<IDocumentStorage>());
+        Assert.IsType<FileSystemDocumentStorage>(SelectedProvider(scope.ServiceProvider));
     }
 
     [Fact]
@@ -190,8 +190,19 @@ public sealed class DocumentStorageProviderSelectionTests
         });
         using var scope = provider.CreateScope();
 
-        Assert.IsType<AzureBlobDocumentStorage>(scope.ServiceProvider.GetRequiredService<IDocumentStorage>());
+        Assert.IsType<AzureBlobDocumentStorage>(SelectedProvider(scope.ServiceProvider));
     }
+
+    /// <summary>
+    /// Whichever provider was selected, reached through the support-session read-only guard of
+    /// issue #551: every request resolves <see cref="IDocumentStorage"/> through that guard, so
+    /// "which provider is this?" is a question about what it wraps. Asserting the guard is there as
+    /// well as what it wraps is the point - a registration that bypassed it would let a support
+    /// session write a document.
+    /// </summary>
+    private static IDocumentStorage SelectedProvider(IServiceProvider serviceProvider) =>
+        Assert.IsType<SupportSessionReadOnlyDocumentStorage>(
+            serviceProvider.GetRequiredService<IDocumentStorage>()).Inner;
 
     /// <summary>
     /// The filesystem implementation stays resolvable under either provider. Switching the

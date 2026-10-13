@@ -23,6 +23,17 @@ public class CurrentBusinessProviderTests
         return actor!;
     }
 
+    /// <summary>
+    /// The provider under test. The business scope defaults to a fresh, unresolved one, which is
+    /// what every membership case below runs with: a denied scope is what a request carries before
+    /// this provider's own answer is published into it.
+    /// </summary>
+    private static CurrentBusinessProvider Provider(
+        IAuthenticatedActorAccessor actorAccessor,
+        IBusinessMembershipStore membershipStore,
+        IBusinessScope? businessScope = null) =>
+        new(actorAccessor, membershipStore, businessScope ?? new BusinessScope());
+
     private static ActorBusinessMembership Membership(
         int businessId,
         bool isActive = true,
@@ -40,7 +51,7 @@ public class CurrentBusinessProviderTests
     public async Task Identified_actor_with_one_active_membership_resolves_to_that_business()
     {
         var store = new FakeBusinessMembershipStore(Membership(7));
-        var provider = new CurrentBusinessProvider(FakeAuthenticatedActorAccessor.Identified(Actor()), store);
+        var provider = Provider(FakeAuthenticatedActorAccessor.Identified(Actor()), store);
 
         var resolution = await provider.ResolveAsync(CancellationToken.None);
 
@@ -52,7 +63,7 @@ public class CurrentBusinessProviderTests
     [Fact]
     public async Task RequireBusinessIdAsync_returns_the_resolved_business()
     {
-        var provider = new CurrentBusinessProvider(
+        var provider = Provider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
             new FakeBusinessMembershipStore(Membership(7)));
 
@@ -63,7 +74,7 @@ public class CurrentBusinessProviderTests
     public async Task Unauthenticated_caller_is_denied_without_querying_memberships()
     {
         var store = new FakeBusinessMembershipStore(Membership(7));
-        var provider = new CurrentBusinessProvider(FakeAuthenticatedActorAccessor.NotAuthenticated(), store);
+        var provider = Provider(FakeAuthenticatedActorAccessor.NotAuthenticated(), store);
 
         var resolution = await provider.ResolveAsync(CancellationToken.None);
 
@@ -80,7 +91,7 @@ public class CurrentBusinessProviderTests
     public async Task Authenticated_but_unidentifiable_actor_is_denied_without_querying_memberships()
     {
         var store = new FakeBusinessMembershipStore(Membership(7));
-        var provider = new CurrentBusinessProvider(FakeAuthenticatedActorAccessor.Unidentifiable(), store);
+        var provider = Provider(FakeAuthenticatedActorAccessor.Unidentifiable(), store);
 
         var resolution = await provider.ResolveAsync(CancellationToken.None);
 
@@ -92,7 +103,7 @@ public class CurrentBusinessProviderTests
     [Fact]
     public async Task Actor_with_no_membership_is_denied()
     {
-        var provider = new CurrentBusinessProvider(
+        var provider = Provider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
             new FakeBusinessMembershipStore());
 
@@ -105,7 +116,7 @@ public class CurrentBusinessProviderTests
     [Fact]
     public async Task Actor_with_memberships_in_two_businesses_is_denied_as_ambiguous()
     {
-        var provider = new CurrentBusinessProvider(
+        var provider = Provider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
             new FakeBusinessMembershipStore(Membership(7), Membership(8)));
 
@@ -125,7 +136,7 @@ public class CurrentBusinessProviderTests
     [InlineData(BusinessRole.Owner)]
     public async Task RequireRoleAsync_returns_the_role_the_resolved_membership_carries(BusinessRole role)
     {
-        var provider = new CurrentBusinessProvider(
+        var provider = Provider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
             new FakeBusinessMembershipStore(Membership(7, role: role)));
 
@@ -181,7 +192,7 @@ public class CurrentBusinessProviderTests
     [Fact]
     public async Task Denial_message_does_not_leak_the_actor_identity()
     {
-        var provider = new CurrentBusinessProvider(
+        var provider = Provider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
             new FakeBusinessMembershipStore());
 
@@ -201,7 +212,7 @@ public class CurrentBusinessProviderTests
     {
         var accessor = FakeAuthenticatedActorAccessor.Identified(Actor());
         var store = new FakeBusinessMembershipStore(Membership(7));
-        var provider = new CurrentBusinessProvider(accessor, store);
+        var provider = Provider(accessor, store);
 
         var first = await provider.ResolveAsync(CancellationToken.None);
         var second = await provider.ResolveAsync(CancellationToken.None);
@@ -212,24 +223,83 @@ public class CurrentBusinessProviderTests
         Assert.Equal(1, accessor.CallCount);
     }
 
+    /// <summary>
+    /// The support-session branch (issue #551): a request whose scope was published for a support
+    /// session acts in that business, so a use case that has to pass a business id to a port passes
+    /// the one the tenant query filters are already scoped to. No membership is read at all - the
+    /// one caller who can be in this state is a member of nothing.
+    /// </summary>
+    [Fact]
+    public async Task RequireBusinessIdAsync_answers_the_support_sessions_business_without_a_membership()
+    {
+        var scope = new BusinessScope();
+        scope.ResolveForSupportSession(BusinessId.From(9));
+        var store = new FakeBusinessMembershipStore();
+        var provider = Provider(FakeAuthenticatedActorAccessor.Identified(Actor()), store, scope);
+
+        Assert.Equal(BusinessId.From(9), await provider.RequireBusinessIdAsync(CancellationToken.None));
+        Assert.Equal(0, store.QueryCount);
+    }
+
+    /// <summary>
+    /// A support session is not a membership and must not be reported as one: the resolution stays
+    /// denied, and asking for a role fails closed rather than inventing one. What a support request
+    /// may do comes from <c>Access.CurrentCapabilities</c>' fixed set instead.
+    /// </summary>
+    [Fact]
+    public async Task A_support_session_resolves_no_membership_and_no_role()
+    {
+        var scope = new BusinessScope();
+        scope.ResolveForSupportSession(BusinessId.From(9));
+        var provider = Provider(
+            FakeAuthenticatedActorAccessor.Identified(Actor()),
+            new FakeBusinessMembershipStore(),
+            scope);
+
+        var resolution = await provider.ResolveAsync(CancellationToken.None);
+
+        Assert.False(resolution.IsResolved);
+        Assert.Null(resolution.ResolvedRole);
+        await Assert.ThrowsAsync<BusinessAccessDeniedException>(
+            () => provider.RequireRoleAsync(CancellationToken.None));
+    }
+
+    /// <summary>
+    /// An ordinary member's own resolution is untouched by the branch above: a resolved scope is not
+    /// a support scope, and the business still comes from their membership.
+    /// </summary>
+    [Fact]
+    public async Task A_resolved_members_business_still_comes_from_their_membership()
+    {
+        var scope = new BusinessScope();
+        scope.Resolve(BusinessId.From(7));
+        var provider = Provider(
+            FakeAuthenticatedActorAccessor.Identified(Actor()),
+            new FakeBusinessMembershipStore(Membership(7)),
+            scope);
+
+        Assert.Equal(BusinessId.From(7), await provider.RequireBusinessIdAsync(CancellationToken.None));
+        Assert.Equal(BusinessRole.Owner, await provider.RequireRoleAsync(CancellationToken.None));
+    }
+
     private static CurrentBusinessProvider CreateProviderDeniedWith(BusinessAccessDenialReason reason) => reason switch
     {
-        BusinessAccessDenialReason.NotAuthenticated => new CurrentBusinessProvider(
+        BusinessAccessDenialReason.NotAuthenticated => Provider(
             FakeAuthenticatedActorAccessor.NotAuthenticated(), new FakeBusinessMembershipStore()),
-        BusinessAccessDenialReason.UnidentifiableActor => new CurrentBusinessProvider(
+        BusinessAccessDenialReason.UnidentifiableActor => Provider(
             FakeAuthenticatedActorAccessor.Unidentifiable(), new FakeBusinessMembershipStore()),
-        BusinessAccessDenialReason.MembershipMissing => new CurrentBusinessProvider(
+        BusinessAccessDenialReason.MembershipMissing => Provider(
             FakeAuthenticatedActorAccessor.Identified(Actor()), new FakeBusinessMembershipStore()),
-        BusinessAccessDenialReason.MembershipInactive => new CurrentBusinessProvider(
+        BusinessAccessDenialReason.MembershipInactive => Provider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
             new FakeBusinessMembershipStore(Membership(7, isActive: false))),
-        BusinessAccessDenialReason.MembershipAmbiguous => new CurrentBusinessProvider(
+        BusinessAccessDenialReason.MembershipAmbiguous => Provider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
             new FakeBusinessMembershipStore(Membership(7), Membership(8))),
-        BusinessAccessDenialReason.BusinessInactive => new CurrentBusinessProvider(
+        BusinessAccessDenialReason.BusinessInactive => Provider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
             new FakeBusinessMembershipStore(Membership(7, businessStatus: BusinessStatus.Deactivated))),
-        BusinessAccessDenialReason.RoleUnrecognised => new CurrentBusinessProvider(
+        BusinessAccessDenialReason.RoleUnrecognised => Provider(
             FakeAuthenticatedActorAccessor.Identified(Actor()),
             new FakeBusinessMembershipStore(Membership(7, role: (BusinessRole)0))),
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unhandled denial reason."),

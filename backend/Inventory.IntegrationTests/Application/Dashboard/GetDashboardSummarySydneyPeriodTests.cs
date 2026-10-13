@@ -1,3 +1,4 @@
+using Inventory.Application.Access;
 using Inventory.Application.Dashboard;
 using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
@@ -8,6 +9,7 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -90,7 +92,9 @@ public class GetDashboardSummarySydneyPeriodTests : IDisposable
                 time.Clock,
                 time.Calendar,
                 // An Owner, so the sales card these tests are about is published at all (issue #527).
-                new FakeCurrentBusinessProvider(BusinessId),
+                new CurrentCapabilities(
+                    new FakeSupportSessionAccessor(),
+                    new FakeCurrentBusinessProvider(BusinessId)),
                 new EfDashboardSummarySalesFactsProvider(db),
                 new EfProductCatalogStore(db),
                 new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object))

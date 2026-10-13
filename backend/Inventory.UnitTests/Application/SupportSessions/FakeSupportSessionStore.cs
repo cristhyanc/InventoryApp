@@ -20,11 +20,19 @@ namespace InventoryApi.Tests.Application.SupportSessions;
 public sealed class FakeSupportSessionStore : ISupportSessionStore
 {
     public const string ActiveRead = "support-session-active-read";
+    public const string IdHashRead = "support-session-id-hash-read";
     public const string Start = "support-session-start";
     public const string EndForActor = "support-session-end-for-actor";
     public const string EndForBusiness = "support-session-end-for-business";
 
     private readonly Dictionary<int, StoredSupportSession> _rows = [];
+
+    /// <summary>
+    /// Each row's stored session-id hash, which <see cref="StoredSupportSession"/> deliberately does
+    /// not carry: the real adapter keeps that column out of every projection and only ever names it
+    /// in a <c>WHERE</c> clause, which is exactly what the lookup below reproduces.
+    /// </summary>
+    private readonly Dictionary<int, string> _idHashes = [];
 
     private int _nextKey = 1;
 
@@ -53,7 +61,8 @@ public sealed class FakeSupportSessionStore : ISupportSessionStore
         DateTime startedAtUtc,
         DateTime expiresAtUtc,
         DateTime? endedAtUtc = null,
-        string reason = "Investigating a reported error")
+        string reason = "Investigating a reported error",
+        string? sessionId = null)
     {
         ArgumentNullException.ThrowIfNull(actor);
 
@@ -68,7 +77,33 @@ public sealed class FakeSupportSessionStore : ISupportSessionStore
             endedAtUtc);
 
         _rows[stored.Key] = stored;
+        if (sessionId is not null)
+        {
+            _idHashes[stored.Key] = SupportSessionId.Hash(sessionId);
+        }
+
         return stored.Key;
+    }
+
+    public Task<StoredSupportSession?> FindActiveForActorByIdHashAsync(
+        ActorIdentity actor,
+        string sessionIdHash,
+        DateTime nowUtc,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionIdHash);
+        Observer?.Invoke(IdHashRead);
+        LastQueriedActor = actor;
+
+        // The actor, the hash and "still active" are all conditions of the match, exactly as they
+        // are in the adapter's WHERE clause - so a leaked id matches nothing for anybody else.
+        return Task.FromResult(ActiveOf(actor, nowUtc)
+            .Where(row =>
+                _idHashes.TryGetValue(row.Key, out var hash)
+                && string.Equals(hash, sessionIdHash, StringComparison.Ordinal))
+            .OrderByDescending(row => row.Key)
+            .FirstOrDefault());
     }
 
     public Task<StoredSupportSession?> FindActiveForActorAsync(
@@ -102,6 +137,7 @@ public sealed class FakeSupportSessionStore : ISupportSessionStore
             EndedAtUtc: null);
 
         _rows[stored.Key] = stored;
+        _idHashes[stored.Key] = session.SessionIdHash;
         return Task.FromResult(stored);
     }
 

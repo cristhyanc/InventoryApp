@@ -301,7 +301,11 @@ public static class InfrastructureServiceCollectionExtensions
         switch (configuration.Provider)
         {
             case DocumentStorageProvider.FileSystem:
-                services.AddSingleton<IDocumentStorage>(sp => sp.GetRequiredService<FileSystemDocumentStorage>());
+                // Scoped rather than singleton since issue #551, because the read-only guard reads
+                // the request's own business scope. The filesystem adapter it wraps is still the one
+                // singleton it always was.
+                services.AddScoped<IDocumentStorage>(sp => ReadOnlyInSupportSession(
+                    sp, sp.GetRequiredService<FileSystemDocumentStorage>()));
                 break;
 
             case DocumentStorageProvider.AzureBlob:
@@ -333,9 +337,25 @@ public static class InfrastructureServiceCollectionExtensions
             sp.GetRequiredService<BlobServiceClient>().GetBlobContainerClient(configuration.ContainerName)));
 
         // Scoped, unlike the filesystem adapter: it reads the current request's business scope,
-        // which is what decides the tenant prefix every blob name is built from.
-        services.AddScoped<IDocumentStorage, AzureBlobDocumentStorage>();
+        // which is what decides the tenant prefix every blob name is built from. Registered as the
+        // concrete type and reached through the read-only guard of issue #551, exactly as the
+        // filesystem provider is.
+        services.AddScoped<AzureBlobDocumentStorage>();
+        services.AddScoped<IDocumentStorage>(sp => ReadOnlyInSupportSession(
+            sp, sp.GetRequiredService<AzureBlobDocumentStorage>()));
     }
+
+    /// <summary>
+    /// Wraps whichever document-storage provider was selected in the support-session read-only
+    /// guard (issue #551), so the rule is registered once rather than repeated per provider - and so
+    /// a provider added later inherits it by being registered through here.
+    /// </summary>
+    private static IDocumentStorage ReadOnlyInSupportSession(
+        IServiceProvider serviceProvider,
+        IDocumentStorage storage) =>
+        new SupportSessionReadOnlyDocumentStorage(
+            storage,
+            serviceProvider.GetRequiredService<IBusinessScope>());
 
     /// <summary>
     /// Registers the Nayax Lynx HTTP client behind <see cref="INayaxLynxClient"/> (issue #49), with

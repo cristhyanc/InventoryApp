@@ -1,3 +1,4 @@
+using Inventory.Application.Access;
 using Inventory.Application.Dashboard;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
@@ -6,6 +7,7 @@ using Inventory.Application.Tenancy;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Products;
+using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Moq;
 using Xunit;
@@ -34,6 +36,17 @@ public class GetDashboardSummaryRedactionTests
         ICurrentBusinessProvider currentBusiness,
         IDashboardSummarySalesFactsProvider salesFacts,
         IProductCatalogStore catalog,
+        Mock<INayaxLynxClient>? nayax = null) =>
+        UseCase(
+            new CurrentCapabilities(new FakeSupportSessionAccessor(), currentBusiness),
+            salesFacts,
+            catalog,
+            nayax);
+
+    private static GetDashboardSummary UseCase(
+        CurrentCapabilities capabilities,
+        IDashboardSummarySalesFactsProvider salesFacts,
+        IProductCatalogStore catalog,
         Mock<INayaxLynxClient>? nayax = null)
     {
         var fleet = nayax ?? EmptyFleet();
@@ -44,7 +57,7 @@ public class GetDashboardSummaryRedactionTests
         return new GetDashboardSummary(
             new FakeClock(NowUtc),
             new FakeBusinessCalendar(NowUtc),
-            currentBusiness,
+            capabilities,
             salesFacts,
             catalog,
             new CalculateReorderNeeds(fleet.Object, outstandingOrders.Object));
@@ -70,6 +83,25 @@ public class GetDashboardSummaryRedactionTests
         {
             InventoryValue = inventoryValue,
         });
+
+    /// <summary>
+    /// A support session (issue #551) grants <c>Dashboard.ViewFinancials</c>, so the decision is
+    /// taken from that set rather than from a role the platform administrator does not hold - and
+    /// asking for a role, which would deny the request, is not what happens.
+    /// </summary>
+    [Fact]
+    public async Task A_support_session_is_answered_the_financial_figures_without_a_role()
+    {
+        var summary = await UseCase(
+                new CurrentCapabilities(
+                    FakeSupportSessionAccessor.Active(businessId: 1),
+                    FakeCurrentBusinessProvider.SupportSession(businessId: 1)),
+                SalesFacts(),
+                Catalog())
+            .Handle(CancellationToken.None);
+
+        Assert.IsType<DashboardSummaryDto>(summary);
+    }
 
     /// <summary>
     /// An Operator holds <c>Dashboard.View</c> and not <c>Dashboard.ViewFinancials</c>, so they are

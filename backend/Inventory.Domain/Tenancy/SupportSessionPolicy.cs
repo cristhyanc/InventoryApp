@@ -9,7 +9,7 @@ namespace Inventory.Domain.Tenancy;
 ///
 /// <para>No clock, no database and no configuration - every answer is a function of the values handed
 /// in, which is what lets the same rule decide a start, the "do I have one?" read, an end, and
-/// (under #551) whether a request may join a session at all.</para>
+/// (since #551) whether a request may join a session at all.</para>
 ///
 /// <para>It decides nothing about <em>who</em> may ask. That is the configured platform administrator
 /// and nothing else, enforced at the HTTP boundary by <c>PlatformAdminPolicy</c> (issue #336); an
@@ -80,8 +80,14 @@ public static class SupportSessionPolicy
     public static DateTime ExpiresAt(DateTime startedAtUtc) => startedAtUtc + Lifetime;
 
     /// <summary>
-    /// Whether a support session may be started for a business in <paramref name="status"/>: only
+    /// Whether a support session may be started for - and, since issue #551, may still be
+    /// <em>used</em> to read - a business in <paramref name="status"/>: only
     /// <see cref="BusinessStatus.Active"/> may.
+    ///
+    /// <para>The same rule answers both questions deliberately, rather than a second predicate
+    /// saying the same thing: a business a session could not have been started for is not one it may
+    /// go on reading, so a deactivation between two requests closes the view on the next one whether
+    /// or not anything remembered to end the session row.</para>
     /// </summary>
     public static bool CanStartFor(BusinessStatus status) => status == BusinessStatus.Active;
 

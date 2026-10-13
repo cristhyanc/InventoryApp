@@ -13,12 +13,12 @@ namespace Inventory.Application.SupportSessions;
 /// #512 under #328): the Super Admin says which business they need to look at and why, and gets back
 /// an opaque session id, the business's name and the instant the session expires.
 ///
-/// <para><strong>What a session is, and what this slice of it does.</strong> A support session is the
-/// record that a person from outside a business is allowed to <em>read</em> that business's data for
-/// an hour. Storing that record, reporting it and ending it is all this task does: no request resolves
-/// a business from it yet, and nothing in the pipeline reads it (issue #551 adds that, and issue #552
-/// the dashboard's behaviour under it). A session that exists today therefore grants no access at all,
-/// which is deliberately the fail-closed order to build this in.</para>
+/// <para><strong>What a session is, and what this use case does of it.</strong> A support session is
+/// the record that a person from outside a business is allowed to <em>read</em> that business's data
+/// for an hour. Storing that record is all this use case does: what turns it into access is a request
+/// presenting its id in the <c>X-Support-Session</c> header (issue #551), so a session nobody presents
+/// grants nothing. Issue #550 shipped this record before anything acted on it, which was deliberately
+/// the fail-closed order to build it in; issue #552 is still the dashboard's behaviour under one.</para>
 ///
 /// <para><strong>The session id is a credential.</strong> It is drawn from the platform's
 /// cryptographic generator rather than from a counter, a key or a <c>Guid</c>, rendered URL-safe, and

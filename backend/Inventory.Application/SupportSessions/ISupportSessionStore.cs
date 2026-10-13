@@ -8,9 +8,11 @@ namespace Inventory.Application.SupportSessions;
 ///
 /// <para><strong>Nothing a request supplies can choose a row here.</strong> A session is found by the
 /// authenticated actor it belongs to, or by the business a committed deactivation has just read
-/// inside its own transaction. There is deliberately no lookup by key, by business the caller named,
-/// or by the presented session id: the id-to-session lookup a support request needs is issue #551's,
-/// and it arrives with that slice rather than being available to this one.</para>
+/// inside its own transaction. There is deliberately no lookup by key and none by a business the
+/// caller named. Issue #551 added the one lookup a request takes part in -
+/// <see cref="FindActiveForActorByIdHashAsync"/> - and it is still not a row the request chose: the
+/// presented id is only ever matched <em>within</em> the sessions of the authenticated actor, so a
+/// leaked id is useless to anybody else and no value a request carries can widen the search.</para>
 ///
 /// <para><strong>The table is structurally non-tenant-owned</strong> (docs/architecture.md § Tenant
 /// ownership), for the reason <c>MemberInvite</c> is: every request that reaches it carries a
@@ -41,6 +43,29 @@ public interface ISupportSessionStore
     /// </summary>
     Task<StoredSupportSession?> FindActiveForActorAsync(
         ActorIdentity actor,
+        DateTime nowUtc,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The support session of <paramref name="actor"/> that <paramref name="sessionIdHash"/>
+    /// identifies and that is active at <paramref name="nowUtc"/>, or <see langword="null"/> when
+    /// there is none (issue #551).
+    ///
+    /// <para><strong>The actor is part of the lookup, not a check made afterwards.</strong> A
+    /// session is visible and usable only to the administrator it was granted to (issue #550), so
+    /// the statement names the actor pair beside the hash: an id that leaked to somebody else
+    /// matches no row for them, rather than matching a row they are then refused. The hash is
+    /// <see cref="SupportSessionId.Hash"/>'s output for the value the request presented - the
+    /// plaintext never crosses this port and no row holds it.</para>
+    ///
+    /// <para>"Active" is <see cref="SupportSessionPolicy.IsActive"/>, in the statement rather than
+    /// after it, so an ended or expired session is not a row this can return and then somebody has
+    /// to remember to reject. Whether the <em>business</em> is still active is not this port's
+    /// question: that is the caller's own read of the business row.</para>
+    /// </summary>
+    Task<StoredSupportSession?> FindActiveForActorByIdHashAsync(
+        ActorIdentity actor,
+        string sessionIdHash,
         DateTime nowUtc,
         CancellationToken cancellationToken);
 

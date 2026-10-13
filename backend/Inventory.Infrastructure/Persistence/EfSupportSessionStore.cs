@@ -86,6 +86,27 @@ public sealed class EfSupportSessionStore : ISupportSessionStore
     }
 
     /// <inheritdoc />
+    public Task<StoredSupportSession?> FindActiveForActorByIdHashAsync(
+        ActorIdentity actor,
+        string sessionIdHash,
+        DateTime nowUtc,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(actor);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sessionIdHash);
+
+        // The actor pair and the hash are both in the WHERE clause, so a presented id can only ever
+        // match a session of the caller's own - and the "still active" condition is in there too,
+        // rather than checked on the result, so an ended or expired row is not something this can
+        // hand back. The hash column is uniquely indexed, so this is one index seek.
+        return ActiveOf(actor, nowUtc)
+            .AsNoTracking()
+            .Where(session => session.SessionIdHash == sessionIdHash)
+            .Select(Projection)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<StoredSupportSession> StartAsync(
         NewSupportSession session,
         CancellationToken cancellationToken)

@@ -1,3 +1,4 @@
+using Inventory.Application.Access;
 using Inventory.Application.Dashboard;
 using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
@@ -6,6 +7,7 @@ using Inventory.Application.Reorder;
 using Inventory.Domain.Reporting.Dashboard;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Products;
+using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Moq;
 using Xunit;
@@ -62,7 +64,9 @@ public class GetDashboardSummaryTests
             new FakeBusinessCalendar(NowUtc),
             // An Owner, so these tests see the whole summary; which figures a role without
             // Dashboard.ViewFinancials is given is GetDashboardSummaryRedactionTests.
-            new FakeCurrentBusinessProvider(businessId: 1),
+            new CurrentCapabilities(
+                new FakeSupportSessionAccessor(),
+                new FakeCurrentBusinessProvider(businessId: 1)),
             salesFacts,
             catalog,
             new CalculateReorderNeeds(nayax, outstandingOrders));

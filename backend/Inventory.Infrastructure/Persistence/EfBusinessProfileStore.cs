@@ -11,9 +11,10 @@ namespace Inventory.Infrastructure.Persistence;
 /// and the persistence models it depends on.
 ///
 /// <c>Businesses</c> is one of the deliberately global tables - it is the owner, not owned - so the
-/// lookup is by primary key and the key is only ever one tenancy resolution produced from the
-/// authenticated actor's membership. That is what keeps this read, which no query filter can scope,
-/// confined to the caller's own business.
+/// lookup is by primary key and the key is only ever one the server resolved: tenancy resolution
+/// from the authenticated actor's membership, or (issue #551) the business id stored on the support
+/// session a presented id matched. That is what keeps this read, which no query filter can scope,
+/// confined to one business the caller has been established to be entitled to.
 /// </summary>
 public sealed class EfBusinessProfileStore : IBusinessProfileStore
 {
@@ -28,7 +29,7 @@ public sealed class EfBusinessProfileStore : IBusinessProfileStore
         await _db.Businesses
             .AsNoTracking()
             .Where(business => business.Id == businessId.Value)
-            .Select(business => new BusinessProfile(business.Name, business.TimeZoneId))
+            .Select(business => new BusinessProfile(business.Name, business.TimeZoneId, business.Status))
             .SingleOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 }

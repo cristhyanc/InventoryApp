@@ -26,9 +26,9 @@ public sealed record SuperAdminStartSupportSessionRequest(string? Reason);
 /// hash. An administrator who loses it starts another session.</para>
 /// </summary>
 /// <param name="SessionId">
-/// The opaque session id. Under issue #551 a request joins the session by presenting it in the
-/// <c>X-Support-Session</c> header; in this slice nothing reads it yet, so a session grants no access
-/// of its own.
+/// The opaque session id. A request joins the session by presenting it in the
+/// <c>X-Support-Session</c> header (issue #551), which is the only thing that grants the read access
+/// this record describes - holding the session without presenting it grants nothing.
 /// </param>
 /// <param name="BusinessId">The business the session may read.</param>
 /// <param name="BusinessName">Its display name, so the caller can say whose data is being looked at.</param>
