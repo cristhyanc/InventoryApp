@@ -117,7 +117,8 @@ export const primaryNavigation: readonly NavItem[] = [
       link('AVCO Transition', '/admin/avco-transition', 'Data.Repair'),
       link('Costing Repair', '/admin/costing-repair', 'Data.Repair'),
       link('Historical GST Classification', '/admin/historical-gst-classification', 'Data.Repair'),
-      link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair')
+      link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair'),
+      link('Users', '/admin/users', 'Members.Manage')
     ]
   }
 ];
