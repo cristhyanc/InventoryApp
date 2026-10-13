@@ -451,7 +451,10 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
 
     /// <summary>
     /// Every endpoint on the surface, called once, so an authorization assertion is about the whole
-    /// controller rather than whichever action a test happened to pick.
+    /// controller rather than whichever action a test happened to pick. The four lifecycle endpoints
+    /// of issue #545 are here for exactly that reason: an endpoint that writes a business's status
+    /// or releases somebody's membership must be refused for every caller who is not the configured
+    /// administrator, and "every endpoint" has to keep meaning every endpoint.
     /// </summary>
     private async Task<IReadOnlyList<HttpResponseMessage>> AllEndpointsAsync(HttpClient client) =>
     [
@@ -461,6 +464,12 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
         await client.PostAsync(
             RejectUrl(_factory.PendingBusinessId),
             new StringContent("{\"reason\":\"no\"}", Encoding.UTF8, "application/json")),
+        await client.PostAsync($"{ListUrl}/{_factory.TradingBusinessId}/deactivate", null),
+        await client.PostAsync($"{ListUrl}/{_factory.TradingBusinessId}/reactivate", null),
+        await client.GetAsync($"{ListUrl}/{_factory.TradingBusinessId}/members"),
+        await client.PostAsync(
+            $"{ListUrl}/{_factory.TradingBusinessId}/members/{_factory.TradingOwnerMembershipId}/release",
+            null),
     ];
 
     private static async Task<JsonDocument> ReadJsonAsync(HttpResponseMessage response)
@@ -478,12 +487,22 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
     private static bool IsAuditEntry(string entry) =>
         entry.StartsWith("Platform business decision audit.", StringComparison.Ordinal);
 
+    /// <summary>
+    /// Any platform audit event at all - a decision's or a lifecycle action's (issue #545) - so
+    /// "nothing happened" can be asserted about the whole surface rather than about one of the two
+    /// trails.
+    /// </summary>
+    private static bool IsPlatformAuditEntry(string entry) =>
+        IsAuditEntry(entry)
+        || entry.StartsWith("Platform business lifecycle audit.", StringComparison.Ordinal);
+
     /// <summary>The one audit event the request under test emitted.</summary>
     private string AuditEntry() => Assert.Single(_factory.LoggedEntries().Where(IsAuditEntry));
 
     /// <summary>
-    /// The pending application is untouched and no decision was audited - the assertion every
-    /// refusal shares.
+    /// The pending application and the trading business are both untouched and nothing was audited -
+    /// the assertion every refusal shares. The trading business is here because the lifecycle
+    /// endpoints above are called against it: a refused caller must have changed neither.
     /// </summary>
     private async Task AssertNothingWasDecidedAsync()
     {
@@ -492,7 +511,13 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
         Assert.Null(business.DecidedAtUtc);
         Assert.Null(business.RejectionReason);
         Assert.True((await _factory.MembershipAsync(_factory.ApplicantMembershipId)).IsActive);
-        Assert.Empty(_factory.LoggedEntries().Where(IsAuditEntry));
+
+        Assert.Equal(
+            BusinessStatus.Active,
+            (await _factory.BusinessAsync(_factory.TradingBusinessId)).Status);
+        Assert.True((await _factory.MembershipAsync(_factory.TradingOwnerMembershipId)).IsActive);
+
+        Assert.Empty(_factory.LoggedEntries().Where(IsPlatformAuditEntry));
     }
 
     #endregion

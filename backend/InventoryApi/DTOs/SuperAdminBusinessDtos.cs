@@ -1,4 +1,5 @@
 using Inventory.Application.PlatformAdmin;
+using Inventory.Domain.Tenancy;
 
 namespace InventoryApi.DTOs;
 
@@ -116,5 +117,101 @@ public sealed record SuperAdminBusinessDecisionResponse(
             decision.Status.ToString(),
             decision.DecidedAtUtc,
             decision.RejectionReason);
+    }
+}
+
+/// <summary>
+/// A recorded deactivation, as <c>POST /api/super-admin/businesses/{businessId}/deactivate</c>
+/// answers (issue #545).
+/// </summary>
+/// <param name="BusinessId">The business that was switched off.</param>
+/// <param name="Name">Its display name.</param>
+/// <param name="Status">The published status name it now holds - always <c>Deactivated</c>.</param>
+/// <param name="InvitesCancelled">
+/// How many of its invite links were still live and have now been cancelled permanently. It is
+/// reported because it is the one part of a deactivation that the business row does not show
+/// afterwards, and "no outstanding link survived this" is a fact an operator needs to be able to
+/// check. Already-used, already-cancelled and expired invites are not counted: they were not
+/// cancelled by this action.
+/// </param>
+public sealed record SuperAdminBusinessDeactivationResponse(
+    int BusinessId,
+    string Name,
+    string Status,
+    int InvitesCancelled)
+{
+    public static SuperAdminBusinessDeactivationResponse From(PlatformBusinessDeactivation deactivation)
+    {
+        ArgumentNullException.ThrowIfNull(deactivation);
+
+        return new SuperAdminBusinessDeactivationResponse(
+            deactivation.BusinessId,
+            deactivation.Name,
+            deactivation.Status.ToString(),
+            deactivation.InvitesCancelled);
+    }
+}
+
+/// <summary>
+/// A recorded reactivation, as <c>POST /api/super-admin/businesses/{businessId}/reactivate</c>
+/// answers (issue #545). It carries no invite count and no membership, because a reactivation
+/// restores the business and changes nothing else about it.
+/// </summary>
+/// <param name="BusinessId">The business that was switched back on.</param>
+/// <param name="Name">Its display name.</param>
+/// <param name="Status">The published status name it now holds - always <c>Active</c>.</param>
+public sealed record SuperAdminBusinessReactivationResponse(int BusinessId, string Name, string Status)
+{
+    public static SuperAdminBusinessReactivationResponse From(PlatformBusinessReactivation reactivation)
+    {
+        ArgumentNullException.ThrowIfNull(reactivation);
+
+        return new SuperAdminBusinessReactivationResponse(
+            reactivation.BusinessId,
+            reactivation.Name,
+            reactivation.Status.ToString());
+    }
+}
+
+/// <summary>
+/// One membership of a deactivated business, as <c>GET .../{businessId}/members</c> and the release
+/// beside it report it (issue #545).
+///
+/// <para>These four fields are the whole contract, and what is missing from it is the point: no
+/// email address, no Entra <c>(tid, oid)</c> pair, and nothing tenant-owned. The Super Admin is here
+/// to free somebody from a business nobody can reach; they are not thereby a reader of that
+/// business's people. <see cref="DisplayName"/> is present because choosing which membership to
+/// release is impossible from a column of keys alone, and it is the same display-only value an
+/// Owner's own members list reports (issue #524) - never an identifier.</para>
+/// </summary>
+/// <param name="MembershipId">The membership's own key, which the release endpoint names.</param>
+/// <param name="DisplayName">
+/// The member's display name as their own sign-in token last reported it, or <c>null</c> when no
+/// token has reported one.
+/// </param>
+/// <param name="Role">
+/// The published <c>Inventory.Domain.Tenancy.BusinessRole</c> name, or <c>null</c> when the stored
+/// value is one this code does not declare - reported as unknown rather than guessed at, because
+/// naming a role nobody granted is how somebody comes to believe a person holds access they do not.
+/// </param>
+/// <param name="IsActive">
+/// Whether the membership is current. A released or revoked membership stays on the list: it is the
+/// record of who used to be able to reach the business.
+/// </param>
+public sealed record SuperAdminBusinessMemberResponse(
+    int MembershipId,
+    string? DisplayName,
+    string? Role,
+    bool IsActive)
+{
+    public static SuperAdminBusinessMemberResponse From(PlatformBusinessMember member)
+    {
+        ArgumentNullException.ThrowIfNull(member);
+
+        return new SuperAdminBusinessMemberResponse(
+            member.MembershipId,
+            member.DisplayName,
+            BusinessRoles.IsSupported(member.StoredRole) ? member.StoredRole.ToString() : null,
+            member.IsActive);
     }
 }

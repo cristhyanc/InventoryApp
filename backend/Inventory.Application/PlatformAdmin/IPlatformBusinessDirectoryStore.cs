@@ -120,18 +120,30 @@ public sealed record PlatformBusinessDecision(
     string? RejectionReason);
 
 /// <summary>
-/// The narrow persistence port the Super Admin's business directory and its two decisions run on
-/// (issue #544, one slice of #509 under #328).
+/// The narrow persistence port the Super Admin's business directory, its two decisions on an
+/// application and its three lifecycle transitions run on (issues #544 and #545, two slices of #509
+/// under #328).
 ///
 /// <para><strong>Why it is a port of its own, and why it is this small.</strong> It is the first
 /// write-capable platform-admin path, and the first request path of any kind that reads across every
 /// business through <c>AppDbContext</c>. What keeps that from being a general cross-business context
-/// is that the whole surface is here, in one reviewable interface: three business columns' worth of
-/// directory data, the count of active memberships, the existence of a Nayax connection row, and two
-/// writes that change a business's lifecycle status and one membership's activation. There is no
-/// method that takes a table name, a predicate, a column list or a statement, and no method that
-/// reaches a tenant-owned row - so there is nothing here that a later change could widen without
-/// changing this file (AGENTS.md § Unrestricted access is an explicit opt-in).</para>
+/// is that the whole surface is here, in one reviewable interface: a fixed set of business columns,
+/// the count of active memberships, the existence of a Nayax connection row, the memberships of one
+/// named business, and writes that change nothing but a business's lifecycle status, its decision
+/// instant and rejection reason, and one of its memberships' activation. There is no method that
+/// takes a table name, a predicate, a column list or a statement, and no method that reaches a
+/// tenant-owned row - so there is nothing here that a later change could widen without changing this
+/// file (AGENTS.md § Unrestricted access is an explicit opt-in).</para>
+///
+/// <para><strong>One operation reaches past this port, deliberately.</strong> Deactivating a
+/// business must leave no usable invite behind, and cancelling every live invite of one business is
+/// already <see cref="Members.IMemberInviteStore.CancelAllLiveAsync"/> - written for this caller
+/// (issue #531) as a single conditional statement so it commits or rolls back with the deactivation
+/// itself. <c>BusinessLifecycleWriter</c> calls it with the business id of the row it has just read
+/// inside its own transaction, never the route value, and <c>MemberInvite</c> is one of the four
+/// structural non-tenant-owned tables, so nothing about that reaches a tenant-owned row either. A
+/// second implementation of the same cancellation here would be two statements that could drift
+/// apart.</para>
 ///
 /// <para><strong>Every write runs inside issue #522's shared write transaction</strong>, through the
 /// request's own <c>AppDbContext</c>, so <c>MembershipWriteGuard</c>'s re-checks see what was
@@ -204,5 +216,64 @@ public interface IPlatformBusinessDirectoryStore
         string? reason,
         DateTime decidedAtUtc,
         int? deactivateMembershipId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The facts a lifecycle transition on <paramref name="businessId"/> is measured against -
+    /// its status and every membership it holds - or <see langword="null"/> when no such business
+    /// row exists (issue #545).
+    ///
+    /// <para>It must be called inside the transition's own write transaction: the status and the
+    /// memberships are exactly the mutable facts a concurrent decision, release or revocation
+    /// changes. It is a separate read from <see cref="FindDecisionTargetAsync"/> because the two
+    /// answer different questions - a decision needs the single applicant and their Entra identity,
+    /// a lifecycle transition needs every membership's role and state and no identity at all.</para>
+    /// </summary>
+    Task<PlatformBusinessLifecycleTarget?> FindLifecycleTargetAsync(
+        int businessId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Records the deactivation: the business becomes <see cref="BusinessStatus.Deactivated"/>
+    /// (issue #545). Its status column is the only thing this writes.
+    ///
+    /// <para>No membership is touched - the members keep their active flag and are refused because
+    /// the business no longer resolves - and no decision instant or rejection reason is written: a
+    /// deactivation is not a decision on an application, and overwriting <c>DecidedAtUtc</c> would
+    /// make the row claim its application was decided at the moment it was switched off.</para>
+    ///
+    /// <para>It persists its own change before returning, because the caller runs inside
+    /// <c>MembershipWriteGuard</c>'s transaction and the statements that follow - the invite
+    /// cancellation, and any hook - have to see what this wrote.</para>
+    /// </summary>
+    Task DeactivateAsync(int businessId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Records the reactivation: the business becomes <see cref="BusinessStatus.Active"/> again
+    /// (issue #545), and nothing else changes.
+    ///
+    /// <para>It restores no membership and no invite. A membership that was released or revoked
+    /// while the business was off stays inactive, and a cancelled invite stays cancelled: both are
+    /// deliberate decisions about a person, and a business returning is not a reason to undo
+    /// them.</para>
+    /// </summary>
+    Task ReactivateAsync(int businessId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Releases one membership of one business: it becomes inactive, with
+    /// <paramref name="releasedAtUtc"/> as its state-change instant, written in the same operation
+    /// as the state it describes (issue #522) - so the person is free to join another business.
+    /// </summary>
+    /// <param name="businessId">
+    /// The business the membership must belong to. It is paired with the membership key in the
+    /// statement, so another business's member cannot be released by naming their key here.
+    /// </param>
+    /// <param name="membershipId">The membership to release, which the caller has read as active.</param>
+    /// <param name="releasedAtUtc">The instant to record as the state change.</param>
+    /// <param name="cancellationToken">Cancellation for the whole operation.</param>
+    Task ReleaseMemberAsync(
+        int businessId,
+        int membershipId,
+        DateTime releasedAtUtc,
         CancellationToken cancellationToken);
 }

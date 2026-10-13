@@ -229,6 +229,17 @@ builder.Services.AddScoped<IBusinessApplicationAudit, LoggingBusinessApplication
 // name, a contact address, an applicant identity or the rejection reason's text, which is what keeps
 // all four out of the audit trail structurally rather than by a sink's discretion.
 builder.Services.AddScoped<IPlatformBusinessDecisionAudit, LoggingPlatformBusinessDecisionAudit>();
+// The platform business-lifecycle audit trail (issue #545): deactivating a business, reactivating
+// it, and releasing one of its members. A separate port again because a lifecycle action records a
+// membership id and an invite count and no rejection reason, and because its entry type has no
+// field for a name of any kind - not the business's, and not the released member's.
+builder.Services.AddScoped<IPlatformBusinessLifecycleAudit, LoggingPlatformBusinessLifecycleAudit>();
+// What else happens when a business is deactivated (issue #545's hook point). Nothing does today,
+// and this is the one registration issue #512's support sessions replace: the hook runs inside the
+// deactivation's own transaction, so a session ended by a deactivation that rolled back never
+// happened and a committed deactivation cannot leave one running. A single registration rather than
+// a collection, so "what runs here?" has exactly one answer, visible in this file.
+builder.Services.AddScoped<IBusinessDeactivationHook, NoBusinessDeactivationHook>();
 
 // Whether self-service onboarding is switched on at all (issue #541). Read once here, because only
 // the composition root reads configuration, and published as the Application layer's narrow flag

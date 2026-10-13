@@ -8,8 +8,11 @@ using Microsoft.Identity.Web.Resource;
 namespace InventoryApi.Controllers;
 
 /// <summary>
-/// The Super Admin's business directory and the two decisions on a business application (issue
-/// #544, one slice of #509 under #328): the first platform-admin surface that <em>writes</em>.
+/// The Super Admin's business directory, the two decisions on a business application (issue #544)
+/// and the three lifecycle actions on a business that has already traded (issue #545) - deactivate,
+/// reactivate, and release a member of a deactivated business, with that business's membership list
+/// to choose from. Two slices of #509 under #328, and the first platform-admin surface that
+/// <em>writes</em>.
 ///
 /// <para><strong>Authorisation is the diagnostics surface's, unchanged and server-side on every
 /// request.</strong> <c>[Authorize(Policy = PlatformAdminPolicy.Name)]</c> is evaluated by the
@@ -31,13 +34,15 @@ namespace InventoryApi.Controllers;
 /// <c>Inventory.Infrastructure.Persistence.EfPlatformBusinessDirectoryStore</c> and
 /// docs/architecture.md § Super Admin businesses API.</para>
 ///
-/// <para><strong>The business id in the route is the subject of a decision, not a tenancy
+/// <para><strong>The business id in the route is the subject of the action, not a tenancy
 /// scope.</strong> Every other endpoint in this application resolves its business from the
 /// authenticated actor's membership and accepts no owner from a request (AGENTS.md § Tenant
-/// ownership). A platform decision has to name the application it is about, so these two routes
-/// carry the id - and it chooses nothing else: it resolves no business for the request, it is never
-/// stamped on a row, and it cannot reach a tenant-owned table. It is checked against the stored rows
-/// on every call, so an unknown id is <c>404</c> and an already-decided one is <c>409</c>.</para>
+/// ownership). A platform decision has to name the business it is about, so these routes carry the
+/// id - and it chooses nothing else: it resolves no business for the request, it is never stamped on
+/// a row, and it cannot reach a tenant-owned table. It is checked against the stored rows on every
+/// call, so an unknown id is <c>404</c> and a business in the wrong status is <c>409</c>. The
+/// membership id the release names is read only within the business named beside it, so another
+/// business's member is <c>404</c> rather than reachable.</para>
 ///
 /// <para>The controller is thin, as every controller here is: it binds the route value and the one
 /// optional body field, invokes the use case with the request's cancellation token, and maps the
@@ -63,17 +68,29 @@ public sealed class SuperAdminBusinessesController : ControllerBase
     private readonly CountPendingBusinessApplications _countPending;
     private readonly ApproveBusinessApplication _approve;
     private readonly RejectBusinessApplication _reject;
+    private readonly DeactivateBusiness _deactivate;
+    private readonly ReactivateBusiness _reactivate;
+    private readonly ListDeactivatedBusinessMembers _listMembers;
+    private readonly ReleaseBusinessMember _releaseMember;
 
     public SuperAdminBusinessesController(
         ListPlatformBusinesses list,
         CountPendingBusinessApplications countPending,
         ApproveBusinessApplication approve,
-        RejectBusinessApplication reject)
+        RejectBusinessApplication reject,
+        DeactivateBusiness deactivate,
+        ReactivateBusiness reactivate,
+        ListDeactivatedBusinessMembers listMembers,
+        ReleaseBusinessMember releaseMember)
     {
         _list = list;
         _countPending = countPending;
         _approve = approve;
         _reject = reject;
+        _deactivate = deactivate;
+        _reactivate = reactivate;
+        _listMembers = listMembers;
+        _releaseMember = releaseMember;
     }
 
     /// <summary>
@@ -153,5 +170,108 @@ public sealed class SuperAdminBusinessesController : ControllerBase
         return decision is null
             ? NotFound()
             : Ok(SuperAdminBusinessDecisionResponse.From(decision));
+    }
+
+    /// <summary>
+    /// Switches one trading business off (issue #545): it becomes <c>Deactivated</c>, so nothing
+    /// resolves it and its members are refused on their next request, and every invite link of it
+    /// that is still live is cancelled permanently in the same transaction. Nothing is deleted and no
+    /// membership is changed.
+    /// </summary>
+    /// <response code="200">The deactivation was recorded.</response>
+    /// <response code="404">No such business.</response>
+    /// <response code="409">The business is not active. Nothing was written.</response>
+    [HttpPost("{businessId:int}/deactivate")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<SuperAdminBusinessDeactivationResponse>> Deactivate(
+        int businessId,
+        CancellationToken cancellationToken)
+    {
+        var deactivation = await _deactivate.Handle(businessId, cancellationToken);
+
+        return deactivation is null
+            ? NotFound()
+            : Ok(SuperAdminBusinessDeactivationResponse.From(deactivation));
+    }
+
+    /// <summary>
+    /// Switches one deactivated business back on (issue #545): it becomes <c>Active</c> again, so
+    /// the memberships that are still active start resolving. It restores no released or revoked
+    /// membership and no cancelled invite.
+    /// </summary>
+    /// <response code="200">The reactivation was recorded.</response>
+    /// <response code="404">No such business.</response>
+    /// <response code="409">
+    /// The business is not deactivated, or it no longer has an active Owner membership - a trading
+    /// business nobody can administer is refused rather than created. Nothing was written.
+    /// </response>
+    [HttpPost("{businessId:int}/reactivate")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<SuperAdminBusinessReactivationResponse>> Reactivate(
+        int businessId,
+        CancellationToken cancellationToken)
+    {
+        var reactivation = await _reactivate.Handle(businessId, cancellationToken);
+
+        return reactivation is null
+            ? NotFound()
+            : Ok(SuperAdminBusinessReactivationResponse.From(reactivation));
+    }
+
+    /// <summary>
+    /// The memberships of one <em>deactivated</em> business, so the Super Admin can see who is still
+    /// attached to it and release them (issue #545). It carries the four fields of
+    /// <see cref="SuperAdminBusinessMemberResponse"/> and no email address, Entra identifier or
+    /// tenant data of any kind.
+    /// </summary>
+    /// <response code="200">The business's memberships, active and inactive alike.</response>
+    /// <response code="404">No such business.</response>
+    /// <response code="409">
+    /// The business is not deactivated, so its members are its own Owner's business and are not
+    /// listed here.
+    /// </response>
+    [HttpGet("{businessId:int}/members")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<IReadOnlyList<SuperAdminBusinessMemberResponse>>> Members(
+        int businessId,
+        CancellationToken cancellationToken)
+    {
+        var members = await _listMembers.Handle(businessId, cancellationToken);
+
+        return members is null
+            ? NotFound()
+            : Ok(members.Select(SuperAdminBusinessMemberResponse.From).ToList());
+    }
+
+    /// <summary>
+    /// Frees one person from a deactivated business (issue #545): their membership becomes inactive
+    /// with the instant it changed recorded, so they may redeem an invite or apply for a business of
+    /// their own. The last-Owner rule deliberately does not apply - a business nobody can reach has
+    /// no administrator to protect - and <c>reactivate</c> above is what refuses to bring a business
+    /// back without one.
+    /// </summary>
+    /// <response code="200">The membership as the release left it, replayed requests included.</response>
+    /// <response code="404">That business holds no such membership, or no such business.</response>
+    /// <response code="409">The business is not deactivated. Nothing was written.</response>
+    [HttpPost("{businessId:int}/members/{membershipId:int}/release")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult<SuperAdminBusinessMemberResponse>> ReleaseMember(
+        int businessId,
+        int membershipId,
+        CancellationToken cancellationToken)
+    {
+        var member = await _releaseMember.Handle(businessId, membershipId, cancellationToken);
+
+        return member is null
+            ? NotFound()
+            : Ok(SuperAdminBusinessMemberResponse.From(member));
     }
 }

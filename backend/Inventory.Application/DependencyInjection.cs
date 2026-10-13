@@ -121,6 +121,17 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ApproveBusinessApplication>();
         services.AddScoped<RejectBusinessApplication>();
 
+        // Switching a business off and on again, and releasing its members while it is off (issue
+        // #545). Scoped for the same reasons: the authoritative read, the status write, the invite
+        // cancellation and the membership release all run on the request's own AppDbContext, inside
+        // MembershipWriteGuard's transaction on that same context, and the business they act on is
+        // named by the route - a decision's subject rather than a tenancy scope.
+        services.AddScoped<BusinessLifecycleWriter>();
+        services.AddScoped<DeactivateBusiness>();
+        services.AddScoped<ReactivateBusiness>();
+        services.AddScoped<ListDeactivatedBusinessMembers>();
+        services.AddScoped<ReleaseBusinessMember>();
+
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
         // state about the process rather than about one request: "this membership was refreshed
