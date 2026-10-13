@@ -444,17 +444,20 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
 
     private const string ListUrl = "/api/super-admin/businesses";
     private const string PendingCountUrl = "/api/super-admin/businesses/pending-count";
+    private const string SupportSessionsUrl = "/api/super-admin/support-sessions";
 
     private static string ApproveUrl(int businessId) => $"{ListUrl}/{businessId}/approve";
 
     private static string RejectUrl(int businessId) => $"{ListUrl}/{businessId}/reject";
 
     /// <summary>
-    /// Every endpoint on the surface, called once, so an authorization assertion is about the whole
-    /// controller rather than whichever action a test happened to pick. The four lifecycle endpoints
-    /// of issue #545 are here for exactly that reason: an endpoint that writes a business's status
-    /// or releases somebody's membership must be refused for every caller who is not the configured
-    /// administrator, and "every endpoint" has to keep meaning every endpoint.
+    /// Every endpoint on the whole platform-admin business surface, called once, so an authorization
+    /// assertion is about the controllers rather than whichever action a test happened to pick. The
+    /// four lifecycle endpoints of issue #545 and the three support-session endpoints of issue #550
+    /// are here for exactly that reason: an endpoint that writes a business's status, releases
+    /// somebody's membership or grants somebody read access to another business must be refused for
+    /// every caller who is not the configured administrator, and "every endpoint" has to keep meaning
+    /// every endpoint.
     /// </summary>
     private async Task<IReadOnlyList<HttpResponseMessage>> AllEndpointsAsync(HttpClient client) =>
     [
@@ -470,6 +473,11 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
         await client.PostAsync(
             $"{ListUrl}/{_factory.TradingBusinessId}/members/{_factory.TradingOwnerMembershipId}/release",
             null),
+        await client.PostAsync(
+            $"{SupportSessionsUrl}/{_factory.TradingBusinessId}",
+            new StringContent("{\"reason\":\"looking\"}", Encoding.UTF8, "application/json")),
+        await client.GetAsync($"{SupportSessionsUrl}/active"),
+        await client.PostAsync($"{SupportSessionsUrl}/active/end", null),
     ];
 
     private static async Task<JsonDocument> ReadJsonAsync(HttpResponseMessage response)
@@ -488,24 +496,28 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
         entry.StartsWith("Platform business decision audit.", StringComparison.Ordinal);
 
     /// <summary>
-    /// Any platform audit event at all - a decision's or a lifecycle action's (issue #545) - so
-    /// "nothing happened" can be asserted about the whole surface rather than about one of the two
-    /// trails.
+    /// Any platform audit event at all - a decision's, a lifecycle action's (issue #545) or a support
+    /// session's (issue #550) - so "nothing happened" can be asserted about the whole surface rather
+    /// than about one of the three trails.
     /// </summary>
     private static bool IsPlatformAuditEntry(string entry) =>
         IsAuditEntry(entry)
-        || entry.StartsWith("Platform business lifecycle audit.", StringComparison.Ordinal);
+        || entry.StartsWith("Platform business lifecycle audit.", StringComparison.Ordinal)
+        || entry.StartsWith("Support session audit.", StringComparison.Ordinal);
 
     /// <summary>The one audit event the request under test emitted.</summary>
     private string AuditEntry() => Assert.Single(_factory.LoggedEntries().Where(IsAuditEntry));
 
     /// <summary>
-    /// The pending application and the trading business are both untouched and nothing was audited -
-    /// the assertion every refusal shares. The trading business is here because the lifecycle
-    /// endpoints above are called against it: a refused caller must have changed neither.
+    /// The pending application and the trading business are both untouched, no support session
+    /// exists, and nothing was audited - the assertion every refusal shares. The trading business is
+    /// here because the lifecycle and support-session endpoints above are called against it: a
+    /// refused caller must have changed none of it and must not have been granted read access to it.
     /// </summary>
     private async Task AssertNothingWasDecidedAsync()
     {
+        Assert.Empty(await _factory.SupportSessionsAsync());
+
         var business = await _factory.BusinessAsync(_factory.PendingBusinessId);
         Assert.Equal(BusinessStatus.Pending, business.Status);
         Assert.Null(business.DecidedAtUtc);
@@ -557,8 +569,19 @@ public class SuperAdminBusinessesUnconfiguredApiTests
             (await client.PostAsync($"/api/super-admin/businesses/{_factory.PendingBusinessId}/approve", null))
                 .StatusCode);
 
+        // And the support-session surface of issue #550, which is the same policy and the same
+        // marker: with no administrator configured, nobody may grant themselves read access to a
+        // business either, and no session row is written.
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await client.PostAsync(
+                $"/api/super-admin/support-sessions/{_factory.TradingBusinessId}",
+                new StringContent("{\"reason\":\"looking\"}", Encoding.UTF8, "application/json")))
+                .StatusCode);
+
         Assert.Equal(
             BusinessStatus.Pending,
             (await _factory.BusinessAsync(_factory.PendingBusinessId)).Status);
+        Assert.Empty(await _factory.SupportSessionsAsync());
     }
 }

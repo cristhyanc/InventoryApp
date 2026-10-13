@@ -22,7 +22,8 @@ namespace Inventory.Infrastructure.Models;
 /// filter that the one path the table exists for must evade is not a boundary; naming the owner in
 /// the statement is. The invite is therefore listed in
 /// <c>BusinessOwnershipCoverageTests.DeliberatelyGlobalEntities</c> with that reason, and it is the
-/// fourth such table rather than a new class of exception.
+/// fourth such table rather than a new class of exception. The fifth is
+/// <see cref="SupportSession"/> (issue #550), on the same terms.
 ///
 /// What this does <em>not</em> relax: no request value may choose the business, the
 /// <see cref="BusinessId"/> is never written after the insert, every read and write names it, and

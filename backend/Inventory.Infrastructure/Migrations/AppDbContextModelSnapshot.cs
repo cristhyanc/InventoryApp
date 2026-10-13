@@ -1665,6 +1665,54 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("SupplierOrderReceiptAllocations");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.SupportSession", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ActorDirectoryTenantId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorObjectId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("EndedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SessionIdHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("StartedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("SessionIdHash")
+                        .IsUnique();
+
+                    b.HasIndex("ActorDirectoryTenantId", "ActorObjectId");
+
+                    b.ToTable("SupportSessions");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.BusinessMembership", b =>
                 {
                     b.HasOne("Inventory.Infrastructure.Models.Business", "Business")

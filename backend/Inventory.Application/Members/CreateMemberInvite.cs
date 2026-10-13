@@ -17,7 +17,7 @@ namespace Inventory.Application.Members;
 /// and an optional note, and nothing else. There is no business id, no creator id and no expiry in
 /// the contract - an invite that let its creator choose when it expires would not have a
 /// seven-day lifetime. The resolved business is then passed to the store explicitly, because
-/// <c>MemberInvite</c> is one of the four structural non-tenant-owned tables and has no central
+/// <c>MemberInvite</c> is one of the five structural non-tenant-owned tables and has no central
 /// query filter or ownership stamp to defer to (issue #532; docs/architecture.md § Tenant
 /// ownership).</para>
 ///
