@@ -3657,6 +3657,48 @@ previous account restoring nothing, and the control returning only on the new ac
 answer) and `dashboard.component.spec.ts` (the redacted summary rendering
 the two non-financial cards, with no `$0.00` and no withheld figure anywhere).
 
+### The Roles page (issue #530)
+
+Admin → Roles (`/admin/roles`, `components/admin/roles/`) is a read-only page, on `Roles.View`
+which only an Owner holds, explaining what Owner, Manager and Operator can each access. It is one
+slice of #503, which keeps the full agreed contract for this area under #328. It edits nothing —
+no role, no permission and no member, which stays #530's and #505's member-management work — and
+it is guarded exactly like every other page above: `requireCapability('Roles.View')` on its route
+and the matching `Capability.RolesView` an Owner alone holds in `RoleCapabilities`, so a hidden
+`Roles` entry and a redirected route hide a page rather than protect one.
+
+**This is a deliberate, bounded exception to "no second role source".** The paragraph above says
+there is deliberately no frontend role source for a navigation or authorization decision, because
+a second copy of `RoleCapabilities` could only diverge from it — true for every decision on this
+page otherwise, since nothing here decides what anybody may do. But explaining the *whole* matrix
+needs the matrix, and no endpoint reports it: `GET /api/me/access` reports only the caller's own
+capabilities, and building a new endpoint to report somebody else's was explicitly out of scope
+(migration, data and deployment impact: none, frontend only). `components/admin/roles/role-definitions.ts`
+is therefore one written-out table — each role's capability list, written out in full in the
+published vocabulary's order rather than derived, the same convention `RoleCapabilities` itself and
+this frontend's own `navigation.spec.ts` already use — plus one human-readable sentence for every
+published capability, independent of which role holds it.
+
+**Kept from drifting by a test, not by a shared source.** `role-definitions.spec.ts` fails the
+build the moment this file and the published vocabulary (`access/capabilities.ts`, itself mirrored
+from `Inventory.Application.Access.Capabilities`) disagree: every published capability must have a
+description and nothing else may; the union of what Owner, Manager and Operator each hold must be
+exactly the published vocabulary, so a capability added to the vocabulary with no role granted to
+it fails here; and the hierarchy (Operator's set a subset of Manager's, Manager's of Owner's, and
+Owner holding every capability) is pinned literally, the same way `navigation.spec.ts` pins the
+per-role menus, so a role that quietly gains or loses a capability on the frontend disagrees with
+this test instead of agreeing with itself. TypeScript's own excess-property check on the
+`Record<Capability, string>` description map catches an invented capability at compile time too,
+but the test is what explains the failure and what catches a capability silently *removed* from a
+role's list, which the compiler alone would not.
+
+**What proves this slice.** `role-definitions.spec.ts` (the vocabulary-sync assertions above),
+`roles.component.spec.ts` (the three sections in order, each role's own capabilities rendered and
+no other role's, no form control or action anywhere on the page, and the link back to Admin), and
+`navigation.spec.ts` / `app.routes.spec.ts` (the `Roles` destination offered to an Owner and
+withheld from a Manager and an Operator, and the route guarded by `MsalGuard`, `accountStateGuard`
+and `requireCapability('Roles.View')` like every other business route).
+
 ### Account-state routing, the access-unavailable page and the global 403 handler (issue #529)
 
 Until issue #529 the app called no endpoint that could tell a signed-in person apart from a
