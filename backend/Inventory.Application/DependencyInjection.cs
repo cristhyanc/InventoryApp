@@ -9,6 +9,7 @@ using Inventory.Application.Expenses;
 using Inventory.Application.Gst;
 using Inventory.Application.Imports;
 using Inventory.Application.InventoryCounting;
+using Inventory.Application.MachineStock;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Machines;
 using Inventory.Application.Members;
@@ -223,6 +224,12 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ApplyMachineStockSync>();
         services.AddScoped<ResolveMachineStockDuplicate>();
         services.AddScoped<ResolveMachineStockEventsAsAlreadyRecorded>();
+
+        // The machine-stock ledger (issue #56). Scoped like every other use case: the reconciliation
+        // reads one caller's resolved business through the request's own AppDbContext, and a recorded
+        // count is written through that same context.
+        services.AddScoped<GetMachineStockReconciliation>();
+        services.AddScoped<RecordMachineStockCount>();
         services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<ComputePurchaseGstSummary>();
