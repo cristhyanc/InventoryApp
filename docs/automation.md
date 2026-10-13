@@ -80,10 +80,13 @@ required by change type), or treat the failure as a regression and fix the guard
 
 ## Optional isolated Windows/Hyper-V runner pilot (issue #635)
 
-The repository is **public**, so the default for agent implementation, architecture, review,
-repair, pull-request validation and deployment remains **GitHub-hosted**. GitHub warns that
-a persistent self-hosted runner for a public repository can retain compromise from untrusted
-code. Do not route those jobs to a home PC just by replacing `runs-on: ubuntu-latest`.
+The repository was switched to **private** on 14 October 2026. That reduces exposure
+to untrusted outside contributors, but **private visibility is not a runner sandbox**:
+malicious or accidentally unsafe branch code, compromised collaborator accounts and leaked
+credentials can still put a persistent home runner at risk. The default for agent
+implementation, architecture, review, repair, pull-request validation and deployment remains
+**GitHub-hosted**. Do not route those jobs to a home PC just by replacing
+`runs-on: ubuntu-latest`.
 
 The first stage supports only two low-privilege checks:
 
@@ -106,15 +109,18 @@ Repository Settings → Actions → Runners; confirm it shows Online/Idle. Keep 
 to this runner, without host-drive mounts, personal credentials or other sensitive data.
 Prefer a fresh disposable VM per job and an isolated network. Configure GitHub's protected
 runner access and approval controls where available. The diagnostic and default-off preflight
-are **not** a certification that a persistent runner is safe for public PR or credentialed
-coding workloads.
+are **not** a certification that a persistent runner is safe for arbitrary PR code or credentialed
+coding workloads, even when the repository is private.
 
 **Rollback:** remove or set `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` to `false` in
 Repository Settings → Secrets and variables → Actions → Variables. Future preflight jobs
 then use GitHub-hosted runners again. The diagnostic remains manual. Do not change the
 variable while a job is executing; inspect the Actions run to confirm its selected runner.
 Only a separately reviewed, security-hardened follow-up may consider migrating additional
-workloads, and never public PR validation onto this persistent VM.
+workloads. Before moving any credentialed coding agent, protect the GitHub runner from
+untrusted pull-request branches, provision an ephemeral/resettable VM or equivalent
+isolation, limit GitHub App/token permissions, and verify that GitHub Actions secrets do
+not become accessible to code under review. Private visibility alone is not sufficient.
 
 ## Desired lifecycle
 
