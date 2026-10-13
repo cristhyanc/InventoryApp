@@ -41,6 +41,8 @@ namespace InventoryApi.Tests.Controllers;
 public class SupportSessionRequestApiTests
     : IClassFixture<SupportSessionRequestApiTests.ApiFactory>, IAsyncLifetime
 {
+    private const string DashboardSummary = "/api/dashboard/summary";
+
     private readonly ApiFactory _factory;
 
     public SupportSessionRequestApiTests(ApiFactory factory) => _factory = factory;
@@ -187,11 +189,11 @@ public class SupportSessionRequestApiTests
     /// <c>unavailable_in_support_view</c>, and the client records no call at all - the credentials
     /// were never resolved, so nothing left the API and the business's token was never decrypted.
     ///
-    /// <para>The dashboard summary is among these deliberately: issue #551 accepts that it fails in
-    /// a support view until #552 gives it a degraded shape, and this is that failure, stated.</para>
+    /// <para>The dashboard summary was among these until issue #552 gave it a degraded shape; it is
+    /// now answered <c>200</c> with its two Nayax-backed sections replaced, which is the region
+    /// below.</para>
     /// </summary>
     [Theory]
-    [InlineData("/api/dashboard/summary")]
     [InlineData("/api/pick-list?machineIds=1")]
     [InlineData("/api/machines")]
     public async Task A_nayax_backed_read_fails_closed_without_a_single_call(string route)
@@ -227,6 +229,105 @@ public class SupportSessionRequestApiTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True(_factory.NayaxCalls > 0, $"GET {route} made no Nayax call for a member.");
+    }
+
+    #endregion
+
+    #region The dashboard's degraded shape (issue #552)
+
+    /// <summary>
+    /// The criterion: in a support view the summary is answered <c>200</c> with its local sections
+    /// intact and the two sections the live fleet feeds replaced by
+    /// <c>{ "available": false, "reason": "SupportView" }</c> - the shape issue #329 uses for
+    /// <c>NayaxNotConnected</c> - and the Nayax client records no call at all.
+    ///
+    /// <para>The property sets are asserted exactly, so a section that was emitted as a partial
+    /// count, a <c>null</c> or a zero - any of which would read as a real figure about the
+    /// business's machines - fails here.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_dashboard_summary_replaces_its_fleet_sections_without_a_single_call()
+    {
+        await _factory.SeedNayaxConnectionAsync();
+        var client = await _factory.InSupportSessionAsync();
+        _factory.ResetNayaxCalls();
+
+        var response = await client.GetAsync(DashboardSummary);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(0, _factory.NayaxCalls);
+
+        using var json = await ReadJsonAsync(response);
+        var summary = json.RootElement;
+        Assert.Equal(
+            ["asOfUtc", "businessDate", "inventory", "needsOrdering", "needsRefill", "salesThisWeek"],
+            Properties(summary));
+        foreach (var section in new[] { "needsRefill", "needsOrdering" })
+        {
+            Assert.Equal(["available", "reason"], Properties(summary.GetProperty(section)));
+            Assert.False(summary.GetProperty(section).GetProperty("available").GetBoolean());
+            Assert.Equal("SupportView", summary.GetProperty(section).GetProperty("reason").GetString());
+        }
+    }
+
+    /// <summary>
+    /// The other half of the criterion: the sections that need nothing from Nayax are the real
+    /// local ones, computed over the supported business's own catalogue - the point of the issue is
+    /// that the dashboard still shows what it can rather than failing whole.
+    /// </summary>
+    [Fact]
+    public async Task The_dashboard_summary_still_reports_the_local_sections()
+    {
+        var client = await _factory.InSupportSessionAsync();
+
+        using var json = await ReadJsonAsync(await client.GetAsync(DashboardSummary));
+        var summary = json.RootElement;
+
+        var inventory = summary.GetProperty("inventory");
+        // The one product this file seeds for the supported business, with its five units: the
+        // local sections describe that business and not the other one or an empty catalogue.
+        Assert.Equal(1, inventory.GetProperty("productCount").GetInt32());
+        Assert.Equal(5, inventory.GetProperty("unitsInStorage").GetInt32());
+        // A support session grants Dashboard.ViewFinancials, so the week's figures are published.
+        Assert.Equal(
+            ["inventoryValueAtCost", "isInventoryValueComplete", "productCount", "productsWithUnknownCost",
+                "unitsInStorage"],
+            Properties(inventory));
+        Assert.Equal(0m, summary.GetProperty("salesThisWeek").GetProperty("sales").GetDecimal());
+    }
+
+    /// <summary>
+    /// The criterion that keeps the one above a support-session claim rather than a change to the
+    /// endpoint: the business's own Owner is answered the ordinary contract over the same host and
+    /// the same stored connection - the real refill and ordering cards, no availability flag
+    /// anywhere, and the Nayax client really is called.
+    /// </summary>
+    [Fact]
+    public async Task The_same_summary_keeps_its_normal_shape_for_a_member()
+    {
+        await _factory.SeedNayaxConnectionAsync();
+        _factory.ResetNayaxCalls();
+
+        var response = await _factory
+            .Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId)
+            .GetAsync(DashboardSummary);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(_factory.NayaxCalls > 0, "The summary made no Nayax call for a member.");
+
+        using var json = await ReadJsonAsync(response);
+        var summary = json.RootElement;
+        Assert.Equal(
+            ["asOfUtc", "businessDate", "inventory", "needsOrdering", "needsRefill", "salesThisWeek"],
+            Properties(summary));
+        Assert.Equal(
+            ["emptySelectionCount", "lowSelectionCount", "machinesEvaluated", "machinesNeedingRefill",
+                "machinesWithEmptySelections", "machinesWithLowSelections", "selectionsEvaluated"],
+            Properties(summary.GetProperty("needsRefill")));
+        Assert.Equal(
+            ["productsEvaluated", "productsNeedingOrdering"],
+            Properties(summary.GetProperty("needsOrdering")));
+        Assert.DoesNotContain("SupportView", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
     #endregion
@@ -498,6 +599,13 @@ public class SupportSessionRequestApiTests
 
     private static async Task<JsonDocument> ReadJsonAsync(HttpResponseMessage response) =>
         JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+
+    /// <summary>
+    /// One JSON object's property names, ordered, so a response shape is asserted as the exact set
+    /// it publishes rather than as the properties a test happened to look for.
+    /// </summary>
+    private static string[] Properties(JsonElement element) =>
+        element.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).ToArray();
 
     private static async Task<string?> CodeAsync(HttpResponseMessage response)
     {

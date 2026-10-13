@@ -47,7 +47,8 @@ public class GetDashboardSummaryRedactionTests
         CurrentCapabilities capabilities,
         IDashboardSummarySalesFactsProvider salesFacts,
         IProductCatalogStore catalog,
-        Mock<INayaxLynxClient>? nayax = null)
+        Mock<INayaxLynxClient>? nayax = null,
+        IBusinessScope? businessScope = null)
     {
         var fleet = nayax ?? EmptyFleet();
         var outstandingOrders = new Mock<IOutstandingSupplierOrderQuantityStore>();
@@ -58,9 +59,29 @@ public class GetDashboardSummaryRedactionTests
             new FakeClock(NowUtc),
             new FakeBusinessCalendar(NowUtc),
             capabilities,
+            businessScope ?? MemberScope(),
             salesFacts,
             catalog,
             new CalculateReorderNeeds(fleet.Object, outstandingOrders.Object));
+    }
+
+    /// <summary>
+    /// An ordinary request's resolved scope: these tests are about which figures a role is given,
+    /// so none of them is a support view. The support view's own shape (issue #552) is
+    /// <c>GetDashboardSummarySupportViewTests</c>.
+    /// </summary>
+    private static BusinessScope MemberScope()
+    {
+        var scope = new BusinessScope();
+        scope.Resolve(BusinessId.From(1));
+        return scope;
+    }
+
+    private static BusinessScope SupportScope()
+    {
+        var scope = new BusinessScope();
+        scope.ResolveForSupportSession(BusinessId.From(1));
+        return scope;
     }
 
     private static Mock<INayaxLynxClient> EmptyFleet()
@@ -88,6 +109,10 @@ public class GetDashboardSummaryRedactionTests
     /// A support session (issue #551) grants <c>Dashboard.ViewFinancials</c>, so the decision is
     /// taken from that set rather than from a role the platform administrator does not hold - and
     /// asking for a role, which would deny the request, is not what happens.
+    ///
+    /// <para>Since issue #552 such a request is answered the support view's own shape, and this is
+    /// still the claim it makes about the figures: the week's revenue and the valuation are in it,
+    /// decided from the session's capability set.</para>
     /// </summary>
     [Fact]
     public async Task A_support_session_is_answered_the_financial_figures_without_a_role()
@@ -97,10 +122,13 @@ public class GetDashboardSummaryRedactionTests
                     FakeSupportSessionAccessor.Active(businessId: 1),
                     FakeCurrentBusinessProvider.SupportSession(businessId: 1)),
                 SalesFacts(),
-                Catalog())
+                Catalog(),
+                businessScope: SupportScope())
             .Handle(CancellationToken.None);
 
-        Assert.IsType<DashboardSummaryDto>(summary);
+        var supportView = Assert.IsType<SupportViewDashboardSummaryDto>(summary);
+        Assert.Equal(1234.56m, supportView.SalesThisWeek.Sales);
+        Assert.Equal(777.77m, supportView.Inventory.InventoryValueAtCost);
     }
 
     /// <summary>

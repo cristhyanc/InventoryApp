@@ -127,7 +127,10 @@ public class GetDashboardSummaryTenancyTests : IDisposable
     }
 
     private static GetDashboardSummary UseCase(
-        AppDbContext db, ICurrentBusinessProvider currentBusiness, Mock<INayaxLynxClient>? fleet = null)
+        AppDbContext db,
+        ICurrentBusinessProvider currentBusiness,
+        Mock<INayaxLynxClient>? fleet = null,
+        int scopedBusinessId = BusinessA)
     {
         var outstandingOrders = new Mock<IOutstandingSupplierOrderQuantityStore>();
         outstandingOrders.Setup(x => x.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()))
@@ -137,6 +140,9 @@ public class GetDashboardSummaryTenancyTests : IDisposable
             Time.Clock,
             Time.Calendar,
             new CurrentCapabilities(new FakeSupportSessionAccessor(), currentBusiness),
+            // A member's own resolved scope, matching the context's: these tests are about which
+            // business's rows the figures come from, and none of them is a support view.
+            TestAppDbContext.ScopeFor(scopedBusinessId),
             new EfDashboardSummarySalesFactsProvider(db),
             new EfProductCatalogStore(db),
             new CalculateReorderNeeds((fleet ?? SharedOperatorFleet()).Object, outstandingOrders.Object));
@@ -149,7 +155,7 @@ public class GetDashboardSummaryTenancyTests : IDisposable
         // An Owner of that same business, so the isolation assertions below see every figure; what a
         // role without Dashboard.ViewFinancials is given is issue #527's
         // GetDashboardSummaryRedactionTests.
-        var summary = await UseCase(db, new FakeCurrentBusinessProvider(businessId))
+        var summary = await UseCase(db, new FakeCurrentBusinessProvider(businessId), scopedBusinessId: businessId)
             .Handle(CancellationToken.None);
 
         return Assert.IsType<DashboardSummaryDto>(summary);
