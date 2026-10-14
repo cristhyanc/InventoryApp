@@ -276,7 +276,7 @@ jobs:
       - sonar
     # Only the checker the route selected counts; the other one is skipped. A failed SonarCloud read
     # never blocks: the sonar job's result is not required, and a missing count is treated as zero.
-    if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && ((needs.context.outputs.checker == 'copilot' && needs.copilot-check.outputs.verdict == 'findings') || (needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.verdict == 'findings') || fromJSON(needs.sonar.outputs.count || '0') > 0) }}
+    if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
