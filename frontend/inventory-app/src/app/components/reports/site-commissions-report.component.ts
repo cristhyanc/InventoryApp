@@ -1,9 +1,11 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { Site } from '../../models/models';
 import { ReportingService, SiteCommissionReport, SiteCommissionRow } from '../../services/reporting.service';
 import { SiteService } from '../../services/site.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 @Component({
   selector: 'app-site-commissions-report',
@@ -36,7 +38,7 @@ import { SiteService } from '../../services/site.service';
           <table class="table mt-2"><thead class="table-head"><tr><th scope="col" class="table-cell">Machine</th><th scope="col" class="table-cell table-num">Transactions</th><th scope="col" class="table-cell table-num">Sales</th><th scope="col" class="table-cell table-num">Commission Due</th></tr></thead><tbody>@for (machine of selected.machines; track machine.machineId) { <tr class="table-row"><td class="table-cell">{{ machine.machineName }}</td><td class="table-cell table-num">{{ machine.transactionCount }}</td><td class="table-cell table-num">{{ money(machine.grossSales) }}</td><td class="table-cell table-num">{{ money(machine.commissionDue) }}</td></tr> }</tbody></table>
           <h3 class="card-title mt-5">Payment history</h3>
           @if (!selected.payments.length) { <p class="value-muted">No payments recorded for this period.</p> } @else { @for (payment of selected.payments; track payment.id) { <div class="mt-2">{{ payment.paymentDate | date:'dd/MM/yyyy' }} - {{ money(payment.amount) }} {{ payment.notes }}</div> } }
-          @if (selected.outstanding > 0) { <div class="mt-4 flex flex-wrap items-end gap-2 border-t border-md-gray-200 pt-4"><label class="field-label">Payment date <input class="mt-1" type="date" [(ngModel)]="paymentDate" /></label><label class="field-label">Amount <input class="mt-1 w-24" type="number" min="0.01" step="0.01" [(ngModel)]="paymentAmount" /></label><label class="field-label">Notes <input class="mt-1" [(ngModel)]="paymentNotes" /></label><button type="button" class="btn btn-primary" (click)="recordPayment()">Record Payment</button></div> }
+          @if (selected.outstanding > 0 && !sessionActive) { <div class="mt-4 flex flex-wrap items-end gap-2 border-t border-md-gray-200 pt-4"><label class="field-label">Payment date <input class="mt-1" type="date" [(ngModel)]="paymentDate" /></label><label class="field-label">Amount <input class="mt-1 w-24" type="number" min="0.01" step="0.01" [(ngModel)]="paymentAmount" /></label><label class="field-label">Notes <input class="mt-1" [(ngModel)]="paymentNotes" /></label><button type="button" class="btn btn-primary" (click)="recordPayment()">Record Payment</button></div> }
           @if (selected.dataQuality) { <p class="mt-4 text-md-warning-text">{{ selected.dataQuality }}</p> }
         </div>
       </section>
@@ -54,17 +56,34 @@ import { SiteService } from '../../services/site.service';
   }
 </div>
 ` })
-export class SiteCommissionsReportComponent implements OnInit {
+export class SiteCommissionsReportComponent implements OnInit, OnDestroy {
   sites: Site[] = []; report: SiteCommissionReport | null = null; selected: SiteCommissionRow | null = null;
   siteId: number | null = null; loading = false; error = ''; period = 'thisMonth';
   paymentDate = this.date(new Date()); paymentAmount = 0; paymentNotes = '';
   from = this.date(new Date(new Date().getFullYear(), new Date().getMonth(), 1)); to = this.date(new Date());
   periods = [['thisMonth', 'This Month'], ['lastMonth', 'Last Month'], ['thisQuarter', 'This Quarter'], ['lastQuarter', 'Last Quarter'], ['currentFy', 'Current FY'], ['previousFy', 'Previous FY'], ['custom', 'Custom']];
-  constructor(private reports: ReportingService, private siteService: SiteService) {}
+
+  /**
+   * Whether a support session is active (issue #659, extending #554): Record Payment hides
+   * itself while it is, because a session grants `SiteCommissionsManage` - the capability this
+   * page would otherwise gate the write on - and the backend refuses the write itself only by
+   * its read-only method rule, never by withholding the capability. See
+   * `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
+
+  constructor(private reports: ReportingService, private siteService: SiteService, supportSession: SupportSessionService) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
   ngOnInit(): void { this.siteService.getAll().subscribe({ next: sites => this.sites = sites, error: () => this.sites = [] }); this.load(); }
+  ngOnDestroy(): void { this.sessionActiveSubscription.unsubscribe(); }
   load(): void { this.loading = true; this.error = ''; this.selected = null; this.reports.siteCommissions({ from: this.from, to: this.to }, this.siteId).subscribe({ next: report => { this.report = report; this.loading = false; }, error: () => { this.error = 'Unable to load site commissions.'; this.loading = false; } }); }
   selectPeriod(period: string): void { this.period = period; const now = new Date(); const month = now.getMonth(); const year = now.getFullYear(); if (period === 'thisMonth') { this.from = this.date(new Date(year, month, 1)); this.to = this.date(now); } else if (period === 'lastMonth') { this.from = this.date(new Date(year, month - 1, 1)); this.to = this.date(new Date(year, month, 0)); } else if (period.includes('Quarter')) { const quarter = Math.floor(month / 3) + (period === 'lastQuarter' ? -1 : 0); this.from = this.date(new Date(year, quarter * 3, 1)); this.to = this.date(period === 'thisQuarter' ? now : new Date(year, quarter * 3 + 3, 0)); } else if (period === 'currentFy' || period === 'previousFy') { const startYear = year - (month < 6 ? 1 : 0) - (period === 'previousFy' ? 1 : 0); this.from = this.date(new Date(startYear, 6, 1)); this.to = this.date(period === 'currentFy' ? now : new Date(startYear + 1, 5, 30)); } }
-  recordPayment(): void { if (!this.selected || this.paymentAmount <= 0) return; this.reports.recordCommissionPayment(this.selected.siteId, this.from, this.to, this.paymentDate, this.paymentAmount, this.paymentNotes).subscribe({ next: () => { this.paymentAmount = 0; this.paymentNotes = ''; this.load(); }, error: () => this.error = 'Unable to record commission payment.' }); }
+  // Checked here as well as hidden in the template, so the write is actually unavailable rather
+  // than merely invisible - the endpoint refuses it either way.
+  recordPayment(): void { if (this.sessionActive || !this.selected || this.paymentAmount <= 0) return; this.reports.recordCommissionPayment(this.selected.siteId, this.from, this.to, this.paymentDate, this.paymentAmount, this.paymentNotes).subscribe({ next: () => { this.paymentAmount = 0; this.paymentNotes = ''; this.load(); }, error: () => this.error = 'Unable to record commission payment.' }); }
   printDetails(): void {
     if (!this.selected) return;
     const row = this.selected;

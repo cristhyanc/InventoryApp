@@ -1,11 +1,13 @@
-import { Component } from '@angular/core';
+import { Component, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { ReportingService, SiteCommissionAgreement } from '../../../services/reporting.service';
 import { ToastService } from '../../../services/toast.service';
 import { Site } from '../../../models/models';
 import { SiteService } from '../../../services/site.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
  * Dedicated page for the site commission agreement workflow, split out of `AdminComponent`
@@ -58,7 +60,7 @@ import { SiteService } from '../../../services/site.service';
               <input id="commission-due-days" type="number" min="0" [(ngModel)]="commissionDueDays" />
             </div>
           </div>
-          <button type="button" class="btn btn-primary mt-3" [disabled]="loading" (click)="saveCommissionAgreement()">Save agreement</button>
+          <button type="button" class="btn btn-primary mt-3" [disabled]="loading || sessionActive" (click)="saveCommissionAgreement()">Save agreement</button>
           @if (commissionAgreements.length) {
             <div class="mt-5 overflow-x-auto border-t border-md-gray-200 pt-4">
               <h3 class="mb-2 text-sm font-semibold text-md-gray-800">Current agreements</h3>
@@ -73,7 +75,7 @@ import { SiteService } from '../../../services/site.service';
     </div>
   `
 })
-export class SiteCommissionAgreementsComponent {
+export class SiteCommissionAgreementsComponent implements OnDestroy {
   loading = false;
   sites: Site[] = [];
   commissionSiteId: number | null = null;
@@ -84,16 +86,38 @@ export class SiteCommissionAgreementsComponent {
   commissionDueDays: number | null = null;
   commissionAgreements: SiteCommissionAgreement[] = [];
 
+  /**
+   * Whether a support session is active (issue #659, extending #554): Save agreement disables
+   * itself while it is, because a session grants `SiteCommissionsManage` - the capability this
+   * page would otherwise gate the write on - and the backend refuses the write itself only by
+   * its read-only method rule, never by withholding the capability. See
+   * `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
+
   constructor(
     private readonly reportingService: ReportingService,
     private readonly toast: ToastService,
-    private readonly siteService: SiteService
+    private readonly siteService: SiteService,
+    supportSession: SupportSessionService
   ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
     this.loadCommissionAgreements();
     this.siteService.getAll().subscribe({ next: sites => this.sites = sites, error: () => this.sites = [] });
   }
 
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+  }
+
   saveCommissionAgreement(): void {
+    // Checked here as well as disabled in the template, so the write is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) {
+      return;
+    }
     if (this.commissionSiteId == null || this.commissionRate < 0 || this.commissionRate > 100 || !this.commissionEffectiveFrom || (this.commissionDueDays != null && this.commissionDueDays < 0)) {
       this.toast.error('Enter a site, valid commission rate, and effective date.');
       return;
