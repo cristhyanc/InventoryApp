@@ -1,8 +1,10 @@
-import { Component, EventEmitter, Input, OnChanges, Output, SimpleChanges } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { StockService } from '../../../services/stock.service';
 import { Machine, RestockCostSuggestion, StockAdjustmentReason } from '../../../models/models';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
  * The manual stock-adjustment workflow for one selected product (issue #384), moved out of the
@@ -26,7 +28,7 @@ import { Machine, RestockCostSuggestion, StockAdjustmentReason } from '../../../
   imports: [CommonModule, FormsModule],
   templateUrl: './stock-adjustment-form.component.html'
 })
-export class StockAdjustmentFormComponent implements OnChanges {
+export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
   /** The product the adjustment is recorded against. */
   @Input({ required: true }) productId!: number;
 
@@ -41,6 +43,16 @@ export class StockAdjustmentFormComponent implements OnChanges {
   saving = false;
   restockCostSuggestion: RestockCostSuggestion | null = null;
   private restockCostRequired = false;
+
+  /**
+   * Whether a support session is active (issue #658): Apply Adjustment is disabled while it is,
+   * because a session grants `InventoryOperate` - the capability this write would otherwise be
+   * gated on - and the backend refuses the write itself only by its read-only method rule, never
+   * by withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
 
   form = {
     quantityChange: null as number | null,
@@ -60,7 +72,13 @@ export class StockAdjustmentFormComponent implements OnChanges {
     { value: StockAdjustmentReason.MachineRefill, label: 'Machine refill' }
   ];
 
-  constructor(private stockService: StockService) {}
+  constructor(private stockService: StockService, supportSession: SupportSessionService) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+  }
 
   /**
    * A different product is a different adjustment: the in-progress quantity, reason, cost and the
@@ -118,6 +136,11 @@ export class StockAdjustmentFormComponent implements OnChanges {
   }
 
   adjust(): void {
+    // Checked here as well as disabled in the template, so the write is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) {
+      return;
+    }
     const quantityChange = this.isCorrection
       ? -(Math.abs(this.form.quantityChange ?? 0))
       : this.form.quantityChange;

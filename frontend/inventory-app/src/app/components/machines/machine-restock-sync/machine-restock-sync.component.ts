@@ -1,6 +1,6 @@
-import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewChild } from '@angular/core';
+import { Component, ElementRef, EventEmitter, HostListener, Input, OnDestroy, Output, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { BehaviorSubject } from 'rxjs';
+import { BehaviorSubject, Subscription } from 'rxjs';
 import { MachineService } from '../../../services/machine.service';
 import { ToastService } from '../../../services/toast.service';
 import {
@@ -11,6 +11,7 @@ import {
 import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pipe';
 import { NayaxStatusBannerComponent } from '../../shared/nayax-status-banner/nayax-status-banner.component';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import {
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
@@ -154,11 +155,22 @@ import {
     `
   ]
 })
-export class MachineRestockSyncComponent {
+export class MachineRestockSyncComponent implements OnDestroy {
   @Input() machineId: number | null | undefined = null;
 
   /** Emitted only after at least one event was actually applied, so the page can reload products. */
   @Output() readonly restockApplied = new EventEmitter<void>();
+
+  /**
+   * Whether a support session is active (issue #658): Sync Restock and every action inside its
+   * dialog are disabled while it is, because a session grants `InventoryOperate` - the capability
+   * every one of these writes would otherwise be gated on - and the backend refuses every one of
+   * them itself only by its read-only method rule (including the preview fetch, which is a `POST`),
+   * never by withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
 
   modalOpen$ = new BehaviorSubject(false);
   syncPreview$ = new BehaviorSubject<NayaxMachineStockSyncPreview | null>(null);
@@ -201,8 +213,15 @@ export class MachineRestockSyncComponent {
   constructor(
     private machineService: MachineService,
     private toastService: ToastService,
-    private businessTimeZone: BusinessTimeZoneService
-  ) {}
+    private businessTimeZone: BusinessTimeZoneService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+  }
 
   /**
    * Whether this event is directly safe/applicable through the normal Apply path (issue #183),
@@ -294,7 +313,9 @@ export class MachineRestockSyncComponent {
    * reconciled filters to their opening defaults (issue #206), and fetches a fresh preview.
    */
   syncRestock(): void {
-    if (!this.machineId) {
+    // Checked here as well as disabled in the template, so the write is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (!this.machineId || this.sessionActive) {
       return;
     }
 
@@ -405,7 +426,7 @@ export class MachineRestockSyncComponent {
 
   applySelectedEvents(): void {
     const machineId = this.machineId;
-    if (!machineId || this.selectedEventIds.size === 0) {
+    if (!machineId || this.selectedEventIds.size === 0 || this.sessionActive) {
       return;
     }
 
@@ -444,7 +465,7 @@ export class MachineRestockSyncComponent {
    */
   resolveDuplicate(event: NayaxStockEventPreview, resolution: NayaxDuplicateResolutionChoice): void {
     const machineId = this.machineId;
-    if (!machineId) {
+    if (!machineId || this.sessionActive) {
       return;
     }
 
@@ -483,7 +504,7 @@ export class MachineRestockSyncComponent {
    */
   resolveSelectedAsAlreadyRecorded(): void {
     const machineId = this.machineId;
-    if (!machineId || this.selectedEventIds.size === 0) {
+    if (!machineId || this.selectedEventIds.size === 0 || this.sessionActive) {
       return;
     }
 

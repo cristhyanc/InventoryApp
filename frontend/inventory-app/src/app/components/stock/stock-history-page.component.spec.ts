@@ -14,6 +14,7 @@ import {
   StockHistoryPage
 } from '../../models/models';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -338,7 +339,8 @@ describe('StockHistoryPageComponent rendering', () => {
         { provide: ActivatedRoute, useValue: routeStub(options.queryParams ?? {}) },
         { provide: StockService, useValue: { historyPage } },
         { provide: ProductService, useValue: { getAll: jest.fn(() => of([product()])) } },
-        { provide: MachineService, useValue: { getAll: jest.fn(() => of([machine(9, 'Lobby')])) } }
+        { provide: MachineService, useValue: { getAll: jest.fn(() => of([machine(9, 'Lobby')])) } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } }
       ]
     }).compileComponents();
 
