@@ -48,11 +48,11 @@ export class ProductFormComponent implements OnInit, OnDestroy {
   };
 
   constructor(
-    private productService: ProductService,
-    private categoryService: CategoryService,
-    private supplierService: SupplierService,
-    private router: Router,
-    private route: ActivatedRoute,
+    private readonly productService: ProductService,
+    private readonly categoryService: CategoryService,
+    private readonly supplierService: SupplierService,
+    private readonly router: Router,
+    private readonly route: ActivatedRoute,
     supportSession: SupportSessionService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
