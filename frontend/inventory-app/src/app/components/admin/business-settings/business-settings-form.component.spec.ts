@@ -1,10 +1,11 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
 import { ABN_INVALID_MESSAGE, NAME_REQUIRED_MESSAGE } from '../../../access/business-application-rules';
 import { BusinessService } from '../../../services/business.service';
 import { BusinessSettings, BusinessSettingsService } from '../../../services/business-settings.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import {
   BusinessSettingsFormComponent,
   GENERIC_SAVE_ERROR_MESSAGE,
@@ -29,7 +30,9 @@ interface Harness {
   accessRefresh: jest.Mock;
 }
 
-async function render(options: { settings?: BusinessSettings; save?: jest.Mock }): Promise<Harness> {
+async function render(
+  options: { settings?: BusinessSettings; save?: jest.Mock; sessionActive?: Observable<boolean> }
+): Promise<Harness> {
   const save = options.save ?? jest.fn(() => of({ ...SETTINGS, timeZoneId: 'Australia/Brisbane' }));
   const businessRefresh = jest.fn(() => of(null));
   const accessRefresh = jest.fn(() => of({ status: 'unread' as const }));
@@ -39,7 +42,8 @@ async function render(options: { settings?: BusinessSettings; save?: jest.Mock }
     providers: [
       { provide: BusinessSettingsService, useValue: { get: jest.fn(() => of(SETTINGS)), save } },
       { provide: BusinessService, useValue: { refresh: businessRefresh } },
-      { provide: AccessService, useValue: { refresh: accessRefresh, allows: () => of(false) } }
+      { provide: AccessService, useValue: { refresh: accessRefresh, allows: () => of(false) } },
+      { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } }
     ]
   }).compileComponents();
 
@@ -241,5 +245,48 @@ describe('BusinessSettingsFormComponent (issue #549)', () => {
 
     expect(harness.fixture.componentInstance.pendingTimeZoneChange).toBe(false);
     expect(save).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * Save while a support session is active (issue #660). A session grants `BusinessManage`, so this
+ * control would otherwise still render enabled.
+ */
+describe('BusinessSettingsFormComponent write control during a support session (issue #660)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('disables Save while a session is active', async () => {
+    const harness = await render({ sessionActive: of(true) });
+
+    expect((harness.host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('does not submit or save while a session is active, even if submit() is invoked directly', async () => {
+    const harness = await render({ sessionActive: of(true) });
+
+    await submitForm(harness);
+
+    expect(harness.save).not.toHaveBeenCalled();
+    expect(harness.fixture.componentInstance.pendingTimeZoneChange).toBe(false);
+  });
+
+  it('does not save a time-zone change confirmed after a session started, even though it was requested before', async () => {
+    const sessionActive = new Subject<boolean>();
+    sessionActive.next(false);
+    const harness = await render({ sessionActive });
+    harness.fixture.componentInstance.draft.timeZoneId = 'Australia/Brisbane';
+    await submitForm(harness);
+    expect(harness.fixture.componentInstance.pendingTimeZoneChange).toBe(true);
+
+    sessionActive.next(true);
+    harness.fixture.componentInstance.confirmTimeZoneChange();
+
+    expect(harness.save).not.toHaveBeenCalled();
+  });
+
+  it('leaves Save enabled while no session is active', async () => {
+    const harness = await render({ sessionActive: of(false) });
+
+    expect((harness.host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(false);
   });
 });

@@ -7,6 +7,7 @@ import { AccessService } from '../../../access/access.service';
 import { BusinessService } from '../../../services/business.service';
 import { BusinessSettings, BusinessSettingsService } from '../../../services/business-settings.service';
 import { LegacyBusinessSettingsPromptComponent } from '../../shared/legacy-business-settings-prompt/legacy-business-settings-prompt.component';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import { BusinessSettingsFormComponent } from './business-settings-form.component';
 import { BusinessSettingsComponent, LOAD_ERROR_MESSAGE } from './business-settings.component';
 
@@ -36,7 +37,8 @@ async function render(settings$?: Observable<BusinessSettings>): Promise<Harness
       provideRouter([{ path: 'admin', component: AdminPageComponent }]),
       { provide: BusinessSettingsService, useValue: { get, save: jest.fn() } },
       { provide: BusinessService, useValue: { refresh: jest.fn(() => of(null)) } },
-      { provide: AccessService, useValue: { refresh: jest.fn(), allows: () => of(false) } }
+      { provide: AccessService, useValue: { refresh: jest.fn(), allows: () => of(false) } },
+      { provide: SupportSessionService, useValue: { active$: of(false) } }
     ]
   }).compileComponents();
 

@@ -3732,6 +3732,60 @@ covers Apply Adjustment being disabled in both states and `adjust()` refusing to
 provides `SupportSessionService` for the embedded form so its own existing coverage keeps rendering
 the composed page.
 
+### Disabling business administration write controls in support view (issue #660)
+
+Issue #554 rolled `SupportSessionService.active$` out to Products as the two representative pages;
+this is the next slice of #513's follow-up, carrying the same `active$` subscription to the three
+named business-admin mutation families the parent issue called out - Business Settings, Nayax
+Settings, and members/users/invitations - each judged by the same question: does this page's route
+capability stay granted inside a session?
+
+**Business Settings and Nayax Settings needed the guard, because their capabilities are granted.**
+`Business.Manage` and `Integration.Manage` are both in `SupportSessionAccessPolicy.Capabilities`
+(see [Hiding write controls and support-view messages](#hiding-write-controls-and-support-view-messages-issue-554)
+for why a granted capability is the wrong signal for a write control), so a Super Admin's support
+session reaches both routes with the page rendered exactly as an Owner sees it. `active$` is the
+flag each page's write method checks instead, the same belt-and-suspenders `ProductListComponent`
+and `ProductFormComponent` already follow:
+
+- `BusinessSettingsFormComponent` disables Save and its `submit()`/`save()` both return before
+  validating or calling `BusinessSettingsService.save()` - `save()` is checked a second time
+  because `confirmTimeZoneChange()` reaches it without going through `submit()`'s own guard, which
+  only covers a session that was already active when the form was submitted.
+- `NayaxSettingsComponent` disables Save rate and `saveFeeRate()` returns before calling
+  `NayaxSettingsService.saveRate()`.
+- `NayaxConnectionWizardComponent` disables Test connection, Save connection and Re-test, and
+  `runTest()`, `saveConnection()` and `retest()` each return before calling the matching
+  `NayaxConnectionService` method - `canSave` folds the session flag in beside `canManage`, the
+  existing `Integration.Manage` read, exactly as it already folds in `busy`.
+
+Every one of these pages keeps its read-only information on screen - the stored fee-rate history,
+the stored Nayax connection's status and checklist, the legacy-settings prompt - because only the
+mutating action itself is disabled, never the page.
+
+**Members, Invites and the rest of Admin Users needed no frontend change, because `Members.Manage`
+is excluded.** `SupportSessionAccessPolicy.Excluded` deliberately withholds `MembersManage` from a
+support session (the member list's names and emails are private even from a supporter - see
+[Hiding write controls and support-view messages](#hiding-write-controls-and-support-view-messages-issue-554)),
+and `admin/users`'s route requires exactly that capability (`app.routes.ts`). `requireCapability`
+therefore redirects a session's request to `access-not-allowed` before `MemberManagementComponent`
+or `MemberInvitesComponent` ever mounts, so role change, revoke, reinstate, invite creation and
+invite cancellation are unreachable by construction rather than by a flag either component reads.
+Teaching either component `active$` as well would be an assertion this build can never exercise
+honestly, because the capability that would have to flip for the route to admit a session request
+is the one `SupportSessionAccessPolicy.Excluded` pins shut; the backend side of that is proved by
+`SupportSessionAccessPolicyTests`, and the route guard's generic redirect-on-denial behaviour is
+proved by `capability.guard.spec.ts`, so this slice adds no redundant frontend test for a path that
+cannot be reached.
+
+**What proves it.** `business-settings-form.component.spec.ts`,
+`nayax-settings.component.spec.ts` and `nayax-connection-wizard.component.spec.ts` each cover their
+write control being disabled while a session is active, the write method refusing to call its
+service while one is - including, for Business Settings, a time zone confirmation requested before
+a session started but confirmed after one did - and every control rendering and working normally
+while none is. `business-settings.component.spec.ts` was given the same `SupportSessionService`
+stub `BusinessSettingsFormComponent` now requires, because that page composes the form.
+
 ### Member access: capability-built navigation, guards and hidden actions (issue #528)
 
 Until issue #528 the sidebar showed every entry to every member and every route was behind

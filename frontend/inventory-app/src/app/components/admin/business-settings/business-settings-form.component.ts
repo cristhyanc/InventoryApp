@@ -1,7 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, Input, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Subject, forkJoin, map, switchMap, takeUntil } from 'rxjs';
+import { Subject, Subscription, forkJoin, map, switchMap, takeUntil } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
 import {
   BusinessApplicationDraft,
@@ -15,6 +15,7 @@ import {
 import { BusinessService } from '../../../services/business.service';
 import { BusinessSettings, BusinessSettingsService } from '../../../services/business-settings.service';
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 export const GENERIC_SAVE_ERROR_MESSAGE = "Your business settings couldn't be saved. Try again.";
 
@@ -189,7 +190,7 @@ function saveErrorMessage(error: unknown): string {
           </div>
 
           <div class="page-actions">
-            <button type="submit" class="btn btn-primary" [disabled]="saving">
+            <button type="submit" class="btn btn-primary" [disabled]="saving || sessionActive">
               {{ saving ? 'Saving...' : 'Save' }}
             </button>
           </div>
@@ -220,6 +221,14 @@ export class BusinessSettingsFormComponent implements OnDestroy {
   submitError: string | null = null;
   pendingTimeZoneChange = false;
 
+  /**
+   * Whether a support session is active (issue #660): Save is disabled while it is, because a
+   * session grants `BusinessManage` - the capability this page's write would otherwise be gated
+   * on - and the backend refuses the write itself only by its read-only method rule, never by
+   * withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
   draft: BusinessApplicationDraft = { name: '', contactEmail: '', abn: '', gstRegistered: null, timeZoneId: '' };
 
   /** The settings the page read - the baseline a time zone change is detected against. */
@@ -232,16 +241,21 @@ export class BusinessSettingsFormComponent implements OnDestroy {
   private readonly touched = new Set<BusinessApplicationField>();
   private submitAttempted = false;
   private readonly destroying$ = new Subject<void>();
+  private readonly sessionActiveSubscription: Subscription;
 
   constructor(
     private readonly businessSettings: BusinessSettingsService,
     private readonly business: BusinessService,
-    private readonly access: AccessService
-  ) {}
+    private readonly access: AccessService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
 
   ngOnDestroy(): void {
     this.destroying$.next();
     this.destroying$.complete();
+    this.sessionActiveSubscription.unsubscribe();
   }
 
   /** The current rule violations, recomputed from the draft so they always match what is typed. */
@@ -259,7 +273,9 @@ export class BusinessSettingsFormComponent implements OnDestroy {
   }
 
   submit(): void {
-    if (this.saving) {
+    // Checked here as well as disabled in the template, so the write is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.saving || this.sessionActive) {
       return;
     }
 
@@ -290,6 +306,9 @@ export class BusinessSettingsFormComponent implements OnDestroy {
   }
 
   private save(): void {
+    if (this.sessionActive) {
+      return;
+    }
     this.saving = true;
     this.saved = false;
     this.submitError = null;
