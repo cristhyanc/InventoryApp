@@ -502,3 +502,19 @@ Agent evals: PASS
 ```
 
 The model-decision set (corpus version 7 above) was not re-run for this change; none of its six cases was edited.
+
+## Corpus version 9 (Copilot check and review removed)
+
+- **Corpus version:** 9. Issue #643 removed the Copilot CLI architecture check and final review, so `AUTH-011` and `AUTH-012` no longer describe Copilot as the default checker and reviewer. Their scenarios and repository assertions now ground the Claude-only pipeline: on both `cross-claude` (the default `agent-ready-claude`) and `full-claude` (the legacy `agent-ready-full-claude`) separate read-only Claude invocations check and review, always labelled same-provider, never independent, and `scripts/validate-agent-workflows.mjs` rejects any workflow that runs the Copilot CLI or reads a Copilot credential again. `AUTH-009`'s scenario no longer mentions Copilot. No case was added or removed and no expected decision, category, risk level or criticality changed.
+- **Case count:** 32 (29 graded deterministically, 3 reserved for hand-graded model evaluation), unchanged.
+
+Deterministic result, run on 2026-10-14 on the working tree of this change with
+`node scripts/run-agent-evals.mjs`:
+
+```text
+Total: 32 | Passed: 29 | Failed: 0 | Skipped (model-eval only): 3
+
+Agent evals: PASS
+```
+
+The model-decision set (corpus version 7 above) was not re-run for this change; none of its six cases was edited.

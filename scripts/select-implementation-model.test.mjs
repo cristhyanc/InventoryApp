@@ -112,9 +112,9 @@ test('readiness labels map to trusted routes; Claude-primary is the default', ()
   assert.equal(DEFAULT_READY_LABEL, 'agent-ready-claude');
   assert.deepEqual(FULL_READY_LABELS, ['agent-ready-full-claude']);
   const expected = {
-    'agent-ready-claude': ['cross-claude', 'claude', 'copilot', false, 'default'],
-    'agent-ready-claude-low': ['cross-claude', 'claude', 'copilot', false, 'low'],
-    'agent-ready-claude-high': ['cross-claude', 'claude', 'copilot', false, 'high'],
+    'agent-ready-claude': ['cross-claude', 'claude', 'claude', true, 'default'],
+    'agent-ready-claude-low': ['cross-claude', 'claude', 'claude', true, 'low'],
+    'agent-ready-claude-high': ['cross-claude', 'claude', 'claude', true, 'high'],
     'agent-ready-full-claude': ['full-claude', 'claude', 'claude', true, 'default'],
   };
   assert.deepEqual([...READINESS_LABELS].sort(), Object.keys(expected).sort());
@@ -122,7 +122,7 @@ test('readiness labels map to trusted routes; Claude-primary is the default', ()
     assert.deepEqual(parseReadinessLabel(label), { label, mode, implementer, reviewer, sameProviderReview, tier });
     assert.ok(READINESS_LABEL_PATTERN.test(label));
   }
-  assert.equal(parseReadinessLabel(DEFAULT_READY_LABEL).reviewer, 'copilot');
+  assert.equal(parseReadinessLabel(DEFAULT_READY_LABEL).reviewer, 'claude');
   for (const other of ['agent-ready', 'agent-ready-full', 'agent-ready-full-claude-high', 'agent-ready-full-claude-low', 'agent-ready-claude-full', 'agent-ready-gemini', 'agent-ready-copilot', 'agent-ready-copilot-low', 'agent-ready-copilot-high', 'agent-ready-full-copilot', 'Agent-Ready-Claude', ' agent-ready-claude', 'agent-ready-claude\n', 'agent-working', null, undefined, 42]) {
     assert.equal(parseReadinessLabel(other), null, String(other));
     if (typeof other === 'string') assert.equal(READINESS_LABEL_PATTERN.test(other), false, other);
@@ -138,6 +138,8 @@ test('the full-provider label starts work by default and refuses to start when t
     // Haiku triage runs for the full labels too: they carry no explicit tier.
     assert.equal(selection.triage, true);
     assert.throws(() => prepareSelection({ provider, label, issue: issue(label), fullProviderEnabled: false }), /not enabled yet/);
+    // The kill switch covers only the full label: the default route's same-provider review is not gated by it.
+    assert.doesNotThrow(() => prepareSelection({ provider, label: 'agent-ready-claude', issue: issue('agent-ready-claude'), fullProviderEnabled: false }));
   }
 });
 

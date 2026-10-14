@@ -1,8 +1,8 @@
 // Trusted provider-mode policy for the agent pipeline (#337, #338, #339).
 //
-// Readiness labels choose one of two routes. Claude is the only implementer: on the default route
-// the Copilot CLI checks and reviews its work, and on the full-claude fallback separate read-only
-// Claude invocations do. The route of an agent pull request is never taken
+// Readiness labels choose one of two routes. Claude is the only implementer, and on both routes
+// separate read-only Claude invocations check the architecture and review the result, so every
+// review is same-provider, not independent. The route of an agent pull request is never taken
 // from a comment, a label that is still on the issue, or PR text. It is derived from the issue's
 // own label history, which GitHub records and nobody can edit or delete: the newest *claim* (the
 // claiming workflow step replacing the readiness label with `agent-working`, as
@@ -18,8 +18,7 @@
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
-// Claude is the only implementer. Copilot only checks and reviews (the cross-claude route); it no
-// longer implements, so there is no copilot readiness label, route or `copilot/*` branch.
+// Claude is the sole implementation, architecture-check and final-review provider.
 export const PROVIDERS = Object.freeze(['claude']);
 export const STANDARD_READY_LABELS = Object.freeze(['agent-ready-claude', 'agent-ready-claude-low', 'agent-ready-claude-high']);
 // Single-provider fallback: Claude implements, architecture-checks, repairs and reviews.
@@ -31,7 +30,7 @@ export const READINESS_LABEL_PATTERN = /^agent-ready-(?:claude(?:-low|-high)?|fu
 export const DEFAULT_READY_LABEL = 'agent-ready-claude';
 // Trusted routing policy. Provider names come from this table, never from model output.
 export const ROUTES = Object.freeze({
-  'cross-claude': Object.freeze({ implementer: 'claude', reviewer: 'copilot', sameProviderReview: false }),
+  'cross-claude': Object.freeze({ implementer: 'claude', reviewer: 'claude', sameProviderReview: true }),
   'full-claude': Object.freeze({ implementer: 'claude', reviewer: 'claude', sameProviderReview: true }),
 });
 // Kill switch for the single-provider fallback. #340 connected its same-provider architecture
@@ -75,7 +74,7 @@ export function resolveMode({ issue, headRef, expectedImplementer, prCreatedAt, 
   if (route.implementer !== implementer) {
     throw new Error(`Issue #${issue} was last claimed for ${route.mode} (${claim.label}), but this pull request belongs to ${implementer}. The provider is never switched automatically; a human must resolve it.`);
   }
-  if (route.sameProviderReview && !fullProviderEnabled) {
+  if (route.mode.startsWith('full-') && !fullProviderEnabled) {
     throw new Error(`Issue #${issue} was claimed for ${route.mode}, which is not enabled yet; nothing will run for it.`);
   }
   const opened = Date.parse(prCreatedAt);

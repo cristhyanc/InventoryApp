@@ -45,8 +45,8 @@ export const FINDINGS_FILE = 'findings-envelope.json';
 export const MAX_FINDINGS_CHARS = 60000;
 const FINDINGS_ENVELOPE_KEYS = ['agent_mode', 'checker', 'findings', 'head_sha', 'implementer', 'pr_number', 'redactions', 'repository', 'run_attempt', 'run_id', 'schema', 'verdict'];
 const CHECK_VERDICTS = new Set(['clean', 'findings']);
-// The route alone names the architecture checker; nothing falls back to the other provider.
-const CHECKER_FOR_MODE = Object.freeze({ 'cross-claude': 'copilot', 'full-claude': 'claude' });
+// The route alone names the architecture checker: a separate Claude invocation on every route.
+const CHECKER_FOR_MODE = Object.freeze({ 'cross-claude': 'claude', 'full-claude': 'claude' });
 
 export class TransportError extends Error {
   constructor(code, message) {
@@ -178,8 +178,7 @@ const isObject = (value) => value !== null && typeof value === 'object' && !Arra
 const exactKeys = (value, keys) => isObject(value) && Object.keys(value).length === keys.length && keys.every((k) => Object.hasOwn(value, k));
 
 /**
- * The review contract shared by both reviewers (the same rules as the Claude --json-schema and the
- * Copilot jq check). Returns the names of the failed checks only, never field contents.
+ * The review contract (the same rules as the Claude --json-schema). Returns the names of the failed checks only, never field contents.
  */
 export function contractFailures(review) {
   if (!isObject(review)) return ['root_is_object'];
@@ -201,7 +200,7 @@ export function contractFailures(review) {
 /** The run-scoped artifact name. The run id, not the name, is the trust anchor; the name only selects. */
 export function artifactName({ runId, reviewer }) {
   if (!/^[1-9]\d*$/.test(String(runId))) fail('context', 'The workflow run id is missing or invalid.');
-  if (!['claude', 'copilot'].includes(reviewer)) fail('context', 'The reviewer is missing or unknown.');
+  if (reviewer !== 'claude') fail('context', 'The reviewer is missing or unknown.');
   return `agent-review-result-${reviewer}-${runId}`;
 }
 
@@ -376,7 +375,7 @@ export function fetchReview(context, { artifactId, digest }) {
 /** The run-scoped findings artifact name. As for reviews, the run id is the trust anchor. */
 export function findingsArtifactName({ runId, checker }) {
   if (!/^[1-9]\d*$/.test(String(runId))) fail('context', 'The workflow run id is missing or invalid.');
-  if (!['claude', 'copilot'].includes(checker)) fail('context', 'The architecture checker is missing or unknown.');
+  if (checker !== 'claude') fail('context', 'The architecture checker is missing or unknown.');
   return `agent-architecture-findings-${checker}-${runId}`;
 }
 

@@ -56,8 +56,8 @@ jobs:
       HEAD_SHA: ${{ github.sha }}
       AGENT_MODE: cross-claude
       IMPLEMENTER: claude
-      REVIEWER: copilot
-      CHECKER: copilot
+      REVIEWER: claude
+      CHECKER: claude
 
     steps:
       - name: Check out
@@ -159,8 +159,8 @@ jobs:
       HEAD_SHA: ${{ github.sha }}
       AGENT_MODE: cross-claude
       IMPLEMENTER: claude
-      REVIEWER: copilot
-      CHECKER: copilot
+      REVIEWER: claude
+      CHECKER: claude
 
     steps:
       - name: Check out
