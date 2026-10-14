@@ -130,7 +130,7 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     const { host } = await render({ list });
 
     const row = rowFor(host, 'Snack Co');
-    expect(row.querySelectorAll('button').length).toBe(0);
+    expect(row.querySelectorAll('button')).toHaveLength(0);
   });
 
   it('asks for confirmation before approving, and calls nothing until confirmed', async () => {

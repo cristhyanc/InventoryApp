@@ -136,10 +136,10 @@ describe('SuperAdminBusinessesService (issue #547)', () => {
     const seen: void[] = [];
     service.changed$.subscribe((value) => seen.push(value));
 
-    expect(seen.length).toBe(0);
+    expect(seen).toHaveLength(0);
 
     service.notifyChanged();
 
-    expect(seen.length).toBe(1);
+    expect(seen).toHaveLength(1);
   });
 });
