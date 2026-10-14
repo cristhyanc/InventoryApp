@@ -5,7 +5,8 @@ import { AccessService, MemberAccessState } from '../access/access.service';
 import { CapabilitySet } from '../access/capabilities';
 import { IconComponent } from '../components/shared/icon.component';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
-import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, navigationFor } from './navigation';
+import { SuperAdminBusinessesService } from '../services/super-admin-businesses.service';
+import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, navigationFor, superAdminNavGroup } from './navigation';
 
 /**
  * The id of the navigation landmark. It lives here because the `<nav>` that carries it is this
@@ -76,13 +77,24 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
 
   activeRoute?: string;
 
+  /**
+   * How many business applications are waiting for a decision (issue #547), shown as a badge on
+   * the `Super Admin` group and its `Businesses` child. `null` until the platform-admin probe
+   * grants access and the count itself is known, which is also what a failed read leaves it as:
+   * the Businesses page's own table is the authority on refusing to show a wrong number, and this
+   * badge simply shows nothing rather than a stale or guessed one.
+   */
+  pendingBusinessCount: number | null = null;
+
   private readonly openGroups = new Set<string>();
   private readonly destroying$ = new Subject<void>();
+  private hasSuperAdminAccess = false;
 
   constructor(
     private readonly router: Router,
     private readonly access: AccessService,
-    private readonly diagnosticsAccess: PlatformDiagnosticsAccessService
+    private readonly diagnosticsAccess: PlatformDiagnosticsAccessService,
+    private readonly superAdminBusinesses: SuperAdminBusinessesService
   ) {}
 
   ngOnInit(): void {
@@ -109,7 +121,25 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
         // A page opened by URL before the answers arrived becomes the active entry once its link
         // exists, so the owning group reflects where the operator actually is.
         this.applyActiveRoute(this.router.url);
+
+        this.hasSuperAdminAccess = diagnosticsGranted;
+        if (diagnosticsGranted) {
+          this.refreshPendingBusinessCount();
+        } else {
+          // No access means no rendered group to show it beside, and a previous identity's count
+          // must not survive the switch (issue #605's same rule for the group itself).
+          this.pendingBusinessCount = null;
+        }
       });
+
+    // The Businesses page (issue #547) reports every approve, reject, deactivate, reactivate and
+    // release here instead of this component reading its state directly, so the badge agrees
+    // with that page's own list without either one polling the other.
+    this.superAdminBusinesses.changed$.pipe(takeUntil(this.destroying$)).subscribe(() => {
+      if (this.hasSuperAdminAccess) {
+        this.refreshPendingBusinessCount();
+      }
+    });
 
     this.router.events
       .pipe(
@@ -126,6 +156,15 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
 
   isLinkActive(link: NavLink): boolean {
     return this.activeRoute === link.route;
+  }
+
+  /** Whether `item`'s badge is the pending-business-applications count (issue #547). */
+  isSuperAdminGroup(item: NavItem): boolean {
+    return item.kind === 'group' && item.label === superAdminNavGroup.label;
+  }
+
+  isBusinessesLink(link: NavLink): boolean {
+    return link.route === '/super-admin/businesses';
   }
 
   isGroupActive(group: NavGroup): boolean {
@@ -169,6 +208,16 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
     if (group) {
       this.openGroups.add(group.label);
     }
+  }
+
+  private refreshPendingBusinessCount(): void {
+    this.superAdminBusinesses
+      .pendingCount()
+      .pipe(
+        catchError(() => of(null)),
+        takeUntil(this.destroying$)
+      )
+      .subscribe((count) => (this.pendingBusinessCount = count));
   }
 }
 

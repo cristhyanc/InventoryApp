@@ -33,10 +33,11 @@ export interface NavLink {
 }
 
 /**
- * An inert group child with no page of its own yet (issue #546's Businesses placeholder, built in
- * #547). It renders as plain text rather than a link, because this file's one rule - every `route`
- * must be a real page already declared in `app.routes.ts` - leaves no route to give it before that
- * page exists.
+ * An inert group child with no page of its own yet. It renders as plain text rather than a link,
+ * because this file's one rule - every `route` must be a real page already declared in
+ * `app.routes.ts` - leaves no route to give it before that page exists. Issue #546 introduced this
+ * for the Businesses destination, and issue #547 built that page, so nothing uses it today; the
+ * type is kept for the next Super Admin destination that lands before its own page does.
  */
 export interface NavPlaceholder {
   readonly kind: 'placeholder';
@@ -140,10 +141,16 @@ export const platformDiagnosticsNavLink: NavLink = {
   route: '/super-admin/diagnostics'
 };
 
-/** The Businesses page's placeholder (issue #546; the real page is issue #547). */
-export const businessesNavPlaceholder: NavPlaceholder = {
-  kind: 'placeholder',
-  label: 'Businesses'
+/**
+ * The Businesses page (issue #546's placeholder, built in issue #547): approve/reject a pending
+ * application, deactivate/reactivate a trading one, and release a member of a deactivated one.
+ * Like `platformDiagnosticsNavLink`, it declares no capability - no business role grants it, only
+ * the platform-admin probe below does.
+ */
+export const businessesNavLink: NavLink = {
+  kind: 'link',
+  label: 'Businesses',
+  route: '/super-admin/businesses'
 };
 
 /**
@@ -157,7 +164,7 @@ export const superAdminNavGroup: NavGroup = {
   kind: 'group',
   label: 'Super Admin',
   icon: 'settings',
-  children: [platformDiagnosticsNavLink, businessesNavPlaceholder]
+  children: [platformDiagnosticsNavLink, businessesNavLink]
 };
 
 /**

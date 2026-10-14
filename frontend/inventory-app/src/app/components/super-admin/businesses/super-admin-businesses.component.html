@@ -1,0 +1,123 @@
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Businesses</h1>
+      <p class="page-subtitle">Review applications and manage the businesses on this platform.</p>
+    </div>
+  </header>
+
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">All businesses</h2>
+      <label class="text-sm" for="status-filter">
+        Status
+        <select id="status-filter" class="ml-2" [(ngModel)]="statusFilter">
+          @for (filter of statusFilters; track filter) {
+            <option [value]="filter">{{ filter }}</option>
+          }
+        </select>
+      </label>
+    </div>
+    <div class="card-body">
+      @if (loading) {
+        <p class="text-sm value-muted">Loading businesses…</p>
+      } @else if (loadError) {
+        <p class="text-sm text-red-600" role="alert">Unable to load businesses.</p>
+      } @else if (filteredBusinesses.length === 0) {
+        <p class="text-sm value-muted">No businesses found.</p>
+      } @else {
+        <table class="table">
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell">Name</th>
+              <th scope="col" class="table-cell">Status</th>
+              <th scope="col" class="table-cell">Applied</th>
+              <th scope="col" class="table-cell">Contact email</th>
+              <th scope="col" class="table-cell">ABN</th>
+              <th scope="col" class="table-cell">Members</th>
+              <th scope="col" class="table-cell">Nayax</th>
+              <th scope="col" class="table-cell">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (business of filteredBusinesses; track business.businessId) {
+              <tr class="table-row">
+                <td class="table-cell">{{ business.name }}</td>
+                <td class="table-cell">
+                  <span
+                    class="badge"
+                    [class.badge-warning]="business.status === 'Pending'"
+                    [class.badge-success]="business.status === 'Active'"
+                    [class.badge-danger]="business.status === 'Rejected'"
+                    [class.badge-neutral]="business.status === 'Deactivated'"
+                  >
+                    {{ business.status }}
+                  </span>
+                </td>
+                <td class="table-cell">{{ business.appliedAtUtc ? (business.appliedAtUtc | date: 'dd/MM/yyyy' : 'UTC') : '—' }}</td>
+                <td class="table-cell">{{ business.contactEmail ?? '—' }}</td>
+                <td class="table-cell">{{ business.abn ?? '—' }}</td>
+                <td class="table-cell table-num">{{ business.activeMemberCount }}</td>
+                <td class="table-cell">{{ business.nayaxConfigured ? 'Yes' : 'No' }}</td>
+                <td class="table-cell">
+                  <div class="flex flex-wrap gap-2">
+                    @if (business.status === 'Pending') {
+                      <button type="button" class="btn btn-primary btn-sm" (click)="requestApprove(business)">
+                        Approve
+                      </button>
+                      <button type="button" class="btn btn-danger btn-sm" (click)="requestReject(business)">
+                        Reject
+                      </button>
+                    }
+                    @if (business.status === 'Active') {
+                      <button type="button" class="btn btn-danger btn-sm" (click)="requestDeactivate(business)">
+                        Deactivate
+                      </button>
+                    }
+                    @if (business.status === 'Deactivated') {
+                      <button type="button" class="btn btn-primary btn-sm" (click)="requestReactivate(business)">
+                        Reactivate
+                      </button>
+                      <button type="button" class="btn btn-secondary btn-sm" (click)="openMembers(business)">
+                        Members
+                      </button>
+                    }
+                  </div>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </div>
+  </section>
+</div>
+
+@if (pendingAction) {
+  <app-confirmation-dialog
+    [title]="dialogTitle"
+    [message]="dialogMessage"
+    confirmLabel="Confirm"
+    cancelLabel="Cancel"
+    (confirmed)="confirmPendingAction()"
+    (canceled)="cancelPendingAction()"
+  ></app-confirmation-dialog>
+}
+
+@if (rejectTarget) {
+  <app-business-reject-dialog
+    [businessId]="rejectTarget.businessId"
+    [businessName]="rejectTarget.name"
+    (rejected)="onRejected()"
+    (canceled)="onRejectCanceled()"
+  ></app-business-reject-dialog>
+}
+
+@if (membersTarget) {
+  <app-business-members-dialog
+    [businessId]="membersTarget.businessId"
+    [businessName]="membersTarget.name"
+    (closed)="closeMembers()"
+    (memberReleased)="onMemberReleased()"
+  ></app-business-members-dialog>
+}

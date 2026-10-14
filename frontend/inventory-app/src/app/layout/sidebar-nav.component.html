@@ -72,6 +72,9 @@
           >
             <app-icon [name]="item.icon" variant="outlined" [size]="20" />
             <span class="truncate" [class.sr-only]="!expanded">{{ item.label }}</span>
+            @if (isSuperAdminGroup(item) && pendingBusinessCount) {
+              <span class="badge badge-warning" [class.sr-only]="!expanded">{{ pendingBusinessCount }}</span>
+            }
             @if (expanded) {
               <span aria-hidden="true" class="ml-auto text-xs text-md-gray-500">{{ isGroupOpen(item) ? '▴' : '▾' }}</span>
             }
@@ -84,15 +87,19 @@
                   @if (child.kind === 'link') {
                     <a
                       [routerLink]="child.route"
-                      class="block truncate rounded-md-control px-3 py-1.5 transition hover:bg-md-gray-100"
+                      class="flex items-center gap-2 truncate rounded-md-control px-3 py-1.5 transition hover:bg-md-gray-100"
                       [class.bg-md-dark-gradient]="isLinkActive(child)"
                       [class.text-white]="isLinkActive(child)"
                       [class.font-semibold]="isLinkActive(child)"
                       [class.text-md-gray-800]="!isLinkActive(child)"
                       [attr.aria-current]="isLinkActive(child) ? 'page' : null"
                       (click)="navigated.emit()"
-                      >{{ child.label }}</a
                     >
+                      <span class="truncate">{{ child.label }}</span>
+                      @if (isBusinessesLink(child) && pendingBusinessCount) {
+                        <span class="badge badge-warning">{{ pendingBusinessCount }}</span>
+                      }
+                    </a>
                   } @else {
                     <span class="block truncate rounded-md-control px-3 py-1.5 text-md-gray-400" aria-disabled="true">{{
                       child.label

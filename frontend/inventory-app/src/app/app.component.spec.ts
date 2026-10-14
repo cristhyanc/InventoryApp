@@ -13,6 +13,7 @@ import { AppComponent } from './app.component';
 import { BusinessTimeZoneService } from './formatting/business-time-zone.service';
 import { ConfigService } from './services/config.service';
 import { PlatformDiagnosticsAccessService } from './services/platform-diagnostics-access.service';
+import { SuperAdminBusinessesService } from './services/super-admin-businesses.service';
 import { BusinessService, CurrentBusiness } from './services/business.service';
 
 @Component({ standalone: true, template: 'page body' })
@@ -204,6 +205,10 @@ async function render(
       // super-admin link (issue #335). The shell itself owns no part of that decision, so the
       // probe is stubbed as refused here and tested where it belongs.
       { provide: PlatformDiagnosticsAccessService, useValue: { granted$: of(false) } },
+      // The sidebar also reads the pending-business-applications badge (issue #547), tested in
+      // sidebar-nav.component.spec.ts; stubbed here only so the real service's HttpClient
+      // dependency is not constructed in a shell test that never grants super-admin access.
+      { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } },
       // The sidebar also renders the capabilities GET /api/me/access reported (issue #528). The
       // shell owns no part of that decision either, so it is stubbed as every capability here and
       // tested in access.service.spec.ts and sidebar-nav.component.spec.ts.
