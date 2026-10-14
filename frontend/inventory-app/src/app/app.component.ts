@@ -3,6 +3,7 @@ import { RouterOutlet } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AuthenticationResult } from '@azure/msal-browser';
 import { Subject, Subscription, catchError, defer, filter, map, of, retry, switchMap, take, takeUntil, timer } from 'rxjs';
+import packageJson from '../../package.json';
 import { ToastContainerComponent } from "./components/shared/toast-container.component";
 import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
@@ -67,6 +68,9 @@ export class AppComponent implements OnInit, OnDestroy {
   static readonly businessLookupRetryDelayMs = 1000;
 
   title = 'Inventory Manager';
+
+  /** The build's own package version (issue #648), read from `package.json` rather than duplicated. */
+  readonly appVersion = packageJson.version;
 
   isLoggedIn = false;
   userName = '';
