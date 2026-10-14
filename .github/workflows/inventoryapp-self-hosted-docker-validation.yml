@@ -17,15 +17,9 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 45
-    container:
-      image: inventoryapp-dev:local
-      options: --cap-drop=ALL --security-opt=no-new-privileges
     defaults:
       run:
         shell: bash
-    env:
-      TZ: UTC
-      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
     steps:
       - name: Checkout trusted main
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -33,13 +27,30 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - name: Verify container toolchain
+      # The service account UID/GID is not fixed across installations. Run the
+      # container as the runner user so the mounted checkout remains writable,
+      # even with all Linux capabilities dropped. Do not mount the Docker socket.
+      - name: Validate backend and frontend in Docker
         run: |
           set -euo pipefail
-          dotnet --version
-          node --version
-          npm --version
-          git --version
-
-      - name: Validate backend and frontend
-        run: bash scripts/validate.sh
+          docker image inspect inventoryapp-dev:local >/dev/null
+          echo "Runner user: $(id -u):$(id -g)"
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --cap-drop=ALL \
+            --security-opt=no-new-privileges \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace" \
+            --workdir /workspace \
+            --env HOME=/tmp \
+            --env TZ=UTC \
+            --env DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+            inventoryapp-dev:local \
+            bash -c '
+              set -euo pipefail
+              dotnet --version
+              node --version
+              npm --version
+              git --version
+              git ls-files -- backend/InventoryApi >/dev/null
+              bash scripts/validate.sh
+            '
