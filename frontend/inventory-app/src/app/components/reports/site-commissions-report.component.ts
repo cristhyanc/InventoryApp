@@ -74,7 +74,7 @@ export class SiteCommissionsReportComponent implements OnInit, OnDestroy {
 
   private readonly sessionActiveSubscription: Subscription;
 
-  constructor(private reports: ReportingService, private siteService: SiteService, supportSession: SupportSessionService) {
+  constructor(private readonly reports: ReportingService, private readonly siteService: SiteService, supportSession: SupportSessionService) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
   }
   ngOnInit(): void { this.siteService.getAll().subscribe({ next: sites => this.sites = sites, error: () => this.sites = [] }); this.load(); }
@@ -83,7 +83,7 @@ export class SiteCommissionsReportComponent implements OnInit, OnDestroy {
   selectPeriod(period: string): void { this.period = period; const now = new Date(); const month = now.getMonth(); const year = now.getFullYear(); if (period === 'thisMonth') { this.from = this.date(new Date(year, month, 1)); this.to = this.date(now); } else if (period === 'lastMonth') { this.from = this.date(new Date(year, month - 1, 1)); this.to = this.date(new Date(year, month, 0)); } else if (period.includes('Quarter')) { const quarter = Math.floor(month / 3) + (period === 'lastQuarter' ? -1 : 0); this.from = this.date(new Date(year, quarter * 3, 1)); this.to = this.date(period === 'thisQuarter' ? now : new Date(year, quarter * 3 + 3, 0)); } else if (period === 'currentFy' || period === 'previousFy') { const startYear = year - (month < 6 ? 1 : 0) - (period === 'previousFy' ? 1 : 0); this.from = this.date(new Date(startYear, 6, 1)); this.to = this.date(period === 'currentFy' ? now : new Date(startYear + 1, 5, 30)); } }
   // Checked here as well as hidden in the template, so the write is actually unavailable rather
   // than merely invisible - the endpoint refuses it either way.
-  recordPayment(): void { if (this.sessionActive || !this.selected || this.paymentAmount <= 0) return; this.reports.recordCommissionPayment(this.selected.siteId, this.from, this.to, this.paymentDate, this.paymentAmount, this.paymentNotes).subscribe({ next: () => { this.paymentAmount = 0; this.paymentNotes = ''; this.load(); }, error: () => this.error = 'Unable to record commission payment.' }); }
+  recordPayment(): void { if (this.sessionActive || !this.selected || this.paymentAmount <= 0) { return; } this.reports.recordCommissionPayment(this.selected.siteId, this.from, this.to, this.paymentDate, this.paymentAmount, this.paymentNotes).subscribe({ next: () => { this.paymentAmount = 0; this.paymentNotes = ''; this.load(); }, error: () => this.error = 'Unable to record commission payment.' }); }
   printDetails(): void {
     if (!this.selected) return;
     const row = this.selected;
