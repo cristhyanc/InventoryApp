@@ -1,10 +1,11 @@
 import { TestBed } from '@angular/core/testing';
 import { Router } from '@angular/router';
-import { Subject, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { SupplierOrdersComponent } from './supplier-orders.component';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { ToastService } from '../../services/toast.service';
 import { SupplierOrder } from '../../models/models';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 function order(overrides: Partial<SupplierOrder> = {}): SupplierOrder {
   return {
@@ -39,15 +40,16 @@ interface Harness {
   toast: { success: jest.Mock; error: jest.Mock; warning: jest.Mock; info: jest.Mock };
 }
 
-function createHarness(getActive: jest.Mock = jest.fn(() => of([order()]))): Harness {
+function createHarness(getActive: jest.Mock = jest.fn(() => of([order()])), sessionActive: Observable<boolean> = of(false)): Harness {
   const cancel = jest.fn(() => of(undefined));
   const navigate = jest.fn();
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
 
   const supplierOrderService = { getActive, cancel } as unknown as SupplierOrderService;
   const router = { navigate } as unknown as Router;
+  const supportSession = { active$: sessionActive } as unknown as SupportSessionService;
 
-  const component = new SupplierOrdersComponent(supplierOrderService, router, toast as unknown as ToastService);
+  const component = new SupplierOrdersComponent(supplierOrderService, router, toast as unknown as ToastService, supportSession);
   component.ngOnInit();
 
   return { component, getActive, cancel, navigate, toast };
@@ -167,7 +169,8 @@ describe('SupplierOrdersComponent actions', () => {
     const supplierOrderService = { getActive, cancel } as unknown as SupplierOrderService;
     const navigate = jest.fn();
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
-    const component = new SupplierOrdersComponent(supplierOrderService, { navigate } as unknown as Router, toast as unknown as ToastService);
+    const supportSession = { active$: of(false) } as unknown as SupportSessionService;
+    const component = new SupplierOrdersComponent(supplierOrderService, { navigate } as unknown as Router, toast as unknown as ToastService, supportSession);
     component.ngOnInit();
     getActive.mockClear();
 
@@ -189,7 +192,7 @@ describe('SupplierOrdersComponent actions', () => {
 });
 
 describe('SupplierOrdersComponent rendered structure', () => {
-  async function render(getActive: jest.Mock = jest.fn(() => of([order()]))) {
+  async function render(getActive: jest.Mock = jest.fn(() => of([order()])), sessionActive: Observable<boolean> = of(false)) {
     const cancel = jest.fn(() => of(undefined));
     const navigate = jest.fn();
 
@@ -198,7 +201,8 @@ describe('SupplierOrdersComponent rendered structure', () => {
       providers: [
         { provide: SupplierOrderService, useValue: { getActive, cancel } },
         { provide: Router, useValue: { navigate } },
-        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } }
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: sessionActive } }
       ]
     }).compileComponents();
 
@@ -272,5 +276,38 @@ describe('SupplierOrdersComponent rendered structure', () => {
     fixture.detectChanges();
 
     expect(navigate).toHaveBeenCalledWith(['/purchases/new'], { queryParams: { supplierOrderId: 5 } });
+  });
+
+  /**
+   * Receive / Create Purchase and Cancel while a support session is active (issue #657, extending
+   * #554). A session grants `PurchasingOperate`, so these would otherwise still render - hiding
+   * them is this page's own job, not the capability check's.
+   */
+  it('hides Receive / Create Purchase and Cancel while a session is active', async () => {
+    const { host } = await render(jest.fn(() => of([order({ status: 0 })])), of(true));
+
+    expect(Array.from(host.querySelectorAll<HTMLButtonElement>('button')).some((b) => b.textContent?.includes('Receive / Create Purchase'))).toBe(false);
+    expect(Array.from(host.querySelectorAll<HTMLButtonElement>('button')).some((b) => b.textContent?.trim() === 'Cancel')).toBe(false);
+  });
+
+  it('shows Receive / Create Purchase and Cancel while no session is active', async () => {
+    const { host } = await render(jest.fn(() => of([order({ status: 0 })])), of(false));
+
+    expect(Array.from(host.querySelectorAll<HTMLButtonElement>('button')).some((b) => b.textContent?.includes('Receive / Create Purchase'))).toBe(true);
+    expect(Array.from(host.querySelectorAll<HTMLButtonElement>('button')).some((b) => b.textContent?.trim() === 'Cancel')).toBe(true);
+  });
+});
+
+/**
+ * The write methods themselves (issue #657, extending #554): the belt-and-suspenders guard beside
+ * the template's own hiding of the controls above.
+ */
+describe('SupplierOrdersComponent write guards during a support session (issue #657)', () => {
+  it('does not cancel the order while a session is active, even if the write method is invoked directly', () => {
+    const { component, cancel } = createHarness(jest.fn(() => of([order()])), of(true));
+
+    component.cancelOrder(order({ id: 7 }));
+
+    expect(cancel).not.toHaveBeenCalled();
   });
 });

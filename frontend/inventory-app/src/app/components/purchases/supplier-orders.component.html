@@ -62,26 +62,30 @@
                     {{ order.orderDate | date:'mediumDate' }}@if (order.expectedDate) { · Expected {{ order.expectedDate | date:'mediumDate' }} }@if (order.reference) { · {{ order.reference }} }
                   </p>
                 </div>
-                <div class="flex flex-wrap gap-2">
-                  @if (order.status !== 3 && order.status !== 2) {
-                    <button
-                      type="button"
-                      class="btn btn-primary"
-                      (click)="receiveOrder(order)"
-                    >
-                      Receive / Create Purchase
-                    </button>
-                  }
-                  @if (order.status < 2) {
-                    <button
-                      type="button"
-                      class="btn btn-secondary"
-                      (click)="cancelOrder(order)"
-                    >
-                      Cancel
-                    </button>
-                  }
-                </div>
+                <!-- Hidden rather than disabled while a support session is active (issue #657): a
+                     session grants PurchasingOperate, so these writes would otherwise still render. -->
+                @if (!sessionActive) {
+                  <div class="flex flex-wrap gap-2">
+                    @if (order.status !== 3 && order.status !== 2) {
+                      <button
+                        type="button"
+                        class="btn btn-primary"
+                        (click)="receiveOrder(order)"
+                      >
+                        Receive / Create Purchase
+                      </button>
+                    }
+                    @if (order.status < 2) {
+                      <button
+                        type="button"
+                        class="btn btn-secondary"
+                        (click)="cancelOrder(order)"
+                      >
+                        Cancel
+                      </button>
+                    }
+                  </div>
+                }
               </div>
               <div class="overflow-x-auto">
                 <table class="table">

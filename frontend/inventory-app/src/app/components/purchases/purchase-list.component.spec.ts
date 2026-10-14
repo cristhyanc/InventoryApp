@@ -1,8 +1,9 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { of } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import { PurchaseListComponent } from './purchase-list.component';
 import { PurchaseService } from '../../services/purchase.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
 import {
   GstClassification,
   GstClassificationSource,
@@ -53,7 +54,8 @@ function purchase(overrides: Partial<Purchase> = {}): Purchase {
 async function render(
   purchases: Purchase[],
   gst: PurchaseGstSummary | null = null,
-  validation: PurchaseValidation | null = null
+  validation: PurchaseValidation | null = null,
+  sessionActive: Observable<boolean> = of(false)
 ) {
   await TestBed.configureTestingModule({
     imports: [PurchaseListComponent],
@@ -68,7 +70,8 @@ async function render(
           getValidationFor: jest.fn(() => validation),
           getGstSummaryFor: jest.fn(() => gst)
         }
-      }
+      },
+      { provide: SupportSessionService, useValue: { active$: sessionActive } }
     ]
   }).compileComponents();
 
@@ -219,5 +222,40 @@ describe('PurchaseListComponent Actions column layout (issue #449)', () => {
     deleteButton.click();
 
     expect(removeSpy).toHaveBeenCalledWith(stored);
+  });
+});
+
+/**
+ * Add Purchase and Delete while a support session is active (issue #657, extending #554). A
+ * session grants `PurchasingOperate`, so these would otherwise still render - hiding them is this
+ * page's own job, not the capability check's.
+ */
+describe('PurchaseListComponent write controls during a support session (issue #657)', () => {
+  it('hides Add Purchase and Delete while a session is active', async () => {
+    const { host } = await render([purchase({ id: 7 })], null, null, of(true));
+
+    expect(host.querySelector('a[href="/purchases/new"]')).toBeNull();
+    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Delete'));
+    expect(deleteButton).toBeUndefined();
+  });
+
+  it('shows Add Purchase and Delete while no session is active', async () => {
+    const { host } = await render([purchase({ id: 7 })], null, null, of(false));
+
+    expect(host.querySelector('a[href="/purchases/new"]')).not.toBeNull();
+    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.includes('Delete'));
+    expect(deleteButton).toBeDefined();
+  });
+
+  it('does not delete the purchase while a session is active, even if the write method is invoked directly', async () => {
+    const { fixture } = await render([purchase({ id: 7 })], null, null, of(true));
+    const component = fixture.componentInstance;
+    const deleteSpy = jest.spyOn(TestBed.inject(PurchaseService), 'delete');
+    const confirmSpy = jest.spyOn(window, 'confirm');
+
+    component.remove(purchase({ id: 7 }));
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(deleteSpy).not.toHaveBeenCalled();
   });
 });

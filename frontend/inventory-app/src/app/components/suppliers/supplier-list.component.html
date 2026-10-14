@@ -32,7 +32,7 @@
           <textarea id="supplierAddress" [(ngModel)]="form.address" name="address" rows="2" placeholder="Optional"></textarea>
         </div>
         <div class="page-actions">
-          <button type="submit" class="btn btn-primary">{{ editing ? 'Update' : 'Create' }}</button>
+          <button type="submit" class="btn btn-primary" [disabled]="sessionActive">{{ editing ? 'Update' : 'Create' }}</button>
           @if (editing) {
             <button type="button" class="btn btn-secondary" (click)="cancel()">Cancel</button>
           }
@@ -80,10 +80,15 @@
                         <app-icon name="edit" [size]="16" />
                         Edit
                       </button>
-                      <button type="button" class="btn btn-sm btn-danger" (click)="remove(s)">
-                        <app-icon name="delete" [size]="16" />
-                        Delete
-                      </button>
+                      <!-- Hidden rather than disabled while a support session is active (issue
+                           #657): a session grants PurchasingOperate, so this write would
+                           otherwise still render. -->
+                      @if (!sessionActive) {
+                        <button type="button" class="btn btn-sm btn-danger" (click)="remove(s)">
+                          <app-icon name="delete" [size]="16" />
+                          Delete
+                        </button>
+                      }
                     </div>
                   </td>
                 </tr>

@@ -112,7 +112,7 @@
   </div>
 
   <div class="page-actions">
-    <button type="submit" class="btn btn-primary" data-testid="edit-purchase-save" [disabled]="saving">
+    <button type="submit" class="btn btn-primary" data-testid="edit-purchase-save" [disabled]="saving || sessionActive">
       {{ saving ? 'Saving...' : 'Save' }}
     </button>
     <button type="button" class="btn btn-secondary" data-testid="edit-purchase-cancel" (click)="cancelEdit()">Cancel</button>

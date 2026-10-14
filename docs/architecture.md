@@ -3602,7 +3602,10 @@ backend's read-only enforcement is still what would refuse the write if this pag
 disable it. `ProductListComponent` (Delete, hidden; the Active/Inactive toggle, disabled) and
 `ProductFormComponent` (Save, disabled) are this slice's representative pages; rolling the same
 `active$` subscription out to every remaining write control across the application is tracked as
-follow-up under #513. Each page's write method (`confirmDelete`, `toggleActive`, `save`) also
+follow-up under #513 - issue #657 is the first of those follow-ups, extending this to Purchases,
+purchase details/forms and Suppliers (below); Sites, Machines, Expenses, Site Commissions,
+Business Settings and the rest remain open. Each page's write method (`confirmDelete`,
+`toggleActive`, `save`) also
 checks the flag itself and returns before calling the API, the same belt-and-suspenders the
 capability-gated controls already follow - the control actually becomes unavailable rather than
 merely invisible.
@@ -3646,6 +3649,53 @@ covers the Nayax sentence appearing for both cards' value and footer when the su
 not. `support-session-message.interceptor.spec.ts` covers the two messages being shown for their
 own code and nothing else, and `member-forbidden-notice.interceptor.spec.ts` covers the generic
 message staying silent for both support-session codes.
+
+### Extending write-control hiding to Purchases and Suppliers (issue #657)
+
+Issue #554 hid or disabled write controls on two representative pages and left the rest of the
+application as follow-up under #513; this slice rolls the same `SupportSessionService.active$`
+flag out to Purchases, purchase details/forms and Suppliers - the bounded area #657 named. The
+reasoning is unchanged: every endpoint these pages call is `[RequireCapability(Capability
+.PurchasingOperate)]`, one of the capabilities `SupportSessionAccessPolicy.Capabilities` grants a
+session, so a page that hides a control on the same capability a member's own role uses would
+still render it inside a session; `active$` is the one flag that does not make that mistake, and
+the backend's read-only method rule is still what would refuse the write if a page failed to hide
+or disable it.
+
+**What changed, page by page.** `PurchaseListComponent` hides Add Purchase and Delete (`remove`
+checks the flag itself before confirming). `PurchaseUploadComponent` (`/purchases/new`, reached
+both directly and from a supplier order's Receive action) disables Add Purchase and `upload()`
+returns before calling the API. `PurchaseEditFormComponent` - a presentational child with no
+service of its own - takes `sessionActive` as an `@Input` exactly as it already takes `saving` and
+`error`; `PurchaseEditPageComponent` is what actually subscribes to `active$` (alongside its
+existing `Subscription` bag) and passes the flag down, and guards its own `onSave` the same way as
+a second line of defence beneath the form's own `submit()` guard. `SupplierOrdersComponent` hides
+Receive / Create Purchase and Cancel, and `cancelOrder` checks the flag before calling the API;
+Receive is navigation to the already-guarded upload page, so only the control needed hiding, not a
+new guard. `SupplierListComponent` disables the Create/Update submit button and hides Delete,
+guarding `save()` and `remove()` the same way; Edit is left alone because it only sets local form
+state and issues no request of its own - the control that matters is the Save/Create button it
+leads to.
+
+**What this slice deliberately left alone.** `SupplierGstDefaultsComponent` needed no change: its
+editor already hides itself on `AccessService.allows('Suppliers.ManageGstDefaults')`, and that
+capability is one of the two `SupportSessionAccessPolicy.Excluded` withholds entirely, so a
+session's `canManage` is already `false` without reading `active$` at all. Local-only controls
+that issue no request of their own - a draft purchase line's Add Product/Remove, every plain form
+field - are untouched for the same reason the representative pages in #554 left them alone: the
+single Save/Submit control downstream of them is what is actually guarded.
+
+**What proves it.** `purchase-list.component.spec.ts` covers Add Purchase and Delete being hidden,
+and `remove` refusing to call the API, while a session is active - and both rendering normally
+while none is. `purchase-upload.component.spec.ts` covers Add Purchase being disabled and
+`upload()` refusing to call the API. `purchase-edit-form.component.spec.ts` covers Save being
+disabled and `submit()` emitting nothing while `sessionActive` is set directly on the form, and
+`purchase-edit-page.component.spec.ts` covers the page passing its own `active$` subscription down
+as that input and `onSave` refusing to call the API. `supplier-orders.component.spec.ts` covers
+Receive and Cancel being hidden and `cancelOrder` refusing to call the API.
+`supplier-list.component.spec.ts` (new) covers Create/Update being disabled, Delete being hidden,
+`save()` and `remove()` refusing to call the API while a session is active, and normal behaviour
+resuming once a session ends.
 
 ### Member access: capability-built navigation, guards and hidden actions (issue #528)
 

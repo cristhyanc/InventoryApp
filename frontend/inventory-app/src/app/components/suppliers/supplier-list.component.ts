@@ -1,10 +1,12 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { SupplierService } from '../../services/supplier.service';
 import { Supplier } from '../../models/models';
 import { SupplierGstDefaultsComponent } from './supplier-gst-defaults/supplier-gst-defaults.component';
 import { IconComponent } from '../shared/icon.component';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 @Component({
   selector: 'app-supplier-list',
@@ -12,15 +14,35 @@ import { IconComponent } from '../shared/icon.component';
   imports: [CommonModule, FormsModule, SupplierGstDefaultsComponent, IconComponent],
   templateUrl: './supplier-list.component.html'
 })
-export class SupplierListComponent implements OnInit {
+export class SupplierListComponent implements OnInit, OnDestroy {
   suppliers: Supplier[] = [];
   editing: Supplier | null = null;
   form = { name: '', contactName: '', phone: '', email: '', address: '' };
 
-  constructor(private supplierService: SupplierService) {}
+  /**
+   * Whether a support session is active (issue #657, extending #554): Create/Update and Delete
+   * are hidden while it is, because a session grants `PurchasingOperate` - the capability this
+   * page would otherwise gate those on - and the backend refuses the write itself only by its
+   * read-only method rule, never by withholding the capability. See
+   * `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
+
+  constructor(
+    private supplierService: SupplierService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
 
   ngOnInit(): void {
     this.load();
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
   }
 
   load(): void {
@@ -44,6 +66,9 @@ export class SupplierListComponent implements OnInit {
   }
 
   save(): void {
+    // Checked here as well as disabled in the template, so the write is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) return;
     if (!this.form.name.trim()) return;
 
     const payload = {
@@ -68,6 +93,9 @@ export class SupplierListComponent implements OnInit {
   }
 
   remove(supplier: Supplier): void {
+    // Checked here as well as hidden in the template, so the write is actually unavailable rather
+    // than merely invisible - the endpoint refuses it either way.
+    if (this.sessionActive) return;
     if (!confirm(`Delete supplier "${supplier.name}"?`)) return;
     this.supplierService.delete(supplier.id).subscribe(() => this.load());
   }

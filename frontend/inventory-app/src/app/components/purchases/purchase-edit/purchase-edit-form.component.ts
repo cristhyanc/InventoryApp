@@ -57,6 +57,15 @@ export class PurchaseEditFormComponent {
   /** Why the page's last save was refused. The form keeps the entered values beneath it. */
   @Input() error = '';
 
+  /**
+   * Whether a support session is active (issue #657, extending #554): Save is disabled while it
+   * is, because a session grants `PurchasingOperate` - the capability this page's write would
+   * otherwise be gated on - and the backend refuses the write itself only by its read-only method
+   * rule, never by withholding the capability. The page component owns the subscription to
+   * `SupportSessionService.active$`; this presentational form only reads the flag it is given.
+   */
+  @Input() sessionActive = false;
+
   /** The edited values, for the page to send through the existing update API. */
   @Output() readonly saveRequested = new EventEmitter<PurchaseUpdatePayload>();
 
@@ -118,6 +127,9 @@ export class PurchaseEditFormComponent {
   }
 
   submit(): void {
+    // Checked here as well as disabled in the template, so the write is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) return;
     if (this.saving) return;
     if (!this.editForm.title.trim()) return;
 

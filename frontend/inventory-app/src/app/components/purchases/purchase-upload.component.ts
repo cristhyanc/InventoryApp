@@ -1,8 +1,8 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink, ActivatedRoute } from '@angular/router';
-import { of } from 'rxjs';
+import { Subscription, of } from 'rxjs';
 import { switchMap, tap, map, catchError } from 'rxjs/operators';
 import { PurchaseService } from '../../services/purchase.service';
 import { SupplierService } from '../../services/supplier.service';
@@ -13,6 +13,7 @@ import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
 import { IconComponent } from '../shared/icon.component';
 import { GST_CLASSIFICATION_OPTIONS, isChargePresent } from './gst-classification-options';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 // Draft item representation where unitCost may be null
 interface DraftPurchaseItem {
@@ -33,7 +34,7 @@ interface DraftPurchaseItem {
   imports: [CommonModule, FormsModule, RouterLink, IconComponent],
   templateUrl: './purchase-upload.component.html'
 })
-export class PurchaseUploadComponent implements OnInit {
+export class PurchaseUploadComponent implements OnInit, OnDestroy {
   suppliers: Supplier[] = [];
   products: Product[] = [];
   items: DraftPurchaseItem[] = [];
@@ -41,6 +42,16 @@ export class PurchaseUploadComponent implements OnInit {
   previewUrl: string | null = null;
   saving = false;
   error = '';
+
+  /**
+   * Whether a support session is active (issue #657, extending #554): Add Purchase is disabled
+   * while it is, because a session grants `PurchasingOperate` - the capability this page's write
+   * would otherwise be gated on - and the backend refuses the write itself only by its read-only
+   * method rule, never by withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
 
   supplierOrderId: number | null = null;
   supplierOrder: SupplierOrder | null = null;
@@ -70,8 +81,15 @@ export class PurchaseUploadComponent implements OnInit {
     private productService: ProductService,
     private route: ActivatedRoute,
     private router: Router,
-    private toastService: ToastService
-  ) {}
+    private toastService: ToastService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+  }
 
   ngOnInit(): void {
     this.supplierService.getAll().subscribe((s) => (this.suppliers = s));
@@ -193,6 +211,11 @@ export class PurchaseUploadComponent implements OnInit {
   }
 
   upload(): void {
+    // Checked here as well as disabled in the template, so the write is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) {
+      return;
+    }
     if (this.loadingSupplierOrder) {
       this.error = 'Please wait while the supplier order is loading.';
       return;
