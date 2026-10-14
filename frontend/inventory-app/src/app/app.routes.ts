@@ -24,10 +24,11 @@ import { designSystemRoutes } from './design-system/design-system.routes';
  * ones it would otherwise send somebody *to* - `/welcome`, `/application-pending`,
  * `/application-rejected`, `/access-unavailable`, `/apply` and `/invite/:token` - because a person already
  * sent to one of them must not be sent away from it; `/access-not-allowed` carries no capability
- * for the reason already documented beside it, and `/super-admin/diagnostics` (issue #546) carries
- * neither guard: its authority is the platform-admin check, not a business role or membership, so
- * it carries `platformAdminGuard` instead and sends a refusal to the dashboard rather than to any
- * membership-handling destination (see `access/platform-admin.guard.ts`).
+ * for the reason already documented beside it, and `/super-admin/diagnostics` and
+ * `/super-admin/businesses` (issues #546, #547) carry neither guard: their authority is the
+ * platform-admin check, not a business role or membership, so each carries `platformAdminGuard`
+ * instead and sends a refusal to the dashboard rather than to any membership-handling destination
+ * (see `access/platform-admin.guard.ts`).
  */
 export const routes: Routes = [
   // Public: the Entra redirect callback must be reachable without authentication.
@@ -315,6 +316,18 @@ export const routes: Routes = [
     path: 'admin/diagnostics',
     pathMatch: 'full',
     redirectTo: '/super-admin/diagnostics'
+  },
+  {
+    // The Super Admin Businesses page (issue #546's placeholder, built in issue #547): approve,
+    // reject, deactivate and reactivate a business, and release a member of a deactivated one.
+    // Platform-admin authority, not a business role, decides it - the same `platformAdminGuard`
+    // as the diagnostics route above, and for the same reason.
+    path: 'super-admin/businesses',
+    canActivate: [MsalGuard, platformAdminGuard],
+    loadComponent: () =>
+      import('./components/super-admin/businesses/super-admin-businesses.component').then(
+        (m) => m.SuperAdminBusinessesComponent
+      )
   },
   {
     path: 'admin/nayax-settings',

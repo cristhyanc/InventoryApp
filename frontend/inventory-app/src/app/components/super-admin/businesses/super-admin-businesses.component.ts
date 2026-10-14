@@ -1,0 +1,221 @@
+import { CommonModule, DatePipe } from '@angular/common';
+import { Component, OnDestroy, OnInit } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { Subject, takeUntil } from 'rxjs';
+import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
+import { ToastService } from '../../../services/toast.service';
+import { SuperAdminBusiness, SuperAdminBusinessesService } from '../../../services/super-admin-businesses.service';
+import { BusinessMembersDialogComponent } from './business-members-dialog.component';
+import { BusinessRejectDialogComponent } from './business-reject-dialog.component';
+
+/** The filterable statuses, matching `Inventory.Domain.Tenancy.BusinessStatus`'s published names. */
+export const SUPER_ADMIN_BUSINESS_STATUS_FILTERS = ['All', 'Pending', 'Active', 'Rejected', 'Deactivated'] as const;
+export type SuperAdminBusinessStatusFilter = (typeof SUPER_ADMIN_BUSINESS_STATUS_FILTERS)[number];
+
+type PendingBusinessAction =
+  | { readonly kind: 'approve'; readonly business: SuperAdminBusiness }
+  | { readonly kind: 'deactivate'; readonly business: SuperAdminBusiness }
+  | { readonly kind: 'reactivate'; readonly business: SuperAdminBusiness };
+
+/**
+ * The Super Admin Businesses page (issue #547), at `/super-admin/businesses`, over the eight
+ * endpoints of the Super Admin businesses API (issues #544, #545). It is presentation only: the
+ * API decides every rule a decision or transition might refuse, including the "no active Owner"
+ * reactivation refusal, and this page shows that refusal's own sentence rather than a second copy
+ * of the rule.
+ *
+ * Per docs/architecture.md § Page composition boundary, the page itself owns the table, the
+ * status filter and the three single-call confirmations (approve, deactivate, reactivate) behind
+ * the shared `ConfirmationDialogComponent` - the same shape `ProductListComponent` already uses
+ * for a single-call confirmation - while Reject (its own reason text and submission state) and
+ * Members (its own load, release confirmation and error) are dedicated feature components
+ * composed through `[businessId]`/`[businessName]` and their outputs.
+ *
+ * "View as business" (#513) is explicitly out of scope for this page.
+ */
+@Component({
+  selector: 'app-super-admin-businesses',
+  standalone: true,
+  imports: [
+    CommonModule,
+    FormsModule,
+    DatePipe,
+    ConfirmationDialogComponent,
+    BusinessRejectDialogComponent,
+    BusinessMembersDialogComponent
+  ],
+  templateUrl: './super-admin-businesses.component.html'
+})
+export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
+  readonly statusFilters = SUPER_ADMIN_BUSINESS_STATUS_FILTERS;
+
+  businesses: SuperAdminBusiness[] = [];
+  loading = false;
+  loadError = false;
+  statusFilter: SuperAdminBusinessStatusFilter = 'All';
+
+  pendingAction: PendingBusinessAction | null = null;
+  rejectTarget: SuperAdminBusiness | null = null;
+  membersTarget: SuperAdminBusiness | null = null;
+
+  private readonly destroying$ = new Subject<void>();
+
+  constructor(
+    private readonly businessesService: SuperAdminBusinessesService,
+    private readonly toast: ToastService
+  ) {}
+
+  ngOnInit(): void {
+    this.load();
+  }
+
+  ngOnDestroy(): void {
+    this.destroying$.next();
+    this.destroying$.complete();
+  }
+
+  get filteredBusinesses(): SuperAdminBusiness[] {
+    return this.statusFilter === 'All'
+      ? this.businesses
+      : this.businesses.filter((business) => business.status === this.statusFilter);
+  }
+
+  load(): void {
+    this.loading = true;
+    this.loadError = false;
+    this.businessesService
+      .list()
+      .pipe(takeUntil(this.destroying$))
+      .subscribe({
+        next: (businesses) => {
+          this.businesses = businesses;
+          this.loading = false;
+        },
+        error: () => {
+          this.loading = false;
+          this.loadError = true;
+        }
+      });
+  }
+
+  requestApprove(business: SuperAdminBusiness): void {
+    this.pendingAction = { kind: 'approve', business };
+  }
+
+  requestReject(business: SuperAdminBusiness): void {
+    this.rejectTarget = business;
+  }
+
+  requestDeactivate(business: SuperAdminBusiness): void {
+    this.pendingAction = { kind: 'deactivate', business };
+  }
+
+  requestReactivate(business: SuperAdminBusiness): void {
+    this.pendingAction = { kind: 'reactivate', business };
+  }
+
+  openMembers(business: SuperAdminBusiness): void {
+    this.membersTarget = business;
+  }
+
+  closeMembers(): void {
+    this.membersTarget = null;
+  }
+
+  onMemberReleased(): void {
+    this.load();
+  }
+
+  onRejected(): void {
+    this.rejectTarget = null;
+    this.toast.success('The application was rejected.');
+    this.load();
+  }
+
+  onRejectCanceled(): void {
+    this.rejectTarget = null;
+  }
+
+  cancelPendingAction(): void {
+    this.pendingAction = null;
+  }
+
+  confirmPendingAction(): void {
+    const action = this.pendingAction;
+    if (!action) {
+      return;
+    }
+    this.pendingAction = null;
+
+    switch (action.kind) {
+      case 'approve':
+        this.businessesService.approve(action.business.businessId).subscribe({
+          next: () => this.onActionSucceeded(`${action.business.name} was approved.`),
+          error: (err) => this.onActionFailed(err, 'Unable to approve this application.')
+        });
+        break;
+      case 'deactivate':
+        this.businessesService.deactivate(action.business.businessId).subscribe({
+          next: () => this.onActionSucceeded(`${action.business.name} was deactivated.`),
+          error: (err) => this.onActionFailed(err, 'Unable to deactivate this business.')
+        });
+        break;
+      case 'reactivate':
+        this.businessesService.reactivate(action.business.businessId).subscribe({
+          next: () => this.onActionSucceeded(`${action.business.name} was reactivated.`),
+          error: (err) => this.onActionFailed(err, 'Unable to reactivate this business.')
+        });
+        break;
+    }
+  }
+
+  get dialogTitle(): string {
+    switch (this.pendingAction?.kind) {
+      case 'approve':
+        return 'Approve application';
+      case 'deactivate':
+        return 'Deactivate business';
+      case 'reactivate':
+        return 'Reactivate business';
+      default:
+        return '';
+    }
+  }
+
+  get dialogMessage(): string {
+    const action = this.pendingAction;
+    if (!action) {
+      return '';
+    }
+    const name = action.business.name;
+    switch (action.kind) {
+      case 'approve':
+        return `Approve ${name}'s application? Its Owner will be able to trade immediately.`;
+      case 'deactivate':
+        return `Deactivate ${name}? Its members will lose access and its live invite links will be cancelled.`;
+      case 'reactivate':
+        return `Reactivate ${name}? Its active members will be able to reach it again.`;
+      default:
+        return '';
+    }
+  }
+
+  private onActionSucceeded(message: string): void {
+    this.businessesService.notifyChanged();
+    this.toast.success(message);
+    this.load();
+  }
+
+  private onActionFailed(err: unknown, fallback: string): void {
+    this.toast.error(extractErrorMessage(err, fallback));
+  }
+}
+
+function extractErrorMessage(err: unknown, fallback: string): string {
+  const body = (err as { error?: unknown } | undefined)?.error;
+  if (typeof body === 'string') {
+    return body;
+  }
+  const problem = body as { message?: string; title?: string } | undefined;
+  return problem?.message ?? problem?.title ?? fallback;
+}

@@ -19,6 +19,7 @@ import { CostingRepairPageComponent } from './components/admin/costing-repair/co
 import { HistoricalGstClassificationComponent } from './components/admin/historical-gst-classification/historical-gst-classification.component';
 import { NayaxSaleTimestampRepairComponent } from './components/admin/nayax-sale-timestamp-repair/nayax-sale-timestamp-repair.component';
 import { PlatformDiagnosticsComponent } from './components/admin/diagnostics/platform-diagnostics.component';
+import { SuperAdminBusinessesComponent } from './components/super-admin/businesses/super-admin-businesses.component';
 import { AdminUsersComponent } from './components/admin/users/admin-users.component';
 import { RolesComponent } from './components/admin/roles/roles.component';
 import { PurchaseEditPageComponent } from './components/purchases/purchase-edit/purchase-edit-page.component';
@@ -284,5 +285,18 @@ describe('super-admin routing (issue #546)', () => {
 
   it('carries no accountStateGuard, because platform-admin authority is independent of membership', () => {
     expect(route('super-admin/diagnostics').canActivate ?? []).not.toContain(accountStateGuard);
+  });
+
+  /** The Businesses page (issue #547) is guarded exactly like diagnostics, for the same reason. */
+  it('guards /super-admin/businesses with MsalGuard then platformAdminGuard, and nothing else', () => {
+    expect(route('super-admin/businesses').canActivate).toEqual([MsalGuard, platformAdminGuard]);
+  });
+
+  it('carries no accountStateGuard on /super-admin/businesses either', () => {
+    expect(route('super-admin/businesses').canActivate ?? []).not.toContain(accountStateGuard);
+  });
+
+  it('loads the Super Admin Businesses page component', async () => {
+    await expect(loadedComponent('super-admin/businesses')).resolves.toBe(SuperAdminBusinessesComponent);
   });
 });

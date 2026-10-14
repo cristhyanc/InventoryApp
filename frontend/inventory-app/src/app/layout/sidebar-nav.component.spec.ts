@@ -10,6 +10,7 @@ import { apiConfig, queuedReads, readingHttp, signedInIdentity } from '../access
 import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { PlatformDiagnosticsAccess, PlatformDiagnosticsService } from '../services/platform-diagnostics.service';
+import { SuperAdminBusinessesService } from '../services/super-admin-businesses.service';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './sidebar-nav.component';
 import { NavGroup, navLinks, primaryNavigation } from './navigation';
 
@@ -50,6 +51,8 @@ async function render(
     access?: Observable<MemberAccessState>;
     /** The real `AccessService`, for the tests that are about what it publishes when (issue #603). */
     accessService?: AccessService;
+    pendingCount?: () => Observable<number>;
+    businessesChanged$?: Observable<void>;
   } = {}
 ): Promise<Rendered> {
   await TestBed.configureTestingModule({
@@ -63,6 +66,13 @@ async function render(
       {
         provide: PlatformDiagnosticsAccessService,
         useValue: { granted$: options.diagnosticsAccess ?? of(false) }
+      },
+      {
+        provide: SuperAdminBusinessesService,
+        useValue: {
+          pendingCount: jest.fn(options.pendingCount ?? (() => of(0))),
+          changed$: options.businessesChanged$ ?? NEVER
+        }
       }
     ]
   }).compileComponents();
@@ -278,7 +288,7 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     expect(host.textContent).not.toContain('Super Admin');
   });
 
-  it('renders Platform Diagnostics and the inert Businesses placeholder once the API confirms access', async () => {
+  it('renders Platform Diagnostics and Businesses once the API confirms access', async () => {
     const { fixture, host } = await render({ diagnosticsAccess: of(true) });
     expect(link(host, '/super-admin/diagnostics')).toBeNull();
 
@@ -289,10 +299,9 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     expect(diagnostics).not.toBeNull();
     expect(diagnostics?.textContent?.trim()).toBe('Platform Diagnostics');
 
-    expect(host.textContent).toContain('Businesses');
-    expect(Array.from(host.querySelectorAll('a')).some((anchor) => anchor.textContent?.trim() === 'Businesses')).toBe(
-      false
-    );
+    const businesses = link(host, '/super-admin/businesses');
+    expect(businesses).not.toBeNull();
+    expect(businesses?.textContent?.trim()).toBe('Businesses');
   });
 
   it('marks the diagnostics page active and opens the Super Admin group for it', async () => {
@@ -311,8 +320,72 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     ]);
     expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
       ...navLinks(primaryNavigation).map((entry) => entry.route),
-      '/super-admin/diagnostics'
+      '/super-admin/diagnostics',
+      '/super-admin/businesses'
     ]);
+  });
+});
+
+/**
+ * The pending-business-applications badge on the `Super Admin` group and its `Businesses` child
+ * (issue #547), re-read whenever the Businesses page reports a completed action.
+ */
+describe('SidebarNavComponent pending-business badge (issue #547)', () => {
+  it('shows no badge while platform-admin access is not confirmed', async () => {
+    const { host } = await render({ diagnosticsAccess: of(false), pendingCount: () => of(3) });
+
+    expect(host.textContent).not.toContain('3');
+  });
+
+  it('shows the pending count on the group heading once access is confirmed', async () => {
+    const { host } = await render({ diagnosticsAccess: of(true), pendingCount: () => of(2) });
+
+    expect(groupToggle(host, 'Super Admin').textContent).toContain('2');
+  });
+
+  it('shows no badge while the count is zero', async () => {
+    const { host } = await render({ diagnosticsAccess: of(true), pendingCount: () => of(0) });
+
+    expect(groupToggle(host, 'Super Admin').textContent?.trim()).toBe('Super Admin▾');
+  });
+
+  it('shows the pending count beside the Businesses link once its group is open', async () => {
+    const { fixture, host } = await render({ diagnosticsAccess: of(true), pendingCount: () => of(5) });
+
+    groupToggle(host, 'Super Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/super-admin/businesses')?.textContent).toContain('5');
+  });
+
+  it('re-reads the count when the Businesses page reports a completed action', async () => {
+    const changed = new Subject<void>();
+    const pendingCount = jest.fn().mockReturnValueOnce(of(4)).mockReturnValueOnce(of(1));
+    const { fixture, host } = await render({
+      diagnosticsAccess: of(true),
+      pendingCount,
+      businessesChanged$: changed
+    });
+
+    expect(groupToggle(host, 'Super Admin').textContent).toContain('4');
+
+    changed.next();
+    fixture.detectChanges();
+
+    expect(groupToggle(host, 'Super Admin').textContent).toContain('1');
+    expect(pendingCount).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears a previously granted count the moment platform-admin access is lost', async () => {
+    const diagnosticsAccess = new BehaviorSubject(true);
+    const { fixture, host, component } = await render({ diagnosticsAccess, pendingCount: () => of(3) });
+
+    expect(groupToggle(host, 'Super Admin').textContent).toContain('3');
+
+    diagnosticsAccess.next(false);
+    fixture.detectChanges();
+
+    expect(component.pendingBusinessCount).toBeNull();
   });
 });
 
@@ -355,6 +428,7 @@ describe('SidebarNavComponent Super Admin group across an identity change (issue
         provideRouter([{ path: '**', component: BlankPageComponent }]),
         { provide: AccessService, useValue: { access$: of(EVERY_CAPABILITY) } },
         { provide: PlatformDiagnosticsService, useValue: { access, query: jest.fn() } },
+        { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } },
         {
           provide: MsalService,
           useValue: {
