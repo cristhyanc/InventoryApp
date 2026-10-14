@@ -35,7 +35,7 @@ jobs:
       startsWith(github.event.comment.body, '@claude repair') &&
       github.event.comment.user.login == github.repository_owner &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 120
     permissions:
       contents: read
@@ -295,7 +295,7 @@ jobs:
     name: Dispatch exact-SHA validation
     needs: repair
     if: always() && needs.repair.outputs.dispatch_validation == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     permissions:
       actions: write
       pull-requests: read

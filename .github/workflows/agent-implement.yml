@@ -53,10 +53,9 @@ jobs:
   preflight:
     name: Validate issue documentation-impact declaration
     if: (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null
-    # The only optional self-hosted pilot. Defaults to a fresh GitHub-hosted runner.
-    # Never route the implementation, review, repair, architecture or PR validation jobs
-    # to a persistent runner merely by enabling this variable.
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    # Uses the shared INVENTORY_AGENT_SELF_HOSTED_ALL selector (default off: a fresh
+    # GitHub-hosted runner). See docs/automation.md before enabling it.
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -92,7 +91,7 @@ jobs:
     name: Implement issue with Claude
     needs: [preflight, model]
     if: needs.preflight.result == 'success' && needs.model.result == 'success' && (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 180
     permissions:
       contents: read
@@ -601,7 +600,7 @@ jobs:
     name: Dispatch trusted architecture pass
     needs: implement
     if: always() && needs.implement.outputs.dispatch_architecture == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     permissions:
       actions: write
       pull-requests: read

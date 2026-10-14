@@ -96,9 +96,10 @@ The first stage supports only two low-privilege checks:
    available RAM/disk and presence of build tools. It has `permissions: {}`, performs **no
    checkout**, accepts no arbitrary shell input and references **no secrets**. The diagnostic
    cannot run until an online Ubuntu x64 runner bearing all four labels is registered.
-2. **Opt-in trusted issue preflight**: the *preflight job only* in
+2. **Opt-in trusted issue preflight**: the preflight job in
    `.github/workflows/agent-implement.yml` uses the self-hosted runner when the repository
-   Actions variable `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` is exactly `true`. If unset
+   Actions variable `INVENTORY_AGENT_SELF_HOSTED_ALL` is exactly `true` (the earlier
+   preflight-only variable `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` is no longer read). If unset
    or any other value, it continues to use `ubuntu-latest`. This job checks out the
    reviewed `develop` branch and reads an issue's documentation-impact declaration with
    read-only GitHub permissions; it does not run an AI model or PR code. If the VM is offline,
@@ -133,15 +134,43 @@ This pilot does not alter the normal PR, Claude, review, or deployment routes.
 If the container cannot start or validation fails, leave those routes unchanged
 while inspecting the manual workflow logs.
 
-**Rollback:** remove or set `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` to `false` in
-Repository Settings → Secrets and variables → Actions → Variables. Future preflight jobs
-then use GitHub-hosted runners again. The diagnostic remains manual. Do not change the
+**Rollback:** remove or set `INVENTORY_AGENT_SELF_HOSTED_ALL` to `false` in
+Repository Settings → Secrets and variables → Actions → Variables. Future jobs in the five
+core workflows, preflight included, then use GitHub-hosted runners again. The diagnostic remains manual. Do not change the
 variable while a job is executing; inspect the Actions run to confirm its selected runner.
 Only a separately reviewed, security-hardened follow-up may consider migrating additional
 workloads. Before moving any credentialed coding agent, protect the GitHub runner from
 untrusted pull-request branches, provision an ephemeral/resettable VM or equivalent
 isolation, limit GitHub App/token permissions, and verify that GitHub Actions secrets do
 not become accessible to code under review. Private visibility alone is not sufficient.
+
+## Opt-in self-hosted agent workflow migration
+
+The core development workflow jobs in `validate.yml`, `agent-implement.yml`,
+`agent-architecture.yml`, `agent-review.yml`, and `agent-repair.yml` now
+have a common **default-off** runner selector. Set the repository Actions
+variable `INVENTORY_AGENT_SELF_HOSTED_ALL=true` to route these jobs to
+`[self-hosted, linux, x64, inventory-agent]`; unset it or set it to `false`
+to use `ubuntu-latest`. The prior preflight-only variable is superseded
+for these jobs. This change does **not** automatically enable the switch.
+
+**Safety prerequisite before enabling:** The persistent Ubuntu runner has
+Docker daemon access (equivalent to high host privilege). Docker is not a
+sufficient sandbox for untrusted PR code or credentialed Claude runs. Enable
+the whole-workflow selector only after provisioning a disposable/resettable
+runner VM per job, controlling network and host mounts, restricting credentials,
+and proving cleanup/re-registration works. Do not place Claude OAuth or
+GitHub write tokens on a persistent home runner that also executes untrusted
+PR heads. A runner that is offline leaves selected jobs queued; rollback by
+setting the variable to `false` and rerunning/canceling as needed.
+
+This selector controls **which runner host** executes a job. It does not
+containerize the Claude action, and it does not automatically use the local
+`inventoryapp-dev:local` image for ordinary validation; that image remains
+used by the separately tested manual Docker validation workflow. Production
+deployment is unchanged and remains human-triggered. Auxiliary workflows
+outside the five core files still need separate review before claiming every
+repository workflow is migrated.
 
 ## Desired lifecycle
 

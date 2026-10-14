@@ -48,7 +48,7 @@ concurrency:
 jobs:
   context:
     name: Resolve review context
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
       pull-requests: read
@@ -132,7 +132,7 @@ jobs:
     needs: context
     # Claude reviews only as a separate same-provider invocation, on the full-claude fallback.
     if: needs.context.outputs.reviewer == 'claude'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
     # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
     # permission, so the model cannot publish, label, dispatch or push even if it tried. Its only
@@ -282,7 +282,7 @@ jobs:
     needs:
       - context
       - review
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     permissions:
       pull-requests: write
       statuses: write
