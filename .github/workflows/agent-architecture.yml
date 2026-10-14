@@ -91,7 +91,7 @@ jobs:
           agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "claude")" || fail "the provider mode of pull request #$PR_NUMBER could not be verified."
           # The route picks the read-only checker. Nothing falls back to the other provider.
           case "$agent_mode" in
-            cross-claude) checker=copilot; checker_name="GitHub Copilot, a different agent," ;;
+            cross-claude) checker=claude; checker_name="A separate read-only Claude invocation (same provider, not independent)" ;;
             full-claude) checker=claude; checker_name="A separate read-only Claude invocation (a same-provider check, not an independent one)" ;;
             *) fail "Provider mode '$agent_mode' is not a Claude-implemented route." ;;
           esac
