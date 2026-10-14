@@ -55,7 +55,7 @@
           <textarea id="adjustment-notes" [(ngModel)]="form.notes" name="notes" rows="2" placeholder="Optional"></textarea>
         </div>
       </div>
-      <button type="submit" data-testid="apply-adjustment" [disabled]="saving" class="btn btn-primary">
+      <button type="submit" data-testid="apply-adjustment" [disabled]="saving || sessionActive" class="btn btn-primary">
         {{ saving ? 'Applying…' : 'Apply Adjustment' }}
       </button>
     </form>

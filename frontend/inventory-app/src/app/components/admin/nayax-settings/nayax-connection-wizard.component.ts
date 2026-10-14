@@ -12,6 +12,7 @@ import {
   NayaxConnectionTestResult
 } from '../../../services/nayax-connection.service';
 import { ToastService } from '../../../services/toast.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import {
   NayaxConnectionChecklistComponent,
   nayaxConnectionAreaLabel,
@@ -78,6 +79,11 @@ const STEP_LABELS = [
  * themselves and refuse the request regardless. The capability read here hides a control an Owner's
  * role is the only one that can use; it starts granted so an unanswered read leaves the wizard
  * exactly as it was before roles were rendered.
+ *
+ * **A support session is the other reason Test, Save connection and Re-test are disabled** (issue
+ * #660): a session grants `IntegrationManage`, the very capability `canManage` reads above, so
+ * `SupportSessionService.active$` is the flag that actually decides it - see
+ * docs/architecture.md § Hiding write controls and support-view messages.
  */
 @Component({
   selector: 'app-nayax-connection-wizard',
@@ -134,7 +140,7 @@ const STEP_LABELS = [
                 type="button"
                 class="btn btn-secondary mt-3"
                 data-testid="retest"
-                [disabled]="busy"
+                [disabled]="busy || sessionActive"
                 (click)="retest()"
               >{{ retesting ? 'Re-testing…' : 'Re-test this connection' }}</button>
 
@@ -231,7 +237,7 @@ const STEP_LABELS = [
                 type="button"
                 class="btn btn-primary mt-3"
                 data-testid="run-test"
-                [disabled]="busy"
+                [disabled]="busy || sessionActive"
                 (click)="runTest()"
               >{{ testing ? 'Testing…' : 'Test connection' }}</button>
             </div>
@@ -388,6 +394,14 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
    */
   canManage = true;
 
+  /**
+   * Whether a support session is active (issue #660): Test, Save connection and Re-test are
+   * disabled while it is, because a session grants `IntegrationManage` - the same capability
+   * {@link canManage} reads - and the backend refuses the write itself only by its read-only
+   * method rule, never by withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
   /** The stored connection's state, as the server reported it. */
   connection: NayaxConnectionState | null = null;
 
@@ -423,17 +437,20 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
   private saveSubscription: Subscription | null = null;
   private retestSubscription: Subscription | null = null;
   private readonly manageAccess: Subscription;
+  private readonly sessionActiveSubscription: Subscription;
 
   private testSequence = 0;
 
   constructor(
     private readonly connections: NayaxConnectionService,
     private readonly toast: ToastService,
-    access: AccessService
+    access: AccessService,
+    supportSession: SupportSessionService
   ) {
     this.manageAccess = access
       .allows('Integration.Manage')
       .subscribe((allowed) => (this.canManage = allowed));
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
   }
 
   ngOnInit(): void {
@@ -444,6 +461,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     // The field goes with the view, but clearing it is explicit rather than incidental.
     this.discardToken();
     this.manageAccess.unsubscribe();
+    this.sessionActiveSubscription.unsubscribe();
     this.statusSubscription?.unsubscribe();
     this.testSubscription?.unsubscribe();
     this.saveSubscription?.unsubscribe();
@@ -475,7 +493,14 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
   }
 
   get canSave(): boolean {
-    return this.canManage && !this.busy && this.result !== null && this.signInPassed && !this.draftExpired;
+    return (
+      this.canManage &&
+      !this.sessionActive &&
+      !this.busy &&
+      this.result !== null &&
+      this.signInPassed &&
+      !this.draftExpired
+    );
   }
 
   statusLabel(status: NayaxConnectionStatusName): string {
@@ -548,7 +573,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
    * refusal and a transport failure alike.
    */
   runTest(): void {
-    if (!this.canManage || this.busy) {
+    if (!this.canManage || this.sessionActive || this.busy) {
       return;
     }
 
@@ -606,7 +631,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
   /** Promotes the completed test into this business's connection, by draft id alone. */
   saveConnection(): void {
     const result = this.result;
-    if (!this.canManage || this.busy || !result) {
+    if (!this.canManage || this.sessionActive || this.busy || !result) {
       return;
     }
     if (!this.signInPassed) {
@@ -659,7 +684,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
 
   /** Runs the same checks again with the token this business already has stored. */
   retest(): void {
-    if (!this.canManage || this.busy) {
+    if (!this.canManage || this.sessionActive || this.busy) {
       return;
     }
 
