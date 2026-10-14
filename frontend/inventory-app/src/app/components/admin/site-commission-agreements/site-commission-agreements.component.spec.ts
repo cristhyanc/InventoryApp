@@ -1,11 +1,12 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { of, throwError } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
 import { SiteCommissionAgreementsComponent } from './site-commission-agreements.component';
 import { ReportingService, SiteCommissionAgreement } from '../../../services/reporting.service';
 import { ToastService } from '../../../services/toast.service';
 import { Site } from '../../../models/models';
 import { SiteService } from '../../../services/site.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 function agreement(overrides: Partial<SiteCommissionAgreement> = {}): SiteCommissionAgreement {
   return { id: 1, siteId: 1, effectiveFrom: '2026-01-01', commissionRate: 0.1, frequency: 1, basis: 0, ...overrides };
@@ -18,7 +19,8 @@ function site(overrides: Partial<Site> = {}): Site {
 async function render(
   reporting: Partial<ReportingService>,
   siteService: Partial<SiteService> = { getAll: jest.fn(() => of([site()])) },
-  toast?: Partial<ToastService>
+  toast?: Partial<ToastService>,
+  sessionActive: Observable<boolean> = of(false)
 ) {
   await TestBed.configureTestingModule({
     imports: [SiteCommissionAgreementsComponent],
@@ -26,7 +28,8 @@ async function render(
       provideRouter([]),
       { provide: ReportingService, useValue: reporting },
       { provide: SiteService, useValue: siteService },
-      { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn(), ...toast } }
+      { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn(), ...toast } },
+      { provide: SupportSessionService, useValue: { active$: sessionActive } }
     ]
   }).compileComponents();
 
@@ -117,5 +120,53 @@ describe('SiteCommissionAgreementsComponent (issue #388)', () => {
     expect(error).toHaveBeenCalledWith('Overlapping agreement.');
     expect(siteCommissionAgreements).toHaveBeenCalledTimes(1);
     expect(fixture.componentInstance.loading).toBe(false);
+  });
+});
+
+/**
+ * Hiding the Save agreement write control and guarding its handler during a support session
+ * (issue #659, extending #554). A session grants `SiteCommissionsManage`, so this control would
+ * otherwise still render enabled.
+ */
+describe('SiteCommissionAgreementsComponent write control during a support session (issue #659)', () => {
+  it('disables Save agreement while a session is active', async () => {
+    const { host } = await render(
+      { siteCommissionAgreements: jest.fn(() => of([])), saveSiteCommissionAgreement: jest.fn() },
+      undefined,
+      undefined,
+      of(true)
+    );
+
+    const saveButton = host.querySelector('button.btn-primary') as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(true);
+  });
+
+  it('leaves Save agreement enabled while no session is active', async () => {
+    const { host } = await render(
+      { siteCommissionAgreements: jest.fn(() => of([])), saveSiteCommissionAgreement: jest.fn() },
+      undefined,
+      undefined,
+      of(false)
+    );
+
+    const saveButton = host.querySelector('button.btn-primary') as HTMLButtonElement;
+    expect(saveButton.disabled).toBe(false);
+  });
+
+  it('does not save while a session is active, even if the handler is invoked directly', async () => {
+    const saveSiteCommissionAgreement = jest.fn();
+    const { fixture } = await render(
+      { siteCommissionAgreements: jest.fn(() => of([])), saveSiteCommissionAgreement },
+      undefined,
+      undefined,
+      of(true)
+    );
+
+    fixture.componentInstance.commissionSiteId = 1;
+    fixture.componentInstance.commissionRate = 10;
+    fixture.componentInstance.commissionEffectiveFrom = '2026-02-01';
+    fixture.componentInstance.saveCommissionAgreement();
+
+    expect(saveSiteCommissionAgreement).not.toHaveBeenCalled();
   });
 });
