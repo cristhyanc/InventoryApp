@@ -1,13 +1,15 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, ActivatedRoute, RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { Category, Supplier } from '../../models/models';
 import { ProductPriceHistoryComponent } from './product-price-history/product-price-history.component';
 import { ProductGstRuleComponent } from './product-gst-rule/product-gst-rule.component';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 @Component({
   selector: 'app-product-form',
@@ -15,12 +17,22 @@ import { ProductGstRuleComponent } from './product-gst-rule/product-gst-rule.com
   imports: [CommonModule, FormsModule, RouterLink, ProductPriceHistoryComponent, ProductGstRuleComponent],
   templateUrl: './product-form.component.html'
 })
-export class ProductFormComponent implements OnInit {
+export class ProductFormComponent implements OnInit, OnDestroy {
   productId: number | null = null;
   categories: Category[] = [];
   suppliers: Supplier[] = [];
   saving = false;
   error = '';
+
+  /**
+   * Whether a support session is active (issue #554): Save is disabled while it is, because a
+   * session grants `InventoryOperate` - the capability this page's write would otherwise be gated
+   * on - and the backend refuses the write itself only by its read-only method rule, never by
+   * withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
 
   form = {
     name: '',
@@ -36,12 +48,19 @@ export class ProductFormComponent implements OnInit {
   };
 
   constructor(
-    private productService: ProductService,
-    private categoryService: CategoryService,
-    private supplierService: SupplierService,
-    private router: Router,
-    private route: ActivatedRoute
-  ) {}
+    private readonly productService: ProductService,
+    private readonly categoryService: CategoryService,
+    private readonly supplierService: SupplierService,
+    private readonly router: Router,
+    private readonly route: ActivatedRoute,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+  }
 
   ngOnInit(): void {
     this.categoryService.getAll().subscribe((c) => (this.categories = c));
@@ -68,6 +87,11 @@ export class ProductFormComponent implements OnInit {
   }
 
   save(): void {
+    // Checked here as well as disabled in the template, so the write is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) {
+      return;
+    }
     if (!this.form.name.trim()) {
       this.error = 'Name is required.';
       return;

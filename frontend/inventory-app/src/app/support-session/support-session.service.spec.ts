@@ -191,6 +191,30 @@ describe('SupportSessionService (issue #553)', () => {
     });
   });
 
+  /** What `active$` publishes for every page's write controls (issue #554). */
+  describe('active$', () => {
+    it('starts false and reports true once a session has started, with no duplicate for an unchanged state', async () => {
+      const { service } = harness();
+      const observed: boolean[] = [];
+      service.active$.subscribe((active) => observed.push(active));
+
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+
+      expect(observed).toEqual([false, true]);
+    });
+
+    it('reports false again once the session has ended', async () => {
+      const { service } = harness();
+      const observed: boolean[] = [];
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      service.active$.subscribe((active) => observed.push(active));
+
+      await firstValueFrom(service.end());
+
+      expect(observed).toEqual([true, false]);
+    });
+  });
+
   describe('ending a session', () => {
     it('ends the caller’s own session, clears the id and the banner, and applies the business context change', async () => {
       const { service, post, businessReset, accessRefresh, navigate, states } = harness();

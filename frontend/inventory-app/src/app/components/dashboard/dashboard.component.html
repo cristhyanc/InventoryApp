@@ -69,7 +69,7 @@
           @if (isLoadingSummary) {
             <div class="h-8 w-16 animate-pulse rounded bg-md-gray-100"></div>
           } @else if (summary) {
-            <p class="stat-card-value">{{ summary.needsRefill.machinesNeedingRefill }}</p>
+            <p class="stat-card-value" [ngClass]="refillValueClass(summary.needsRefill)">{{ refillValueDisplay(summary.needsRefill) }}</p>
           } @else {
             <p class="stat-card-value value-muted">Unavailable</p>
           }
@@ -100,7 +100,7 @@
           @if (isLoadingSummary) {
             <div class="h-8 w-16 animate-pulse rounded bg-md-gray-100"></div>
           } @else if (summary) {
-            <p class="stat-card-value">{{ summary.needsOrdering.productsNeedingOrdering }}</p>
+            <p class="stat-card-value" [ngClass]="orderingValueClass(summary.needsOrdering)">{{ orderingValueDisplay(summary.needsOrdering) }}</p>
           } @else {
             <p class="stat-card-value value-muted">Unavailable</p>
           }

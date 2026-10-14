@@ -90,7 +90,7 @@
         </div>
 
         <div class="flex flex-wrap gap-3 pt-2">
-          <button type="submit" class="btn btn-primary" [disabled]="saving || form.restockTo < form.lowStockThreshold">Update Product</button>
+          <button type="submit" class="btn btn-primary" [disabled]="saving || form.restockTo < form.lowStockThreshold || sessionActive">Update Product</button>
           <a routerLink="/products" class="btn btn-secondary">Cancel</a>
         </div>
       </form>

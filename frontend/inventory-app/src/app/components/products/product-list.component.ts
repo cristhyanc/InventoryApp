@@ -2,7 +2,7 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { EMPTY, Subject } from 'rxjs';
+import { EMPTY, Subject, Subscription } from 'rxjs';
 import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
@@ -20,6 +20,7 @@ import {
   sortColumnLabel
 } from '../shared/sortable-column';
 import { ToastService } from '../../services/toast.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 type ProductSortColumn = 'name' | 'category' | 'supplier' | 'price' | 'stock' | 'status';
 
@@ -41,17 +42,30 @@ export class ProductListComponent implements OnInit, OnDestroy {
   sortColumn: ProductSortColumn | null = null;
   sortDirection: SortDirection = 'asc';
 
+  /**
+   * Whether a support session is active (issue #554): Delete is hidden and the Active/Inactive
+   * toggle is disabled while it is, because a support session grants `InventoryOperate` - the
+   * capability this page would otherwise gate those on - and refuses the write itself only by its
+   * read-only method rule, never by withholding the capability. See
+   * `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
   private readonly search$ = new Subject<string>();
   private readonly immediateFilter$ = new Subject<void>();
   private readonly destroy$ = new Subject<void>();
+  private readonly sessionActiveSubscription: Subscription;
 
   constructor(
     private productService: ProductService,
     private categoryService: CategoryService,
     private supplierService: SupplierService,
     private toastService: ToastService,
-    private router: Router
-  ) {}
+    private router: Router,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
 
   ngOnInit(): void {
     this.categoryService.getAll().subscribe((categories) => (this.categories = categories));
@@ -70,6 +84,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
     this.destroy$.next();
     this.destroy$.complete();
+    this.sessionActiveSubscription.unsubscribe();
   }
 
   private fetchProducts() {
@@ -113,6 +128,11 @@ export class ProductListComponent implements OnInit, OnDestroy {
   }
 
   confirmDelete(product: Product): void {
+    // Checked here as well as hidden in the template, so the write is actually unavailable rather
+    // than merely invisible - the endpoint refuses it either way.
+    if (this.sessionActive) {
+      return;
+    }
     this.confirmingProduct = product;
   }
 
@@ -200,6 +220,9 @@ export class ProductListComponent implements OnInit, OnDestroy {
   }
 
   toggleActive(product: Product): void {
+    if (this.sessionActive) {
+      return;
+    }
     this.productService.update(product.id, {
       name: product.name,
       sku: product.sku ?? null,

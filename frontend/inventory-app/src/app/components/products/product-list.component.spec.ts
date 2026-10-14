@@ -1,12 +1,13 @@
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { of } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import { ProductListComponent } from './product-list.component';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { ToastService } from '../../services/toast.service';
 import { Product } from '../../models/models';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -49,7 +50,7 @@ function product(overrides: Partial<Product> = {}): Product {
 describe('ProductListComponent Actions column layout (issue #451)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  async function render(products: Product[]) {
+  async function render(products: Product[], sessionActive: Observable<boolean> = of(false)) {
     await TestBed.configureTestingModule({
       imports: [ProductListComponent],
       providers: [
@@ -57,7 +58,8 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
         { provide: ProductService, useValue: { getAll: () => of(products) } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: SupplierService, useValue: { getAll: () => of([]) } },
-        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } }
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: sessionActive } }
       ]
     }).compileComponents();
 
@@ -134,7 +136,7 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
 describe('ProductListComponent row navigation and sorting (issue #497)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  async function render(products: Product[]) {
+  async function render(products: Product[], sessionActive: Observable<boolean> = of(false)) {
     const navigate = jest.fn();
     await TestBed.configureTestingModule({
       imports: [ProductListComponent],
@@ -143,7 +145,8 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
         { provide: ProductService, useValue: { getAll: () => of(products), update: () => of(undefined) } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: SupplierService, useValue: { getAll: () => of([]) } },
-        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } }
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: sessionActive } }
       ]
     }).compileComponents();
 
@@ -319,5 +322,66 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
 
     const rows = Array.from(host.querySelectorAll('tbody tr'));
     expect(rows.map((r) => r.querySelector('td')?.textContent?.trim())).toEqual(['Apple', 'Banana']);
+  });
+});
+
+/**
+ * Delete and the Active/Inactive toggle while a support session is active (issue #554). A session
+ * grants `InventoryOperate`, so these would otherwise still render - hiding and disabling them is
+ * this page's own job, not the capability check's.
+ */
+describe('ProductListComponent write controls during a support session (issue #554)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(products: Product[], sessionActive: Observable<boolean>) {
+    const update = jest.fn(() => of(undefined));
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll: () => of(products), update } },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: sessionActive } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement, update };
+  }
+
+  it('hides the Delete button and disables the status toggle while a session is active', async () => {
+    const { host } = await render([product({ id: 1, name: 'Widget', isActive: true })], of(true));
+
+    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete');
+    const statusButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Active') as HTMLButtonElement;
+
+    expect(deleteButton).toBeUndefined();
+    expect(statusButton.disabled).toBe(true);
+  });
+
+  it('shows the Delete button and leaves the status toggle enabled while no session is active', async () => {
+    const { host } = await render([product({ id: 1, name: 'Widget', isActive: true })], of(false));
+
+    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete');
+    const statusButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Active') as HTMLButtonElement;
+
+    expect(deleteButton).toBeDefined();
+    expect(statusButton.disabled).toBe(false);
+  });
+
+  it('does not open the delete confirmation or write the toggled status while a session is active', async () => {
+    const { fixture, host, update } = await render([product({ id: 1, name: 'Widget', isActive: true })], of(true));
+    const component = fixture.componentInstance;
+
+    component.confirmDelete(product({ id: 1, name: 'Widget' }));
+    component.toggleActive(product({ id: 1, name: 'Widget', isActive: true }));
+    fixture.detectChanges();
+
+    expect(component.confirmingProduct).toBeNull();
+    expect(update).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain('Confirm delete');
   });
 });
