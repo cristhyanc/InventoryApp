@@ -37,7 +37,7 @@ concurrency:
 jobs:
   context:
     name: Resolve validation context
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     permissions:
       pull-requests: read
       statuses: write
@@ -146,7 +146,7 @@ jobs:
   validate:
     name: Backend tests and frontend build
     needs: context
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -220,7 +220,7 @@ jobs:
     needs:
       - context
       - validate
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     permissions:
       statuses: write
 
@@ -272,7 +272,7 @@ jobs:
       - context
       - validate
       - report-status
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     permissions:
       actions: write
       pull-requests: read
