@@ -1,0 +1,45 @@
+name: InventoryApp self-hosted Docker validation
+
+# Pilot only: dispatch from main, check out reviewed main code, no PR heads, no AI credentials.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inventoryapp-self-hosted-docker-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate trusted main inside local development image
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, inventory-agent]
+    timeout-minutes: 45
+    container:
+      image: inventoryapp-dev:local
+      options: --cap-drop=ALL --security-opt=no-new-privileges
+    defaults:
+      run:
+        shell: bash
+    env:
+      TZ: UTC
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Verify container toolchain
+        run: |
+          set -euo pipefail
+          dotnet --version
+          node --version
+          npm --version
+          git --version
+
+      - name: Validate backend and frontend
+        run: bash scripts/validate.sh
