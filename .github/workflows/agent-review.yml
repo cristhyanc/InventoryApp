@@ -3,16 +3,12 @@ name: Agent review
 # Final review of agent pull requests that carry `agent-review`.
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md ("Review agent").
-# - The verified provider mode picks the reviewer; the other review job is skipped, so its provider and
-#   secret are never touched (docs/automation.md "Provider roles and readiness labels"):
-#   - cross-claude (default): the Copilot CLI reviews Claude's `agent/issue-*` pull request in the
-#     `copilot-review` job;
-#   - full-claude (single-provider fallback): a separate, fresh read-only Claude invocation reviews it
-#     in the `review` job, and the prompt and published review state that it is a same-provider
-#     review, not an independent one.
-#   Claude is the only implementer; Copilot no longer implements, so `copilot/*` branches are refused.
-#   Both jobs return the same structured review, and the same deterministic publish job turns it into a
-#   comment-only review and the `agent-review-verdict` status.
+# - Both verified provider modes (cross-claude, the default, and full-claude) are reviewed in the
+#   `review` job by a separate, fresh read-only Claude invocation, and the prompt and published review
+#   state that it is a same-provider review, not an independent one (docs/automation.md "Provider
+#   roles and readiness labels"). Claude is the only implementer, so `copilot/*` branches are refused.
+#   The deterministic publish job turns the structured review into a comment-only review and the
+#   `agent-review-verdict` status.
 # - agent-architecture.yml applies `agent-review` after the read-only
 #   architecture check; exact-SHA validation then dispatches the initial review automatically. A human
 #   may remove/re-apply the label to request another review of an already validated head; the label
@@ -81,7 +77,7 @@ jobs:
 
           # Only trusted dispatches start a review: the post-validation dispatcher in validate.yml and
           # the manual re-review dispatcher agent-review-request.yml, both with --ref main. This
-          # workflow, and the pinned Copilot CLI it installs, therefore always come from main.
+          # workflow therefore always comes from main.
           [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || fail "Reviews run only from a trusted workflow_dispatch."
           [ "$GITHUB_REF" = "refs/heads/main" ] || fail "Reviews run only from main, not $GITHUB_REF."
           pr_number="$INPUT_PR_NUMBER"

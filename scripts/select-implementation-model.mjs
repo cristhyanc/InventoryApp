@@ -17,7 +17,7 @@ const fingerprint = issue => createHash('sha256').update(JSON.stringify({ title:
 export function prepareSelection({ provider, label, issue, attempt = 1, fullProviderEnabled = FULL_PROVIDER_EXECUTION_ENABLED }) {
   const route = parseReadinessLabel(label);
   if (!Object.hasOwn(MODELS, provider) || !route || route.implementer !== provider) throw new Error('Invalid implementation label/provider.');
-  if (route.sameProviderReview && !fullProviderEnabled) throw new Error(`${label} is not enabled yet: single-provider review and repair routes are not connected. Remove ${label}; nothing was started.`);
+  if (route.mode.startsWith('full-') && !fullProviderEnabled) throw new Error(`${label} is not enabled yet: single-provider review and repair routes are not connected. Remove ${label}; nothing was started.`);
   if (issue.state !== 'OPEN') throw new Error('Implementation requires an open issue.');
   if (typeof issue.title !== 'string' || !issue.title.trim() || typeof issue.body !== 'string' || !issue.body.trim()) throw new Error('Task snapshot requires non-empty title and body; implementation was not started.');
   const labels = issue.labels.map(item => typeof item === 'string' ? item : item.name);

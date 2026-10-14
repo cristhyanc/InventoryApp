@@ -1,9 +1,9 @@
 name: Agent implementation
 
 # Implementation agent (Claude Code) for issues a human has marked `agent-ready-claude` (the default
-# Claude-primary route: Copilot checks the architecture and does the final review) or
-# `agent-ready-full-claude` (single-provider fallback: separate read-only Claude invocations check and
-# review instead; see docs/automation.md "Single-provider fallback routes").
+# route) or `agent-ready-full-claude` (the legacy single-provider label). On both routes separate
+# read-only Claude invocations check the architecture and do the final review; see docs/automation.md
+# "Provider roles and readiness labels".
 #
 # Authority and lifecycle: AGENTS.md ("Automated task contract") and docs/automation.md.
 # - Starts only when a human applies one of those labels (or a -low/-high tier of `agent-ready-claude`) to an issue.

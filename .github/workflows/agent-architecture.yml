@@ -2,14 +2,10 @@ name: Agent architecture
 
 # Architecture stage for a verified Claude implementation pull request (`agent-ready-claude` or
 # `agent-ready-full-claude`). Invoked only through workflow_dispatch from trusted default-branch automation.
-# The verified provider mode picks exactly one read-only checker; the other checker job is skipped, so
-# its provider and secret are never touched:
-# - cross-claude (default, Claude-primary): GitHub Copilot (Copilot CLI) reviews the touched code's
-#   architecture read-only and returns findings (copilot-check).
-# - full-claude (single-provider fallback): a separate, fresh read-only Claude invocation does the same
-#   check (claude-check) and is labelled a same-provider check, not an independent one. No Copilot
-#   invocation or Copilot secret is used.
-# Neither checker can edit, commit or push, and each job fails if the tree changes.
+# Both verified provider modes (cross-claude, the default, and full-claude) use the same read-only
+# checker: a separate, fresh Claude invocation (claude-check) that is labelled a same-provider check,
+# not an independent one. No Copilot invocation or Copilot secret is used.
+# The checker cannot edit, commit or push, and the job fails if the tree changes.
 # The checker's findings are model text, so they never travel as a job output (GitHub withholds an
 # output that contains a masked value, PR #558). The checker job redacts and packages them with the
 # trusted scripts/agent-review-transport.mjs and uploads a one-day artifact of this run; only the
@@ -91,7 +87,7 @@ jobs:
           agent_mode="$(node "$RUNNER_TEMP/agent-mode.mjs" verify-pr "$PR_NUMBER" "claude")" || fail "the provider mode of pull request #$PR_NUMBER could not be verified."
           # The route picks the read-only checker. Nothing falls back to the other provider.
           case "$agent_mode" in
-            cross-claude) checker=claude; checker_name="A separate read-only Claude invocation (same provider, not independent)" ;;
+            cross-claude) checker=claude; checker_name="A separate read-only Claude invocation (a same-provider check, not an independent one)" ;;
             full-claude) checker=claude; checker_name="A separate read-only Claude invocation (a same-provider check, not an independent one)" ;;
             *) fail "Provider mode '$agent_mode' is not a Claude-implemented route." ;;
           esac
@@ -113,13 +109,13 @@ jobs:
   claude-check:
     name: Same-provider Claude architecture check (read-only)
     needs: context
-    # Full-claude route only: a fresh Claude invocation with no implementation conversation state.
+    # Every Claude route: a fresh Claude invocation with no implementation conversation state.
     if: needs.context.outputs.checker == 'claude'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
     # permission and no App or Copilot credential. Its result is schema-validated structured output,
-    # converted below into the same verdict and findings the Copilot check returns.
+    # converted below into a verdict and packaged findings.
     permissions:
       contents: read
       pull-requests: read
@@ -274,7 +270,7 @@ jobs:
       - context
       - claude-check
       - sonar
-    # Only the checker the route selected counts; the other one is skipped. A failed SonarCloud read
+    # Runs only after a successful Claude architecture check. A failed SonarCloud read
     # never blocks: the sonar job's result is not required, and a missing count is treated as zero.
     if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) }}
     runs-on: ubuntu-latest
@@ -503,7 +499,6 @@ jobs:
 
           [[ "$ISSUE_NUMBER" =~ ^[1-9][0-9]*$ ]] || fail "A valid issue number is required."
           case "$CHECKER" in
-            copilot) checker_label="Copilot" ;;
             claude) checker_label="Same-provider Claude" ;;
             *) checker_label="Unknown" ;;
           esac

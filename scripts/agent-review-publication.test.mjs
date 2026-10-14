@@ -263,7 +263,7 @@ function publish({ state = eligibleState(), output = readyOutput(), result = 'su
   return run(publishShell, {
     state,
     artifact: delivery,
-    reviewer: reviewer || 'copilot',
+    reviewer: reviewer || 'claude',
     env: {
       ...env,
       IMPLEMENTER: implementer,
@@ -308,7 +308,7 @@ describe('guarded review publication', () => {
     const [review] = reviews(outcome.calls);
     assert.equal(review.payload.commit_id, SHA);
     assert.equal(review.payload.event, 'COMMENT');
-    assert.match(review.payload.body, new RegExp(`^Reviewer: GitHub Copilot \\(Copilot CLI\\)\\nReview type: Cross-provider review \\(Claude implemented, Copilot reviewed\\)\\nHead SHA reviewed: ${SHA}\\n\\nVERDICT: READY FOR HUMAN REVIEW\\n`));
+    assert.match(review.payload.body, new RegExp(`^Reviewer: Claude \\(separate read-only invocation\\)\\nReview type: Same-provider review: not independent\\nHead SHA reviewed: ${SHA}\\n\\nVERDICT: READY FOR HUMAN REVIEW\\n`));
     assert.equal(review.payload.body.match(/^VERDICT:/gm).length, 1);
     assert.match(review.payload.body, /This is an advisory review\. Human approval and branch protection remain the merge gate\.\n?$/);
     assert.deepEqual(statuses(outcome.calls).map(({ sha, state, context }) => ({ sha, state, context })), [{ sha: SHA, state: 'success', context: 'agent-review-verdict' }]);
@@ -366,19 +366,19 @@ describe('guarded review publication', () => {
     assertNotPublished(publish({ state: { ...eligibleState(), events: [] } }), 'not-eligible', /could not be verified/);
   });
 
-  it('publishes the Copilot review of a Claude-implemented pull request through the same guarded path', () => {
+  it('publishes the default route\'s same-provider Claude review through the same guarded path', () => {
     const outcome = publish({ output: changesOutput() });
     assert.equal(outcome.status, 0, outcome.stderr);
     const [review] = reviews(outcome.calls);
-    assert.match(review.payload.body, new RegExp(`^Reviewer: GitHub Copilot \\(Copilot CLI\\)\\nReview type: Cross-provider review \\(Claude implemented, Copilot reviewed\\)\\nHead SHA reviewed: ${SHA}\\n\\nVERDICT: CHANGES REQUESTED\\n`));
+    assert.match(review.payload.body, new RegExp(`^Reviewer: Claude \\(separate read-only invocation\\)\\nReview type: Same-provider review: not independent\\nHead SHA reviewed: ${SHA}\\n\\nVERDICT: CHANGES REQUESTED\\n`));
     assert.equal(review.payload.commit_id, SHA);
     assert.deepEqual(statuses(outcome.calls).map(({ sha, state, context }) => ({ sha, state, context })), [{ sha: SHA, state: 'failure', context: 'agent-review-verdict' }]);
   });
 
   it('never publishes a review whose implementer or reviewer does not match the verified route', () => {
     assertNotPublished(publish({ implementer: '' }), 'not-eligible', /unknown review route/);
-    // The default route never publishes a same-provider review, and the fallback never publishes Copilot's.
-    assertNotPublished(publish({ mode: 'cross-claude', reviewer: 'claude' }), 'not-eligible', /unknown review route/);
+    // Copilot no longer reviews: no route publishes a review attributed to it.
+    assertNotPublished(publish({ mode: 'cross-claude', reviewer: 'copilot' }), 'not-eligible', /unknown review route/);
     assertNotPublished(publish({ mode: 'full-claude', reviewer: 'copilot' }), 'not-eligible', /unknown review route/);
     // The retired Copilot implementation routes are never published, whatever the reviewer.
     for (const mode of ['cross-copilot', 'full-copilot']) {
@@ -481,14 +481,13 @@ describe('guarded review publication', () => {
 
 // The review hand-off (PR #558, run 38050149174): the reviewer's job output was withheld by GitHub's
 // secret masking, so a finished review reached the publisher as an empty string. The review now
-// travels as a run-bound artifact. These tests run the real package step of each reviewer job and the
+// travels as a run-bound artifact. These tests run the real package step of the reviewer job and the
 // real publish step, joined by the artifact exactly as the Actions API would serve it.
 const reviewWorkflow = read('.github/workflows/agent-review.yml');
-const claudePackageShell = stepShell(reviewWorkflow.split('\n  copilot-review:\n')[0], 'Package review result');
-const copilotPackageShell = stepShell(reviewWorkflow.split('\n  copilot-review:\n')[1].split('\n  publish:\n')[0], 'Package review result');
+const claudePackageShell = stepShell(reviewWorkflow.split('\n  publish:\n')[0], 'Package review result');
 
 // Runs a reviewer job's package step; returns the envelope it would upload and its step outputs.
-function packageStep(shell, { raw, rawFile = false, mode = 'cross-claude', reviewer = 'copilot', env = {} }) {
+function packageStep(shell, { raw, rawFile = false, mode = 'cross-claude', reviewer = 'claude', env = {} }) {
   const root = mkdtempSync(join(tmpdir(), 'agent-review-package-'));
   try {
     const bin = join(root, 'bin');
@@ -540,9 +539,8 @@ function packageStep(shell, { raw, rawFile = false, mode = 'cross-claude', revie
 
 // Package, then publish what was packaged, as one run would.
 function handOff({ output, mode = 'cross-claude', reviewer = ROUTES[mode].reviewer, state = eligibleState() }) {
-  const packaged = packageStep(reviewer === 'claude' ? claudePackageShell : copilotPackageShell, {
+  const packaged = packageStep(claudePackageShell, {
     raw: typeof output === 'string' ? output : JSON.stringify(output),
-    rawFile: reviewer === 'copilot',
     mode,
     reviewer,
   });
@@ -561,7 +559,7 @@ const MASKED_TOKEN = `ghs_${'Ab3'.repeat(12)}`;
 
 describe('review result hand-off from reviewer to publisher', () => {
   it('delivers a review whose text contains a masked value, the exact #558 failure, through the artifact', () => {
-    for (const [mode, reviewer] of [['cross-claude', 'copilot'], ['full-claude', 'claude']]) {
+    for (const [mode, reviewer] of [['cross-claude', 'claude'], ['full-claude', 'claude']]) {
       // The masked value lands in evidence text; as a job output this review would have been dropped.
       const output = changesOutput({ validation_evidence: `agent-validation success; the job log printed GH_TOKEN=${MASKED_TOKEN} by mistake.` });
       const { packaged, outcome } = handOff({ output, mode, reviewer });
@@ -581,7 +579,7 @@ describe('review result hand-off from reviewer to publisher', () => {
   it('removes a credential the reviewer job holds even when it has no recognisable shape', () => {
     // GitHub masks exactly the credentials a job holds; those are what could have been in #558's output.
     const held = 'correct-horse-battery-staple-fixture';
-    for (const [shell, reviewer, mode, rawFile] of [[claudePackageShell, 'claude', 'full-claude', false], [copilotPackageShell, 'copilot', 'cross-claude', true]]) {
+    for (const [shell, reviewer, mode, rawFile] of [[claudePackageShell, 'claude', 'full-claude', false], [claudePackageShell, 'claude', 'cross-claude', false]]) {
       const output = changesOutput({ suggestions: [`The run printed ${held} and its base64 ${Buffer.from(held).toString('base64')}.`] });
       const packaged = packageStep(shell, { raw: JSON.stringify(output), rawFile, mode, reviewer, env: { REVIEW_REDACT_PROVIDER_TOKEN: held } });
       assert.equal(packaged.status, 0, packaged.log);
@@ -620,8 +618,8 @@ describe('review result hand-off from reviewer to publisher', () => {
     assertNotPublished(publish({ output: null }), 'publication-failed', /could not be delivered: missing: The reviewer job reported no review artifact id/);
   });
 
-  const envelope = (overrides = {}) => envelopeFor(readyOutput(), { mode: 'cross-claude', implementer: 'claude', reviewer: 'copilot', overrides });
-  const listed = (overrides = {}) => [{ id: Number(ARTIFACT_ID), name: `agent-review-result-copilot-${RUN_ID}`, size_in_bytes: 400, expired: false, workflow_run: { id: Number(RUN_ID) }, ...overrides }];
+  const envelope = (overrides = {}) => envelopeFor(readyOutput(), { mode: 'cross-claude', implementer: 'claude', reviewer: 'claude', overrides });
+  const listed = (overrides = {}) => [{ id: Number(ARTIFACT_ID), name: `agent-review-result-claude-${RUN_ID}`, size_in_bytes: 400, expired: false, workflow_run: { id: Number(RUN_ID) }, ...overrides }];
 
   for (const [name, artifact, reason] of [
     ['an artifact id the reviewer did not report', { envelope: envelope(), id: '999' }, /mismatch: The review artifact id does not match/],
@@ -638,7 +636,7 @@ describe('review result hand-off from reviewer to publisher', () => {
     ['an envelope of another pull request', { envelope: envelope({ pr_number: 268 }) }, /bound to a different pr number/],
     ['an envelope of another head', { envelope: envelope({ head_sha: NEWER_SHA }) }, /bound to a different head sha/],
     ['an envelope of another route', { envelope: envelope({ agent_mode: 'full-claude' }) }, /bound to a different agent mode/],
-    ['an envelope of another reviewer', { envelope: envelope({ reviewer: 'claude' }) }, /bound to a different reviewer/],
+    ['an envelope of another reviewer', { envelope: envelope({ reviewer: 'copilot' }) }, /bound to a different reviewer/],
     ['an envelope of another repository', { envelope: envelope({ repository: 'someone/else' }) }, /bound to a different repository/],
     ['an envelope of another run', { envelope: envelope({ run_id: 1 }) }, /bound to a different run id/],
     ['an envelope from a later attempt', { envelope: envelope({ run_attempt: 2 }) }, /different run attempt/],
@@ -678,7 +676,7 @@ describe('review result hand-off from reviewer to publisher', () => {
   });
 
   it('never reads the review from a job output any more', () => {
-    for (const job of ['review', 'copilot-review']) {
+    for (const job of ['review']) {
       const outputs = reviewWorkflow.split(`\n  ${job}:\n`)[1].split('\n    steps:\n')[0];
       assert.doesNotMatch(outputs, /structured_output/, `${job} must not expose the review as a job output`);
     }
@@ -818,7 +816,7 @@ describe('review route selected by the verified provider mode', () => {
     env: { GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REF: 'refs/heads/main', INPUT_PR_NUMBER: PR, INPUT_HEAD_SHA: SHA },
   });
   for (const [label, state, mode, reviewer, sameProvider] of [
-    ['agent-ready-claude', eligibleState(), 'cross-claude', 'copilot', false],
+    ['agent-ready-claude', eligibleState(), 'cross-claude', 'claude', true],
     ['agent-ready-full-claude', eligibleState(), 'full-claude', 'claude', true],
   ]) {
     it(`${label} is reviewed by ${reviewer}${sameProvider ? ' as a same-provider review' : ' as a cross-provider review'}`, () => {
@@ -875,94 +873,6 @@ describe('cross-review routing after exact-SHA validation', () => {
     ]) {
       const outcome = routed(state);
       assert.equal(labels(outcome.calls).length + dispatches(outcome.calls).length, 0);
-    }
-  });
-});
-
-// The Copilot CLI review step (agent-review.yml copilot-review job), run against a fake `copilot`
-// in a throwaway repository. It must turn only a well-formed, marked review JSON into the raw review
-// file the package step then binds and uploads; it writes no job output.
-const copilotReviewShell = stepShell(read('.github/workflows/agent-review.yml').split('\n  publish:\n')[0], 'Run Copilot review');
-
-const CROSS_RELATION = 'This pull request was implemented by Claude, a different agent: do not rely on anything it claimed; verify it.';
-
-function runCopilotReview(copilotOutput, { touchTree = false, token = 'cli-token', relation = CROSS_RELATION } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'agent-copilot-review-'));
-  try {
-    const repo = join(root, 'repo');
-    const bin = join(root, 'bin');
-    const git = (...args) => spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
-    spawnSync('mkdir', ['-p', repo, bin]);
-    git('init', '-q');
-    writeFileSync(join(repo, 'README.md'), 'fixture\n');
-    git('add', '.');
-    git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-qm', 'fixture');
-    const head = git('rev-parse', 'HEAD').stdout.trim();
-    writeFileSync(join(root, 'copilot-output.md'), copilotOutput.replaceAll('@SHA@', head));
-    const promptLog = join(root, 'prompts.log');
-    writeFileSync(promptLog, '');
-    writeFileSync(join(bin, 'copilot'), `#!/usr/bin/env bash\nprintf '%s\\n' "$@" >> "${promptLog}"\n${touchTree ? 'echo changed > README.md\n' : ''}cat "${join(root, 'copilot-output.md')}"\n`);
-    chmodSync(join(bin, 'copilot'), 0o755);
-    const outputPath = join(root, 'github-output');
-    writeFileSync(outputPath, '');
-    const result = spawnSync('bash', ['-c', copilotReviewShell], {
-      cwd: repo,
-      encoding: 'utf8',
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, GITHUB_OUTPUT: outputPath, RUNNER_TEMP: root, COPILOT_GITHUB_TOKEN: token, PR_NUMBER: PR, HEAD_SHA: head, BASE_REF: 'develop', REVIEW_RELATION: relation },
-    });
-    const raw = join(root, 'review-raw.json');
-    assert.equal(readFileSync(outputPath, 'utf8'), '', 'the review must never travel as a job output');
-    return { status: result.status, stderr: result.stderr + result.stdout, output: existsSync(raw) ? readFileSync(raw, 'utf8') : '', head, prompts: readFileSync(promptLog, 'utf8') };
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
-const marked = (review) => `Reviewed the diff.\n\nBEGIN_REVIEW_JSON\n\`\`\`json\n${JSON.stringify(review, null, 2)}\n\`\`\`\nEND_REVIEW_JSON\n`;
-
-describe('Copilot CLI final review output', () => {
-  it('writes the last marked review JSON as compact raw review for the package step', () => {
-    const stale = marked(readyOutput({ reviewed_head_sha: '@SHA@', validation_evidence: 'draft' }));
-    const outcome = runCopilotReview(stale + marked(changesOutput({ reviewed_head_sha: '@SHA@' })));
-    assert.equal(outcome.status, 0, outcome.stderr);
-    assert.equal(outcome.output.trim().split('\n').length, 1, 'compact single-line JSON');
-    const parsed = JSON.parse(outcome.output);
-    assert.equal(parsed.reviewed_head_sha, outcome.head);
-    assert.equal(parsed.verdict, 'CHANGES REQUESTED');
-  });
-
-  for (const [name, text] of [
-    ['no marked block', JSON.stringify(readyOutput())],
-    ['an unknown verdict', marked(readyOutput({ reviewed_head_sha: '@SHA@', verdict: 'APPROVE' }))],
-    ['an unknown criterion status', marked(readyOutput({ reviewed_head_sha: '@SHA@', criteria: [{ criterion: 'c', status: 'partly', evidence: 'e' }] }))],
-    ['a missing key', marked((({ suggestions, ...rest }) => rest)(readyOutput({ reviewed_head_sha: '@SHA@' })))],
-    ['an extra key', marked(readyOutput({ reviewed_head_sha: '@SHA@', approve: true }))],
-    ['a non-integer inline line', marked(changesOutput({ reviewed_head_sha: '@SHA@', inline_comments: [{ path: 'a.cs', line: 1.5, body: 'b' }] }))],
-    ['malformed JSON', 'BEGIN_REVIEW_JSON\n{"verdict": \nEND_REVIEW_JSON\n'],
-  ]) {
-    it(`fails without output on ${name}`, () => {
-      const outcome = runCopilotReview(text);
-      assert.notEqual(outcome.status, 0);
-      assert.equal(outcome.output, '');
-    });
-  }
-
-  it('states the route relation in the prompt and fails without one', () => {
-    const good = marked(readyOutput({ reviewed_head_sha: '@SHA@' }));
-    const cross = runCopilotReview(good);
-    assert.equal(cross.status, 0, cross.stderr);
-    assert.ok(cross.prompts.includes(CROSS_RELATION));
-    assert.ok(!cross.prompts.includes('@RELATION@'));
-    const missing = runCopilotReview(good, { relation: '' });
-    assert.notEqual(missing.status, 0);
-    assert.equal(missing.output, '');
-  });
-
-  it('fails when Copilot changes the working tree, and when the CLI token is missing', () => {
-    const good = marked(readyOutput({ reviewed_head_sha: '@SHA@' }));
-    for (const outcome of [runCopilotReview(good, { touchTree: true }), runCopilotReview(good, { token: '' })]) {
-      assert.notEqual(outcome.status, 0);
-      assert.equal(outcome.output, '');
     }
   });
 });

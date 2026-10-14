@@ -189,7 +189,6 @@ jobs:
           node scripts/validate-agent-workflows.mjs
           node --test scripts/validate-agent-workflows.test.mjs
           node --test scripts/validate-documentation-impact.test.mjs
-          node --test scripts/copilot-review-contract.test.mjs
           node --test scripts/sonar-new-issues.test.mjs
 
       - name: Validate deployment workflow contracts
@@ -308,8 +307,8 @@ jobs:
             exit 0
           fi
 
-          # agent-review.yml picks the reviewer from the verified provider mode: Copilot on the default
-          # cross-claude route, a separate same-provider Claude invocation on the full-claude fallback.
+          # agent-review.yml verifies the provider mode; every Claude route is reviewed by a separate,
+          # same-provider Claude invocation.
           gh workflow run agent-review.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \

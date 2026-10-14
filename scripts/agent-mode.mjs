@@ -1,7 +1,8 @@
 // Trusted provider-mode policy for the agent pipeline (#337, #338, #339).
 //
-// Readiness labels choose one of two routes. Claude is the only implementer: on the default route
-// all existing readiness labels invoke separate read-only Claude architecture and review agents. The route of an agent pull request is never taken
+// Readiness labels choose one of two routes. Claude is the only implementer, and on both routes
+// separate read-only Claude invocations check the architecture and review the result, so every
+// review is same-provider, not independent. The route of an agent pull request is never taken
 // from a comment, a label that is still on the issue, or PR text. It is derived from the issue's
 // own label history, which GitHub records and nobody can edit or delete: the newest *claim* (the
 // claiming workflow step replacing the readiness label with `agent-working`, as
@@ -73,7 +74,7 @@ export function resolveMode({ issue, headRef, expectedImplementer, prCreatedAt, 
   if (route.implementer !== implementer) {
     throw new Error(`Issue #${issue} was last claimed for ${route.mode} (${claim.label}), but this pull request belongs to ${implementer}. The provider is never switched automatically; a human must resolve it.`);
   }
-  if (route.sameProviderReview && !fullProviderEnabled) {
+  if (route.mode.startsWith('full-') && !fullProviderEnabled) {
     throw new Error(`Issue #${issue} was claimed for ${route.mode}, which is not enabled yet; nothing will run for it.`);
   }
   const opened = Date.parse(prCreatedAt);
