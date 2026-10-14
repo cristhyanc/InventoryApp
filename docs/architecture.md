@@ -3647,6 +3647,49 @@ not. `support-session-message.interceptor.spec.ts` covers the two messages being
 own code and nothing else, and `member-forbidden-notice.interceptor.spec.ts` covers the generic
 message staying silent for both support-session codes.
 
+### Extending hidden write controls to expenses and site commissions (issue #659)
+
+Issue #554 rolled `SupportSessionService.active$` out to Products as the representative pages and
+tracked every remaining write control as follow-up under #513. This slice closes that follow-up for
+Operating Expenses and site commissions: `OperatingExpenseComponent`, `SiteCommissionAgreementsComponent`
+and the commission payment control on `SiteCommissionsReportComponent`.
+
+**The same wrong signal, for two more capabilities.** `SupportSessionAccessPolicy` grants a session
+`Capability.ExpensesManage` and `Capability.SiteCommissionsManage` alongside the capabilities #554
+already named, so a page that gates its own write controls on either of those - exactly as Products
+gates on `InventoryOperate` - would still render them inside a session. `active$` is the same shared
+flag these pages now read instead, for the same reason: it is presentation only, and the backend's
+read-only method rule is still what would refuse the write if a page failed to hide or disable it.
+
+**What each page hides or disables, and why hidden rather than disabled differs by control.**
+`OperatingExpenseComponent` hides Add Expense (a page action, like the rest of this build's create
+entry points) and each row's Edit/Delete (following `ProductListComponent`'s Delete), and disables
+Save on the open edit form (following `ProductFormComponent`) - a session cannot open an edit form in
+the first place once Edit is hidden, but Save still checks the flag so a form already open when a
+session starts cannot submit. `SiteCommissionAgreementsComponent` disables its single Save agreement
+button, the same pattern as `ProductFormComponent`'s Save. `SiteCommissionsReportComponent`'s Record
+Payment control - the input group and the button together - hides rather than disables, since (like
+Products' Delete) there is no mid-edit state the control being merely inert would protect. Every
+guarded handler (`startCreate`, `startEdit`, `save`, `remove` on the expense page;
+`saveCommissionAgreement`; `recordPayment`) also checks `sessionActive` itself and returns before
+calling the API, the same belt-and-suspenders #554 established: the control becomes unavailable
+rather than merely invisible or inert.
+
+**Read-only listings and reports are unaffected.** The expense table, the current-agreements table
+and the commission report's rows, details and Print details stay visible and interactive during a
+session; only the controls that attempt a write are touched. Server-side enforcement - the method
+rule behind `ExpensesManage` and `SiteCommissionsManage` alike - is unchanged.
+
+**What proves it.** `operating-expense.component.spec.ts`, added by this slice, covers Add
+Expense/Edit/Delete being hidden and Save being disabled while a session is active, each guarded
+handler (`startCreate`, `startEdit`, `save`, `remove`) refusing to call the service when invoked
+directly, and normal create/edit/delete behaviour while no session is active.
+`site-commission-agreements.component.spec.ts` gained a session-active describe block covering Save
+agreement being disabled and `saveCommissionAgreement` refusing to call the service while a session
+is active, and both staying available while none is. `site-commissions-report.component.spec.ts`,
+added by this slice, covers Record Payment being hidden and `recordPayment` refusing to call the
+service while a session is active, and both working normally while none is.
+
 ### Extending the read-only support-view guard to machines and stock (issue #658)
 
 Issue #554 established the pattern and covered Products as its representative pages; this slice
