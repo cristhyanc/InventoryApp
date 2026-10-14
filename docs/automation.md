@@ -1,3 +1,4 @@
+<!-- Claude-only migration: Copilot architecture and final-review jobs are removed; both prior labels route to separate Claude invocations. Existing historical cross-route references below require a follow-up full documentation cleanup. -->
 # InventoryApp automated development lifecycle
 
 ## Purpose
@@ -5,8 +6,8 @@
 This document defines how InventoryApp intends to run a controlled, automated software-development system:
 
 ```text
-GitHub issue → implementation agent (Claude) → feature branch → pull request → read-only architecture check by Copilot
-→ implementer fixes findings → CI validation → final review by Copilot → human approval → develop → release PR → main (releasable) → human-started Deploy Production → monitoring
+GitHub issue → implementation agent (Claude) → feature branch → pull request → read-only architecture check by a fresh Claude invocation
+→ implementer fixes findings → CI validation → final review by another fresh Claude invocation → human approval → develop → release PR → main (releasable) → human-started Deploy Production → monitoring
 ```
 
 It describes the lifecycle, the authority of each participant, task states, risk classification, failure handling, traceability, branch policy, and the incremental phases in which the system will be built.
@@ -34,7 +35,7 @@ problem:
 | --- | --- | --- |
 | **Guardrails** | What is an agent allowed to do at all? | `AGENTS.md`, `CLAUDE.md`, this document, the `.github/workflows/agent-*.yml` prompts and tool permissions, `scripts/validate-agent-workflows.mjs`. |
 | **CI validation** | Does this specific change build, test, and lint? | `scripts/validate.sh`/`scripts/validate.ps1`, `validate.yml`. |
-| **Final review** | Did this specific pull request actually honour the guardrails? Independent (the other provider) on the cross routes; same-provider, and so not independent, on a full-provider fallback. | `agent-review.yml`. |
+| **Final review** | Did this specific pull request actually honour the guardrails? A separate Claude invocation reviews the exact validated SHA; this is same-provider, not an independent provider review. | `agent-review.yml`. |
 | **Evals** | Do representative scenarios still resolve the way the guardrails say they should, across changes to the guardrails themselves? | `evals/agent/` (corpus and deterministic runner in `scripts/run-agent-evals.mjs`; on-demand model-decision runner in `scripts/run-agent-model-evals.mjs`; see `evals/agent/README.md`). |
 
 Evals are the odd one out: they do not validate a specific pull request's diff, and today's
@@ -159,7 +160,7 @@ The target lifecycle for one automated change is:
 
 1. A human creates or refines an agent task issue using the **Agent task** issue form, including its documentation impact decision and details.
 2. A human confirms that the acceptance criteria are complete, testable, and bounded by explicit exclusions, and that the documentation impact decision is correct.
-3. A human applies a readiness label, which chooses the route: normally `agent-ready-claude` (Claude implements, Copilot reviews), or the `agent-ready-full-claude` fallback label when Copilot is unavailable (see [Provider roles and readiness labels](#provider-roles-and-readiness-labels)). A read-only preflight job validates that the issue carries a meaningful documentation impact declaration; when it does not, nothing else runs and the issue is left unchanged.
+3. A human applies a readiness label, which chooses the route: normally `agent-ready-claude` (Claude implements, another Claude invocation reviews), or the `agent-ready-full-claude` legacy single-provider label (see [Provider roles and readiness labels](#provider-roles-and-readiness-labels)). A read-only preflight job validates that the issue carries a meaningful documentation impact declaration; when it does not, nothing else runs and the issue is left unchanged.
 4. An implementation agent creates a feature branch from the latest `develop`.
 5. The agent implements only the approved scope defined by the issue's acceptance criteria and exclusions, and updates the documentation the issue's decision requires.
 6. The agent runs the complete repository validation (`scripts/validate.sh` or `scripts/validate.ps1`).
