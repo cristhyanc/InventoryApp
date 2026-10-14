@@ -7,6 +7,7 @@ import { ToastService } from '../../../services/toast.service';
 import { SuperAdminBusiness, SuperAdminBusinessesService } from '../../../services/super-admin-businesses.service';
 import { BusinessMembersDialogComponent } from './business-members-dialog.component';
 import { BusinessRejectDialogComponent } from './business-reject-dialog.component';
+import { ViewAsBusinessDialogComponent } from './view-as-business-dialog.component';
 
 /** The filterable statuses, matching `Inventory.Domain.Tenancy.BusinessStatus`'s published names. */
 export const SUPER_ADMIN_BUSINESS_STATUS_FILTERS = ['All', 'Pending', 'Active', 'Rejected', 'Deactivated'] as const;
@@ -31,7 +32,9 @@ type PendingBusinessAction =
  * Members (its own load, release confirmation and error) are dedicated feature components
  * composed through `[businessId]`/`[businessName]` and their outputs.
  *
- * "View as business" (#513) is explicitly out of scope for this page.
+ * "View as this business" (issue #553, a slice of #513) is the one dedicated feature component
+ * composed the same way Reject and Members are: its own reason text, submission state and error,
+ * reached through `[businessId]`/`[businessName]` and reacting only to `(started)`/`(canceled)`.
  */
 @Component({
   selector: 'app-super-admin-businesses',
@@ -42,7 +45,8 @@ type PendingBusinessAction =
     DatePipe,
     ConfirmationDialogComponent,
     BusinessRejectDialogComponent,
-    BusinessMembersDialogComponent
+    BusinessMembersDialogComponent,
+    ViewAsBusinessDialogComponent
   ],
   templateUrl: './super-admin-businesses.component.html'
 })
@@ -57,6 +61,7 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
   pendingAction: PendingBusinessAction | null = null;
   rejectTarget: SuperAdminBusiness | null = null;
   membersTarget: SuperAdminBusiness | null = null;
+  viewAsTarget: SuperAdminBusiness | null = null;
 
   private readonly destroying$ = new Subject<void>();
 
@@ -120,6 +125,20 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
 
   closeMembers(): void {
     this.membersTarget = null;
+  }
+
+  requestViewAs(business: SuperAdminBusiness): void {
+    this.viewAsTarget = business;
+  }
+
+  onViewAsStarted(): void {
+    // SupportSessionService.start already cleared the cached business data, re-read the
+    // capabilities and navigated to the dashboard; this page is about to be torn down with it.
+    this.viewAsTarget = null;
+  }
+
+  onViewAsCanceled(): void {
+    this.viewAsTarget = null;
   }
 
   onMemberReleased(): void {

@@ -2010,13 +2010,13 @@ The two slices above are the API; this one, one slice of [#510](https://github.c
 
 **It is presentation only, and the routed page is a thin composition boundary** per [Page composition boundary](#page-composition-boundary-issue-191): `SuperAdminBusinessesComponent` owns the table, the status filter and the three single-call confirmations (approve, deactivate, reactivate) behind the shared `ConfirmationDialogComponent` — the same shape `ProductListComponent` already uses for a single-call confirmation — while Reject (its own reason text and submission state) and Members (its own load, release confirmation and error) are dedicated feature components, `BusinessRejectDialogComponent` and `BusinessMembersDialogComponent`, composed through `[businessId]`/`[businessName]` and their own outputs. Every refusal the page shows is the API's own sentence, verbatim, including reactivate's "no active Owner" one (`BusinessLifecyclePolicy.NoActiveOwnerMessage`) — the page duplicates no rule.
 
-**The table shows exactly the directory's ten fields, minus the one instant the page has no use for.** Name, status, applied date, contact email, ABN, active member count and whether Nayax is configured — `decidedAtUtc` is read by the API but not rendered, because the acceptance criteria name only the first seven. Pending applications sort first because the directory read already returns them that way; the status filter narrows the same ordered list rather than requesting a different one, since the list endpoint takes no server-side filter at all (see [Super Admin businesses API](#super-admin-businesses-api-issue-544) above). Approve and Reject are offered only for a `Pending` business, Deactivate only for `Active`, and Reactivate and Members only for `Deactivated` — the same `BusinessDecisionPolicy`/`BusinessLifecyclePolicy` gates the API itself enforces, mirrored here only to decide which buttons to show, never to decide whether an action succeeds.
+**The table shows exactly the directory's ten fields, minus the one instant the page has no use for.** Name, status, applied date, contact email, ABN, active member count and whether Nayax is configured — `decidedAtUtc` is read by the API but not rendered, because the acceptance criteria name only the first seven. Pending applications sort first because the directory read already returns them that way; the status filter narrows the same ordered list rather than requesting a different one, since the list endpoint takes no server-side filter at all (see [Super Admin businesses API](#super-admin-businesses-api-issue-544) above). Approve and Reject are offered only for a `Pending` business, Deactivate and **View as this business** only for `Active`, and Reactivate and Members only for `Deactivated` — the same `BusinessDecisionPolicy`/`BusinessLifecyclePolicy` gates the API itself enforces, mirrored here only to decide which buttons to show, never to decide whether an action succeeds.
 
 **The pending-count badge (on the sidebar's `Super Admin` group and its `Businesses` link) is re-read after every action, not cached state the page pushes to it.** `SuperAdminBusinessesService.notifyChanged()` is a plain `Subject<void>` notification with no payload, called once a mutating call — approve, reject, deactivate, reactivate or release — has itself completed; `SidebarNavComponent` is the one subscriber, and on each notification (while platform-admin access is granted) it re-reads `GET .../pending-count` itself rather than trusting a number the mutating caller computed. The badge is `null` — rendered as no badge at all — until access is granted and a first read returns, and it is cleared the moment access is lost, the same rule issue #605 already gives the group itself.
 
-**"View as business" (issue #513) is explicitly out of scope for this page**, and so is any backend change: the page calls the eight endpoints #544 and #545 already shipped, unchanged.
+**"View as this business" (issue #553, one slice of #513) is the one action here that does not stay on this page.** `ViewAsBusinessDialogComponent`, composed the same way Reject and Members already are, starts a support session through `SupportSessionService`; see [Support session banner and the in-memory session id](#support-session-banner-and-the-in-memory-session-id-issue-553) for what that does next. No backend change came with it: the dialog calls the one endpoint #550 already shipped (`POST /api/super-admin/support-sessions/{businessId}`), unchanged. Hiding write controls and support-view messages once inside the session is issue #554's separate follow-up.
 
-**What proves it.** `super-admin-businesses.service.spec.ts` covers the eight HTTP calls, including the trimmed/blank/absent reason on reject and the `changed$` notification. `business-reject-dialog.component.spec.ts` and `business-members-dialog.component.spec.ts` cover each dedicated workflow's own load, confirmation, success and API-refusal-shown-verbatim paths. `super-admin-businesses.component.spec.ts` covers the status filter, which actions each status offers, each confirmation, the reactivate no-active-Owner refusal shown verbatim, and that a reload (and a badge notification) follows every completed action. `sidebar-nav.component.spec.ts` covers the badge itself: hidden until access is granted, hidden again at zero, shown on both the group and the `Businesses` link once a count is read, re-read on a `changed$` notification, and cleared the moment access is lost. `navigation.spec.ts` and `app.routes.spec.ts` cover the real `Businesses` `NavLink` replacing issue #546's placeholder and the route's guards.
+**What proves it.** `super-admin-businesses.service.spec.ts` covers the eight HTTP calls, including the trimmed/blank/absent reason on reject and the `changed$` notification. `business-reject-dialog.component.spec.ts` and `business-members-dialog.component.spec.ts` cover each dedicated workflow's own load, confirmation, success and API-refusal-shown-verbatim paths; `view-as-business-dialog.component.spec.ts` is the same shape for the required-reason dialog issue #553 added. `super-admin-businesses.component.spec.ts` covers the status filter, which actions each status offers (including **View as this business** for `Active` alone), each confirmation, the reactivate no-active-Owner refusal shown verbatim, and that a reload (and a badge notification) follows every completed action. `sidebar-nav.component.spec.ts` covers the badge itself: hidden until access is granted, hidden again at zero, shown on both the group and the `Businesses` link once a count is read, re-read on a `changed$` notification, and cleared the moment access is lost. `navigation.spec.ts` and `app.routes.spec.ts` cover the real `Businesses` `NavLink` replacing issue #546's placeholder and the route's guards.
 
 #### Support sessions: the store and the control endpoints (issue #550)
 
@@ -2166,8 +2166,8 @@ member of that business is given it, and `needsRefill` and `needsOrdering` repla
 zeroed or nulled, because `machinesNeedingRefill: 0` reads as a fact about the business's machines.
 That is the same shape issue #329 publishes with `reason: "NayaxNotConnected"` for a business whose
 connection is unusable, and deliberately one shape rather than two: a client maps a stable reason
-code to its own wording, and the reason is never a sentence to display. The UI messages are #513's
-work.
+code to its own wording, and the reason is never a sentence to display. Mapping it to a message - and
+hiding the write controls a read-only session cannot use - is issue #554's work, not this one's.
 
 **And the fleet read is not attempted.** `GetDashboardSummary` branches on
 `IBusinessScope.State == SupportReadOnly` and never calls `CalculateReorderNeeds` at all, so there is
@@ -3481,6 +3481,106 @@ its route exist — not a template change in the shell.
   template, not something the shell imposes or forbids.
 - **Sign-in callback.** `auth-callback.component.ts` centres a `.card` on the canvas background
   instead of a bare paragraph; its logic is still just the static "Signing you in..." message.
+
+### Support session banner and the in-memory session id (issue #553)
+
+Issues #550 and #551 built the support-session API and its read-only enforcement with no frontend
+at all - the endpoints were called, and the header sent, by hand. Issue #553 is the one slice of
+#513 that gives the Super Admin a UI for it: the **View as this business** dialog on the
+[Super Admin Businesses page](#super-admin-businesses-page-issue-547), the banner every other page
+shows while a session is active, and the one service, `support-session/support-session.service.ts`
+(`SupportSessionService`), that both own. Hiding write controls and support-view messages once
+inside the session is issue #554's separate follow-up and is not part of this slice.
+
+**The session id lives in this service's memory and nowhere else.** `SupportSessionService` is a
+root singleton holding a private `sessionId: string | null` field, read back only by
+`currentSessionId()` - `supportSessionInterceptor`'s own accessor, documented below - and never
+written to `localStorage`, `sessionStorage`, a query parameter or any other part of the URL. A page
+reload therefore forgets it, which is what the next two paragraphs exist to handle; this is the
+same trade-off issue #550 made in choosing to answer the start call with the id and no other read
+with it (`SuperAdminStartedSupportSessionResponse` above) - a value that is never written down
+cannot leak through a saved page, a shared link, a browser history entry or a crash dump.
+
+**Every open tab shares the id over `BroadcastChannel`, not through anything persisted.** Starting a
+session broadcasts `{ type: 'started', sessionId, businessName, expiresAtUtc }` to every other open
+tab of the same origin, so each of them can both show the banner and present the header on its own
+requests; ending one - from the banner's own **End session**, from another tab, or because the
+server answered `support_session_ended` on some unrelated call (below) - broadcasts (or, for the
+tab that merely received the broadcast, locally applies) `{ type: 'ended' }` everywhere at once. The
+listener is attached once, in the constructor, so it is live for every open tab regardless of
+whether anything has subscribed to the banner's state yet. `BroadcastChannel` does not exist in this
+build's Jest environment (`jest-environment-jsdom`'s bundled jsdom predates it), so it is used only
+behind a `typeof BroadcastChannel` check - the same feature-detection `AppComponent` already uses
+for `window.matchMedia` - and the Jest suite supplies a same-process double that preserves the one
+asymmetry that makes a multi-tab test mean anything: a channel never delivers its own posted message
+back to itself.
+
+**A tab that was never told the id this way still learns a session is running.** A freshly opened
+or reloaded tab cannot have received a `BroadcastChannel` message for a session that started before
+it existed, so instead it asks `GET /api/super-admin/support-sessions/active` once - the one read
+issue #550 resolves from the authenticated actor rather than from a presented id. That tab can show
+the banner, with the business name and the expiry, and can still end the session (the end call is
+likewise resolved from the actor, not from an id); it cannot itself present the header until another
+tab's `started` broadcast reaches it, because the active read deliberately never answers the id
+either (`SuperAdminActiveSupportSessionResponse` above). This is issue #550's own design surfacing in
+the client, not a frontend gap, and `SupportSessionService`'s own tests assert it rather than work
+around it. The probe itself is asked once per browser session and only for a caller
+`PlatformDiagnosticsAccessService.isGranted()` already confirms is the configured platform
+administrator, the same cached check `platformAdminGuard` uses - asking it unconditionally for every
+signed-in member would be wasted traffic for a surface that can never apply to them.
+
+**`classifyMemberRequest` treats the support-session control surface like the diagnostics probe
+beside it** (`access/member-endpoint.ts`, issue #602's classification, extended here): both are
+`platform-admin` kind, reached as the administrator and authorized the same class-2 way, never
+inside a session, so a `403` from either is excluded from the capability cache's refresh trigger,
+the account-state cache's refresh trigger and the global "you don't have access to this" notice -
+exactly as a refusal of the diagnostics probe already was. Without that extension, an ordinary
+member's browser asking `GET .../active` (or, for a platform administrator outside an eligible
+window, the dialog's own start call) would have its expected `403` misread as a member refusal.
+
+**`supportSessionInterceptor` (`support-session/support-session.interceptor.ts`) is what a request
+actually joins a session through.** For every request this build's own API - never the support-
+session control surface itself, never a static asset - it attaches `X-Support-Session:
+<currentSessionId()>` while a session is active, and nothing while one is not. On the way back it
+does two things with one rule:
+
+1. **Reacts to `support_session_ended` from any call.** A `403` carrying that code - the one
+   `SupportSessionAuthorizationResultHandler` and `SupportSessionExceptionHandler` both use - calls
+   `SupportSessionService.handleSessionEndedSignal()`, which clears the id, publishes the banner's
+   inactive state, broadcasts the end to other tabs, and does the same three things start and end
+   both do: forgets the cached business (`BusinessService.reset()`), re-reads the capabilities
+   (`AccessService.refresh()`) and navigates to the dashboard. It is idempotent, so a second
+   signal - or one for a tab that was never active - does nothing further.
+2. **Discards a response sent under an id that is no longer current.** Once the response (or
+   refusal) has been fully processed - after the reaction above has had its chance to clear the id -
+   the interceptor compares the id this request carried against `currentSessionId()` again. A
+   mismatch means the session moved on while this request was in flight, for any reason, and the
+   caller is left with neither a value nor an error: exactly `EMPTY` would. A request made with no
+   session active is untouched by this rule, because there was never an id for it to become stale
+   against. This is one rule rather than two: it is what makes "this very response answered
+   `support_session_ended`" and "something else ended or replaced the session first" the same
+   check, read after the first reaction has run.
+
+**Start, end and the `support_session_ended` signal all do the same three things**, and do them from
+one place (`SupportSessionService`) rather than three: forget the cached business the shell reads
+for every member, re-read the capabilities - the support set inside a session, the administrator's
+own (none) outside one - and navigate to the dashboard, because neither the page that was on screen
+before nor the one a stale capability set rendered belongs to the business now in view.
+
+**What proves it.** `support-session.service.spec.ts` covers starting a session, ending it, the
+`support_session_ended` signal (idempotent, and inert for a tab that was never active), the id never
+reaching `localStorage`/`sessionStorage`/the URL, a new or reloaded tab's own-session probe (asked
+once, gated on platform-admin eligibility, and never answering the id), and the two `BroadcastChannel`
+cases: a session shared to another open tab and an end applied in every other open tab.
+`support-session.interceptor.spec.ts` covers the header being attached and withheld, every one of the
+control surface and the diagnostics probe never receiving it, the `support_session_ended` reaction,
+and a stale response - successful or refused - being discarded while an unchanged id is left alone.
+`member-endpoint.spec.ts` covers the new `platform-admin` classification of the support-session
+control surface. `view-as-business-dialog.component.spec.ts` and
+`support-session-banner.component.spec.ts` are the two components' own behaviour, and
+`super-admin-businesses.component.spec.ts` covers **View as this business** being offered only for
+an `Active` business and composed the same way Reject and Members already are (see
+[Page composition boundary](#page-composition-boundary-issue-191)).
 
 ### Member access: capability-built navigation, guards and hidden actions (issue #528)
 

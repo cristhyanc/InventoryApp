@@ -9,6 +9,7 @@ import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
 import { BreadcrumbsComponent } from './layout/breadcrumbs/breadcrumbs.component';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav.component';
+import { SupportSessionBannerComponent } from './layout/support-session-banner.component';
 import { UserMenuComponent } from './layout/user-menu.component';
 import { AccountStateService } from './access/account-state.service';
 import { activeAccountKey, signedInAccountMayHaveChanged } from './access/signed-in-account';
@@ -52,7 +53,8 @@ import { loginRequest } from './auth-config';
     IconComponent,
     ToastContainerComponent,
     LoadingIndicatorComponent,
-    BreadcrumbsComponent
+    BreadcrumbsComponent,
+    SupportSessionBannerComponent
   ],
   templateUrl: './app.component.html'
 })
