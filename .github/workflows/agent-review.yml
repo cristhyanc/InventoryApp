@@ -105,8 +105,8 @@ jobs:
           # The verified route picks the reviewer. Nothing falls back to the other provider.
           case "$agent_mode:$implementer" in
             cross-claude:claude)
-              reviewer=copilot
-              review_relation="This pull request was implemented by Claude, a different agent: do not rely on anything it claimed; verify it." ;;
+              reviewer=claude
+              review_relation="This pull request was implemented by another Claude invocation. This is a same-provider review, not an independent one: you are a fresh invocation with no implementation conversation state; verify every claim." ;;
             full-claude:claude)
               reviewer=claude
               review_relation="This pull request was implemented by another Claude invocation under the full-claude single-provider fallback route. This is a same-provider review, not an independent one: you are a fresh invocation with no implementation conversation state, so do not rely on anything the implementation claimed; verify it." ;;
@@ -598,7 +598,7 @@ jobs:
 
           # The trusted route table decides who reviewed and whether the review was independent.
           case "$AGENT_MODE:$IMPLEMENTER:$REVIEWER" in
-            cross-claude:claude:copilot) reviewer="GitHub Copilot (Copilot CLI)"; review_type="Cross-provider review (Claude implemented, Copilot reviewed)" ;;
+            cross-claude:claude:claude) reviewer="Claude (separate read-only invocation)"; review_type="Same-provider review: not independent" ;;
             full-claude:claude:claude) reviewer="Claude (separate read-only invocation)"; review_type="Same-provider review (full-claude fallback): not independent" ;;
             *) not_published not-eligible "unknown review route '$AGENT_MODE' (implementer '$IMPLEMENTER', reviewer '$REVIEWER')." ;;
           esac
