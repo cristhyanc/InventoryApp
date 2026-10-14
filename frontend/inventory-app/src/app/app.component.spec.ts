@@ -5,6 +5,7 @@ import { Router, provideRouter } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
 import { BehaviorSubject, NEVER, Observable, Subject, of } from 'rxjs';
+import packageJson from '../../package.json';
 import { AccessService, MemberAccessState } from './access/access.service';
 import { AccountStateAnswer, AccountStateService } from './access/account-state.service';
 import { CAPABILITIES, capabilitySet } from './access/capabilities';
@@ -1010,5 +1011,17 @@ describe('AppComponent routing (issue #391)', () => {
 
     expect((fixture.nativeElement as HTMLElement).querySelector('main')?.textContent).toContain('page body');
     expect(sidebar(fixture.nativeElement as HTMLElement)?.querySelector('a[href="/reports/bookkeeping"]')).not.toBeNull();
+  });
+});
+
+describe('AppComponent version footer (issue #648)', () => {
+  beforeEach(() => stubMatchMedia(true));
+
+  it('shows the frontend package version in an application-wide footer', async () => {
+    const { host } = await render();
+
+    const footer = host.querySelector('footer');
+    expect(footer).not.toBeNull();
+    expect(footer?.textContent?.trim()).toBe(`Version ${packageJson.version}`);
   });
 });
