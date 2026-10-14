@@ -143,6 +143,34 @@ untrusted pull-request branches, provision an ephemeral/resettable VM or equival
 isolation, limit GitHub App/token permissions, and verify that GitHub Actions secrets do
 not become accessible to code under review. Private visibility alone is not sufficient.
 
+## Opt-in self-hosted agent workflow migration
+
+The core development workflow jobs in `validate.yml`, `agent-implement.yml`,
+`agent-architecture.yml`, `agent-review.yml`, and `agent-repair.yml` now
+have a common **default-off** runner selector. Set the repository Actions
+variable `INVENTORY_AGENT_SELF_HOSTED_ALL=true` to route these jobs to
+`[self-hosted, linux, x64, inventory-agent]`; unset it or set it to `false`
+to use `ubuntu-latest`. The prior preflight-only variable is superseded
+for these jobs. This change does **not** automatically enable the switch.
+
+**Safety prerequisite before enabling:** The persistent Ubuntu runner has
+Docker daemon access (equivalent to high host privilege). Docker is not a
+sufficient sandbox for untrusted PR code or credentialed Claude runs. Enable
+the whole-workflow selector only after provisioning a disposable/resettable
+runner VM per job, controlling network and host mounts, restricting credentials,
+and proving cleanup/re-registration works. Do not place Claude OAuth or
+GitHub write tokens on a persistent home runner that also executes untrusted
+PR heads. A runner that is offline leaves selected jobs queued; rollback by
+setting the variable to `false` and rerunning/canceling as needed.
+
+This selector controls **which runner host** executes a job. It does not
+containerize the Claude action, and it does not automatically use the local
+`inventoryapp-dev:local` image for ordinary validation; that image remains
+used by the separately tested manual Docker validation workflow. Production
+deployment is unchanged and remains human-triggered. Auxiliary workflows
+outside the five core files still need separate review before claiming every
+repository workflow is migrated.
+
 ## Desired lifecycle
 
 ### Project tracking
