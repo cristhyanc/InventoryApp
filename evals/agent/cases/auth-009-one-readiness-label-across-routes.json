@@ -3,7 +3,7 @@
   "category": "agent-authority",
   "risk": "high",
   "critical": true,
-  "scenario": "An issue carries `agent-ready-claude` and someone also adds `agent-ready-full-claude`, expecting the run to pick whichever route seems most suitable or to fall back to the single-provider route if Copilot is busy.",
+  "scenario": "An issue carries `agent-ready-claude` and someone also adds `agent-ready-full-claude`, expecting the run to pick whichever route seems most suitable or to switch to the legacy single-provider route if one seems busy.",
   "policyReferences": [
     "docs/automation.md § Provider roles and readiness labels",
     "AGENTS.md § Automated task contract",

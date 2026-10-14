@@ -17,7 +17,7 @@ import {
 const SHA = '6b5ade799d290fb2c4e59710cbf047c43a305df0';
 const ENV = {
   GITHUB_REPOSITORY: 'owner/InventoryApp', PR_NUMBER: '267', HEAD_SHA: SHA, AGENT_MODE: 'cross-claude',
-  IMPLEMENTER: 'claude', REVIEWER: 'copilot', GITHUB_RUN_ID: '38050149174', GITHUB_RUN_ATTEMPT: '1',
+  IMPLEMENTER: 'claude', REVIEWER: 'claude', GITHUB_RUN_ID: '38050149174', GITHUB_RUN_ATTEMPT: '1',
 };
 const context = contextFromEnv(ENV);
 const review = (overrides = {}) => ({
@@ -140,9 +140,9 @@ describe('packaging', () => {
     assert.equal(redactions, 0);
     assert.deepEqual(
       { ...envelope, review: undefined },
-      { schema: 'inventoryapp.agent-review-result.v1', repository: 'owner/InventoryApp', pr_number: 267, head_sha: SHA, agent_mode: 'cross-claude', implementer: 'claude', reviewer: 'copilot', run_id: 38050149174, run_attempt: 1, redactions: 0, review: undefined },
+      { schema: 'inventoryapp.agent-review-result.v1', repository: 'owner/InventoryApp', pr_number: 267, head_sha: SHA, agent_mode: 'cross-claude', implementer: 'claude', reviewer: 'claude', run_id: 38050149174, run_attempt: 1, redactions: 0, review: undefined },
     );
-    assert.equal(artifactName(context), 'agent-review-result-copilot-38050149174');
+    assert.equal(artifactName(context), 'agent-review-result-claude-38050149174');
   });
 
   for (const [name, raw, expected] of [
@@ -157,7 +157,7 @@ describe('packaging', () => {
   }
 
   it('refuses an incomplete or unknown trusted context', () => {
-    for (const [key, value] of [['HEAD_SHA', 'abc'], ['PR_NUMBER', ''], ['AGENT_MODE', 'cross-copilot'], ['REVIEWER', 'openai'], ['IMPLEMENTER', 'copilot'], ['GITHUB_RUN_ID', ''], ['GITHUB_RUN_ATTEMPT', '0']]) {
+    for (const [key, value] of [['HEAD_SHA', 'abc'], ['PR_NUMBER', ''], ['AGENT_MODE', 'cross-copilot'], ['REVIEWER', 'openai'], ['REVIEWER', 'copilot'], ['IMPLEMENTER', 'copilot'], ['GITHUB_RUN_ID', ''], ['GITHUB_RUN_ATTEMPT', '0']]) {
       assert.equal(code(() => contextFromEnv({ ...ENV, [key]: value })), 'context', key);
     }
   });
@@ -171,7 +171,7 @@ describe('verification', () => {
   });
 
   it('refuses an envelope bound to anything else', () => {
-    for (const overrides of [{ pr_number: 1 }, { head_sha: 'f'.repeat(40) }, { agent_mode: 'full-claude' }, { reviewer: 'claude' }, { implementer: 'copilot' }, { repository: 'a/b' }, { run_id: 1 }, { run_attempt: 2 }]) {
+    for (const overrides of [{ pr_number: 1 }, { head_sha: 'f'.repeat(40) }, { agent_mode: 'full-claude' }, { reviewer: 'copilot' }, { implementer: 'copilot' }, { repository: 'a/b' }, { run_id: 1 }, { run_attempt: 2 }]) {
       assert.equal(code(() => verifyEnvelope(packaged(review(), overrides), context)), 'mismatch', JSON.stringify(overrides));
     }
     assert.equal(code(() => verifyEnvelope(Buffer.from(''), context)), 'empty');
@@ -189,7 +189,7 @@ describe('command line', () => {
       const ok = spawnSync(process.execPath, [script, 'package', join(dir, 'raw.json'), join(dir, 'out.json')], { encoding: 'utf8', env: { ...process.env, ...ENV } });
       assert.equal(ok.status, 0, ok.stderr);
       const summary = JSON.parse(ok.stdout);
-      assert.equal(summary.name, 'agent-review-result-copilot-38050149174');
+      assert.equal(summary.name, 'agent-review-result-claude-38050149174');
       assert.match(summary.digest, /^[0-9a-f]{64}$/);
       assert.equal(JSON.parse(readFileSync(join(dir, 'out.json'), 'utf8')).head_sha, SHA);
 
@@ -203,16 +203,16 @@ describe('command line', () => {
 });
 
 describe('architecture findings', () => {
-  const FINDINGS_ENV = { ...ENV, CHECKER: 'copilot' };
+  const FINDINGS_ENV = { ...ENV, CHECKER: 'claude' };
   delete FINDINGS_ENV.REVIEWER;
   const findingsContext = findingsContextFromEnv(FINDINGS_ENV);
   const held = 'correct-horse-battery-staple-fixture';
   const packaged = (raw, verdict = 'findings', knownValues = []) => Buffer.from(packageFindings(raw, verdict, findingsContext, knownValues).text);
 
   it('names the artifact after the checker and run, and binds the checker to the route', () => {
-    assert.equal(findingsArtifactName(findingsContext), 'agent-architecture-findings-copilot-38050149174');
+    assert.equal(findingsArtifactName(findingsContext), 'agent-architecture-findings-claude-38050149174');
     assert.equal(findingsContextFromEnv({ ...FINDINGS_ENV, AGENT_MODE: 'full-claude', CHECKER: 'claude' }).checker, 'claude');
-    for (const env of [{ ...FINDINGS_ENV, AGENT_MODE: 'full-claude' }, { ...FINDINGS_ENV, CHECKER: 'openai' }, { ...FINDINGS_ENV, CHECKER: '' }]) {
+    for (const env of [{ ...FINDINGS_ENV, CHECKER: 'copilot' }, { ...FINDINGS_ENV, AGENT_MODE: 'full-claude', CHECKER: 'copilot' }, { ...FINDINGS_ENV, CHECKER: 'openai' }, { ...FINDINGS_ENV, CHECKER: '' }]) {
       assert.equal(code(() => findingsContextFromEnv(env)), 'context');
     }
   });
@@ -243,7 +243,7 @@ describe('architecture findings', () => {
     const good = JSON.parse(packaged('finding').toString('utf8'));
     for (const [change, expected] of [
       [{ repository: 'other/repo' }, 'mismatch'], [{ pr_number: 1 }, 'mismatch'], [{ head_sha: 'f'.repeat(40) }, 'mismatch'],
-      [{ agent_mode: 'full-claude' }, 'mismatch'], [{ checker: 'claude' }, 'mismatch'], [{ run_id: 1 }, 'mismatch'], [{ run_attempt: 2 }, 'mismatch'],
+      [{ agent_mode: 'full-claude' }, 'mismatch'], [{ checker: 'copilot' }, 'mismatch'], [{ run_id: 1 }, 'mismatch'], [{ run_attempt: 2 }, 'mismatch'],
       [{ schema: 'other' }, 'malformed'], [{ extra: true }, 'malformed'], [{ verdict: 'maybe' }, 'contract'], [{ findings: 7 }, 'contract'],
       [{ findings: 'x'.repeat(MAX_FINDINGS_CHARS + 1) }, 'contract'], [{ findings: '   ' }, 'contract'], [{ verdict: 'clean' }, 'mismatch'],
     ]) {

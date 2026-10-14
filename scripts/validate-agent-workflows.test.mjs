@@ -51,6 +51,7 @@ import {
   verifyScopedStagingCleanupPermissions,
   verifyValidationModeIsolation,
   RETIRED_COPILOT_IMPLEMENTATION_PATHS,
+  RETIRED_COPILOT_RUNTIME_PATHS,
   reviewRequestPath,
   NAYAX_MCP_CONTRACT,
   agentsPath,
@@ -899,7 +900,7 @@ describe('updated-head scheduling contract', () => {
   });
 });
 
-describe('cross-review contract (Claude implements; Copilot checks and reviews)', () => {
+describe('Claude-only review contract (Claude implements; separate Claude invocations check and review)', () => {
   const headUpdateWorkflow = readRepositoryFile(headUpdatePath);
   const reviewRequestWorkflow = readRepositoryFile(reviewRequestPath);
   const rejects = (overrides, pattern) => assert.throws(() => runContractChecks({ read: readWithOverrides(overrides) }), pattern);
@@ -941,21 +942,21 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
   it('rejects a review that could let an agent review its own implementation', () => {
     for (const [unsafe, reason] of [
       [replaceOnce(reviewWorkflow, "if: needs.context.outputs.reviewer == 'claude'", "if: needs.context.outputs.reviewer != ''"), /agent-review.yml review job/],
-      [replaceOnce(reviewWorkflow, "    if: needs.context.outputs.reviewer == 'copilot'", "    if: always()"), /agent-review.yml Copilot review job/],
       [replaceOnce(reviewWorkflow, '[ "$live_implementer" = "$IMPLEMENTER" ] || not_published', 'true || not_published'), /agent-review.yml publish job/],
-      [replaceOnce(reviewWorkflow, "needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.result || needs.review.result", 'needs.review.result'), /agent-review.yml publish job/],
-      // The route table: the default route is always reviewed by Copilot, never by its implementer.
-      [replaceOnce(reviewWorkflow, '            cross-claude:claude)\n              reviewer=copilot\n', '            cross-claude:claude)\n              reviewer=claude\n'), /agent-review.yml cross-claude route/],
+      [replaceOnce(reviewWorkflow, 'REVIEW_RESULT: ${{ needs.review.result }}', "REVIEW_RESULT: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.result || needs.review.result }}"), /agent-review.yml publish job|copilot/],
+      // The route table: the default route is reviewed by a separate same-provider Claude invocation, never by Copilot.
+      [replaceOnce(reviewWorkflow, '            cross-claude:claude)\n              reviewer=claude\n', '            cross-claude:claude)\n              reviewer=copilot\n'), /agent-review.yml cross-claude route|reviewer=copilot/],
       [replaceOnce(reviewWorkflow, '            *) fail "Provider mode \'$agent_mode\' does not match implementer $implementer." ;;', '            *) reviewer=claude ;;'), /agent-review.yml context/],
-      [replaceOnce(reviewWorkflow, 'cross-claude:claude:copilot) reviewer=', 'cross-claude:claude:claude) reviewer='), /agent-review.yml publish job/],
+      [replaceOnce(reviewWorkflow, 'cross-claude:claude:claude) reviewer=', 'cross-claude:claude:copilot) reviewer='), /agent-review.yml publish job/],
     ]) {
       rejects({ [reviewPath]: unsafe }, reason);
     }
   });
-
   it('rejects a same-provider review that is not called out as such', () => {
     for (const [unsafe, reason] of [
       [reviewWorkflow.replace(/(full-claude:claude\)\n {14}reviewer=claude\n {14}review_relation="[^"]*)This is a same-provider review, not an independent one/, '$1This is an independent review'), /agent-review.yml full-claude route/],
+      [reviewWorkflow.replace(/(cross-claude:claude\)\n {14}reviewer=claude\n {14}review_relation="[^"]*)This is a same-provider review, not an independent one/, '$1This is an independent review'), /agent-review.yml cross-claude route/],
+      [replaceOnce(reviewWorkflow, 'review_type="Same-provider review: not independent"', 'review_type="Independent review"'), /agent-review.yml publish job/],
       [replaceOnce(reviewWorkflow, 'review_type="Same-provider review (full-claude fallback): not independent"', 'review_type="Independent review"'), /agent-review.yml publish job/],
       [replaceOnce(reviewWorkflow, 'Review type: \\($review_type)\\n', ''), /agent-review.yml publish job/],
     ]) {
@@ -963,32 +964,22 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
     }
   });
 
-  it('rejects a Copilot final review that could write, float its CLI version or skip the review contract', () => {
-    for (const unsafe of [
-      replaceOnce(reviewWorkflow, "            --deny-tool='write' \\\n            -p \"$prompt\" > \"$work/copilot-output.md\"", '            -p "$prompt" > "$work/copilot-output.md"'),
-      replaceOnce(reviewWorkflow, "    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    # Only the artifact id and the envelope digest leave this job as outputs; see the review job.", "    permissions:\n      contents: read\n      pull-requests: write\n      issues: read\n      actions: read\n      checks: read\n      statuses: read\n    # Only the artifact id and the envelope digest leave this job as outputs; see the review job."),
-      replaceOnce(reviewWorkflow, 'COPILOT_AUTO_UPDATE: "false"', 'COPILOT_AUTO_UPDATE: "true"'),
-      reviewWorkflow.replace('npm ci --prefix "$cli_dir" --ignore-scripts --no-audit --no-fund\n          echo "$cli_dir/node_modules/.bin" >> "$GITHUB_PATH"\n\n      - name: Run Copilot review', 'npm install -g @github/copilot@latest\n\n      - name: Run Copilot review'),
-      replaceOnce(reviewWorkflow, "--allow-tool='shell(gh run list:*)'", "--allow-tool='shell(gh run list:*)' --allow-tool='shell(gh pr comment:*)'"),
-      replaceOnce(reviewWorkflow, '.status == "met" or .status == "not met" or .status == "not verified"', 'true'),
-      replaceOnce(reviewWorkflow, "--deny-tool='shell' --deny-tool='write' --deny-tool='url'", "--deny-tool='write'"),
-      replaceOnce(reviewWorkflow, 'copilot -s --no-ask-user --disable-builtin-mcps', 'copilot -s --no-ask-user'),
-    ]) {
-      rejects({ [reviewPath]: unsafe }, /agent-review.yml Copilot review/);
+  it('rejects any Copilot CLI review job, credential or pinned CLI coming back', () => {
+    const copilotJob = '  copilot-review:\n    name: Copilot review\n    needs: context\n    runs-on: ubuntu-latest\n    steps:\n      - run: copilot -s -p review\n        env:\n          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}\n\n';
+    rejects({ [reviewPath]: replaceOnce(reviewWorkflow, '  publish:\n', copilotJob + '  publish:\n') }, /agent-review\.yml|copilot/i);
+    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, '  claude-check:\n', copilotJob.replace('copilot-review', 'copilot-check') + '  claude-check:\n') }, /agent-architecture\.yml|copilot/i);
+    for (const path of RETIRED_COPILOT_RUNTIME_PATHS) {
+      rejects({ [path]: '{}' }, /Copilot CLI was removed/);
     }
   });
-
-  // PR #558: the review must never travel as a job output again, and both ends of the artifact
-  // hand-off must use the trusted transport script and a pinned, short-lived artifact.
   it('rejects a review hand-off through job outputs, untrusted transport code or a long-lived artifact', () => {
-    const copilotJob = reviewWorkflow.split('\n  copilot-review:\n')[1].split('\n  publish:\n')[0];
+    const reviewJob = reviewWorkflow.split('\n  review:\n')[1].split('\n  publish:\n')[0];
     for (const [unsafe, reason] of [
       [replaceOnce(reviewWorkflow, '      artifact_id: ${{ steps.upload.outputs.artifact-id }}\n      artifact_digest: ${{ steps.package.outputs.digest }}\n\n    steps:\n      - name: Check out pull request head\n        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        with:\n          ref: ${{ needs.context.outputs.head_sha }}\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Run Claude Code review agent', '      artifact_id: ${{ steps.upload.outputs.artifact-id }}\n      artifact_digest: ${{ steps.package.outputs.digest }}\n      structured_output: ${{ steps.review_agent.outputs.structured_output }}\n\n    steps:\n      - name: Check out pull request head\n        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        with:\n          ref: ${{ needs.context.outputs.head_sha }}\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Run Claude Code review agent'), /agent-review.yml review outputs/],
-      [reviewWorkflow.replace(copilotJob, copilotJob.replace('node "$transport" package', 'node scripts/agent-review-transport.mjs package')), /agent-review.yml copilot-review review transport/],
-      [reviewWorkflow.replace(copilotJob, copilotJob.replace('retention-days: 1', 'retention-days: 90')), /agent-review.yml copilot-review review transport/],
-      [reviewWorkflow.replace(copilotJob, copilotJob.replace('          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}\n', '')), /agent-review.yml copilot-review review transport/],
+      [reviewWorkflow.replace(reviewJob, reviewJob.replace('node "$transport" package', 'node scripts/agent-review-transport.mjs package')), /agent-review.yml review review transport/],
+      [reviewWorkflow.replace(reviewJob, reviewJob.replace('retention-days: 1', 'retention-days: 90')), /agent-review.yml review review transport/],
       [replaceOnce(reviewWorkflow, '          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n', ''), /agent-review.yml review review transport/],
-      [reviewWorkflow.replace(copilotJob, copilotJob.replace('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2', 'actions/upload-artifact@v4')), /agent-review.yml copilot-review review transport/],
+      [reviewWorkflow.replace(reviewJob, reviewJob.replace('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2', 'actions/upload-artifact@v4')), /agent-review.yml review review transport/],
       [replaceOnce(reviewWorkflow, '      issues: read\n      actions: read\n\n    steps:\n      - name: Guard and publish review', '      issues: read\n\n    steps:\n      - name: Guard and publish review'), /agent-review.yml publish transport/],
       [replaceOnce(reviewWorkflow, "          REVIEW_ARTIFACT_ID: ", "          REVIEW_OUTPUT: ${{ needs.review.outputs.structured_output }}\n          REVIEW_ARTIFACT_ID: "), /agent-review.yml publish (job|transport)/],
       [replaceOnce(reviewWorkflow, 'not_published publication-failed "the review result could not be delivered: ', 'not_published ready "the review result could not be delivered: '), /agent-review.yml publish transport/],
@@ -1001,18 +992,16 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
   // The architecture findings follow the same rule as the review: model text never travels as a job
   // output, and every end of the hand-off runs the trusted transport script.
   it('rejects an architecture findings hand-off through job outputs, untrusted transport code or a long-lived artifact', () => {
-    const copilotCheck = architectureWorkflow.split('\n  copilot-check:\n')[1].split('\n  claude-check:\n')[0];
     const claudeCheck = architectureWorkflow.split('\n  claude-check:\n')[1].split('\n  sonar:\n')[0];
-    const inCopilot = (from, to) => architectureWorkflow.replace(copilotCheck, () => replaceOnce(copilotCheck, from, to));
     const inClaude = (from, to) => architectureWorkflow.replace(claudeCheck, () => replaceOnce(claudeCheck, from, to));
     for (const [unsafe, reason] of [
-      [inCopilot('      findings_digest: ${{ steps.package.outputs.digest }}\n', '      findings_digest: ${{ steps.package.outputs.digest }}\n      findings: ${{ steps.check.outputs.findings }}\n'), /agent-architecture.yml copilot-check outputs/],
+      [inClaude('      findings_digest: ${{ steps.package.outputs.digest }}\n', '      findings_digest: ${{ steps.package.outputs.digest }}\n      findings: ${{ steps.check.outputs.findings }}\n'), /agent-architecture.yml claude-check outputs/],
       [inClaude('      findings_artifact_id: ${{ steps.upload.outputs.artifact-id }}\n', ''), /agent-architecture.yml claude-check outputs/],
-      [inCopilot('git show "$TRUSTED_SHA:scripts/agent-review-transport.mjs" > "$transport"', 'cp scripts/agent-review-transport.mjs "$transport"'), /agent-architecture.yml copilot-check findings transport/],
+      [inClaude('git show "$TRUSTED_SHA:scripts/agent-review-transport.mjs" > "$transport"', 'cp scripts/agent-review-transport.mjs "$transport"'), /agent-architecture.yml claude-check findings transport/],
       [inClaude('node "$transport" package-findings', 'node scripts/agent-review-transport.mjs package-findings'), /agent-architecture.yml claude-check findings transport/],
-      [inCopilot('retention-days: 1', 'retention-days: 90'), /agent-architecture.yml copilot-check findings transport/],
+      [inClaude('retention-days: 1', 'retention-days: 90'), /agent-architecture.yml claude-check findings transport/],
       [inClaude('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2', 'actions/upload-artifact@v4'), /agent-architecture.yml claude-check findings transport/],
-      [inCopilot('          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}\n', ''), /agent-architecture.yml copilot-check findings transport/],
+      [inClaude('          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n', ''), /agent-architecture.yml claude-check findings transport/],
       [inClaude('          REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n', ''), /agent-architecture.yml claude-check findings transport/],
       [inClaude('          CHECKER: claude\n', '          CHECKER: copilot\n'), /agent-architecture.yml claude-check findings transport/],
       [replaceOnce(architectureWorkflow, '      issues: read\n      # Read-only: lets the trusted step below fetch this run\'s architecture findings artifact.\n      actions: read\n', '      issues: read\n'), /agent-architecture.yml architecture permissions/],
@@ -1036,10 +1025,6 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
     }
   });
 
-  it('requires CI to run the Copilot review contract regression suite', () => {
-    rejects({ [validatePath]: replaceOnce(validateWorkflow, '          node --test scripts/copilot-review-contract.test.mjs\n', '') }, /validate.yml validate job/);
-  });
-
   it('rejects review routing that bypasses agent-review.yml or lets the dispatcher change labels', () => {
     rejects({ [validatePath]: replaceOnce(validateWorkflow, 'gh workflow run agent-review.yml', 'gh workflow run other-review.yml') }, /validate.yml review dispatcher/);
     const dispatcherEnv = '          HEAD_SHA: ${{ needs.context.outputs.head_sha }}\n          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}\n        run: |';
@@ -1047,30 +1032,18 @@ describe('cross-review contract (Claude implements; Copilot checks and reviews)'
     rejects({ [validatePath]: replaceOnce(validateWorkflow, '      pull-requests: read\n      issues: read\n      contents: read\n\n    steps:\n      - name: Reverify current head and dispatch review', '      pull-requests: write\n      issues: write\n      contents: read\n\n    steps:\n      - name: Reverify current head and dispatch review') }, /validate.yml review dispatcher/);
   });
 
-  it('rejects a Copilot architecture check that could write, push or use another credential', () => {
-    for (const unsafe of [
-      replaceOnce(architectureWorkflow, "            --deny-tool='write' \\\n", ''),
-      replaceOnce(architectureWorkflow, "    permissions:\n      contents: read\n    outputs:\n      verdict:", "    permissions:\n      contents: write\n    outputs:\n      verdict:"),
-      replaceOnce(architectureWorkflow, 'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}', 'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}'),
-      replaceOnce(architectureWorkflow, '          [ -z "$(git status --porcelain)" ] || fail', '          true || fail'),
-    ]) {
-      rejects({ [architecturePath]: unsafe }, /agent-architecture.yml Copilot check/);
-    }
-  });
-
-  it('rejects a Claude fix pass that runs without Copilot findings or SonarCloud issues', () => {
+  it('rejects a Claude fix pass that runs without architecture findings or SonarCloud issues', () => {
     rejects({ [architecturePath]: replaceOnce(architectureWorkflow, " || fromJSON(needs.sonar.outputs.count || '0') > 0)", ')') }, /agent-architecture.yml architecture job/);
-    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, "(needs.context.outputs.checker == 'copilot' && needs.copilot-check.outputs.verdict == 'findings') || ", '') }, /agent-architecture.yml architecture job/);
-    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, "(needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.verdict == 'findings') || ", '') }, /agent-architecture.yml architecture job/);
+    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, "(needs.claude-check.outputs.verdict == 'findings' || ", '(') }, /agent-architecture.yml architecture job/);
+    rejects({ [architecturePath]: replaceOnce(architectureWorkflow, "needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict", "(needs.claude-check.outputs.verdict") }, /agent-architecture.yml architecture job/);
   });
-
   it('rejects an architecture checker that is not selected by the verified route, or not read-only', () => {
     for (const [from, to, reason] of [
-      // Each checker runs only on its route, so the other provider is never invoked.
-      ["    # Claude-primary route only; the full-claude route never runs Copilot.\n    if: needs.context.outputs.checker == 'copilot'\n", '', /agent-architecture.yml Copilot check/],
+      // The checker runs only for a verified Claude route.
       ["    if: needs.context.outputs.checker == 'claude'\n", '', /agent-architecture.yml same-provider Claude check/],
-      // The route table: full-claude never maps to Copilot.
-      ['full-claude) checker=claude;', 'full-claude) checker=copilot;', /agent-architecture.yml context/],
+      // The route table: no route maps to Copilot.
+      ['full-claude) checker=claude;', 'full-claude) checker=copilot;', /agent-architecture.yml context|checker=copilot/],
+      ['cross-claude) checker=claude;', 'cross-claude) checker=copilot;', /agent-architecture.yml context|checker=copilot/],
       // A same-provider checker must say so, and may not write or hold the other provider's secret.
       ['This is a same-provider check, not an independent one', 'This is an independent check', /agent-architecture.yml same-provider Claude check/],
       ["    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n    outputs:\n      verdict: ${{ steps.check.outputs.verdict }}", "    permissions:\n      contents: read\n      pull-requests: write\n      issues: read\n    outputs:\n      verdict: ${{ steps.check.outputs.verdict }}", /agent-architecture.yml same-provider Claude check/],
@@ -1131,29 +1104,14 @@ describe('Nayax documentation access (issue #192)', () => {
     rejects({ [repairPath]: replaceOnce(repairWorkflow, contract.claudeMcpConfig, contract.claudeMcpConfig + contract.claudeMcpConfig) }, /exactly one --mcp-config/);
   });
 
-  it('requires the filtered server and exact tool rules in both Copilot CLI analysis steps', () => {
-    for (const [path, workflow] of [[architecturePath, architecture], [reviewPath, review]]) {
-      rejects({ [path]: replaceOnce(workflow, contract.copilotMcpConfig, "--additional-mcp-config '{\"mcpServers\":{\"nayax\":{\"type\":\"http\",\"url\":\"https://devzone.nayax.com/mcp\"}}}'") }, /Copilot/);
-      rejects({ [path]: replaceOnce(workflow, contract.copilotToolRules, "--allow-tool='nayax'") }, /Copilot/);
-      rejects({ [path]: replaceOnce(workflow, contract.copilotToolRules, "--allow-tool='nayax(search_nayax_developer_portal)' --allow-tool='nayax(query_docs_filesystem_nayax_developer_portal)'") }, /Copilot/);
-    }
-    rejects({ [architecturePath]: replaceOnce(architecture, ' ' + contract.promptRule, '') }, /architecture check prompt/);
-    rejects({ [reviewPath]: replaceOnce(review, '\n          ' + contract.promptRule + '\n', '\n') }, /Copilot review prompt/);
-  });
-
-  it('keeps model triage and the format-only review repair out of Nayax documentation access', () => {
+  it('keeps model triage out of Nayax documentation access', () => {
     const selection = readRepositoryFile(modelSelectionPath);
     rejects({ [modelSelectionPath]: replaceOnce(selection, '            --max-turns 8\n', '            --max-turns 8\n' + contract.claudeMcpConfig) }, /model triage/);
-    rejects(
-      { [reviewPath]: replaceOnce(review, 'copilot -s --no-ask-user --disable-builtin-mcps \\\n', 'copilot -s --no-ask-user --disable-builtin-mcps \\\n              ' + contract.copilotMcpConfig + ' \\\n') },
-      /format repair|exactly one --additional-mcp-config/,
-    );
-    rejects({ [reviewPath]: replaceOnce(review, 'copilot -s --no-ask-user --disable-builtin-mcps', 'copilot -s --no-ask-user') }, /format repair/);
     rejects({ '.mcp.json': '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp"}}}' }, /workspace MCP configuration/);
     rejects({ '.github/mcp.json': '{}' }, /workspace MCP configuration/);
   });
 
-  it('keeps the prompt rule safe inside the double-quoted Copilot architecture prompt', () => {
+  it('keeps the prompt rule safe inside a double-quoted shell string', () => {
     for (const unsafe of ['`', '$', '"']) assert.ok(!contract.promptRule.includes(unsafe));
   });
 

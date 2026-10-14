@@ -31,7 +31,6 @@ const finalizeShell = stepShell(read('.github/workflows/agent-architecture.yml')
 const contextShell = stepShell(read('.github/workflows/agent-architecture.yml'), 'Verify exact agent pull request');
 const storeFindingsShell = stepShell(read('.github/workflows/agent-architecture.yml'), 'Store architecture findings and SonarCloud issues for the fix agent');
 const architectureWorkflow = read('.github/workflows/agent-architecture.yml');
-const copilotPackageShell = stepShell(architectureWorkflow.split('  copilot-check:\n')[1], 'Package architecture findings');
 const claudePackageShell = stepShell(architectureWorkflow.split('  claude-check:\n')[1], 'Package architecture findings');
 const TRANSPORT_SCRIPT = new URL('./agent-review-transport.mjs', import.meta.url).pathname;
 
@@ -43,7 +42,7 @@ const SHA = '6b5ade799d290fb2c4e59710cbf047c43a305df0';
 const NEWER_SHA = 'f49fcc313ab6295c29d9d426445e1dbbd54fd997';
 const RUN_ID = '38060000001';
 const ARTIFACT_ID = '5151';
-const MODE_FOR_CHECKER = { copilot: 'cross-claude', claude: 'full-claude' };
+const MODE_FOR_CHECKER = { claude: 'cross-claude' };
 
 // A fake gh CLI: serves the fixture in $FAKE_GH_STATE and appends every mutating call to $FAKE_GH_LOG.
 const FAKE_GH = `#!/usr/bin/env node
@@ -109,13 +108,13 @@ function fixture(overrides = {}) {
 
 // The envelope a checker job's package step uploads, built here directly so a test can also produce
 // one the package step would never write.
-function findingsEnvelope({ checker = 'copilot', verdict = 'findings', findings = 'finding', overrides = {} } = {}) {
+function findingsEnvelope({ checker = 'claude', mode = MODE_FOR_CHECKER[checker], verdict = 'findings', findings = 'finding', overrides = {} } = {}) {
   return {
     schema: FINDINGS_SCHEMA,
     repository: REPO,
     pr_number: Number(PR),
     head_sha: SHA,
-    agent_mode: MODE_FOR_CHECKER[checker],
+    agent_mode: mode,
     implementer: 'claude',
     checker,
     run_id: Number(RUN_ID),
@@ -152,7 +151,7 @@ function run(shell, { state, env = {}, findings, cwd }) {
   const root = mkdtempSync(join(tmpdir(), 'agent-architecture-handoff-'));
   try {
     state = structuredClone(state);
-    const checker = env.CHECKER ?? 'copilot';
+    const checker = env.CHECKER ?? 'claude';
     const delivered = stageFindings(root, state, findings, checker);
     const bin = join(root, 'bin');
     spawnSync('mkdir', [bin]);
@@ -264,16 +263,16 @@ describe('provider mode at the architecture handoff', () => {
 });
 
 describe('architecture checker selected by the verified route', () => {
-  // Four-mode matrix on the Claude-implementer side: only the Claude routes reach this workflow, and
-  // each names exactly one checker; the Copilot routes fail closed and name none.
-  for (const [label, checker] of [['agent-ready-claude', 'copilot'], ['agent-ready-claude-high', 'copilot'], ['agent-ready-full-claude', 'claude']]) {
+  // Only the Claude routes reach this workflow, and every one names the same-provider Claude checker;
+  // the retired Copilot routes fail closed and name none.
+  for (const [label, checker] of [['agent-ready-claude', 'claude'], ['agent-ready-claude-high', 'claude'], ['agent-ready-full-claude', 'claude']]) {
     it(`${label} selects the ${checker} architecture check`, () => {
       const { status, stderr, outputs } = run(contextShell, { state: { ...fixture(), events: claimEvents(label) }, env: { HEAD_SHA: SHA } });
       assert.equal(status, 0, stderr);
       assert.match(outputs, new RegExp(`^checker=${checker}$`, 'm'));
       assert.match(outputs, new RegExp(`^agent_mode=${label === 'agent-ready-full-claude' ? 'full-claude' : 'cross-claude'}$`, 'm'));
-      if (checker === 'claude') assert.match(outputs, /^checker_name=.*same-provider check, not an independent one/m);
-      else assert.match(outputs, /^checker_name=GitHub Copilot, a different agent,$/m);
+      assert.match(outputs, /^checker_name=.*same-provider check, not an independent one/m);
+      assert.doesNotMatch(outputs, /Copilot/);
     });
   }
   for (const label of ['agent-ready-copilot', 'agent-ready-full-copilot']) {
@@ -305,34 +304,34 @@ describe('stale implementation dispatcher', () => {
 
 // The text each checker returns, as the checker job packages it.
 const CHECKER_TEXT = {
-  copilot: { findings: 'backend/Api/ProductsController.cs:12 calls the repository directly.\nARCHITECTURE: FINDINGS', clean: 'ARCHITECTURE: CLEAN' },
   claude: { findings: '- `backend/Api/ProductsController.cs:12` (Use cases): calls the repository directly.', clean: '' },
 };
 
 // Runs the finalizer with the findings artifact the selected checker would have uploaded, unless the
 // test supplies its own delivery (or `findings: null` for none).
 function finalizeRun({ state, env, findings }) {
-  const checker = env.CHECKER in CHECKER_TEXT ? env.CHECKER : 'copilot';
+  const checker = env.CHECKER in CHECKER_TEXT ? env.CHECKER : 'claude';
   const verdict = ['clean', 'findings'].includes(env.CHECK_VERDICT) ? env.CHECK_VERDICT : 'findings';
-  const delivery = findings === undefined ? { envelope: findingsEnvelope({ checker, verdict, findings: CHECKER_TEXT[checker][verdict] }) } : findings;
+  const mode = env.AGENT_MODE ?? MODE_FOR_CHECKER[checker];
+  const delivery = findings === undefined ? { envelope: findingsEnvelope({ checker, mode, verdict, findings: CHECKER_TEXT[checker][verdict] }) } : findings;
   return run(finalizeShell, { state, env, findings: delivery });
 }
 
 describe('architecture finalizer', () => {
-  // Copilot's read-only check reported findings and Claude's fix pass produced the final head.
+  // The read-only Claude check reported findings and Claude's fix pass produced the final head.
   const success = {
     CONTEXT_JOB_RESULT: 'success',
-    CHECKER: 'copilot',
+    CHECKER: 'claude',
     CHECK_JOB_RESULT: 'success',
     CHECK_VERDICT: 'findings',
     ARCHITECTURE_JOB_RESULT: 'success',
     EXPECTED_START_SHA: SHA,
     FIX_SHA: SHA,
   };
-  // Copilot reported a clean architecture, so Claude's fix pass was skipped.
+  // The check reported a clean architecture, so Claude's fix pass was skipped.
   const clean = { ...success, CHECK_VERDICT: 'clean', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' };
-  // Full-claude: the separate read-only Claude check reported findings; the record says same-provider.
-  const sameProvider = { ...success, CHECKER: 'claude' };
+  // Full-claude: the same separate read-only Claude check on the legacy route; the record says same-provider.
+  const sameProvider = { ...success, AGENT_MODE: 'full-claude' };
 
   it('records a same-provider Claude check as not independent and dispatches validation', () => {
     for (const env of [sameProvider, { ...sameProvider, CHECK_VERDICT: 'clean', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }]) {
@@ -345,16 +344,16 @@ describe('architecture finalizer', () => {
     }
   });
 
-  it('labels for review and dispatches exact-SHA validation after Claude fixes Copilot findings', () => {
+  it('labels for review and dispatches exact-SHA validation after Claude fixes the architecture findings', () => {
     const { status, calls } = finalizeRun({ state: fixture(), env: success });
     assert.equal(status, 0);
     assert.equal(dispatches(calls, 'validate.yml').length, 1);
     assert.ok(dispatches(calls, 'validate.yml')[0].args.includes(`head_sha=${SHA}`));
-    assert.ok(calls.some((c) => c.kind === 'pr-comment'), 'Copilot findings must be recorded on the PR');
+    assert.ok(calls.some((c) => c.kind === 'pr-comment'), 'the architecture findings must be recorded on the PR');
     assert.ok(!blocked(calls));
   });
 
-  it('dispatches validation of the unchanged head when Copilot reports a clean architecture', () => {
+  it('dispatches validation of the unchanged head when the check reports a clean architecture', () => {
     const { status, calls } = finalizeRun({ state: fixture(), env: clean });
     assert.equal(status, 0);
     assert.equal(dispatches(calls, 'validate.yml').length, 1);
@@ -391,11 +390,12 @@ describe('architecture finalizer', () => {
 
   for (const [name, env] of [
     ['a rejected target check', { ...success, CONTEXT_JOB_RESULT: 'failure', CHECKER: '', CHECK_JOB_RESULT: 'skipped', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
-    ['a failed Copilot check', { ...success, CHECK_JOB_RESULT: 'failure', CHECK_VERDICT: '', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
-    ['a failed same-provider Claude check (no fallback to Copilot)', { ...sameProvider, CHECK_JOB_RESULT: 'failure', CHECK_VERDICT: '', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
+    ['a failed Claude check', { ...success, CHECK_JOB_RESULT: 'failure', CHECK_VERDICT: '', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
+    ['a failed Claude check on the full-claude route', { ...sameProvider, CHECK_JOB_RESULT: 'failure', CHECK_VERDICT: '', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
     ['a skipped checker for the route', { ...sameProvider, CHECK_JOB_RESULT: 'skipped', CHECK_VERDICT: '', ARCHITECTURE_JOB_RESULT: 'skipped', FIX_SHA: '' }],
     ['an unknown checker', { ...success, CHECKER: 'gemini' }],
-    ['an unknown Copilot verdict', { ...success, CHECK_VERDICT: 'maybe' }],
+    ['a retired Copilot checker', { ...success, CHECKER: 'copilot' }],
+    ['an unknown verdict', { ...success, CHECK_VERDICT: 'maybe' }],
     ['a failed Claude fix pass', { ...success, ARCHITECTURE_JOB_RESULT: 'failure', FIX_SHA: '' }],
     ['a clean verdict that still ran the fix pass', { ...clean, ARCHITECTURE_JOB_RESULT: 'success', FIX_SHA: NEWER_SHA }],
     ['SonarCloud issues whose fix pass failed', { ...clean, SONAR_COUNT: '1', ARCHITECTURE_JOB_RESULT: 'failure' }],
@@ -437,7 +437,7 @@ describe('architecture finalizer', () => {
 describe('architecture findings delivery to the finalizer', () => {
   const success = {
     CONTEXT_JOB_RESULT: 'success',
-    CHECKER: 'copilot',
+    CHECKER: 'claude',
     CHECK_JOB_RESULT: 'success',
     CHECK_VERDICT: 'findings',
     ARCHITECTURE_JOB_RESULT: 'success',
@@ -464,7 +464,7 @@ describe('architecture findings delivery to the finalizer', () => {
     ['an artifact id the checker did not report', { envelope: findingsEnvelope() }, { FINDINGS_ARTIFACT_ID: '' }],
     ['a digest that does not match', { envelope: findingsEnvelope(), digest: 'f'.repeat(64) }],
     ['an envelope bound to another head', { envelope: findingsEnvelope({ overrides: { head_sha: NEWER_SHA } }) }],
-    ['an envelope from the other checker', { envelope: findingsEnvelope({ checker: 'claude' }) }],
+    ['an envelope attributed to the retired Copilot checker', { envelope: findingsEnvelope({ checker: 'copilot', mode: 'cross-claude' }) }],
     ['an envelope from another run', { envelope: findingsEnvelope({ overrides: { run_id: 1 } }) }],
     ['an envelope whose verdict differs from the checker job output', { envelope: findingsEnvelope({ verdict: 'clean', findings: '' }) }],
     ['findings reported with no findings text', { envelope: findingsEnvelope({ findings: '  ' }) }],
@@ -506,7 +506,7 @@ describe('architecture findings hand-off from checker to fix agent', () => {
     try {
       writeFileSync(join(temp, 'architecture-raw.md'), raw);
       writeFileSync(join(temp, 'github-output'), '');
-      const result = spawnSync('bash', ['-c', checker === 'copilot' ? copilotPackageShell : claudePackageShell], {
+      const result = spawnSync('bash', ['-c', claudePackageShell], {
         cwd: repo,
         encoding: 'utf8',
         env: {
@@ -559,7 +559,7 @@ describe('architecture findings hand-off from checker to fix agent', () => {
     }
   }
 
-  for (const checker of ['copilot', 'claude']) {
+  for (const checker of ['claude']) {
     it(`delivers ${checker} findings that GitHub would withhold as a job output, without the job's credential`, () => {
       // A shapeless value the job holds: no pattern could recognise it, so only exact-value redaction removes it.
       const held = 'correct-horse-battery-staple-fixture';
@@ -580,34 +580,37 @@ describe('architecture findings hand-off from checker to fix agent', () => {
   }
 
   it('cuts long findings only after redaction, to the same 60000 characters as before', () => {
-    const packaged = packageStep('copilot', { raw: `${'x '.repeat(40000)}\nARCHITECTURE: FINDINGS`, verdict: 'findings' });
+    const packaged = packageStep('claude', { raw: `${'x '.repeat(40000)}\nARCHITECTURE: FINDINGS`, verdict: 'findings' });
     assert.equal(packaged.status, 0, packaged.stderr);
     assert.equal(JSON.parse(packaged.envelope).findings.length, 60000);
   });
 
   it('refuses to package findings with no text, or an unknown verdict', () => {
     for (const [raw, verdict] of [['  \n', 'findings'], ['text', 'maybe'], ['text', '']]) {
-      const packaged = packageStep('copilot', { raw, verdict });
+      const packaged = packageStep('claude', { raw, verdict });
       assert.notEqual(packaged.status, 0);
       assert.equal(packaged.envelope, null);
     }
   });
 
-  it('refuses to package findings for a checker the route does not name', () => {
-    const packaged = packageStep('copilot', { raw: 'x', verdict: 'findings', env: { AGENT_MODE: 'full-claude' } });
-    assert.notEqual(packaged.status, 0);
-    assert.match(packaged.stderr, /^context: The architecture checker is not the one the route names\./m);
+  it('refuses to package findings for a checker or route the policy does not name', () => {
+    const retired = packageStep('claude', { raw: 'x', verdict: 'findings', env: { CHECKER: 'copilot' } });
+    assert.notEqual(retired.status, 0);
+    assert.match(retired.stderr, /^context: The architecture checker is missing or unknown\./m);
+    const unknownRoute = packageStep('claude', { raw: 'x', verdict: 'findings', env: { AGENT_MODE: 'cross-copilot' } });
+    assert.notEqual(unknownRoute.status, 0);
+    assert.match(unknownRoute.stderr, /^context: The review route is missing or unknown\./m);
   });
 
   it('writes the clean note without fetching anything when the check was clean', () => {
-    const stored = storeStep('copilot', { verdict: 'clean', findings: null });
+    const stored = storeStep('claude', { verdict: 'clean', findings: null });
     assert.equal(stored.status, 0, stored.stderr);
     assert.match(stored.findingsFile, /reported a clean architecture/);
   });
 
   it('fails the fix job instead of fixing from findings it cannot verify', () => {
     for (const findings of [null, { envelope: findingsEnvelope(), digest: '0'.repeat(64) }, { envelope: findingsEnvelope({ overrides: { pr_number: 1 } }) }]) {
-      const stored = storeStep('copilot', { verdict: 'findings', findings });
+      const stored = storeStep('claude', { verdict: 'findings', findings });
       assert.notEqual(stored.status, 0);
       assert.match(stored.stdout, /::error::The architecture findings could not be delivered to the fix agent/);
       assert.equal(stored.findingsFile, null, 'Claude must get no findings file to act on');

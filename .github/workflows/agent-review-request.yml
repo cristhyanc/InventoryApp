@@ -5,8 +5,7 @@ name: Agent review request
 #
 # Authority and lifecycle: docs/automation.md ("Updated-head scheduling", "Review agent").
 # - agent-review.yml has no pull_request trigger: a pull_request run would use the pull request's
-#   merge commit as github.sha, so the review workflow and the pinned Copilot CLI it installs could
-#   come from the pull request. Every review is therefore a workflow_dispatch with --ref main, from
+#   merge commit as github.sha, so the review workflow could come from the pull request. Every review is therefore a workflow_dispatch with --ref main, from
 #   validate.yml after successful exact-SHA validation or from this dispatcher.
 # - Trusted source: `pull_request_target` always runs this definition from the default branch, and
 #   this workflow never checks out or executes pull request code. Its only write permission is

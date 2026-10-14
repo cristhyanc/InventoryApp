@@ -408,7 +408,7 @@ function normalizeGuardVariables(text) {
 // Implementation identity and eligibility live in one trusted script, scripts/agent-pr-guard.mjs.
 // Claude is the only implementer: an `agent/issue-*` branch authored by the dedicated agent GitHub App
 // bot (AGENT_AUTOMATION_APP_BOT_LOGIN), read over REST because only that endpoint returns the
-// canonical author login reliably for bot authors. Copilot only checks and reviews, so the guard
+// canonical author login reliably for bot authors. Claude is the only provider, so the guard
 // accepts no `copilot/*` branch and reads no Copilot author variable.
 export const PR_GUARD_PATH = 'scripts/agent-pr-guard.mjs';
 export const PR_GUARD_SCRIPT_CONTRACT = Object.freeze({
@@ -718,7 +718,7 @@ export function verifyDocumentationImpactGate(read = readRepositoryFile) {
   // Review workflow: the prompt must compare the issue decision, the PR declaration and the
   // diff, and treat missing documentation as a blocker, with no additional write authority.
   const review = read(reviewPath);
-  const reviewJob = section(review, '  review:\n', '  copilot-review:\n', reviewPath);
+  const reviewJob = section(review, '  review:\n', '  publish:\n', reviewPath);
   const reviewPrompt = extractPromptText(reviewJob, 'agent-review.yml review prompt');
   for (const required of REVIEW_PROMPT_DOCUMENTATION_CONTRACT) {
     requireText(reviewPrompt, required, 'agent-review.yml review prompt');
@@ -868,11 +868,11 @@ function verifyReviewRequestDispatcher(workflow) {
 
 /**
  * The verified provider mode alone selects the reviewer (docs/automation.md "Provider roles and readiness labels"):
- * Copilot on the cross-claude route, a fresh Claude invocation on the full-claude fallback, which the
- * prompt and the published review must call a same-provider review, not an independent one.
+ * a fresh Claude invocation on every route, which the prompt and the published review must call a
+ * same-provider review, not an independent one.
  */
 export const REVIEW_ROUTES = Object.freeze({
-  'cross-claude': { implementer: 'claude', reviewer: 'copilot', sameProvider: false },
+  'cross-claude': { implementer: 'claude', reviewer: 'claude', sameProvider: true },
   'full-claude': { implementer: 'claude', reviewer: 'claude', sameProvider: true },
 });
 
@@ -889,7 +889,7 @@ function verifyReviewRoutes(review) {
   }
   const publish = section(review, '  publish:\n', null, 'agent-review.yml publish job');
   for (const required of [
-    'cross-claude:claude:copilot)',
+    'cross-claude:claude:claude)', 'Same-provider review: not independent',
     'full-claude:claude:claude)', 'Same-provider review (full-claude fallback): not independent',
     '*) not_published not-eligible "unknown review route', String.raw`Review type: \($review_type)`,
   ]) requireText(publish, required, 'agent-review.yml publish job');
@@ -899,41 +899,12 @@ function verifyReviewRoutes(review) {
   }
 }
 
-/** Copilot's final review: read-only, pinned CLI, schema-checked output. */
-function verifyCopilotReviewJob(review) {
-  const job = section(review, '  copilot-review:\n', '  publish:\n', 'agent-review.yml Copilot review job');
-  for (const required of [
-    "if: needs.context.outputs.reviewer == 'copilot'",
-    'REVIEW_RELATION: ${{ needs.context.outputs.review_relation }}', 'prompt="${prompt//@RELATION@/$REVIEW_RELATION}"',
-    'ref: ${{ needs.context.outputs.head_sha }}', 'persist-credentials: false',
-    'TRUSTED_SHA: ${{ github.sha }}', 'git show "$TRUSTED_SHA:.github/copilot-cli/$file"', '--ignore-scripts',
-    '[ "$GITHUB_REF" = "refs/heads/main" ] ||',
-    'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}', 'COPILOT_AUTO_UPDATE: "false"',
-    "--deny-tool='write' \\\n            -p \"$prompt\" > \"$work/copilot-output.md\"", '--no-ask-user',
-    '[ -z "$(git status --porcelain)" ]', '[ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]',
-    'BEGIN_REVIEW_JSON', 'END_REVIEW_JSON',
-    'jq -c . "$work/review.json" > "$RUNNER_TEMP/review-raw.json"',
-  ]) requireText(job, required, 'agent-review.yml Copilot review job');
-  // The enforced contract lives in validate_copilot_output; the diagnostics that repeat it do not count.
-  const validator = section(job, 'validate_copilot_output() {\n', '\n          }\n', 'agent-review.yml Copilot review contract');
-  for (const required of [
-    '.verdict == "CHANGES REQUESTED" or .verdict == "READY FOR HUMAN REVIEW"',
-    '.status == "met" or .status == "not met" or .status == "not verified"',
-  ]) requireText(validator, required, 'agent-review.yml Copilot review contract');
-  // The single format-only repair may not run shell commands, write files, fetch URLs or use built-in MCP servers.
-  requireText(
-    job,
-    "copilot -s --no-ask-user --disable-builtin-mcps \\\n              --deny-tool='shell' --deny-tool='write' --deny-tool='url' \\\n              -p \"$repair_prompt\"",
-    'agent-review.yml Copilot review format repair',
-  );
-  const permissions = section(job, '    permissions:\n', '\n    outputs:\n', 'agent-review.yml Copilot review permissions');
-  forbidText(permissions, 'write', 'agent-review.yml Copilot review permissions');
-  for (const forbidden of [
-    'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'create-github-app-token', 'COPILOT_AGENT_TOKEN',
-    'npm install', '@github/copilot@', '--allow-all', "--allow-tool='write'", "--allow-tool='shell'",
-    "shell(gh api", "shell(gh pr comment", "shell(gh pr review", "shell(gh pr edit", "shell(gh issue edit", "shell(git push", "shell(git commit",
-  ]) forbidText(job, forbidden, 'agent-review.yml Copilot review job');
-}
+/** Copilot was removed from the pipeline: no workflow may run its CLI or hold its credential again. */
+export const RETIRED_COPILOT_RUNTIME = Object.freeze([
+  'copilot-review:', 'copilot-check:', "checker == 'copilot'", "reviewer == 'copilot'", 'checker=copilot', 'reviewer=copilot',
+  'COPILOT_CLI_TOKEN', 'COPILOT_GITHUB_TOKEN', 'copilot -s', '.github/copilot-cli', '@github/copilot',
+]);
+export const RETIRED_COPILOT_RUNTIME_PATHS = Object.freeze(['.github/copilot-cli/package.json', '.github/copilot-cli/package-lock.json']);
 
 export const REVIEW_TRANSPORT_CONTRACT = Object.freeze({
   reviewerOutputs: [
@@ -970,9 +941,8 @@ function verifyReviewTransport(review) {
   // Each reviewer job hands its own credentials to the package step for exact-value redaction.
   const heldCredentials = {
     review: ['REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}'],
-    'copilot-review': ['REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}'],
   };
-  for (const [name, start, end] of [['review', '  review:\n', '  copilot-review:\n'], ['copilot-review', '  copilot-review:\n', '  publish:\n']]) {
+  for (const [name, start, end] of [['review', '  review:\n', '  publish:\n']]) {
     const job = section(review, start, end, `agent-review.yml ${name} job`);
     const packageStep = section(job, '      - name: Package review result\n', '      - name: Upload review result\n', `agent-review.yml ${name} package step`);
     for (const required of heldCredentials[name]) requireText(packageStep, required, `agent-review.yml ${name} review transport`);
@@ -1008,8 +978,8 @@ export const ARCHITECTURE_TRANSPORT_CONTRACT = Object.freeze({
     'retention-days: 1',
   ],
   consumerRequired: [
-    "FINDINGS_ARTIFACT_ID: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings_artifact_id || needs.copilot-check.outputs.findings_artifact_id }}",
-    "FINDINGS_ARTIFACT_DIGEST: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.findings_digest || needs.copilot-check.outputs.findings_digest }}",
+    'FINDINGS_ARTIFACT_ID: ${{ needs.claude-check.outputs.findings_artifact_id }}',
+    'FINDINGS_ARTIFACT_DIGEST: ${{ needs.claude-check.outputs.findings_digest }}',
     'AGENT_MODE: ${{ needs.context.outputs.agent_mode }}',
     'IMPLEMENTER: claude',
   ],
@@ -1021,13 +991,11 @@ export const ARCHITECTURE_TRANSPORT_CONTRACT = Object.freeze({
  * script from the trusted workflow commit, never from the pull request head.
  */
 function verifyArchitectureTransport(architecture) {
-  // The credentials each checker gives its model, removed from the findings by exact value. The Copilot
-  // check never exposes the job token to the CLI (and verifyReadOnlyCopilotCheck keeps it out of the job).
+  // The credentials the checker gives its model, removed from the findings by exact value.
   const heldCredentials = {
-    'copilot-check': ['REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}', 'CHECKER: copilot'],
     'claude-check': ['REVIEW_REDACT_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}', 'CHECKER: claude'],
   };
-  for (const [name, start, end] of [['copilot-check', '  copilot-check:\n', '  claude-check:\n'], ['claude-check', '  claude-check:\n', '  sonar:\n']]) {
+  for (const [name, start, end] of [['claude-check', '  claude-check:\n', '  sonar:\n']]) {
     const source = `agent-architecture.yml ${name}`;
     const job = section(architecture, start, end, source);
     const outputs = section(job, '    outputs:\n', '\n    steps:\n', `${source} outputs`);
@@ -1085,7 +1053,7 @@ function verifyReviewTransportCheck(check) {
 /** Enforces the review judgment, guarded publication and updated-head scheduling contract. */
 export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) {
   const review = read(reviewPath);
-  const reviewJob = section(review, '  review:\n', '  copilot-review:\n', reviewPath);
+  const reviewJob = section(review, '  review:\n', '  publish:\n', reviewPath);
   requireText(reviewJob, "if: needs.context.outputs.reviewer == 'claude'", 'agent-review.yml review job');
   requireText(reviewJob, '${{ needs.context.outputs.review_relation }}', 'agent-review.yml review job');
   verifyReviewRoutes(review);
@@ -1121,18 +1089,17 @@ export function verifyReviewPublicationAndScheduling(read = readRepositoryFile) 
   for (const required of [
     'IMPLEMENTER: ${{ needs.context.outputs.implementer }}',
     '[ "$live_implementer" = "$IMPLEMENTER" ]',
-    "REVIEW_RESULT: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.result || needs.review.result }}",
-    "REVIEW_ARTIFACT_ID: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.artifact_id || needs.review.outputs.artifact_id }}",
-    "REVIEW_ARTIFACT_DIGEST: ${{ needs.context.outputs.reviewer == 'copilot' && needs.copilot-review.outputs.artifact_digest || needs.review.outputs.artifact_digest }}",
+    'REVIEW_RESULT: ${{ needs.review.result }}',
+    'REVIEW_ARTIFACT_ID: ${{ needs.review.outputs.artifact_id }}',
+    'REVIEW_ARTIFACT_DIGEST: ${{ needs.review.outputs.artifact_digest }}',
     'REVIEWER: ${{ needs.context.outputs.reviewer }}',
-    '      - review\n      - copilot-review\n',
+    '      - context\n      - review\n    runs-on:',
   ]) requireText(publish, required, 'agent-review.yml publish job');
   // The fail-closed status must not claim "nothing was published" once the review is public.
   for (const required of ['echo "review_posted=true" >> "$GITHUB_OUTPUT"', 'REVIEW_POSTED: ${{ steps.publish.outputs.review_posted }}', 'if [ "$REVIEW_POSTED" = "true" ]; then']) {
     requireText(publish, required, 'agent-review.yml publish job');
   }
   requireOrder(publish, '--input "$work/payload-fallback.json" >/dev/null\n          fi\n', 'echo "review_posted=true" >> "$GITHUB_OUTPUT"', 'agent-review.yml publish job', 'publication must be recorded only after the review was posted.');
-  verifyCopilotReviewJob(review);
   verifyReviewTransport(review);
   verifyReviewTransportCheck(read(reviewTransportCheckPath));
   verifyPrGuardScript(read(PR_GUARD_PATH));
@@ -1255,7 +1222,6 @@ export function verifyArchitecturePass(implementationWorkflow, architectureWorkf
   verifyImplementationJob(implementationWorkflow);
   verifyArchitectureDispatcher(implementationWorkflow);
   verifyArchitectureContext(architectureWorkflow);
-  verifyArchitectureCopilotCheck(architectureWorkflow);
   verifyArchitectureClaudeCheck(architectureWorkflow);
   verifySonarIssuesJob(architectureWorkflow, 'agent-architecture.yml', '  architecture:\n');
   verifyArchitectureFixJob(architectureWorkflow);
@@ -1377,7 +1343,7 @@ function verifyArchitectureContext(architectureWorkflow) {
   requireText(architectureWorkflow, 'group: agent-architecture-pr-${{ inputs.pr_number }}', 'agent-architecture.yml concurrency');
   requireText(architectureWorkflow, 'cancel-in-progress: false', 'agent-architecture.yml concurrency');
 
-  const context = section(architectureWorkflow, '  context:\n', '  copilot-check:\n', 'agent-architecture.yml context');
+  const context = section(architectureWorkflow, '  context:\n', '  claude-check:\n', 'agent-architecture.yml context');
   requireText(context, 'pull-requests: read', 'agent-architecture.yml context');
   requireText(context, 'issues: read', 'agent-architecture.yml context');
   requireText(context, 'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}', 'agent-architecture.yml context');
@@ -1386,33 +1352,12 @@ function verifyArchitectureContext(architectureWorkflow) {
   verifyAgentPrGuards(context, 'agent-architecture.yml context', { issue: true });
   requireText(context, 'head_ref="$(jq -r \'.head_ref\' <<<"$pr_guard")"', 'agent-architecture.yml context');
   requireText(context, 'any(.labels[]?; .name == "agent-working")', 'agent-architecture.yml context');
-  // The verified route names exactly one checker; any other mode fails closed.
+  // Every verified Claude route names the same-provider Claude checker; any other mode fails closed.
   for (const required of [
-    'cross-claude) checker=copilot;', 'full-claude) checker=claude;', '*) fail "Provider mode',
+    'cross-claude) checker=claude;', 'full-claude) checker=claude;', '*) fail "Provider mode',
     'checker: ${{ steps.context.outputs.checker }}', 'echo "checker=$checker"', 'echo "agent_mode=$agent_mode"',
   ]) requireText(context, required, 'agent-architecture.yml context');
 
-}
-
-/**
- * A read-only Copilot CLI architecture check: no write permission, no persisted checkout credentials,
- * no App or Anthropic credential, a pinned CLI, and it may not change the tree.
- */
-function verifyReadOnlyCopilotCheck(copilotCheck, source) {
-  for (const required of [
-    '    needs: context', '      contents: read', 'ref: ${{ needs.context.outputs.head_sha }}', 'persist-credentials: false',
-    'COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_CLI_TOKEN }}', "--deny-tool='write'", '--no-ask-user',
-    '[ -z "$(git status --porcelain)" ]', '[ "$(git rev-parse HEAD)" = "$HEAD_SHA" ]',
-    'ARCHITECTURE: CLEAN', 'ARCHITECTURE: FINDINGS', 'echo "verdict=$verdict"',
-    // The CLI is pinned by the trusted workflow commit's lockfile and installed without lifecycle scripts.
-    'TRUSTED_SHA: ${{ github.sha }}', 'git show "$TRUSTED_SHA:.github/copilot-cli/$file"', '--ignore-scripts',
-    '[ "$GITHUB_REF" = "refs/heads/main" ] ||', 'COPILOT_AUTO_UPDATE: "false"',
-  ]) requireText(copilotCheck, required, source);
-  for (const forbidden of [
-    'contents: write', 'pull-requests: write', 'issues: write', 'actions: write', 'copilot-requests: write',
-    'CLAUDE_CODE_OAUTH_TOKEN', 'claude-code-action', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'create-github-app-token', 'COPILOT_AGENT_TOKEN',
-    'secrets.GITHUB_TOKEN', 'git push', 'gh pr', 'gh issue', 'npm install', '@github/copilot@', '--allow-all', "--allow-tool='write'", "--allow-tool='shell'",
-  ]) forbidText(copilotCheck, forbidden, source);
 }
 
 /**
@@ -1437,16 +1382,8 @@ function verifyReadOnlyClaudeCheck(claudeCheck, source) {
   }
 }
 
-function verifyArchitectureCopilotCheck(architectureWorkflow) {
-  // Default route: Copilot reviews Claude's architecture read-only, and only on cross-claude.
-  const source = 'agent-architecture.yml Copilot check';
-  const copilotCheck = section(architectureWorkflow, '  copilot-check:\n', '  claude-check:\n', source);
-  requireText(copilotCheck, "    if: needs.context.outputs.checker == 'copilot'\n", source);
-  verifyReadOnlyCopilotCheck(copilotCheck, source);
-}
-
 function verifyArchitectureClaudeCheck(architectureWorkflow) {
-  // Full-claude route: a separate read-only Claude invocation, labelled same-provider, and only on full-claude.
+  // Every Claude route: a separate read-only Claude invocation, labelled a same-provider check.
   const source = 'agent-architecture.yml same-provider Claude check';
   const claudeCheck = section(architectureWorkflow, '  claude-check:\n', '  sonar:\n', source);
   requireText(claudeCheck, "    if: needs.context.outputs.checker == 'claude'\n", source);
@@ -1475,10 +1412,10 @@ function verifySonarIssuesJob(workflow, source, nextJob) {
 
 function verifyArchitectureFixJob(architectureWorkflow) {
   const architectureJob = section(architectureWorkflow, '  architecture:\n', '  finalize:\n', 'agent-architecture.yml architecture job');
-  requireText(architectureJob, '      - context\n      - copilot-check\n      - claude-check\n      - sonar\n', 'agent-architecture.yml architecture job');
+  requireText(architectureJob, '      - context\n      - claude-check\n      - sonar\n', 'agent-architecture.yml architecture job');
   requireText(
     architectureJob,
-    "if: ${{ !cancelled() && needs.context.result == 'success' && ((needs.context.outputs.checker == 'copilot' && needs.copilot-check.result == 'success') || (needs.context.outputs.checker == 'claude' && needs.claude-check.result == 'success')) && ((needs.context.outputs.checker == 'copilot' && needs.copilot-check.outputs.verdict == 'findings') || (needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.verdict == 'findings') || fromJSON(needs.sonar.outputs.count || '0') > 0) }}",
+    "if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) }}",
     'agent-architecture.yml architecture job',
   );
   requireText(architectureJob, 'node "$transport" fetch-findings .git/architecture-findings.md', 'agent-architecture.yml architecture job');
@@ -1487,7 +1424,7 @@ function verifyArchitectureFixJob(architectureWorkflow) {
   requireText(architectureJob, '> .git/sonar-new-issues.md', 'agent-architecture.yml architecture job');
   requireText(architectureJob, 'Read that file first', 'agent-architecture.yml architecture job');
   requireText(architectureJob, 'Never silence an issue instead of fixing it', 'agent-architecture.yml architecture job');
-  for (const external of ['needs.copilot-check.outputs.findings', 'needs.claude-check.outputs.findings', 'needs.sonar.outputs.issues']) {
+  for (const external of ['needs.claude-check.outputs.findings', 'needs.sonar.outputs.issues']) {
     forbidText(architectureJob.slice(architectureJob.indexOf('prompt: |')), external, 'agent-architecture.yml architecture prompt');
   }
   requireText(architectureJob, '      contents: read', 'agent-architecture.yml architecture permissions');
@@ -1529,7 +1466,7 @@ function verifyArchitectureFinalizer(architectureWorkflow) {
   verifyAgentPrGuards(finalize, 'agent-architecture.yml finalize', { sha: '$FINAL_SHA', issue: true });
   requireOrder(finalize, 'node "$guard" check', 'gh workflow run validate.yml', 'agent-architecture.yml finalize', 'the final head must be re-verified before validation is dispatched.');
   for (const required of [
-    "    if: always()\n", '      - context\n      - copilot-check\n      - claude-check\n      - sonar\n      - architecture\n',
+    "    if: always()\n", '      - context\n      - claude-check\n      - sonar\n      - architecture\n',
     'SONAR_COUNT: ${{ needs.sonar.outputs.count }}', '[[ "$sonar_count" =~ ^[0-9]+$ ]] || sonar_count=0', 'actions: write', 'pull-requests: write', 'issues: write', 'statuses: read',
     'ISSUE_NUMBER: ${{ inputs.issue_number }}', 'CONTEXT_JOB_RESULT: ${{ needs.context.result }}',
     '[ "$CONTEXT_JOB_RESULT" = "success" ]', 'trap block_undispatched EXIT', 'dispatched=true',
@@ -1537,8 +1474,8 @@ function verifyArchitectureFinalizer(architectureWorkflow) {
     'select(.context == "agent-validation")',
     'EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}',
     'ARCHITECTURE_JOB_RESULT: ${{ needs.architecture.result }}', '[ "$ARCHITECTURE_JOB_RESULT" = "success" ]',
-    "CHECK_JOB_RESULT: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.result || needs.copilot-check.result }}", '[ "$CHECK_JOB_RESULT" = "success" ]',
-    "CHECK_VERDICT: ${{ needs.context.outputs.checker == 'claude' && needs.claude-check.outputs.verdict || needs.copilot-check.outputs.verdict }}", '[ "$ARCHITECTURE_JOB_RESULT" = "skipped" ]',
+    'CHECK_JOB_RESULT: ${{ needs.claude-check.result }}', '[ "$CHECK_JOB_RESULT" = "success" ]',
+    'CHECK_VERDICT: ${{ needs.claude-check.outputs.verdict }}', '[ "$ARCHITECTURE_JOB_RESULT" = "skipped" ]',
     '[ "$checker_label" != "Unknown" ] || fail',
     'FINAL_SHA="$EXPECTED_START_SHA"', 'FIX_SHA: ${{ needs.architecture.outputs.head_sha }}', 'FINAL_SHA="$FIX_SHA"',
     'Architecture finalization refused:',
@@ -1626,7 +1563,6 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   requireText(validationJob, 'persist-credentials: false', 'validate.yml validate job');
   requireText(validationJob, 'node scripts/validate-agent-workflows.mjs', 'validate.yml validate job');
   requireText(validationJob, 'node --test scripts/validate-agent-workflows.test.mjs', 'validate.yml validate job');
-  requireText(validationJob, 'node --test scripts/copilot-review-contract.test.mjs', 'validate.yml validate job');
   for (const forbidden of ['actions: write', 'statuses: write', 'CLAUDE_CODE_OAUTH_TOKEN']) {
     forbidText(validationJob, forbidden, 'validate.yml validate job');
   }
@@ -1701,8 +1637,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   }
   const review = read(reviewPath);
   // Reviews run only as a workflow_dispatch from main. A pull_request run would use the pull
-  // request's merge commit as github.sha, so the workflow and the pinned Copilot CLI it installs
-  // could come from the pull request.
+  // request's merge commit as github.sha, so the workflow could come from the pull request.
   const reviewTriggers = section(review, 'on:\n', 'permissions:\n', 'agent-review.yml triggers');
   requireText(reviewTriggers, 'workflow_dispatch:', 'agent-review.yml triggers');
   for (const forbidden of ['pull_request', 'issues:', 'issue_comment', 'workflow_run', 'push:', 'synchronize', 'ready_for_review']) {
@@ -1738,7 +1673,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   forbidText(reviewContext, 'github.event.pull_request', 'agent-review.yml context');
   forbidText(reviewContext, MERGE_VALIDATION_STATUS, 'agent-review.yml dispatched context');
 
-  const reviewJob = section(review, '  review:\n', '  copilot-review:\n', reviewPath);
+  const reviewJob = section(review, '  review:\n', '  publish:\n', reviewPath);
   for (const forbidden of ['contents: write', 'actions: write']) {
     forbidText(reviewJob, forbidden, 'agent-review.yml review job');
   }
@@ -1885,16 +1820,20 @@ function verifyValidationOutcomes(validate, source) {
 }
 
 /**
- * Copilot no longer implements: it only checks and reviews Claude's work. Its implementation
- * workflows stay removed, and no agent workflow may route a readiness label, branch or credential
- * to a Copilot implementation again.
+ * Copilot no longer implements, checks or reviews. Its implementation workflows and pinned CLI stay
+ * removed, and no workflow may route a readiness label, branch, check, review or credential to
+ * Copilot again.
  */
 export function verifyCopilotImplementationRetired(read = readRepositoryFile) {
   for (const path of RETIRED_COPILOT_IMPLEMENTATION_PATHS) {
     if (fileExists(read, path)) throw new Error(`${path}: Copilot no longer implements; this workflow must not be restored.`);
   }
+  for (const path of RETIRED_COPILOT_RUNTIME_PATHS) {
+    if (fileExists(read, path)) throw new Error(`${path}: the Copilot CLI was removed from the agent pipeline; its pinned manifest must not be restored.`);
+  }
   for (const path of listWorkflowFiles()) {
     const text = read(path);
+    for (const forbidden of RETIRED_COPILOT_RUNTIME) forbidText(text, forbidden, path);
     for (const forbidden of ['agent-ready-copilot', 'agent-ready-full-copilot', 'COPILOT_AGENT_TOKEN', 'COPILOT_AGENT_BOT_LOGIN', 'copilot-swe-agent', 'agent-architecture-fix', 'cross-copilot', 'full-copilot']) {
       forbidText(text, forbidden, path);
     }
@@ -2015,7 +1954,7 @@ export function verifyProviderModeProvenance(read = readRepositoryFile) {
 // ---------------------------------------------------------------------------------------
 // Nayax documentation access (issue #192): the analysis and implementation agents may read
 // Nayax's official documentation MCP server through exactly two read-only tools; model triage
-// and the format-only Copilot review repair get no access at all.
+// gets no access at all.
 // ---------------------------------------------------------------------------------------
 
 export const modelSelectionPath = '.github/workflows/agent-model-selection.yml';
@@ -2023,8 +1962,8 @@ export const copilotInstructionsPath = '.github/copilot-instructions.md';
 export const agentsPath = 'AGENTS.md';
 
 export const NAYAX_MCP_CONTRACT = Object.freeze({
-  // Shared by every covered prompt; it sits inside a double-quoted shell string in the Copilot
-  // architecture check, so it must never contain a backtick, a dollar sign or a double quote.
+  // Shared by every covered prompt; it must stay safe to embed in a double-quoted shell string, so it
+  // must never contain a backtick, a dollar sign or a double quote.
   promptRule:
     'Nayax contract verification (AGENTS.md § Nayax contract verification): if this work touches code that calls the Nayax API or models a Nayax request or response, ' +
     'look up the relevant endpoint contract with the read-only Nayax documentation tools (search_nayax_developer_portal and query_docs_filesystem_nayax_developer_portal on the nayax MCP server) ' +
@@ -2034,10 +1973,6 @@ export const NAYAX_MCP_CONTRACT = Object.freeze({
   claudeMcpConfig: `            --mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp"}}}'\n`,
   claudeAllowedTools: '            "mcp__nayax__search_nayax_developer_portal,mcp__nayax__query_docs_filesystem_nayax_developer_portal"\n',
   claudeDeniedTool: '            "mcp__nayax__submit_feedback"\n',
-  copilotMcpConfig:
-    `--additional-mcp-config '{"mcpServers":{"nayax":{"type":"http","url":"https://devzone.nayax.com/mcp","tools":["search_nayax_developer_portal","query_docs_filesystem_nayax_developer_portal"]}}}'`,
-  copilotToolRules:
-    "--allow-tool='nayax(search_nayax_developer_portal)' --allow-tool='nayax(query_docs_filesystem_nayax_developer_portal)' --deny-tool='nayax(submit_feedback)'",
   agentsRequired: [
     '### Nayax contract verification',
     'https://devzone.nayax.com/mcp',
@@ -2046,7 +1981,7 @@ export const NAYAX_MCP_CONTRACT = Object.freeze({
     'state that authoritative Nayax verification could not be completed',
     'Never silently fall back to guessed fields for a contract-sensitive change.',
     'Work that does not touch the Nayax integration needs no lookup',
-    'Model triage and the format-only Copilot review JSON repair have no Nayax documentation access',
+    'Model triage has no Nayax documentation access',
   ],
   copilotInstructionsRequired: [
     '`AGENTS.md` § Nayax contract verification',
@@ -2116,33 +2051,6 @@ function verifyClaudeNayaxAccess(workflow, path, contract) {
   }
 }
 
-/** One Copilot CLI analysis step: the same server, filtered and approved to the same two tools. */
-function verifyCopilotNayaxAccess({ invocation, prompt, workflow, source }, contract) {
-  requireText(invocation, contract.copilotMcpConfig, source);
-  requireText(invocation, contract.copilotToolRules, source);
-  requireText(prompt, contract.promptRule, `${source} prompt`);
-  if (countOccurrences(workflow, '--additional-mcp-config') !== 1) throw new Error(`${source}: expected exactly one --additional-mcp-config.`);
-  if (countOccurrences(invocation, "--allow-tool='nayax") !== 2 || countOccurrences(workflow, "--allow-tool='nayax") !== 2) throw new Error(`${source}: expected exactly two Nayax tool approvals.`);
-  for (const forbidden of ["--allow-tool='nayax'", "--allow-tool='nayax(submit_feedback)'", '--allow-all']) forbidText(invocation, forbidden, source);
-}
-
-function copilotNayaxSteps(read) {
-  const architecture = read(architecturePath);
-  const review = read(reviewPath);
-  const checkSource = 'agent-architecture.yml Copilot architecture check';
-  const check = section(architecture, '          copilot -s --no-ask-user \\\n', '> "$out"', checkSource);
-  const reviewSource = 'agent-review.yml Copilot review';
-  return [
-    { invocation: check, prompt: check, workflow: architecture, source: checkSource },
-    {
-      invocation: section(review, "          copilot -s --no-ask-user \\\n            --allow-tool='shell(git diff:*)'", '-p "$prompt" > "$work/copilot-output.md"', reviewSource),
-      prompt: section(review, `prompt="$(cat <<'EOF'\n`, '\n          EOF\n', `${reviewSource} prompt`),
-      workflow: review,
-      source: reviewSource,
-    },
-  ];
-}
-
 function fileExists(read, path) {
   try {
     read(path);
@@ -2152,16 +2060,12 @@ function fileExists(read, path) {
   }
 }
 
-/** Explicitly excluded: the format-only review repair, model triage, and any workspace MCP file. */
+/** Explicitly excluded: model triage, and any workspace MCP file. */
 function verifyNayaxExclusions(read, contract) {
-  const repairSource = 'agent-review.yml Copilot format repair';
-  const repair = section(read(reviewPath), 'repair_prompt="', '> "$work/copilot-output.md"', repairSource);
-  requireText(repair, "copilot -s --no-ask-user --disable-builtin-mcps \\\n              --deny-tool='shell' --deny-tool='write' --deny-tool='url' \\\n", repairSource);
-  verifyNoNayaxAccess(repair, repairSource);
   verifyNoNayaxAccess(read(modelSelectionPath), `${modelSelectionPath} model triage`);
-  // A workspace MCP file would be loaded by every Copilot CLI invocation, including the excluded ones.
+  // A workspace MCP file would be loaded by agent invocations that are meant to have no MCP access.
   const present = contract.workspaceMcpConfigPaths.find((path) => fileExists(read, path));
-  if (present) throw new Error(`${present}: a workspace MCP configuration would give every Copilot CLI invocation, including the format-only repair, MCP access.`);
+  if (present) throw new Error(`${present}: a workspace MCP configuration would give agent invocations that must have none, such as model triage, MCP access.`);
 }
 
 function verifyNayaxRuleDocuments(read, contract) {
@@ -2175,7 +2079,6 @@ export function verifyNayaxDocumentationAccess(read = readRepositoryFile) {
   const contract = NAYAX_MCP_CONTRACT;
   verifyNayaxPromptRuleIsShellSafe(contract);
   for (const path of contract.claudePaths) verifyClaudeNayaxAccess(read(path), path, contract);
-  for (const step of copilotNayaxSteps(read)) verifyCopilotNayaxAccess(step, contract);
   verifyNayaxExclusions(read, contract);
   verifyNayaxRuleDocuments(read, contract);
 }
