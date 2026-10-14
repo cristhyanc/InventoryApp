@@ -77,14 +77,24 @@
                   </span>
                 </td>
                 <td class="table-cell">
-                  <button type="button" class="badge" [ngClass]="p.isActive ? 'badge-success' : 'badge-neutral'" (click)="toggleActive(p)">
+                  <button
+                    type="button"
+                    class="badge"
+                    [ngClass]="p.isActive ? 'badge-success' : 'badge-neutral'"
+                    [disabled]="sessionActive"
+                    (click)="toggleActive(p)"
+                  >
                     {{ p.isActive ? 'Active' : 'Inactive' }}
                   </button>
                 </td>
                 <td class="table-cell sticky right-0 z-10 bg-white">
                   <div class="flex flex-wrap gap-2 max-w-[140px] sm:max-w-none">
                     <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
-                    <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(p)">Delete</button>
+                    <!-- Hidden rather than disabled while a support session is active (issue #554): a
+                         session grants InventoryOperate, so this write would otherwise still render. -->
+                    @if (!sessionActive) {
+                      <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(p)">Delete</button>
+                    }
                   </div>
                 </td>
               </tr>

@@ -154,6 +154,29 @@ export interface DashboardOrderingSummary {
 }
 
 /**
+ * A summary section the backend deliberately did not compute for this request, published as
+ * `{ "available": false, "reason": "..." }` (`UnavailableDashboardSectionDto`, issue #552). Since
+ * issue #554 the "Needs refill" and "Needs ordering" cards publish this inside a support session,
+ * with `reason: "SupportView"`: a session never resolves the business's Nayax credentials, so the
+ * live fleet those two cards need is never read at all.
+ *
+ * `reason` is a stable code for branching, never a sentence to display - see
+ * `support-session/support-session-messages.ts` for the one sentence this application shows for
+ * `"SupportView"`.
+ */
+export interface UnavailableDashboardSection {
+  available: false;
+  reason: string;
+}
+
+/** Whether `section` is the withheld shape rather than the card's real figures. */
+export function isDashboardSectionUnavailable(
+  section: DashboardRefillSummary | DashboardOrderingSummary | UnavailableDashboardSection
+): section is UnavailableDashboardSection {
+  return (section as UnavailableDashboardSection).available === false;
+}
+
+/**
  * The "Inventory" card. The three figures have deliberately different scopes and are not
  * interchangeable: `inventoryValueAtCost` is the business-owned perpetual AVCO valuation, `null`
  * whenever `isInventoryValueComplete` is `false` (an unknown cost, never a real `$0.00`);
@@ -188,13 +211,18 @@ export interface DashboardInventorySummary {
  * the two money cards rather than rendering a figure it was not given (issue #528). Neither is
  * ever sent as `null` or `0` to mean "withheld", and the page must not read either absence as a
  * zero week or an incomplete valuation.
+ *
+ * `needsRefill` and `needsOrdering` are each either the card's real figures or an
+ * {@link UnavailableDashboardSection} (issue #554) - a support session's own shape of this
+ * response, which replaces both with `{ available: false, reason: "SupportView" }` rather than
+ * blanking a figure inside either card.
  */
 export interface DashboardSummary {
   asOfUtc: string;
   businessDate: string;
   salesThisWeek?: DashboardSalesThisWeek;
-  needsRefill: DashboardRefillSummary;
-  needsOrdering: DashboardOrderingSummary;
+  needsRefill: DashboardRefillSummary | UnavailableDashboardSection;
+  needsOrdering: DashboardOrderingSummary | UnavailableDashboardSection;
   inventory: DashboardInventorySummary;
 }
 

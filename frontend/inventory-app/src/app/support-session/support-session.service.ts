@@ -1,7 +1,19 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, OnDestroy } from '@angular/core';
 import { Router } from '@angular/router';
-import { BehaviorSubject, Observable, Subject, catchError, defer, map, of, switchMap, takeUntil, tap } from 'rxjs';
+import {
+  BehaviorSubject,
+  Observable,
+  Subject,
+  catchError,
+  defer,
+  distinctUntilChanged,
+  map,
+  of,
+  switchMap,
+  takeUntil,
+  tap
+} from 'rxjs';
 import { ConfigService } from '../services/config.service';
 import { BusinessService } from '../services/business.service';
 import { AccessService } from '../access/access.service';
@@ -112,6 +124,19 @@ export class SupportSessionService implements OnDestroy {
   currentSessionId(): string | null {
     return this.sessionId;
   }
+
+  /**
+   * Whether a support session is active now, for every page's write controls (issue #554): a
+   * session grants several capabilities a write button is otherwise shown for (`InventoryOperate`,
+   * `PurchasingOperate`, `BusinessManage` and others - see
+   * `Inventory.Application.Access.SupportSessionAccessPolicy`), so hiding or disabling a write
+   * control is this flag's job and never the capability check's. Subscribing starts the same
+   * one-time boot check {@link state$} does.
+   */
+  readonly active$: Observable<boolean> = this.state$.pipe(
+    map((state) => state.active),
+    distinctUntilChanged()
+  );
 
   /** Starts a session for `businessId`, with a required reason. */
   start(businessId: number, reason: string): Observable<StartedSupportSession> {

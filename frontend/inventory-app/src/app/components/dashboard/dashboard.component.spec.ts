@@ -223,6 +223,49 @@ describe('DashboardComponent needs refill supporting detail', () => {
   });
 });
 
+/**
+ * The support-session shape of this response (issue #554): `needsRefill`/`needsOrdering` replaced
+ * with `{ available: false, reason: "SupportView" }` rather than a blanked figure inside either
+ * card.
+ */
+describe('DashboardComponent unavailable Nayax sections (issue #554)', () => {
+  const SUPPORT_VIEW_SUMMARY: DashboardSummary = {
+    ...SUMMARY,
+    needsRefill: { available: false, reason: 'SupportView' },
+    needsOrdering: { available: false, reason: 'SupportView' }
+  };
+
+  it('shows "Unavailable" for the value and the Nayax message for the footer of each withheld card', () => {
+    const component = createComponent(of(SUPPORT_VIEW_SUMMARY));
+    component.ngOnInit();
+
+    expect(component.refillValueDisplay(component.summary!.needsRefill)).toBe('Unavailable');
+    expect(component.refillFooterText(component.summary!.needsRefill)).toBe('Nayax is not available in support view');
+    expect(component.refillFooterClass(component.summary!.needsRefill)).toBe('value-muted');
+    expect(component.orderingValueDisplay(component.summary!.needsOrdering)).toBe('Unavailable');
+    expect(component.orderingFooterText(component.summary!.needsOrdering)).toBe('Nayax is not available in support view');
+    expect(component.orderingFooterClass(component.summary!.needsOrdering)).toBe('value-muted');
+  });
+
+  it('leaves the real figures and footers unchanged when the sections are available', () => {
+    const component = createComponent(of(SUMMARY));
+    component.ngOnInit();
+
+    expect(component.refillValueDisplay(component.summary!.needsRefill)).toBe('2');
+    expect(component.orderingValueDisplay(component.summary!.needsOrdering)).toBe('4');
+  });
+
+  it('renders the Nayax message in the Dashboard template for both withheld cards', async () => {
+    const host = await renderDashboard({ summary$: of(SUPPORT_VIEW_SUMMARY) });
+
+    const values = Array.from(host.querySelectorAll('.stat-card-value')).map((el) => el.textContent?.trim());
+    const footers = Array.from(host.querySelectorAll('.stat-card-footer')).map((el) => el.textContent?.trim());
+
+    expect(values).toContain('Unavailable');
+    expect(footers.filter((text) => text === 'Nayax is not available in support view')).toHaveLength(2);
+  });
+});
+
 describe('DashboardComponent needs ordering supporting detail', () => {
   it('shows the evaluated catalogue size as supporting detail', () => {
     const component = createComponent(of(SUMMARY));

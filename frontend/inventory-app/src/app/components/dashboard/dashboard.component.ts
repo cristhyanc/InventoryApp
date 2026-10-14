@@ -12,6 +12,8 @@ import {
   DashboardRefillSummary,
   DashboardSalesThisWeek,
   DashboardSummary,
+  UnavailableDashboardSection,
+  isDashboardSectionUnavailable,
   Product,
   Machine,
   Site
@@ -21,6 +23,7 @@ import { siteStockClass } from '../../formatting/site-stock-status';
 import { money } from '../reports/report-formatting';
 import { IconComponent } from '../shared/icon.component';
 import { LegacyBusinessSettingsPromptComponent } from '../shared/legacy-business-settings-prompt/legacy-business-settings-prompt.component';
+import { NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE } from '../../support-session/support-session-messages';
 
 @Component({
   selector: 'app-dashboard',
@@ -221,29 +224,56 @@ export class DashboardComponent implements OnInit {
   }
 
   /**
+   * The "Needs refill" card's primary value: the figure, or - inside a support session (issue
+   * #554) - "Unavailable", matching the sales/inventory cards' own unavailable display rather than
+   * a `0` that would read as a known, adequately stocked fleet.
+   */
+  refillValueDisplay(refill: DashboardRefillSummary | UnavailableDashboardSection): string {
+    return isDashboardSectionUnavailable(refill) ? 'Unavailable' : String(refill.machinesNeedingRefill);
+  }
+
+  refillValueClass(refill: DashboardRefillSummary | UnavailableDashboardSection): string {
+    return isDashboardSectionUnavailable(refill) ? 'value-muted' : '';
+  }
+
+  /**
    * The "Needs refill" supporting detail. `machinesEvaluated` is what makes a zero honest: zero of
    * zero machines is nothing to evaluate yet, zero of many is every evaluated machine adequately
-   * stocked.
+   * stocked. Inside a support session (issue #554) the fleet is never read at all, so this is where
+   * that is explained.
    */
-  refillFooterText(refill: DashboardRefillSummary): string {
+  refillFooterText(refill: DashboardRefillSummary | UnavailableDashboardSection): string {
+    if (isDashboardSectionUnavailable(refill)) return NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE;
     if (refill.machinesEvaluated === 0) return 'No machines to evaluate yet';
     if (refill.machinesNeedingRefill === 0) return `All ${refill.machinesEvaluated} machines adequately stocked`;
     return `${refill.lowSelectionCount} low · ${refill.emptySelectionCount} empty selections across ${refill.machinesEvaluated} machines evaluated`;
   }
 
-  refillFooterClass(refill: DashboardRefillSummary): string {
+  refillFooterClass(refill: DashboardRefillSummary | UnavailableDashboardSection): string {
+    if (isDashboardSectionUnavailable(refill)) return 'value-muted';
     if (refill.machinesEvaluated === 0) return 'value-muted';
     return refill.machinesNeedingRefill === 0 ? 'value-positive' : 'value-muted';
   }
 
+  /** The "Needs ordering" card's primary value, on the same rule as {@link refillValueDisplay}. */
+  orderingValueDisplay(ordering: DashboardOrderingSummary | UnavailableDashboardSection): string {
+    return isDashboardSectionUnavailable(ordering) ? 'Unavailable' : String(ordering.productsNeedingOrdering);
+  }
+
+  orderingValueClass(ordering: DashboardOrderingSummary | UnavailableDashboardSection): string {
+    return isDashboardSectionUnavailable(ordering) ? 'value-muted' : '';
+  }
+
   /** The "Needs ordering" supporting detail, over the same catalogue the count was taken over. */
-  orderingFooterText(ordering: DashboardOrderingSummary): string {
+  orderingFooterText(ordering: DashboardOrderingSummary | UnavailableDashboardSection): string {
+    if (isDashboardSectionUnavailable(ordering)) return NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE;
     if (ordering.productsEvaluated === 0) return 'No products in the catalogue yet';
     if (ordering.productsNeedingOrdering === 0) return `All ${ordering.productsEvaluated} products adequately stocked`;
     return `of ${ordering.productsEvaluated} products in the catalogue`;
   }
 
-  orderingFooterClass(ordering: DashboardOrderingSummary): string {
+  orderingFooterClass(ordering: DashboardOrderingSummary | UnavailableDashboardSection): string {
+    if (isDashboardSectionUnavailable(ordering)) return 'value-muted';
     if (ordering.productsEvaluated === 0) return 'value-muted';
     return ordering.productsNeedingOrdering === 0 ? 'value-positive' : 'value-muted';
   }

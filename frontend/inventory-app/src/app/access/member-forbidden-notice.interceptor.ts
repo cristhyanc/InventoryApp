@@ -4,8 +4,23 @@ import { Router } from '@angular/router';
 import { catchError, throwError } from 'rxjs';
 import { ConfigService } from '../services/config.service';
 import { ToastService } from '../services/toast.service';
+import {
+  NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_CODE,
+  READ_ONLY_SUPPORT_SESSION_CODE
+} from '../support-session/support-session-messages';
 import { ACCOUNT_STATE_BYPASS_PATHS, INVITE_ROUTE_PREFIX } from './account-state.guard';
 import { isMemberAccessRefusal } from './access-forbidden.interceptor';
+
+/**
+ * Whether `error` is one of the two support-session refusals (issue #554), which
+ * `supportSessionMessageInterceptor` reports with its own, more specific sentence. Both are `403`s
+ * from a member endpoint and would otherwise read as "you don't have access to this" here too -
+ * true of the caller's role, but not what either refusal is actually about.
+ */
+function isSupportSessionRefusal(error: HttpErrorResponse): boolean {
+  const body = error.error as { code?: string } | null | undefined;
+  return body?.code === READ_ONLY_SUPPORT_SESSION_CODE || body?.code === NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_CODE;
+}
 
 const SLASH = '/'.charCodeAt(0);
 
@@ -47,6 +62,10 @@ export function isAccountStateBypassRoute(currentUrl: string): boolean {
  * person there has already been told, by the account-state routing itself or by the page they are
  * on, exactly what their situation is, and a generic toast on top would only contradict or
  * duplicate that.
+ *
+ * **Nor does it fire for one of the two support-session refusals** (issue #554): see
+ * {@link isSupportSessionRefusal}. `supportSessionMessageInterceptor` is the one that reports
+ * those, with the sentence the refusal is actually about.
  */
 export const memberForbiddenNoticeInterceptor: HttpInterceptorFn = (req, next) => {
   const toast = inject(ToastService);
@@ -59,7 +78,8 @@ export const memberForbiddenNoticeInterceptor: HttpInterceptorFn = (req, next) =
         error instanceof HttpErrorResponse &&
         error.status === 403 &&
         isMemberAccessRefusal(req.url, config.apiBaseUrl) &&
-        !isAccountStateBypassRoute(router.url)
+        !isAccountStateBypassRoute(router.url) &&
+        !isSupportSessionRefusal(error)
       ) {
         toast.error("You don't have access to this.");
       }

@@ -3582,6 +3582,71 @@ control surface. `view-as-business-dialog.component.spec.ts` and
 an `Active` business and composed the same way Reject and Members already are (see
 [Page composition boundary](#page-composition-boundary-issue-191)).
 
+### Hiding write controls and support-view messages (issue #554)
+
+Issue #553 gave the Super Admin a session and a banner with no effect on the business pages viewed
+through it; this is the one slice of #513 that closes the two gaps that left open: a write control
+that still rendered, and a refusal or a degraded card that said nothing about why.
+
+**A support session's capabilities are the wrong signal for a write control, and this is why a new
+one was needed.** `SupportSessionAccessPolicy` (issue #551) grants a session several capabilities
+that gate a write elsewhere in the application - `InventoryOperate`, `PurchasingOperate`,
+`BusinessManage` and the rest - because the method rule, not the capability set, is what makes the
+session read-only. A page that hides a control on the same capability a member's own role uses
+(`AccessService.allows`, issue #528) would therefore still render it inside a session; only
+`Suppliers.ManageGstDefaults`, one of the two capabilities `SupportSessionAccessPolicy.Excluded`
+withholds entirely, happens to hide itself this way already. `SupportSessionService.active$` - a
+`distinctUntilChanged` projection of the banner's own `state$` - is the one flag every other write
+control reads instead: presentation only, exactly as a capability-gated control already is, and the
+backend's read-only enforcement is still what would refuse the write if this page failed to hide or
+disable it. `ProductListComponent` (Delete, hidden; the Active/Inactive toggle, disabled) and
+`ProductFormComponent` (Save, disabled) are this slice's representative pages; rolling the same
+`active$` subscription out to every remaining write control across the application is tracked as
+follow-up under #513. Each page's write method (`confirmDelete`, `toggleActive`, `save`) also
+checks the flag itself and returns before calling the API, the same belt-and-suspenders the
+capability-gated controls already follow - the control actually becomes unavailable rather than
+merely invisible.
+
+**The two refusal messages are read from the response's own `code`, by one interceptor, for every
+request at once.** `support-session/support-session-messages.ts` declares the two codes
+`Inventory.Application.SupportSessions.SupportSessionErrorCodes` answers a refused request with -
+`read_only_support_session` and `unavailable_in_support_view` - and the one sentence this
+application shows for each. `supportSessionMessageInterceptor` reads a `403`'s `code` and shows the
+matching sentence through the same `ToastService` every other failure uses; a write control this
+build failed to hide or disable ahead of the request (a race with the session ending, a page this
+slice has not yet reached) still resolves to the right sentence rather than the generic "you don't
+have access to this" `memberForbiddenNoticeInterceptor` would otherwise show for any other
+member-endpoint `403` - that interceptor excludes both codes for exactly this reason. It is
+installed in `app.config.ts` beside `FORBIDDEN_INTERCEPTORS`, outer to
+`supportSessionInterceptor`, so it never reports a response that one has already discarded as
+stale.
+
+**The Dashboard's two Nayax-fed cards show the same Nayax sentence, read from a flag rather than a
+refusal.** Issue #552 answers a support session's `GET /api/dashboard/summary` with "Needs refill"
+and "Needs ordering" each replaced by `UnavailableDashboardSectionDto`
+(`{ "available": false, "reason": "SupportView" }`) rather than a blanked figure inside either
+card - there was no error to catch, because the backend declined to read the live fleet at all.
+`DashboardSummary.needsRefill`/`needsOrdering` (`models.ts`) are each typed as the real summary
+shape or `UnavailableDashboardSection`, and `isDashboardSectionUnavailable` is the one type guard
+every reader uses. `DashboardComponent`'s value and footer helpers (`refillValueDisplay`,
+`refillFooterText`, and the ordering pair beside them) check it first: the big number reads
+"Unavailable", on the same rule the sales and inventory cards already use for a figure this
+caller was not given, and the footer carries the one sentence - `support-session-messages.ts`'s
+`NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE`, the same constant the interceptor above shows for a
+direct refusal, so the error and the degraded card are never two different sentences for the one
+reason.
+
+**What proves it.** `support-session.service.spec.ts` covers `active$` publishing `true` once a
+session starts and `false` again once it ends, with no duplicate for an unchanged state.
+`product-list.component.spec.ts` and `product-form.component.spec.ts` cover Delete being hidden,
+the status toggle and Save being disabled, and each write method refusing to call the API while a
+session is active - and that both controls render normally while none is. `dashboard.component.spec.ts`
+covers the Nayax sentence appearing for both cards' value and footer when the summary carries
+`{ available: false, reason: "SupportView" }`, and the real figures being unaffected when it does
+not. `support-session-message.interceptor.spec.ts` covers the two messages being shown for their
+own code and nothing else, and `member-forbidden-notice.interceptor.spec.ts` covers the generic
+message staying silent for both support-session codes.
+
 ### Member access: capability-built navigation, guards and hidden actions (issue #528)
 
 Until issue #528 the sidebar showed every entry to every member and every route was behind
