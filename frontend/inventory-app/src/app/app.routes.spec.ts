@@ -22,6 +22,7 @@ import { PlatformDiagnosticsComponent } from './components/admin/diagnostics/pla
 import { SuperAdminBusinessesComponent } from './components/super-admin/businesses/super-admin-businesses.component';
 import { AdminUsersComponent } from './components/admin/users/admin-users.component';
 import { RolesComponent } from './components/admin/roles/roles.component';
+import { BusinessSettingsComponent } from './components/admin/business-settings/business-settings.component';
 import { PurchaseEditPageComponent } from './components/purchases/purchase-edit/purchase-edit-page.component';
 import { PurchaseListComponent } from './components/purchases/purchase-list.component';
 import { PurchaseUploadComponent } from './components/purchases/purchase-upload.component';
@@ -92,6 +93,13 @@ describe('Admin Roles route (issue #530)', () => {
   it('serves the dedicated Admin Roles page at /admin/roles, behind authentication and Roles.View', async () => {
     expect(route('admin/roles').canActivate).toContain(MsalGuard);
     await expect(loadedComponent('admin/roles')).resolves.toBe(RolesComponent);
+  });
+});
+
+describe('Admin Business Settings route (issue #549)', () => {
+  it('serves the dedicated Business Settings page at /admin/business-settings, behind authentication and Business.Manage', async () => {
+    expect(route('admin/business-settings').canActivate).toContain(MsalGuard);
+    await expect(loadedComponent('admin/business-settings')).resolves.toBe(BusinessSettingsComponent);
   });
 });
 

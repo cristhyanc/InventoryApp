@@ -20,11 +20,12 @@ import { trendLabel, trendClass } from '../../formatting/revenue-trend';
 import { siteStockClass } from '../../formatting/site-stock-status';
 import { money } from '../reports/report-formatting';
 import { IconComponent } from '../shared/icon.component';
+import { LegacyBusinessSettingsPromptComponent } from '../shared/legacy-business-settings-prompt/legacy-business-settings-prompt.component';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, RouterLink, IconComponent],
+  imports: [CommonModule, RouterLink, IconComponent, LegacyBusinessSettingsPromptComponent],
   templateUrl: './dashboard.component.html'
 })
 export class DashboardComponent implements OnInit {

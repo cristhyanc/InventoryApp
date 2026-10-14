@@ -15,6 +15,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Dashboard, bookkeeping, daily-sales, transaction, GST, commission, machine, and product reports.
 - CSV/XLSX exports that use the same backend calculations as the UI.
 - Microsoft Entra sign-in and delegated-scope API authorization (see [Authentication configuration](#authentication-configuration)).
+- Owner-only business settings — name, contact email, ABN, GST registration and time zone, with a confirmation before a time zone change (see [Business settings (Admin page)](#business-settings-admin-page)).
 
 ## Technology
 
@@ -269,7 +270,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
 - **Every endpoint is enforced by capability** (issues #525 and #526). The capability a role must grant is checked before the request reaches the endpoint, and a refusal is a plain `403` that describes neither the capability nor the role. What each role can reach:
   - **Operator** — the Dashboard (including its sales refresh) and the Pick List; inventory: products, take inventory, categories, stock and stock history, machines including Sync Restock, and sites; purchasing: purchases, supplier orders and suppliers. They may record a purchase but not change a supplier's GST defaults (`Suppliers.ManageGstDefaults`), and they reach no report, expense, import, site commission, setting or maintenance tool at all.
   - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
-  - **Owner** — everything a Manager reaches, plus Admin → Nayax Settings (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, all five maintenance repairs (Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery), Admin → Users (below) and Admin → Roles. Each repair's preview and dry run is as restricted as its apply.
+  - **Owner** — everything a Manager reaches, plus Admin → Nayax Settings (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, all five maintenance repairs (Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery), Admin → Users (below), Admin → Roles and Admin → Business Settings (see [Business settings (Admin page)](#business-settings-admin-page)). Each repair's preview and dry run is as restricted as its apply.
   - **Admin → Roles** (issue #530) is a read-only page, on `Roles.View`, which only an Owner holds: it explains what Owner, Manager and Operator can each access, from the same table above. It edits nothing — no role, no permission and no member — and is rendered from one frontend definition kept from drifting away from the published capability vocabulary by its own test (see [docs/architecture.md § The Roles page](docs/architecture.md#the-roles-page-issue-530)).
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **The Angular application renders what the role allows** (issue #528). It reads the caller's capabilities once from `GET /api/me/access` and builds the sidebar from them, so an Operator is offered no Expenses, Reports or Admin entries and a Manager no Nayax Settings or data-repair entries; a route the role does not allow shows an "access not allowed" page, and an action the role cannot use — the supplier GST defaults editor — is not offered. **None of that is the boundary**: the API checks the same capability on every request and refuses it there, so a hidden entry hides a page rather than protecting one, and a capability list that cannot be read hides nothing at all. Since every current member is an Owner, nothing changed for anybody using the application today.
@@ -1016,6 +1017,34 @@ again, so the status always describes the token actually stored.
 
 Tests and re-tests share one allowance for the whole business (five runs per ten minutes); past it
 the page asks you to wait a few minutes, and no call reaches Nayax.
+
+## Business settings (Admin page)
+
+**Admin → Business Settings** is where an Owner reads and changes their own business's name,
+contact email, ABN, GST registration and time zone, through `GET`/`PUT /api/business/settings`
+(issue #548). Only an Owner can reach it — the route, the sidebar entry and the endpoint itself all
+require `Business.Manage` — and the five fields are validated with the exact same rules as the
+business application form (issue #543): a required name, a single well-formed contact address, an
+optional but checksum-validated ABN, and a GST registration that must be *stated*, never defaulted
+to "not registered".
+
+- **Changing the time zone needs an explicit confirmation.** Saving with a different time zone than
+  the one the page was last read with shows a dialog explaining that business days and report date
+  boundaries for **all of the business's data — past and future — will be recalculated in the new
+  zone**, including that zone's own daylight-saving transitions; nothing stored changes, but a
+  figure already shown for one business day may move to an adjacent one. Saving with the time zone
+  unchanged needs no confirmation. See [docs/architecture.md § Business settings API](docs/architecture.md#business-settings-api-issue-548)
+  for why the re-derivation happens on the next request rather than retroactively rewriting
+  anything.
+- **A successful save refreshes the shell before showing success.** The page re-fetches
+  `GET /api/business/current` and calls the access service's `refresh()` — the same re-read a role
+  change already triggers — before reporting the save as done, so the sidebar's business name, the
+  active time zone and every date/time already on screen follow the new settings without a reload.
+- **The migrated business is missing its contact email and GST registration**, because it predates
+  the application form (issue #540). While either is unrecorded, a dismissible prompt on the
+  Dashboard and on this page asks the Owner to complete them; completing both is what actually
+  clears it; dismissing it only hides it for the page currently on screen, not everywhere, and it
+  returns on the next visit or reload while the business is still incomplete.
 
 ## Delivery workflow
 

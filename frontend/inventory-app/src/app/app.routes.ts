@@ -357,6 +357,16 @@ export const routes: Routes = [
     loadComponent: () => import('./components/admin/roles/roles.component').then((m) => m.RolesComponent)
   },
   {
+    // The Admin → Business Settings page (issue #549): the business's own name, contact email,
+    // ABN, GST registration and time zone, Owner-only.
+    path: 'admin/business-settings',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Business.Manage')],
+    loadComponent: () =>
+      import('./components/admin/business-settings/business-settings.component').then(
+        (m) => m.BusinessSettingsComponent
+      )
+  },
+  {
     path: 'expenses',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Expenses.Manage')],
     loadComponent: () => import('./components/expenses/operating-expense.component').then((m) => m.OperatingExpenseComponent)
