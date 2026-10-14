@@ -99,37 +99,18 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     expect(host.textContent).toContain('Active Co');
   });
 
-  it('offers Approve and Reject only for a pending business', async () => {
-    const list = jest.fn(() => of([business({ status: 'Pending' })]));
+  it.each<[SuperAdminBusiness['status'], string[]]>([
+    ['Pending', ['Approve', 'Reject']],
+    ['Active', ['View as this business', 'Deactivate']],
+    ['Deactivated', ['Reactivate', 'Members']]
+  ])('for a %s business, offers %s', async (status, expectedButtons) => {
+    const list = jest.fn(() => of([business({ status })]));
     const { host } = await render({ list });
 
     const row = rowFor(host, 'Snack Co');
-    expect(Array.from(row.querySelectorAll('button')).map((button) => button.textContent?.trim())).toEqual([
-      'Approve',
-      'Reject'
-    ]);
-  });
-
-  it('offers View as this business and Deactivate for an active business', async () => {
-    const list = jest.fn(() => of([business({ status: 'Active' })]));
-    const { host } = await render({ list });
-
-    const row = rowFor(host, 'Snack Co');
-    expect(Array.from(row.querySelectorAll('button')).map((button) => button.textContent?.trim())).toEqual([
-      'View as this business',
-      'Deactivate'
-    ]);
-  });
-
-  it('offers Reactivate and Members for a deactivated business', async () => {
-    const list = jest.fn(() => of([business({ status: 'Deactivated' })]));
-    const { host } = await render({ list });
-
-    const row = rowFor(host, 'Snack Co');
-    expect(Array.from(row.querySelectorAll('button')).map((button) => button.textContent?.trim())).toEqual([
-      'Reactivate',
-      'Members'
-    ]);
+    expect(Array.from(row.querySelectorAll('button')).map((button) => button.textContent?.trim())).toEqual(
+      expectedButtons
+    );
   });
 
   it('offers no action for a rejected business', async () => {
