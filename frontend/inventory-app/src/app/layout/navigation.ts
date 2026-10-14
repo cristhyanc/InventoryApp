@@ -119,7 +119,8 @@ export const primaryNavigation: readonly NavItem[] = [
       link('Historical GST Classification', '/admin/historical-gst-classification', 'Data.Repair'),
       link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair'),
       link('Users', '/admin/users', 'Members.Manage'),
-      link('Roles', '/admin/roles', 'Roles.View')
+      link('Roles', '/admin/roles', 'Roles.View'),
+      link('Business Settings', '/admin/business-settings', 'Business.Manage')
     ]
   }
 ];

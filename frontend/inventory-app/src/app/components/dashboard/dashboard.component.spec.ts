@@ -8,6 +8,8 @@ import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
+import { AccessService } from '../../access/access.service';
+import { BusinessSettingsService } from '../../services/business-settings.service';
 
 /**
  * Declared on its own rather than inline, because `DashboardSummary.salesThisWeek` is optional
@@ -397,7 +399,11 @@ async function renderDashboard(
       { provide: MachineService, useValue: { getAll: () => of(overrides.machines ?? []) } },
       { provide: SiteService, useValue: { getAll: () => of([]) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } },
-      { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } }
+      { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } },
+      // The composed legacy-business-settings-prompt (issue #549) is stubbed to stay hidden: it is
+      // its own component with its own tests, and not what this page's own tests are about.
+      { provide: AccessService, useValue: { allows: () => of(false) } },
+      { provide: BusinessSettingsService, useValue: { get: () => of(null) } }
     ]
   }).compileComponents();
 

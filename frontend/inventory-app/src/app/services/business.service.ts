@@ -92,4 +92,19 @@ export class BusinessService {
     this.current$ = undefined;
     this.timeZone.clear();
   }
+
+  /**
+   * Re-reads the current business and republishes its zone (issue #549), for a page that has just
+   * changed the business's own settings and needs the shell to reflect the new name and time zone
+   * without a reload.
+   *
+   * Unlike `reset()` this does not forget the published zone first and does not bump the
+   * generation: the signed-in identity has not changed, so there is no previous answer to
+   * invalidate and nothing from a superseded identity that could wrongly publish - only a newer
+   * answer for the same business, which `BusinessTimeZoneService.publish` simply overwrites.
+   */
+  refresh(): Observable<CurrentBusiness | null> {
+    this.current$ = undefined;
+    return this.load();
+  }
 }

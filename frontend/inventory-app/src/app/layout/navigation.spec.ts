@@ -94,7 +94,8 @@ const adminChildRoutes: { label: string; route: string }[] = [
   { label: 'Historical GST Classification', route: '/admin/historical-gst-classification' },
   { label: 'Nayax Sale Timestamp Repair', route: '/admin/nayax-sale-timestamp-repair' },
   { label: 'Users', route: '/admin/users' },
-  { label: 'Roles', route: '/admin/roles' }
+  { label: 'Roles', route: '/admin/roles' },
+  { label: 'Business Settings', route: '/admin/business-settings' }
 ];
 
 describe('primary navigation (issue #391)', () => {
@@ -350,6 +351,20 @@ describe('navigationFor capabilities (issue #528)', () => {
       expect.objectContaining({ route: '/admin/roles' })
     );
     expect(navLinks(navigationFor(OPERATOR, false)).map((link) => link.route)).not.toContain('/admin/roles');
+  });
+
+  /** The Admin → Business Settings page (issue #549): visible only to the role that holds `Business.Manage`. */
+  it('offers Business Settings to an Owner and hides it from a Manager and an Operator', () => {
+    expect(childRoutes('Admin', ownerNavigation())).toContainEqual({
+      label: 'Business Settings',
+      route: '/admin/business-settings'
+    });
+    expect(childRoutes('Admin', navigationFor(MANAGER, false))).not.toContainEqual(
+      expect.objectContaining({ route: '/admin/business-settings' })
+    );
+    expect(navLinks(navigationFor(OPERATOR, false)).map((link) => link.route)).not.toContain(
+      '/admin/business-settings'
+    );
   });
 
   /**
