@@ -42,7 +42,7 @@ concurrency:
 jobs:
   context:
     name: Verify architecture target
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       pull-requests: read
@@ -111,7 +111,7 @@ jobs:
     needs: context
     # Every Claude route: a fresh Claude invocation with no implementation conversation state.
     if: needs.context.outputs.checker == 'claude'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
     # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
     # permission and no App or Copilot credential. Its result is schema-validated structured output,
@@ -233,7 +233,7 @@ jobs:
   sonar:
     name: Read SonarCloud issues on the implementation head
     needs: context
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     # Read-only and deterministic: no model runs here. The trusted script from this workflow's own
     # commit waits for the SonarCloud check run on the exact head SHA, then reads the pull request's
@@ -273,7 +273,7 @@ jobs:
     # Runs only after a successful Claude architecture check. A failed SonarCloud read
     # never blocks: the sonar job's result is not required, and a missing count is treated as zero.
     if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 120
     permissions:
       contents: read
@@ -459,7 +459,7 @@ jobs:
     # Runs even when the target check fails, so a rejected or broken handoff never leaves the
     # issue in agent-working with nothing scheduled.
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       actions: write
