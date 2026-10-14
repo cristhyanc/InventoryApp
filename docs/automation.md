@@ -115,6 +115,21 @@ runner access and approval controls where available. The diagnostic and default-
 are **not** a certification that a persistent runner is safe for arbitrary PR code or credentialed
 coding workloads, even when the repository is private.
 
+**Manual Docker validation pilot:** `.github/workflows/inventoryapp-self-hosted-docker-validation.yml`
+can be dispatched from `main` after it is merged into that branch. It selects the
+`[self-hosted, linux, x64, inventory-agent]` runner and starts the runner-local
+`inventoryapp-dev:local` image as a GitHub Actions job container. It checks out
+only reviewed `main` code with read-only contents permission and no persisted
+checkout credentials, sets `TZ=UTC`, and runs `bash scripts/validate.sh`.
+It neither executes pull-request heads nor passes AI/deployment credentials. The
+runner service must have access to the Docker daemon and the image must exist on
+the runner host. Docker daemon access is effectively host-root access: use a
+dedicated, resettable runner/VM, never mount the Docker socket into the job,
+and do not treat a job container as sufficient isolation for untrusted code.
+This pilot does not alter the normal PR, Claude, review, or deployment routes.
+If the container cannot start or validation fails, leave those routes unchanged
+while inspecting the manual workflow logs.
+
 **Rollback:** remove or set `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` to `false` in
 Repository Settings → Secrets and variables → Actions → Variables. Future preflight jobs
 then use GitHub-hosted runners again. The diagnostic remains manual. Do not change the
