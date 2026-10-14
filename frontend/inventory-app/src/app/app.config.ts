@@ -5,6 +5,7 @@ import { routes } from './app.routes';
 import { ConfigService } from './services/config.service';
 import { FORBIDDEN_INTERCEPTORS } from './access/forbidden-interceptors';
 import { loadingInterceptor } from './interceptors/loading.interceptor';
+import { supportSessionInterceptor } from './support-session/support-session.interceptor';
 import { browserAuthProviders } from './auth/browser-auth-providers';
 
 export function initializeApp(configService: ConfigService) {
@@ -16,8 +17,15 @@ export const appConfig: ApplicationConfig = {
     provideRouter(routes),
     // The three `403` interceptors and the order they run in are `FORBIDDEN_INTERCEPTORS`, which
     // documents each one's job and is the same list the composed-chain regression test installs
-    // (issues #528, #529, #602).
-    provideHttpClient(withInterceptors([loadingInterceptor, ...FORBIDDEN_INTERCEPTORS]), withInterceptorsFromDi()),
+    // (issues #528, #529, #602). `supportSessionInterceptor` runs last - innermost, closest to the
+    // backend - so it is the first to see a raw response on the way back: it can discard a stale
+    // one before any of the three above ever reacts to it, and `loadingInterceptor`'s `finalize`
+    // still runs regardless, because completion (which a discarded response still is) is enough to
+    // end it (issue #553).
+    provideHttpClient(
+      withInterceptors([loadingInterceptor, ...FORBIDDEN_INTERCEPTORS, supportSessionInterceptor]),
+      withInterceptorsFromDi()
+    ),
     { provide: APP_INITIALIZER, useFactory: initializeApp, deps: [ConfigService], multi: true },
     // How the browser authenticates. The real Microsoft Entra/MSAL wiring lives in
     // auth/browser-auth-providers.ts; the dedicated end-to-end build configuration replaces that

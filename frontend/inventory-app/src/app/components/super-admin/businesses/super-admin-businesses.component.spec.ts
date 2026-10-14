@@ -7,6 +7,7 @@ import {
   SuperAdminBusinessesService
 } from '../../../services/super-admin-businesses.service';
 import { ToastService } from '../../../services/toast.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 function business(overrides: Partial<SuperAdminBusiness> = {}): SuperAdminBusiness {
   return {
@@ -24,7 +25,11 @@ function business(overrides: Partial<SuperAdminBusiness> = {}): SuperAdminBusine
   };
 }
 
-async function render(service: Partial<SuperAdminBusinessesService>, toast?: Partial<ToastService>) {
+async function render(
+  service: Partial<SuperAdminBusinessesService>,
+  toast?: Partial<ToastService>,
+  supportSession?: Partial<SupportSessionService>
+) {
   await TestBed.configureTestingModule({
     imports: [SuperAdminBusinessesComponent],
     providers: [
@@ -32,7 +37,8 @@ async function render(service: Partial<SuperAdminBusinessesService>, toast?: Par
       {
         provide: ToastService,
         useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn(), ...toast }
-      }
+      },
+      { provide: SupportSessionService, useValue: { start: jest.fn(), ...supportSession } }
     ]
   }).compileComponents();
 
@@ -104,12 +110,13 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     ]);
   });
 
-  it('offers only Deactivate for an active business', async () => {
+  it('offers View as this business and Deactivate for an active business', async () => {
     const list = jest.fn(() => of([business({ status: 'Active' })]));
     const { host } = await render({ list });
 
     const row = rowFor(host, 'Snack Co');
     expect(Array.from(row.querySelectorAll('button')).map((button) => button.textContent?.trim())).toEqual([
+      'View as this business',
       'Deactivate'
     ]);
   });
@@ -248,5 +255,27 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
 
     expect(members).toHaveBeenCalledWith(9);
     expect(host.textContent).toContain('Snack Co - Members');
+  });
+
+  it('opens the view-as dialog for an active business and closes it once a session starts (issue #553)', async () => {
+    const list = jest.fn(() => of([business({ status: 'Active' })]));
+    const start = jest.fn(() => of({ sessionId: 's1', businessId: 9, businessName: 'Snack Co', startedAtUtc: '', expiresAtUtc: '' }));
+    const { fixture, host } = await render({ list }, undefined, { start });
+
+    buttonWithText(host, 'View as this business').click();
+    fixture.detectChanges();
+
+    expect(host.textContent).toContain('View as Snack Co');
+
+    const reasonField = host.querySelector('#view-as-reason') as HTMLTextAreaElement;
+    reasonField.value = 'Investigating a reported bug';
+    reasonField.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    buttonWithText(host, 'Start session').click();
+    fixture.detectChanges();
+
+    expect(start).toHaveBeenCalledWith(9, 'Investigating a reported bug');
+    expect(host.textContent).not.toContain('View as Snack Co');
   });
 });

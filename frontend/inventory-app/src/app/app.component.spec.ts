@@ -16,6 +16,7 @@ import { ConfigService } from './services/config.service';
 import { PlatformDiagnosticsAccessService } from './services/platform-diagnostics-access.service';
 import { SuperAdminBusinessesService } from './services/super-admin-businesses.service';
 import { BusinessService, CurrentBusiness } from './services/business.service';
+import { SupportSessionService, SupportSessionState } from './support-session/support-session.service';
 
 @Component({ standalone: true, template: 'page body' })
 class BlankPageComponent {}
@@ -241,7 +242,11 @@ async function render(
       // The shell waits for the account state before looking up a business at all (issue #529);
       // that gating is what app.component business-context tests below exercise, so the answer
       // comes from the double above rather than through the real cached service.
-      { provide: AccountStateService, useValue: { state$: accountState.state$ } }
+      { provide: AccountStateService, useValue: { state$: accountState.state$ } },
+      // The shell renders the support-session banner on every page (issue #553). The shell owns
+      // no part of that decision either, so it is stubbed inactive here and tested in
+      // support-session-banner.component.spec.ts and support-session.service.spec.ts.
+      { provide: SupportSessionService, useValue: { state$: of<SupportSessionState>({ active: false }) } }
     ]
   }).compileComponents();
 

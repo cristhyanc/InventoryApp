@@ -70,6 +70,9 @@
                       </button>
                     }
                     @if (business.status === 'Active') {
+                      <button type="button" class="btn btn-secondary btn-sm" (click)="requestViewAs(business)">
+                        View as this business
+                      </button>
                       <button type="button" class="btn btn-danger btn-sm" (click)="requestDeactivate(business)">
                         Deactivate
                       </button>
@@ -120,4 +123,13 @@
     (closed)="closeMembers()"
     (memberReleased)="onMemberReleased()"
   ></app-business-members-dialog>
+}
+
+@if (viewAsTarget) {
+  <app-view-as-business-dialog
+    [businessId]="viewAsTarget.businessId"
+    [businessName]="viewAsTarget.name"
+    (started)="onViewAsStarted()"
+    (canceled)="onViewAsCanceled()"
+  ></app-view-as-business-dialog>
 }

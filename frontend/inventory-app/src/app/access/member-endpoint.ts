@@ -13,9 +13,10 @@
  * - `access-probe` - `GET /api/me/access`, the capability cache's own read (issue #521).
  * - `account-state-probe` - `GET /api/me/account-state`, the account-state cache's own read
  *   (issue #523). Membership-exempt, so its refusal says nothing about a membership at all.
- * - `platform-admin` - the platform diagnostics surface (`/api/admin/diagnostics/*`, issue #336),
- *   authorized by the configured Entra `(tid, oid)` pair and by no business role. A `403` is its
- *   expected answer for every ordinary member.
+ * - `platform-admin` - the platform diagnostics surface (`/api/admin/diagnostics/*`, issue #336) and
+ *   the Super Admin support-session control surface (`/api/super-admin/support-sessions/*`, issue
+ *   #550), both authorized by the configured Entra `(tid, oid)` pair and by no business role. A
+ *   `403` is their expected answer for every ordinary member.
  * - `non-api` - a static asset, another origin, or anything else outside the configured API base.
  */
 export type MemberRequestKind = 'member' | 'access-probe' | 'account-state-probe' | 'platform-admin' | 'non-api';
@@ -34,6 +35,17 @@ const ACCOUNT_STATE_PROBE_PATH = 'me/account-state';
  * capability-policy member endpoints and are deliberately not covered.
  */
 const PLATFORM_ADMIN_PREFIX = 'admin/diagnostics';
+
+/**
+ * The Super Admin support-session control surface (issue #550): `{businessId}`, `active` and
+ * `active/end`. The same platform-admin authorization class as the diagnostics prefix above - class
+ * 2, no capability (docs/architecture.md § Support sessions: the store and the control endpoints) -
+ * and reached as the administrator themselves, never inside a session, so a refusal here says
+ * nothing about a business role either. Issue #553's own calls to it (the "view as this business"
+ * dialog, the banner's end action, and a tab's own-session probe) must not be read as a member
+ * refusal any more than the diagnostics probe is.
+ */
+const SUPPORT_SESSION_CONTROL_PREFIX = 'super-admin/support-sessions';
 
 /** Static and runtime-configuration assets (`/assets/config.json`), which are not API calls. */
 const ASSETS_SEGMENT = 'assets';
@@ -116,7 +128,12 @@ export function classifyMemberRequest(url: string, apiBaseUrl: string): MemberRe
   if (endpointPath === ACCOUNT_STATE_PROBE_PATH) {
     return 'account-state-probe';
   }
-  if (endpointPath === PLATFORM_ADMIN_PREFIX || endpointPath.startsWith(`${PLATFORM_ADMIN_PREFIX}/`)) {
+  if (
+    endpointPath === PLATFORM_ADMIN_PREFIX ||
+    endpointPath.startsWith(`${PLATFORM_ADMIN_PREFIX}/`) ||
+    endpointPath === SUPPORT_SESSION_CONTROL_PREFIX ||
+    endpointPath.startsWith(`${SUPPORT_SESSION_CONTROL_PREFIX}/`)
+  ) {
     return 'platform-admin';
   }
 

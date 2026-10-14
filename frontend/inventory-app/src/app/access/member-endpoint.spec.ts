@@ -51,6 +51,22 @@ describe('classifyMemberRequest (issue #602)', () => {
     });
 
     it.each([
+      '/api/super-admin/support-sessions/7',
+      '/api/super-admin/support-sessions/active',
+      '/api/super-admin/support-sessions/active/end',
+      '/api/super-admin/support-sessions'
+    ])('classifies %s as the platform-admin surface (issue #553)', (url) => {
+      expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
+    });
+
+    it('classifies the Super Admin businesses API as an ordinary member endpoint', () => {
+      // Unlike the support-session control surface, this one is only ever called from behind
+      // `platformAdminGuard`'s routed page, so a refusal reaching it at all is not the expected
+      // case the exclusion above exists for.
+      expect(classifyMemberRequest('/api/super-admin/businesses', LOCAL)).toBe('member');
+    });
+
+    it.each([
       '/assets/config.json',
       '/assets/config.json?v=2',
       // Another origin: MSAL's own traffic, and an API host this build was not configured with.
