@@ -84,12 +84,16 @@
                       </span>
                     </td>
                     <td class="table-cell">
-                      <div class="flex items-center gap-2">
-                        <input #qtyInput type="number" min="1" [value]="product.maxStockInMachine - product.quantityInStock" class="w-20 px-2 py-1 text-sm" />
-                        <button (click)="restockProduct(product, machine, qtyInput.value, qtyInput)" [disabled]="product.quantityInStock >= product.maxStockInMachine" class="btn btn-sm btn-secondary">
-                          Restock
-                        </button>
-                      </div>
+                      <!-- Hidden rather than disabled while a support session is active (issue #658): a
+                           session grants InventoryOperate, so this write would otherwise still render. -->
+                      @if (!sessionActive) {
+                        <div class="flex items-center gap-2">
+                          <input #qtyInput type="number" min="1" [value]="product.maxStockInMachine - product.quantityInStock" class="w-20 px-2 py-1 text-sm" />
+                          <button (click)="restockProduct(product, machine, qtyInput.value, qtyInput)" [disabled]="product.quantityInStock >= product.maxStockInMachine" class="btn btn-sm btn-secondary">
+                            Restock
+                          </button>
+                        </div>
+                      }
                     </td>
                   </tr>
                 </tbody>

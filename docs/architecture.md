@@ -3690,6 +3690,48 @@ is active, and both staying available while none is. `site-commissions-report.co
 added by this slice, covers Record Payment being hidden and `recordPayment` refusing to call the
 service while a session is active, and both working normally while none is.
 
+### Extending the read-only support-view guard to machines and stock (issue #658)
+
+Issue #554 established the pattern and covered Products as its representative pages; this slice
+rolls the same `SupportSessionService.active$` subscription out to the next bounded area #513
+named: machine restock, the machine-level Nayax Sync Restock reconciliation workflow, and the
+manual stock-adjustment form shared by the Stock History page and the preserved
+`/products/:id/stock` entry point. Sites, site products and the Sites list carry no write control
+at all - every call those pages make is a `GET` - so nothing in that family needed a guard.
+
+**`MachineDetailComponent`'s Restock control (quantity input and button) is hidden per row**, the
+same `ProductListComponent.confirmDelete`/Delete-button shape issue #554 used: there is no
+read-only value left in a quantity input nobody may submit, so hiding it rather than disabling it
+is the right call, the same way Delete was hidden rather than disabled. `restockProduct()` also
+returns before calling `StockService.adjust` while a session is active.
+
+**`MachineRestockSyncComponent`'s Sync Restock trigger is disabled, not hidden**, because unlike
+Restock's bare input it is a single well-known action on an otherwise-informative panel - the same
+shape `ProductFormComponent.save` used. It needed the guard for a sharper reason than the others,
+though: `POST /api/machines/{id}/sync-restock` is itself a `POST`, so
+`SupportSessionAccessPolicy.IsReadMethod` refuses even the *preview* fetch during a session, not
+only the apply/resolve calls that follow it - there is no partial, read-only view of this dialog to
+leave open. Every write-shaped method on the component (`syncRestock`, `applySelectedEvents`,
+`resolveDuplicate`, `resolveSelectedAsAlreadyRecorded`) checks `sessionActive` and returns before
+calling `MachineService`, and the dialog's own Apply/resolve buttons are disabled the same way as a
+second line of defence for the rare case the dialog was already open when a session started.
+
+**`StockAdjustmentFormComponent`'s Apply Adjustment button is disabled**, on the same reasoning as
+Save: the rest of the form (reason, machine, notes) stays useful to read, only the write at its end
+is refused. `adjust()` returns before calling `StockService.adjust` while a session is active. Since
+the component is composed into both `StockHistoryPageComponent` and the machine-detail/stock pages
+behind it, this one guard covers every place a manual adjustment can be submitted from.
+
+**What proves it.** `machine-detail.component.spec.ts` covers Restock being hidden while a session
+is active and rendered normally while none is, and `restockProduct()` refusing to call the API
+directly. `machine-restock-sync.component.spec.ts` covers Sync Restock being disabled in both
+states and every one of the four write-shaped methods refusing to call `MachineService` directly
+while a session is active, including the preview fetch. `stock-adjustment-form.component.spec.ts`
+covers Apply Adjustment being disabled in both states and `adjust()` refusing to call
+`StockService.adjust` directly while a session is active. `stock-history-page.component.spec.ts`
+provides `SupportSessionService` for the embedded form so its own existing coverage keeps rendering
+the composed page.
+
 ### Member access: capability-built navigation, guards and hidden actions (issue #528)
 
 Until issue #528 the sidebar showed every entry to every member and every route was behind
