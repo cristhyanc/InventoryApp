@@ -129,7 +129,9 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
         Assert.False(businesses[0].GetProperty("nayaxConfigured").GetBoolean());
         Assert.Equal(
             SuperAdminBusinessesApiFactory.AppliedAt,
-            businesses[0].GetProperty("appliedAtUtc").GetDateTime().ToUniversalTime());
+            DateTime.SpecifyKind(
+                    businesses[0].GetProperty("appliedAtUtc").GetDateTime(),
+                    DateTimeKind.Utc));
         Assert.Equal(JsonValueKind.Null, businesses[0].GetProperty("decidedAtUtc").ValueKind);
 
         var trading = businesses.Single(business =>

@@ -87,7 +87,9 @@ public sealed class MembersApiTests : IClassFixture<MembersApiTests.ApiFactory>
             members,
             member => Assert.Equal(
                 ApiFactory.CreatedAt,
-                member.GetProperty("joinedAtUtc").GetDateTime().ToUniversalTime()));
+                DateTime.SpecifyKind(
+                    member.GetProperty("joinedAtUtc").GetDateTime(),
+                    DateTimeKind.Utc)));
     }
 
     /// <summary>
