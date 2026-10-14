@@ -53,9 +53,8 @@ jobs:
   preflight:
     name: Validate issue documentation-impact declaration
     if: (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null
-    # The only optional self-hosted pilot. Defaults to a fresh GitHub-hosted runner.
-    # Never route the implementation, review, repair, architecture or PR validation jobs
-    # to a persistent runner merely by enabling this variable.
+    # Uses the shared INVENTORY_AGENT_SELF_HOSTED_ALL selector (default off: a fresh
+    # GitHub-hosted runner). See docs/automation.md before enabling it.
     runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:

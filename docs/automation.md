@@ -96,9 +96,10 @@ The first stage supports only two low-privilege checks:
    available RAM/disk and presence of build tools. It has `permissions: {}`, performs **no
    checkout**, accepts no arbitrary shell input and references **no secrets**. The diagnostic
    cannot run until an online Ubuntu x64 runner bearing all four labels is registered.
-2. **Opt-in trusted issue preflight**: the *preflight job only* in
+2. **Opt-in trusted issue preflight**: the preflight job in
    `.github/workflows/agent-implement.yml` uses the self-hosted runner when the repository
-   Actions variable `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` is exactly `true`. If unset
+   Actions variable `INVENTORY_AGENT_SELF_HOSTED_ALL` is exactly `true` (the earlier
+   preflight-only variable `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` is no longer read). If unset
    or any other value, it continues to use `ubuntu-latest`. This job checks out the
    reviewed `develop` branch and reads an issue's documentation-impact declaration with
    read-only GitHub permissions; it does not run an AI model or PR code. If the VM is offline,
@@ -133,9 +134,9 @@ This pilot does not alter the normal PR, Claude, review, or deployment routes.
 If the container cannot start or validation fails, leave those routes unchanged
 while inspecting the manual workflow logs.
 
-**Rollback:** remove or set `INVENTORY_AGENT_SELF_HOSTED_PREFLIGHT` to `false` in
-Repository Settings → Secrets and variables → Actions → Variables. Future preflight jobs
-then use GitHub-hosted runners again. The diagnostic remains manual. Do not change the
+**Rollback:** remove or set `INVENTORY_AGENT_SELF_HOSTED_ALL` to `false` in
+Repository Settings → Secrets and variables → Actions → Variables. Future jobs in the five
+core workflows, preflight included, then use GitHub-hosted runners again. The diagnostic remains manual. Do not change the
 variable while a job is executing; inspect the Actions run to confirm its selected runner.
 Only a separately reviewed, security-hardened follow-up may consider migrating additional
 workloads. Before moving any credentialed coding agent, protect the GitHub runner from
