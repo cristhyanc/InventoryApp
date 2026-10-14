@@ -1,7 +1,9 @@
 import { SimpleChange } from '@angular/core';
-import { of, throwError } from 'rxjs';
+import { TestBed } from '@angular/core/testing';
+import { Observable, of, throwError } from 'rxjs';
 import { StockAdjustmentFormComponent } from './stock-adjustment-form.component';
 import { StockService } from '../../../services/stock.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import { RestockCostSuggestion, StockAdjustment, StockAdjustmentReason } from '../../../models/models';
 
 interface Harness {
@@ -11,14 +13,19 @@ interface Harness {
   applied: jest.Mock;
 }
 
-function createHarness(options: { adjustResult?: unknown; suggestion?: RestockCostSuggestion | null } = {}): Harness {
+function createHarness(
+  options: { adjustResult?: unknown; suggestion?: RestockCostSuggestion | null; sessionActive?: Observable<boolean> } = {}
+): Harness {
   const adjust = jest.fn(() => (options.adjustResult === undefined ? of({} as StockAdjustment) : (options.adjustResult as never)));
   const restockCostSuggestion = jest.fn(() =>
     options.suggestion === null
       ? throwError(() => new Error('no suggestion'))
       : of(options.suggestion ?? { unitCost: 1.25, source: 'LastPurchase', purchaseDate: '2026-01-01' })
   );
-  const component = new StockAdjustmentFormComponent({ adjust, restockCostSuggestion } as unknown as StockService);
+  const component = new StockAdjustmentFormComponent(
+    { adjust, restockCostSuggestion } as unknown as StockService,
+    { active$: options.sessionActive ?? of(false) } as unknown as SupportSessionService
+  );
   component.productId = 7;
   const applied = jest.fn();
   component.adjustmentApplied.subscribe(applied);
@@ -182,6 +189,69 @@ describe('StockAdjustmentFormComponent apply outcome', () => {
     component.adjust();
 
     expect(component.error).toBe('Failed to adjust stock.');
+  });
+});
+
+/**
+ * Apply Adjustment while a support session is active (issue #658). A session grants
+ * `InventoryOperate`, so this write would otherwise still be offered.
+ */
+describe('StockAdjustmentFormComponent write control during a support session (issue #658)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('does not write the adjustment while a session is active, even if adjust() is invoked directly', () => {
+    const { component, adjust, applied } = createHarness({ sessionActive: of(true) });
+    component.form.quantityChange = 5;
+
+    component.adjust();
+
+    expect(adjust).not.toHaveBeenCalled();
+    expect(applied).not.toHaveBeenCalled();
+  });
+
+  it('tracks sessionActive from the shared support-session flag', () => {
+    const { component } = createHarness({ sessionActive: of(true) });
+
+    expect(component.sessionActive).toBe(true);
+  });
+
+  it('leaves the write available while no session is active', () => {
+    const { component, adjust } = createHarness({ sessionActive: of(false) });
+    component.form.quantityChange = -3;
+    component.form.reason = StockAdjustmentReason.Damaged;
+
+    component.adjust();
+
+    expect(adjust).toHaveBeenCalled();
+    expect(component.sessionActive).toBe(false);
+  });
+
+  async function render(sessionActive: Observable<boolean>): Promise<HTMLElement> {
+    await TestBed.configureTestingModule({
+      imports: [StockAdjustmentFormComponent],
+      providers: [
+        { provide: StockService, useValue: { adjust: jest.fn(() => of({})), restockCostSuggestion: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: sessionActive } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(StockAdjustmentFormComponent);
+    fixture.componentRef.setInput('productId', 7);
+    fixture.detectChanges();
+
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('disables Apply Adjustment while a session is active', async () => {
+    const host = await render(of(true));
+
+    expect(host.querySelector<HTMLButtonElement>('[data-testid="apply-adjustment"]')?.disabled).toBe(true);
+  });
+
+  it('leaves Apply Adjustment enabled while no session is active', async () => {
+    const host = await render(of(false));
+
+    expect(host.querySelector<HTMLButtonElement>('[data-testid="apply-adjustment"]')?.disabled).toBe(false);
   });
 });
 

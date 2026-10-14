@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute, provideRouter } from '@angular/router';
-import { of } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import { MachineDetailComponent } from './machine-detail.component';
 import { Machine, Product } from '../../models/models';
 import { MachineService } from '../../services/machine.service';
@@ -9,6 +9,11 @@ import { ToastService } from '../../services/toast.service';
 import { BreadcrumbService } from '../../layout/breadcrumbs/breadcrumb.service';
 import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService } from '../../services/nayax-connection.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
+
+function supportSessionStub(active: Observable<boolean> = of(false)): SupportSessionService {
+  return { active$: active } as unknown as SupportSessionService;
+}
 
 function product(quantityInStock: number): Product {
   return { id: 55, name: 'Beef Jerky', quantityInStock } as Product;
@@ -33,7 +38,8 @@ describe('MachineDetailComponent product refresh', () => {
       machineService,
       {} as StockService,
       {} as ToastService,
-      breadcrumbServiceStub()
+      breadcrumbServiceStub(),
+      supportSessionStub()
     );
 
     component.ngOnInit();
@@ -60,7 +66,9 @@ describe('MachineDetailComponent breadcrumb label', () => {
     const machineService = { get: () => of(machine), getProducts: () => of([]) } as unknown as MachineService;
     const route = { paramMap: of(convertToParamMap({ id })) } as unknown as ActivatedRoute;
     const breadcrumbService = breadcrumbServiceStub();
-    const component = new MachineDetailComponent(route, machineService, {} as StockService, {} as ToastService, breadcrumbService);
+    const component = new MachineDetailComponent(
+      route, machineService, {} as StockService, {} as ToastService, breadcrumbService, supportSessionStub()
+    );
 
     component.ngOnInit();
     component.machine$.subscribe();
@@ -106,7 +114,8 @@ describe('MachineDetailComponent Nayax status banner (issue #539)', () => {
         { provide: ToastService, useValue: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } },
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status, machineChecksPending: false }) } },
-        { provide: AccessService, useValue: { allows: () => of(true) } }
+        { provide: AccessService, useValue: { allows: () => of(true) } },
+        { provide: SupportSessionService, useValue: supportSessionStub() }
       ]
     }).compileComponents();
 
@@ -129,5 +138,61 @@ describe('MachineDetailComponent Nayax status banner (issue #539)', () => {
     const host = await renderPage('Ready');
 
     expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
+  });
+});
+
+/**
+ * Restock while a support session is active (issue #658). A session grants `InventoryOperate`, so
+ * this write would otherwise still render.
+ */
+describe('MachineDetailComponent write control during a support session (issue #658)', () => {
+  async function render(sessionActive: Observable<boolean>) {
+    const stockAdjust = jest.fn(() => of({}));
+    await TestBed.configureTestingModule({
+      imports: [MachineDetailComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: { paramMap: of(convertToParamMap({ id: '7' })) } },
+        {
+          provide: MachineService,
+          useValue: {
+            get: () => of({ machineID: 7 } as Machine),
+            getProducts: () => of([product(8)])
+          }
+        },
+        { provide: StockService, useValue: { adjust: stockAdjust } },
+        { provide: ToastService, useValue: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } },
+        { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
+        { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
+        { provide: AccessService, useValue: { allows: () => of(true) } },
+        { provide: SupportSessionService, useValue: supportSessionStub(sessionActive) }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(MachineDetailComponent);
+    fixture.detectChanges(false);
+    return { fixture, host: fixture.nativeElement as HTMLElement, stockAdjust };
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('hides the Restock control while a session is active', async () => {
+    const { host } = await render(of(true));
+
+    expect(Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Restock')).toBeUndefined();
+  });
+
+  it('shows the Restock control while no session is active', async () => {
+    const { host } = await render(of(false));
+
+    expect(Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Restock')).toBeDefined();
+  });
+
+  it('does not write the restock while a session is active, even if restockProduct() is invoked directly', async () => {
+    const { fixture, stockAdjust } = await render(of(true));
+
+    fixture.componentInstance.restockProduct(product(8), { machineID: 7 } as Machine, 5);
+
+    expect(stockAdjust).not.toHaveBeenCalled();
   });
 });

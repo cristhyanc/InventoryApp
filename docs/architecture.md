@@ -3647,6 +3647,91 @@ not. `support-session-message.interceptor.spec.ts` covers the two messages being
 own code and nothing else, and `member-forbidden-notice.interceptor.spec.ts` covers the generic
 message staying silent for both support-session codes.
 
+### Extending hidden write controls to expenses and site commissions (issue #659)
+
+Issue #554 rolled `SupportSessionService.active$` out to Products as the representative pages and
+tracked every remaining write control as follow-up under #513. This slice closes that follow-up for
+Operating Expenses and site commissions: `OperatingExpenseComponent`, `SiteCommissionAgreementsComponent`
+and the commission payment control on `SiteCommissionsReportComponent`.
+
+**The same wrong signal, for two more capabilities.** `SupportSessionAccessPolicy` grants a session
+`Capability.ExpensesManage` and `Capability.SiteCommissionsManage` alongside the capabilities #554
+already named, so a page that gates its own write controls on either of those - exactly as Products
+gates on `InventoryOperate` - would still render them inside a session. `active$` is the same shared
+flag these pages now read instead, for the same reason: it is presentation only, and the backend's
+read-only method rule is still what would refuse the write if a page failed to hide or disable it.
+
+**What each page hides or disables, and why hidden rather than disabled differs by control.**
+`OperatingExpenseComponent` hides Add Expense (a page action, like the rest of this build's create
+entry points) and each row's Edit/Delete (following `ProductListComponent`'s Delete), and disables
+Save on the open edit form (following `ProductFormComponent`) - a session cannot open an edit form in
+the first place once Edit is hidden, but Save still checks the flag so a form already open when a
+session starts cannot submit. `SiteCommissionAgreementsComponent` disables its single Save agreement
+button, the same pattern as `ProductFormComponent`'s Save. `SiteCommissionsReportComponent`'s Record
+Payment control - the input group and the button together - hides rather than disables, since (like
+Products' Delete) there is no mid-edit state the control being merely inert would protect. Every
+guarded handler (`startCreate`, `startEdit`, `save`, `remove` on the expense page;
+`saveCommissionAgreement`; `recordPayment`) also checks `sessionActive` itself and returns before
+calling the API, the same belt-and-suspenders #554 established: the control becomes unavailable
+rather than merely invisible or inert.
+
+**Read-only listings and reports are unaffected.** The expense table, the current-agreements table
+and the commission report's rows, details and Print details stay visible and interactive during a
+session; only the controls that attempt a write are touched. Server-side enforcement - the method
+rule behind `ExpensesManage` and `SiteCommissionsManage` alike - is unchanged.
+
+**What proves it.** `operating-expense.component.spec.ts`, added by this slice, covers Add
+Expense/Edit/Delete being hidden and Save being disabled while a session is active, each guarded
+handler (`startCreate`, `startEdit`, `save`, `remove`) refusing to call the service when invoked
+directly, and normal create/edit/delete behaviour while no session is active.
+`site-commission-agreements.component.spec.ts` gained a session-active describe block covering Save
+agreement being disabled and `saveCommissionAgreement` refusing to call the service while a session
+is active, and both staying available while none is. `site-commissions-report.component.spec.ts`,
+added by this slice, covers Record Payment being hidden and `recordPayment` refusing to call the
+service while a session is active, and both working normally while none is.
+
+### Extending the read-only support-view guard to machines and stock (issue #658)
+
+Issue #554 established the pattern and covered Products as its representative pages; this slice
+rolls the same `SupportSessionService.active$` subscription out to the next bounded area #513
+named: machine restock, the machine-level Nayax Sync Restock reconciliation workflow, and the
+manual stock-adjustment form shared by the Stock History page and the preserved
+`/products/:id/stock` entry point. Sites, site products and the Sites list carry no write control
+at all - every call those pages make is a `GET` - so nothing in that family needed a guard.
+
+**`MachineDetailComponent`'s Restock control (quantity input and button) is hidden per row**, the
+same `ProductListComponent.confirmDelete`/Delete-button shape issue #554 used: there is no
+read-only value left in a quantity input nobody may submit, so hiding it rather than disabling it
+is the right call, the same way Delete was hidden rather than disabled. `restockProduct()` also
+returns before calling `StockService.adjust` while a session is active.
+
+**`MachineRestockSyncComponent`'s Sync Restock trigger is disabled, not hidden**, because unlike
+Restock's bare input it is a single well-known action on an otherwise-informative panel - the same
+shape `ProductFormComponent.save` used. It needed the guard for a sharper reason than the others,
+though: `POST /api/machines/{id}/sync-restock` is itself a `POST`, so
+`SupportSessionAccessPolicy.IsReadMethod` refuses even the *preview* fetch during a session, not
+only the apply/resolve calls that follow it - there is no partial, read-only view of this dialog to
+leave open. Every write-shaped method on the component (`syncRestock`, `applySelectedEvents`,
+`resolveDuplicate`, `resolveSelectedAsAlreadyRecorded`) checks `sessionActive` and returns before
+calling `MachineService`, and the dialog's own Apply/resolve buttons are disabled the same way as a
+second line of defence for the rare case the dialog was already open when a session started.
+
+**`StockAdjustmentFormComponent`'s Apply Adjustment button is disabled**, on the same reasoning as
+Save: the rest of the form (reason, machine, notes) stays useful to read, only the write at its end
+is refused. `adjust()` returns before calling `StockService.adjust` while a session is active. Since
+the component is composed into both `StockHistoryPageComponent` and the machine-detail/stock pages
+behind it, this one guard covers every place a manual adjustment can be submitted from.
+
+**What proves it.** `machine-detail.component.spec.ts` covers Restock being hidden while a session
+is active and rendered normally while none is, and `restockProduct()` refusing to call the API
+directly. `machine-restock-sync.component.spec.ts` covers Sync Restock being disabled in both
+states and every one of the four write-shaped methods refusing to call `MachineService` directly
+while a session is active, including the preview fetch. `stock-adjustment-form.component.spec.ts`
+covers Apply Adjustment being disabled in both states and `adjust()` refusing to call
+`StockService.adjust` directly while a session is active. `stock-history-page.component.spec.ts`
+provides `SupportSessionService` for the embedded form so its own existing coverage keeps rendering
+the composed page.
+
 ### Disabling business administration write controls in support view (issue #660)
 
 Issue #554 rolled `SupportSessionService.active$` out to Products as the two representative pages;
