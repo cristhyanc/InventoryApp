@@ -1,19 +1,24 @@
 import { TestBed } from '@angular/core/testing';
 import { By } from '@angular/platform-browser';
 import { provideRouter } from '@angular/router';
-import { of, throwError } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
 import { NayaxSettingsComponent } from './nayax-settings.component';
 import { NayaxConnectionWizardComponent } from './nayax-connection-wizard.component';
 import { AccessService } from '../../../access/access.service';
 import { NayaxConnectionService } from '../../../services/nayax-connection.service';
 import { NayaxProcessingFeeRate, NayaxSettingsService } from '../../../services/nayax-settings.service';
 import { ToastService } from '../../../services/toast.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 function rate(overrides: Partial<NayaxProcessingFeeRate> = {}): NayaxProcessingFeeRate {
   return { id: 1, effectiveFrom: '2026-01-01', feeExGst: 0.17, ...overrides };
 }
 
-async function render(nayaxSettings: Partial<NayaxSettingsService>, toast?: Partial<ToastService>) {
+async function render(
+  nayaxSettings: Partial<NayaxSettingsService>,
+  toast?: Partial<ToastService>,
+  sessionActive: Observable<boolean> = of(false)
+) {
   // The connection wizard (issue #538) is composed by this page and tested in its own spec; the
   // page only has to supply it, so its collaborators are stubbed at their narrowest here.
   const connections = {
@@ -30,7 +35,8 @@ async function render(nayaxSettings: Partial<NayaxSettingsService>, toast?: Part
       { provide: NayaxSettingsService, useValue: nayaxSettings },
       { provide: NayaxConnectionService, useValue: connections },
       { provide: AccessService, useValue: { allows: () => of(true) } },
-      { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn(), ...toast } }
+      { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn(), ...toast } },
+      { provide: SupportSessionService, useValue: { active$: sessionActive } }
     ]
   }).compileComponents();
 
@@ -120,5 +126,33 @@ describe('NayaxSettingsComponent (issue #388)', () => {
     expect(error).toHaveBeenCalledWith('Rate already configured for that date.');
     expect(getRates).toHaveBeenCalledTimes(1);
     expect(fixture.componentInstance.loading).toBe(false);
+  });
+});
+
+/**
+ * Save rate while a support session is active (issue #660). A session grants `IntegrationManage`,
+ * so this control would otherwise still render enabled.
+ */
+describe('NayaxSettingsComponent write control during a support session (issue #660)', () => {
+  it('disables Save rate while a session is active', async () => {
+    const { host } = await render({ getRates: jest.fn(() => of([])), saveRate: jest.fn() }, undefined, of(true));
+
+    expect((host.querySelector('[data-testid="save-fee-rate"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('does not save the rate while a session is active, even if saveFeeRate() is invoked directly', async () => {
+    const saveRate = jest.fn();
+    const { fixture } = await render({ getRates: jest.fn(() => of([])), saveRate }, undefined, of(true));
+
+    fixture.componentInstance.feeExGst = 0.19;
+    fixture.componentInstance.saveFeeRate();
+
+    expect(saveRate).not.toHaveBeenCalled();
+  });
+
+  it('leaves Save rate enabled while no session is active', async () => {
+    const { host } = await render({ getRates: jest.fn(() => of([])), saveRate: jest.fn() }, undefined, of(false));
+
+    expect((host.querySelector('[data-testid="save-fee-rate"]') as HTMLButtonElement).disabled).toBe(false);
   });
 });

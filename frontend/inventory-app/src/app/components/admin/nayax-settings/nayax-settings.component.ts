@@ -1,9 +1,11 @@
-import { Component } from '@angular/core';
+import { Component, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { NayaxProcessingFeeRate, NayaxSettingsService } from '../../../services/nayax-settings.service';
 import { ToastService } from '../../../services/toast.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import { NayaxConnectionWizardComponent } from './nayax-connection-wizard.component';
 
 /**
@@ -51,7 +53,7 @@ import { NayaxConnectionWizardComponent } from './nayax-connection-wizard.compon
               <input id="nayax-effective-from" type="date" required [(ngModel)]="effectiveFrom" />
             </div>
           </div>
-          <button type="button" class="btn btn-primary mt-3" [disabled]="loading" (click)="saveFeeRate()">Save rate</button>
+          <button type="button" class="btn btn-primary mt-3" data-testid="save-fee-rate" [disabled]="loading || sessionActive" (click)="saveFeeRate()">Save rate</button>
           <div class="mt-5 border-t border-md-gray-200 pt-4">
             <h3 class="mb-2 text-sm font-semibold text-md-gray-800">Configured settings</h3>
             @if (feeRates.length) {
@@ -88,14 +90,33 @@ import { NayaxConnectionWizardComponent } from './nayax-connection-wizard.compon
     </div>
   `
 })
-export class NayaxSettingsComponent {
+export class NayaxSettingsComponent implements OnDestroy {
   loading = false;
   feeRates: NayaxProcessingFeeRate[] = [];
   feeExGst = 0.17;
   effectiveFrom = new Date().toISOString().slice(0, 10);
 
-  constructor(private readonly nayaxSettings: NayaxSettingsService, private readonly toast: ToastService) {
+  /**
+   * Whether a support session is active (issue #660): Save rate is disabled while it is, because a
+   * session grants `IntegrationManage` - the capability this page's write would otherwise be gated
+   * on - and the backend refuses the write itself only by its read-only method rule, never by
+   * withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
+
+  constructor(
+    private readonly nayaxSettings: NayaxSettingsService,
+    private readonly toast: ToastService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
     this.loadFeeRates();
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
   }
 
   isCurrentFeeRate(rate: NayaxProcessingFeeRate): boolean {
@@ -123,6 +144,9 @@ export class NayaxSettingsComponent {
   }
 
   saveFeeRate(): void {
+    if (this.sessionActive) {
+      return;
+    }
     if (this.feeExGst === null || this.feeExGst < 0 || !this.effectiveFrom) {
       this.toast.error('Enter a non-negative fee and effective date.');
       return;
