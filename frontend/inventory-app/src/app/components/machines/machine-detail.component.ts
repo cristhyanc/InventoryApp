@@ -40,11 +40,11 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
   private readonly sessionActiveSubscription: Subscription;
 
   constructor(
-    private route: ActivatedRoute,
-    private machineService: MachineService,
-    private stockService: StockService,
-    private toastService: ToastService,
-    private breadcrumbService: BreadcrumbService,
+    private readonly route: ActivatedRoute,
+    private readonly machineService: MachineService,
+    private readonly stockService: StockService,
+    private readonly toastService: ToastService,
+    private readonly breadcrumbService: BreadcrumbService,
     supportSession: SupportSessionService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));

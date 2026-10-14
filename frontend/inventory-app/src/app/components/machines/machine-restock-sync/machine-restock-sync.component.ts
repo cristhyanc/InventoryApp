@@ -211,9 +211,9 @@ export class MachineRestockSyncComponent implements OnDestroy {
   }
 
   constructor(
-    private machineService: MachineService,
-    private toastService: ToastService,
-    private businessTimeZone: BusinessTimeZoneService,
+    private readonly machineService: MachineService,
+    private readonly toastService: ToastService,
+    private readonly businessTimeZone: BusinessTimeZoneService,
     supportSession: SupportSessionService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));

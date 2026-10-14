@@ -197,6 +197,8 @@ describe('StockAdjustmentFormComponent apply outcome', () => {
  * `InventoryOperate`, so this write would otherwise still be offered.
  */
 describe('StockAdjustmentFormComponent write control during a support session (issue #658)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
   it('does not write the adjustment while a session is active, even if adjust() is invoked directly', () => {
     const { component, adjust, applied } = createHarness({ sessionActive: of(true) });
     component.form.quantityChange = 5;
@@ -239,8 +241,6 @@ describe('StockAdjustmentFormComponent write control during a support session (i
 
     return fixture.nativeElement as HTMLElement;
   }
-
-  afterEach(() => TestBed.resetTestingModule());
 
   it('disables Apply Adjustment while a session is active', async () => {
     const host = await render(of(true));

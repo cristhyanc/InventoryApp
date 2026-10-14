@@ -72,7 +72,7 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     { value: StockAdjustmentReason.MachineRefill, label: 'Machine refill' }
   ];
 
-  constructor(private stockService: StockService, supportSession: SupportSessionService) {
+  constructor(private readonly stockService: StockService, supportSession: SupportSessionService) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
   }
 
