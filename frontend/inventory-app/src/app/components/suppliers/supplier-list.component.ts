@@ -31,7 +31,7 @@ export class SupplierListComponent implements OnInit, OnDestroy {
   private readonly sessionActiveSubscription: Subscription;
 
   constructor(
-    private supplierService: SupplierService,
+    private readonly supplierService: SupplierService,
     supportSession: SupportSessionService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));

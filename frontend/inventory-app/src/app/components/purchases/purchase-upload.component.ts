@@ -75,13 +75,13 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
   };
 
   constructor(
-    private purchaseService: PurchaseService,
-    private supplierService: SupplierService,
-    private supplierOrderService: SupplierOrderService,
-    private productService: ProductService,
-    private route: ActivatedRoute,
-    private router: Router,
-    private toastService: ToastService,
+    private readonly purchaseService: PurchaseService,
+    private readonly supplierService: SupplierService,
+    private readonly supplierOrderService: SupplierOrderService,
+    private readonly productService: ProductService,
+    private readonly route: ActivatedRoute,
+    private readonly router: Router,
+    private readonly toastService: ToastService,
     supportSession: SupportSessionService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
