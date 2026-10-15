@@ -7,6 +7,7 @@ import { ProductService } from '../../../services/product.service';
 import { ToastService } from '../../../services/toast.service';
 import { InventoryCostRepairService } from '../../../services/inventory-cost-repair.service';
 import { Product } from '../../../models/models';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 async function render(getAll: jest.Mock) {
   await TestBed.configureTestingModule({
@@ -15,7 +16,8 @@ async function render(getAll: jest.Mock) {
       provideRouter([]),
       { provide: ProductService, useValue: { getAll } },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
-      { provide: InventoryCostRepairService, useValue: {} }
+      { provide: InventoryCostRepairService, useValue: {} },
+      { provide: SupportSessionService, useValue: { active$: of(false) } }
     ]
   }).compileComponents();
 

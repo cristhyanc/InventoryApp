@@ -7,6 +7,7 @@ import {
   HistoricalGstClassificationPreview,
   HistoricalGstClassificationService
 } from '../../../services/historical-gst-classification.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
  * The Historical GST Classification workflow as a dedicated feature component (issue #433),
@@ -49,7 +50,7 @@ import {
           <button
             type="button"
             class="btn btn-primary"
-            [disabled]="loading"
+            [disabled]="loading || sessionActive"
             (click)="runPreview()"
           >Preview classification</button>
         </div>
@@ -112,7 +113,7 @@ import {
               <button
                 type="button"
                 class="btn btn-primary mt-4"
-                [disabled]="loading"
+                [disabled]="loading || sessionActive"
                 (click)="applyPreview()"
               >Apply classification</button>
             } @else {
@@ -141,13 +142,26 @@ export class HistoricalGstClassificationWorkflowComponent implements OnDestroy {
   preview: HistoricalGstClassificationPreview | null = null;
   applied: HistoricalGstClassificationApplied | null = null;
 
+  /**
+   * Whether a support session is active (issue #661): both actions are disabled while it is,
+   * because a session grants `DataRepair` - the capability this page and both endpoints are gated
+   * on - and the backend refuses them only by its read-only method rule, never by withholding the
+   * capability. The *preview* is guarded too: it is a `POST`, so that rule refuses it as surely as
+   * the apply. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
   private previewSequence = 0;
   private previewSubscription: Subscription | null = null;
+  private readonly sessionActiveSubscription: Subscription;
 
   constructor(
     private readonly classificationService: HistoricalGstClassificationService,
-    private readonly toast: ToastService
-  ) {}
+    private readonly toast: ToastService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
 
   get loading(): boolean {
     return this.previewLoading || this.applying;
@@ -155,6 +169,7 @@ export class HistoricalGstClassificationWorkflowComponent implements OnDestroy {
 
   ngOnDestroy(): void {
     this.cancelPreview();
+    this.sessionActiveSubscription.unsubscribe();
   }
 
   /** The per-kind rows, in the order the acceptance criteria name them. */
@@ -171,6 +186,9 @@ export class HistoricalGstClassificationWorkflowComponent implements OnDestroy {
   }
 
   runPreview(): void {
+    // Checked here as well as disabled in the template, so the request is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) return;
     this.cancelPreview();
     const sequence = ++this.previewSequence;
     this.previewLoading = true;
@@ -192,7 +210,7 @@ export class HistoricalGstClassificationWorkflowComponent implements OnDestroy {
 
   applyPreview(): void {
     const preview = this.preview;
-    if (!preview || this.loading) return;
+    if (!preview || this.loading || this.sessionActive) return;
     if (!window.confirm(
           `Classify ${preview.summary.becomingTaxable + preview.summary.becomingGstFree} purchase ` +
             'component(s) from the configured GST rules? This changes recorded bookkeeping data. ' +

@@ -5,6 +5,7 @@ import { of } from 'rxjs';
 import { HistoricalCostRecoveryComponent } from './historical-cost-recovery.component';
 import { HistoricalCostRecoveryWorkflowComponent } from './historical-cost-recovery-workflow.component';
 import { NayaxCostBackfillResult, ReportingService } from '../../../services/reporting.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 function backfillResult(overrides: Partial<NayaxCostBackfillResult> = {}): NayaxCostBackfillResult {
   return {
@@ -23,7 +24,11 @@ function backfillResult(overrides: Partial<NayaxCostBackfillResult> = {}): Nayax
 async function render(backfillNayaxSaleCosts: jest.Mock) {
   await TestBed.configureTestingModule({
     imports: [HistoricalCostRecoveryComponent],
-    providers: [provideRouter([]), { provide: ReportingService, useValue: { backfillNayaxSaleCosts } }]
+    providers: [
+      provideRouter([]),
+      { provide: ReportingService, useValue: { backfillNayaxSaleCosts } },
+      { provide: SupportSessionService, useValue: { active$: of(false) } }
+    ]
   }).compileComponents();
 
   const fixture = TestBed.createComponent(HistoricalCostRecoveryComponent);

@@ -1,6 +1,7 @@
-import { Component, EventEmitter, Input, Output } from '@angular/core';
+import { Component, EventEmitter, Input, OnDestroy, Output } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { Product } from '../../../models/models';
 import { ToastService } from '../../../services/toast.service';
 import {
@@ -10,6 +11,7 @@ import {
   InventoryCostTransitionService
 } from '../../../services/inventory-cost-transition.service';
 import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pipe';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
  * The Inventory AVCO Transition Baseline workflow as a dedicated feature component, composed by
@@ -64,7 +66,7 @@ import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pip
             </select>
           </div>
         </div>
-        <button type="button" class="btn btn-primary mt-3" [disabled]="loading || (!transitionAllProducts && transitionProductId == null)" (click)="previewTransition()">{{ transitionAllProducts ? 'Preview all product baselines' : 'Preview transition baseline' }}</button>
+        <button type="button" class="btn btn-primary mt-3" [disabled]="loading || sessionActive || (!transitionAllProducts && transitionProductId == null)" (click)="previewTransition()">{{ transitionAllProducts ? 'Preview all product baselines' : 'Preview transition baseline' }}</button>
 
         @if (transitionBatchPreview) {
           <div class="mt-5 rounded-lg border border-md-gray-200 p-4">
@@ -103,7 +105,7 @@ import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pip
                 </tbody>
               </table>
             </div>
-            <button type="button" class="btn btn-primary mt-4" [disabled]="loading" (click)="applyAllTransitions()">Confirm and save all product baselines</button>
+            <button type="button" class="btn btn-primary mt-4" [disabled]="loading || sessionActive" (click)="applyAllTransitions()">Confirm and save all product baselines</button>
           </div>
         }
 
@@ -131,14 +133,14 @@ import { BusinessDateTimePipe } from '../../../formatting/business-date-time.pip
                 </tbody>
               </table>
             </div>
-            <button type="button" class="btn btn-primary mt-4" [disabled]="loading" (click)="applyTransition()">Confirm and save transition baseline</button>
+            <button type="button" class="btn btn-primary mt-4" [disabled]="loading || sessionActive" (click)="applyTransition()">Confirm and save transition baseline</button>
           </div>
         }
       </div>
     </section>
   `
 })
-export class AvcoTransitionWorkflowComponent {
+export class AvcoTransitionWorkflowComponent implements OnDestroy {
   /** The product list the single-product baseline selects from, loaded by the host page. */
   @Input() products: Product[] = [];
 
@@ -158,10 +160,28 @@ export class AvcoTransitionWorkflowComponent {
   transitionAllProducts = false;
   readonly baselineSources = InventoryCostBaselineSource;
 
+  /**
+   * Whether a support session is active (issue #661): Preview and both Confirm and save actions
+   * are disabled while it is, because a session grants `DataRepair` - the capability this page and
+   * all four endpoints are gated on - and the backend refuses them only by its read-only method
+   * rule, never by withholding the capability. The two *previews* are guarded too: they are
+   * `POST`s, so that rule refuses them as surely as an apply. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
+
   constructor(
     private readonly toast: ToastService,
-    private readonly inventoryCostTransition: InventoryCostTransitionService
-  ) {}
+    private readonly inventoryCostTransition: InventoryCostTransitionService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+  }
 
   selectTransitionProduct(): void {
     const product = this.products.find(x => x.id === this.transitionProductId);
@@ -180,6 +200,9 @@ export class AvcoTransitionWorkflowComponent {
   }
 
   previewTransition(): void {
+    // Checked here as well as disabled in the template, so the request is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) return;
     if (this.transitionAllProducts) {
       this.loading = true;
       this.transitionPreview = null;
@@ -208,6 +231,7 @@ export class AvcoTransitionWorkflowComponent {
   }
 
   applyTransition(): void {
+    if (this.sessionActive) return;
     if (!this.transitionPreview ||
         !window.confirm('Save this exact opening quantity, cost, machine-stock snapshot, and cutoff as the permanent AVCO transition baseline?')) return;
     this.loading = true;
@@ -223,6 +247,7 @@ export class AvcoTransitionWorkflowComponent {
   }
 
   applyAllTransitions(): void {
+    if (this.sessionActive) return;
     if (!this.transitionBatchPreview ||
         !window.confirm(`Save the displayed AVCO transition baselines for all ${this.transitionBatchPreview.productCount} products?`)) return;
     this.loading = true;

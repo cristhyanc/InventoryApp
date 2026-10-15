@@ -5,6 +5,7 @@ import { Observable, of, Subject, Subscription } from 'rxjs';
 import { catchError, map, switchMap, tap } from 'rxjs/operators';
 import { ProductService } from '../../../services/product.service';
 import { GstClassification, ProductGstRule } from '../../../models/models';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /** A read tagged with the product it was issued for; `configured` is null when the read failed. */
 type ProductGstRuleRead = { id: number; configured: ProductGstRule | null };
@@ -49,10 +50,20 @@ export class ProductGstRuleComponent implements OnChanges, OnDestroy {
   saved = false;
   error = '';
 
+  /**
+   * Whether a support session is active (issue #661): Save GST rule is disabled while it is,
+   * because a session grants `InventoryOperate` - the capability the product pages and this rule
+   * resource are gated on - and the backend refuses the write itself only by its read-only method
+   * rule, never by withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
   private readonly requestedProductId = new Subject<number | null>();
   private readonly loads: Subscription;
+  private readonly sessionActiveSubscription: Subscription;
 
-  constructor(private productService: ProductService) {
+  constructor(private productService: ProductService, supportSession: SupportSessionService) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
     // switchMap cancels the in-flight read whenever the product changes, so opening product A and
     // then B can never let A's slower response populate B's picker - and a later save write A's
     // value onto B. The identity check discards a response that arrives regardless.
@@ -96,12 +107,15 @@ export class ProductGstRuleComponent implements OnChanges, OnDestroy {
 
   ngOnDestroy(): void {
     this.loads.unsubscribe();
+    this.sessionActiveSubscription.unsubscribe();
     this.requestedProductId.complete();
   }
 
   save(): void {
     const id = this.productId;
-    if (id === null || !this.loaded || this.saving) {
+    // The session check is here as well as in the template, so the write is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (id === null || !this.loaded || this.saving || this.sessionActive) {
       return;
     }
 

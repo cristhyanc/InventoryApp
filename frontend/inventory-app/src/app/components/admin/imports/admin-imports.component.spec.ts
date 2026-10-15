@@ -1,17 +1,23 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { of, throwError } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
 import { AdminImportsComponent } from './admin-imports.component';
 import { ImportService } from '../../../services/import.service';
 import { ToastService } from '../../../services/toast.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
-async function render(importService: Partial<ImportService>, toast?: Partial<ToastService>) {
+async function render(
+  importService: Partial<ImportService>,
+  toast?: Partial<ToastService>,
+  sessionActive: Observable<boolean> = of(false)
+) {
   await TestBed.configureTestingModule({
     imports: [AdminImportsComponent],
     providers: [
       provideRouter([]),
       { provide: ImportService, useValue: importService },
-      { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn(), ...toast } }
+      { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn(), ...toast } },
+      { provide: SupportSessionService, useValue: { active$: sessionActive } }
     ]
   }).compileComponents();
 
@@ -228,5 +234,51 @@ describe('AdminImportsComponent pending reimbursement XML import (issue #389)', 
     fixture.componentInstance.importXml();
 
     expect(error).toHaveBeenCalledWith('The XML import could not be started.');
+  });
+});
+
+describe('AdminImportsComponent in a support session (issue #661)', () => {
+  function importButton(host: HTMLElement, label: string): HTMLButtonElement {
+    const button = Array.from(host.querySelectorAll('button')).find((x) => x.textContent?.includes(label));
+    if (!button) throw new Error(`No "${label}" button rendered.`);
+    return button;
+  }
+
+  it('disables every import control while a session is active', async () => {
+    const { host } = await render({}, undefined, of(true));
+
+    expect(importButton(host, 'Choose sales file').disabled).toBe(true);
+    expect(importButton(host, 'Import products').disabled).toBe(true);
+    expect(importButton(host, 'Import XML files').disabled).toBe(true);
+  });
+
+  it('leaves every import control enabled while no session is active', async () => {
+    const { host } = await render({}, undefined, of(false));
+
+    expect(importButton(host, 'Choose sales file').disabled).toBe(false);
+    expect(importButton(host, 'Import products').disabled).toBe(false);
+    expect(importButton(host, 'Import XML files').disabled).toBe(false);
+  });
+
+  it('leaves the client-side template download available, because it calls no API', async () => {
+    const { host } = await render({}, undefined, of(true));
+
+    expect(importButton(host, 'Download template').disabled).toBe(false);
+  });
+
+  it('calls no import API from a guarded handler while a session is active', async () => {
+    const importProducts = jest.fn();
+    const importPendingXmlFiles = jest.fn();
+    const importNayaxSales = jest.fn();
+    const { fixture } = await render({ importProducts, importPendingXmlFiles, importNayaxSales }, undefined, of(true));
+
+    fixture.componentInstance.importProducts();
+    fixture.componentInstance.importXml();
+    fixture.componentInstance.onSalesSelected(selectionEvent('sales.csv'));
+
+    expect(importProducts).not.toHaveBeenCalled();
+    expect(importPendingXmlFiles).not.toHaveBeenCalled();
+    expect(importNayaxSales).not.toHaveBeenCalled();
+    expect(fixture.componentInstance.loading).toBe(false);
   });
 });

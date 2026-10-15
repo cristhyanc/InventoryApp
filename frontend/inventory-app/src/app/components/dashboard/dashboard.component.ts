@@ -1,6 +1,7 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
@@ -24,6 +25,7 @@ import { money } from '../reports/report-formatting';
 import { IconComponent } from '../shared/icon.component';
 import { LegacyBusinessSettingsPromptComponent } from '../shared/legacy-business-settings-prompt/legacy-business-settings-prompt.component';
 import { NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE } from '../../support-session/support-session-messages';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 @Component({
   selector: 'app-dashboard',
@@ -31,7 +33,7 @@ import { NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE } from '../../support-session
   imports: [CommonModule, RouterLink, IconComponent, LegacyBusinessSettingsPromptComponent],
   templateUrl: './dashboard.component.html'
 })
-export class DashboardComponent implements OnInit {
+export class DashboardComponent implements OnInit, OnDestroy {
   lowStock: Product[] = [];
   machines: Machine[] = [];
   sites: Site[] = [];
@@ -43,18 +45,46 @@ export class DashboardComponent implements OnInit {
   isLoadingSummary = false;
   isSummaryFailed = false;
 
+  /**
+   * Whether the latest-sales synchronization was deliberately not attempted because a support
+   * session is active (issue #661). That is a different thing from {@link isSalesSyncFailed}: a
+   * session resolves no Nayax credentials at all (issue #551), so the call could only have been
+   * refused, and saying it "could not be synchronized" would describe an attempt never made.
+   */
+  isSalesSyncSkippedInSupportView = false;
+
+  /** The one sentence this application shows for anything Nayax a support session cannot reach. */
+  readonly nayaxUnavailableMessage = NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE;
+
+  /**
+   * Whether a support session is active (issue #661). This page offers no write control of its
+   * own, but arriving on it does make one write-shaped call - `POST /api/nayax-sales/sync` - and
+   * the Dashboard is where starting a session lands, so the flag guards that call too. See
+   * `SupportSessionService.active$`.
+   */
+  private sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
+
   constructor(
     private productService: ProductService,
     private machineService: MachineService,
     private siteService: SiteService,
     private nayaxSalesSyncService: NayaxSalesSyncService,
-    private dashboardService: DashboardService
-  ) {}
+    private dashboardService: DashboardService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
 
   ngOnInit(): void {
     this.refreshLowStock();
     this.refreshSalesDashboard();
     this.refreshSummary();
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
   }
 
   /**
@@ -85,11 +115,22 @@ export class DashboardComponent implements OnInit {
    * are loaded from the resulting persisted `NayaxSales` data. If synchronization fails, existing
    * persisted data is still loaded rather than fabricated as zero, but `isSalesSyncFailed` flags
    * that the figures may be stale so the UI never presents them as freshly synchronized.
+   *
+   * Inside a support session (issue #661) the synchronization is not attempted at all: it is a
+   * `POST`, and it is a Nayax call, and a session is refused on both counts (issue #551). The
+   * persisted figures are still loaded, flagged as not synchronized rather than as failed.
    */
   refreshSalesDashboard(): void {
     this.isSalesSyncFailed = false;
+    this.isSalesSyncSkippedInSupportView = false;
     this.isLoadingSites = true;
     this.isLoadingMachines = true;
+    if (this.sessionActive) {
+      this.isSalesSyncSkippedInSupportView = true;
+      this.refreshMachines();
+      this.refreshSites();
+      return;
+    }
     this.nayaxSalesSyncService.syncLatest().subscribe({
       next: () => {
         this.refreshMachines();

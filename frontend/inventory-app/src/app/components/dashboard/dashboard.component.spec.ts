@@ -10,6 +10,7 @@ import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { AccessService } from '../../access/access.service';
 import { BusinessSettingsService } from '../../services/business-settings.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 /**
  * Declared on its own rather than inline, because `DashboardSummary.salesThisWeek` is optional
@@ -62,6 +63,7 @@ function createComponent(
     getAllMachines?: () => Observable<Machine[]>;
     getAllSites?: () => Observable<Site[]>;
     getLowStock?: () => Observable<Product[]>;
+    sessionActive?: Observable<boolean>;
   } = {}
 ): DashboardComponent {
   const productService = {
@@ -74,7 +76,14 @@ function createComponent(
   } as unknown as NayaxSalesSyncService;
   const dashboardService = { getSummary: () => summary$ } as unknown as DashboardService;
 
-  return new DashboardComponent(productService, machineService, siteService, nayaxSalesSyncService, dashboardService);
+  return new DashboardComponent(
+    productService,
+    machineService,
+    siteService,
+    nayaxSalesSyncService,
+    dashboardService,
+    { active$: overrides.sessionActive ?? of(false) } as unknown as SupportSessionService
+  );
 }
 
 const MACHINE: Machine = {
@@ -432,7 +441,12 @@ describe('DashboardComponent reorder alerts - stock after machine need', () => {
 });
 
 async function renderDashboard(
-  overrides: { products?: Product[]; machines?: Machine[]; summary$?: Observable<DashboardSummary> } = {}
+  overrides: {
+    products?: Product[];
+    machines?: Machine[];
+    summary$?: Observable<DashboardSummary>;
+    sessionActive?: Observable<boolean>;
+  } = {}
 ): Promise<HTMLElement> {
   await TestBed.configureTestingModule({
     imports: [DashboardComponent],
@@ -442,6 +456,7 @@ async function renderDashboard(
       { provide: MachineService, useValue: { getAll: () => of(overrides.machines ?? []) } },
       { provide: SiteService, useValue: { getAll: () => of([]) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } },
+      { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } },
       // The composed legacy-business-settings-prompt (issue #549) is stubbed to stay hidden: it is
       // its own component with its own tests, and not what this page's own tests are about.
@@ -705,5 +720,55 @@ describe('DashboardComponent coordinated sales refresh', () => {
     expect(component.isSalesSyncFailed).toBe(true);
     expect(component.machines).toEqual([MACHINE]);
     expect(component.sites).toEqual([SITE]);
+  });
+});
+
+/**
+ * The Dashboard's own write (issue #661): `POST /api/nayax-sales/sync` runs on arrival rather than
+ * from a control, and the Dashboard is exactly where starting a support session lands. A support
+ * session resolves no Nayax credentials at all, so the call could only ever be refused.
+ */
+describe('DashboardComponent Nayax sales sync in a support session (issue #661)', () => {
+  it('never calls the sync endpoint while a session is active', () => {
+    const syncLatest = jest.fn(() => of(undefined));
+    const component = createComponent(of(SUMMARY), { syncLatest, sessionActive: of(true) });
+
+    component.ngOnInit();
+
+    expect(syncLatest).not.toHaveBeenCalled();
+  });
+
+  it('still loads the persisted machines and sites, and reports no sync failure it did not have', () => {
+    const component = createComponent(of(SUMMARY), {
+      syncLatest: jest.fn(() => of(undefined)),
+      sessionActive: of(true),
+      getAllMachines: () => of([MACHINE]),
+      getAllSites: () => of([SITE])
+    });
+
+    component.ngOnInit();
+
+    expect(component.machines).toEqual([MACHINE]);
+    expect(component.sites).toEqual([SITE]);
+    expect(component.isSalesSyncFailed).toBe(false);
+    expect(component.isSalesSyncSkippedInSupportView).toBe(true);
+  });
+
+  it('explains that the figures were not synchronized, instead of the sync-failed warning', async () => {
+    const host = await renderDashboard({ sessionActive: of(true) });
+
+    expect(host.textContent).toContain('Nayax is not available in support view');
+    expect(host.textContent).not.toContain('Latest Nayax sales could not be synchronized.');
+  });
+
+  it('still synchronizes, and shows neither notice, outside a session', async () => {
+    const syncLatest = jest.fn(() => of(undefined));
+    const component = createComponent(of(SUMMARY), { syncLatest, sessionActive: of(false) });
+
+    component.ngOnInit();
+
+    expect(syncLatest).toHaveBeenCalledTimes(1);
+    expect(component.isSalesSyncSkippedInSupportView).toBe(false);
+    expect(component.isSalesSyncFailed).toBe(false);
   });
 });
