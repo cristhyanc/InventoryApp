@@ -56,16 +56,15 @@ type PendingMemberAction =
                   <td class="table-cell">
                     <select
                       #roleSelect
-                      [value]="displayedRole(member)"
                       [disabled]="!member.isActive"
                       [attr.aria-label]="'Role for ' + memberLabel(member)"
                       (change)="requestRoleChange(member, roleSelect.value)"
                     >
                       @if (!member.role) {
-                        <option value="" disabled>Unknown</option>
+                        <option value="" disabled [selected]="!displayedRole(member)">Unknown</option>
                       }
                       @for (role of roles; track role) {
-                        <option [value]="role">{{ role }}</option>
+                        <option [value]="role" [selected]="role === displayedRole(member)">{{ role }}</option>
                       }
                     </select>
                   </td>
