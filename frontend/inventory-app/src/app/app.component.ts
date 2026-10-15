@@ -13,6 +13,7 @@ import { SupportSessionBannerComponent } from './layout/support-session-banner.c
 import { SupportSessionBlockedComponent } from './layout/support-session-blocked.component';
 import { UserMenuComponent } from './layout/user-menu.component';
 import { AccountStateAnswer, AccountStateService } from './access/account-state.service';
+import { BusinessNavigationVisibility, businessNavigationFor } from './access/business-navigation';
 import { activeAccountKey, signedInAccountMayHaveChanged } from './access/signed-in-account';
 import { BusinessService } from './services/business.service';
 import { SupportSessionService } from './support-session/support-session.service';
@@ -36,6 +37,15 @@ import { loginRequest } from './auth-config';
  *
  * Authentication is unchanged: this component still owns the MSAL redirect handling, active
  * account and login/logout calls, and `UserMenuComponent` only reports the operator's intent.
+ *
+ * **Which account states have a business menu at all is decided here** (issue #676). The sidebar
+ * renders the capability set `GET /api/me/access` reported, whose unreadable answer deliberately
+ * offers every destination; only the shell knows the three things that tell a confirmed member
+ * whose probe failed apart from somebody with no usable membership - who is signed in, what
+ * `GET /api/me/account-state` answered for them, and whether this tab is in an effective support
+ * view - so it passes the sidebar `businessNavigation` ({@link businessNavigationFor}) and the
+ * sidebar renders it. The sidebar itself stays on the page either way, because the separately
+ * authorized `Super Admin` group is independent of business membership.
  *
  * What the shell shows follows the identity signed in **now** (issue #604). It watches the same
  * `signedInAccountMayHaveChanged` trigger the access caches do - MSAL's account events as well as
@@ -172,6 +182,15 @@ export class AppComponent implements OnInit, OnDestroy {
   private businessAccountKey: string | null = null;
   private businessLookup?: Subscription;
 
+  /**
+   * The cached account-state answer for the identity signed in **now** (issue #676), which is what
+   * {@link businessNavigation} is decided from. It is dropped back to `unread` by an identity
+   * change here as well as by `AccountStateService` itself, so the menu cannot be built from the
+   * previous account's answer for however long the new read takes, whichever of the two is told
+   * about the change first.
+   */
+  private accountStateAnswer: AccountStateAnswer = { status: 'unread' };
+
   readonly sidebarId = PRIMARY_NAVIGATION_ID;
 
   /** Only rendered on a narrow layout, which is the only layout that returns focus to it. */
@@ -212,6 +231,23 @@ export class AppComponent implements OnInit, OnDestroy {
    */
   get isBusinessContextReady(): boolean {
     return !this.isLoggedIn || (this.isBusinessSettled && !this.isBusinessContextChanging);
+  }
+
+  /**
+   * Whether the sidebar offers the ordinary business navigation (issue #676), decided here because
+   * the shell is what knows who is signed in, what their account state answered and whether this
+   * tab is in an effective support view - see {@link businessNavigationFor} for the rule itself.
+   *
+   * The sidebar is still rendered either way: the separately authorized `Super Admin` group is
+   * independent of business membership (issue #546), so a platform administrator who holds no
+   * membership of their own keeps that group while the business menu is withheld.
+   */
+  get businessNavigation(): BusinessNavigationVisibility {
+    return businessNavigationFor({
+      isSignedIn: this.isLoggedIn,
+      accountState: this.accountStateAnswer,
+      isSupportViewEffective: this.isSupportViewEffective
+    });
   }
 
   get sidebarToggleLabel(): string {
@@ -418,6 +454,9 @@ export class AppComponent implements OnInit, OnDestroy {
       this.isBusinessSettled = false;
       this.isBusinessUnavailable = false;
       this.isBusinessSkippedForNonMember = false;
+      // The previous account's account state goes with it (issue #676): the navigation it decided
+      // was that person's, and the new identity has answered nothing yet.
+      this.accountStateAnswer = { status: 'unread' };
     }
 
     if (this.isLoggedIn && !this.businessRequested) {
@@ -511,8 +550,13 @@ export class AppComponent implements OnInit, OnDestroy {
    * account-state answer concerns the business context: an identity *change* is handled by
    * `updateLoginState`, which drops the previous context first, and a `Member` answer for a context
    * that already read its business is the answer that read it.
+   *
+   * Every answer is kept, though, because it is also what decides whether the sidebar offers the
+   * business navigation at all (issue #676, {@link businessNavigation}).
    */
   private applyAccountState(answer: AccountStateAnswer): void {
+    this.accountStateAnswer = answer;
+
     if (!this.isBusinessSkippedForNonMember || !this.isLoggedIn) {
       return;
     }

@@ -3415,13 +3415,16 @@ and they are the first realized part of the target `layout/` folder described be
 | `layout/navigation.ts` | The navigation data (`primaryNavigation`) and the pure matching rules `navLinks`, `activeNavRoute` and `activeNavGroup` |
 | `layout/sidebar-nav.component.*` | Renders that data, owns which groups are expanded, and resolves the active entry from the router |
 | `layout/user-menu.component.ts` | The top-right signed-in user control: the active account and a sign-out item, or a sign-in button |
-| `app.component.*` | The shell layout, the sidebar open/collapsed state and its handlers, the narrow layout's top-bar opener, the wide-versus-narrow layout decision, and the MSAL identity it passes to the user menu |
+| `app.component.*` | The shell layout, the sidebar open/collapsed state and its handlers, the narrow layout's top-bar opener, the wide-versus-narrow layout decision, the MSAL identity it passes to the user menu, and whether the sidebar offers the ordinary business navigation at all (issue #676) |
 
 `primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Machines`,
 `Sites`, `Expenses`) and expandable groups (`Products`, `Purchases`, `Reports`, `Admin`). Each
 destination also declares the capability its own page needs, and the sidebar renders only the ones
 the signed-in member holds — see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)
-below. A group
+below — while whether it renders any of them at all follows the authenticated account state the
+shell passes it (issue #676, see [Account-state
+routing](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529)):
+a signed-out visitor and an account with no usable membership are offered no business menu. A group
 heading is a `<button>` that toggles its children and is deliberately not a destination, so no
 group needs an overview page. **Every `route` must be a real page already declared in
 `app.routes.ts`**: `navigation.spec.ts` compares the two and fails on a destination invented ahead
@@ -4446,7 +4449,7 @@ could only diverge from `Inventory.Application.Access.RoleCapabilities`.
 | `access/access-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the cache, and nothing else |
 | `access/member-endpoint.ts` | `classifyMemberRequest`, the one answer to "is this refused request a member endpoint?" that all three `403` interceptors read (issue #602) |
 | `access/forbidden-interceptors.ts` | `FORBIDDEN_INTERCEPTORS`: the three `403` interceptors in the order `app.config.ts` installs them, so the composed chain is testable as a whole |
-| `layout/navigation.ts` | Each destination's `capability`, and `navigationFor(capabilities, hasPlatformDiagnosticsAccess)` |
+| `layout/navigation.ts` | Each destination's `capability`, and `navigationFor(capabilities, hasPlatformDiagnosticsAccess, businessNavigation)` |
 
 **One cached answer per signed-in identity.** The read is lazy — issued when something first asks,
 which in practice is the shell's sidebar — and only once MSAL reports `InteractionStatus.None`,
@@ -4573,7 +4576,12 @@ a failed menu probe, while failing open shows an entry whose endpoint still refu
 may not do. (The conditional diagnostics link keeps failing *closed* on its own probe, because
 hiding a link no business role grants costs nothing.) Which screen a person with no usable
 membership is shown at all, and the global `403` handler that tells a member a request was refused,
-are issue #529's account-state routing and are deliberately not here.
+are issue #529's account-state routing and are deliberately not here. **Nor is "has this account a
+business menu at all?"**: this fail-open rule is kept exactly as it is, and the account state
+answers that separately, before any capability is rendered — see [the shell withholding the business
+navigation for a known nonmember](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529)
+(issue #676). It is what stops a signed-out visitor and a known nonmember from being offered every
+destination over the same `unavailable` answer a confirmed member's failed probe gives.
 
 **The navigation is built from the capability set**, not conditioned in the sidebar's template:
 `navigationFor` drops each destination whose capability the member does not hold and drops a group
@@ -4586,7 +4594,10 @@ Until the capability set has been read the sidebar renders **no** destination, b
 offered everything and then took entries away would show entries that were never this member's —
 and it renders none again from the moment the signed-in identity changes until the new identity's
 own answer arrives (issue #603); `Platform Diagnostics` is unchanged and still independent of every
-capability.
+capability. Since issue #676 `navigationFor` takes a third answer, the shell's
+`businessNavigation`, and leaves every business destination out while it is `withheld` — the
+capability set decides which destinations a member is offered, and that one decides whether this
+account state is offered any.
 
 **The Admin hub follows the same destination permissions as the sidebar (issue #674).**
 `AdminComponent` (`/admin`) is a second entry point into the same pages the sidebar's `Admin` group
@@ -4763,7 +4774,8 @@ way as.
 | `access/access-unavailable.component.ts` | The page `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` are routed to |
 | `access/account-state-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the account-state cache, mirroring `accessForbiddenInterceptor` |
 | `access/member-forbidden-notice.interceptor.ts` | The global `403` handler: "you don't have access to this", except on a bypass route or for a refusal `classifyMemberRequest` does not call a member one |
-| `app.component.ts` | Waits for the account state before looking up the business at all |
+| `app.component.ts` | Waits for the account state before looking up the business at all, and decides from it whether the sidebar offers the ordinary business navigation (issue #676) |
+| `access/business-navigation.ts` | `businessNavigationFor`, the pure rule behind that decision, and the `BusinessNavigationVisibility` the sidebar renders (issue #676) |
 
 **The routing contract** (agreed under #328, with its contract corrections of 10 Oct 2026):
 `Member` reaches the route it asked for; every other state redirects before that route's own
@@ -4870,6 +4882,38 @@ answered, exactly once, and not at all while it is still pending; the documented
 fallback and the bounded retries are unchanged, and a late answer from the superseded read reaches
 no shell decision at all.
 
+**The shell also withholds the business navigation from a known nonmember** (issue #676). Until it
+did, the sidebar was rendered independently of the account state and built its menu from the
+capability answer alone — and that answer cannot tell these cases apart, because
+`GET /api/me/access` answers `unavailable` for all of them: nobody signed in, a member whose probe
+failed, and somebody whose membership the API has already refused. `unavailable` offers *every*
+destination (the fail-open rule above), so a signed-out visitor and a known nonmember were offered
+a full business menu whose every endpoint would refuse them. `access/business-navigation.ts` adds
+the one rule that distinguishes them, from what only the shell knows:
+
+| What the shell knows | Ordinary business navigation |
+| --- | --- |
+| Nobody signed in | Withheld — there is no account to be a member of, and every destination would answer `401` |
+| An effective support view (`viewing`) | Offered, whatever the administrator's own state says: the session names the business the tab's requests resolve, the same exception issue #671 gives the business lookup |
+| Account state `unread` | Withheld — nothing has been answered yet, the same rule the sidebar already follows for an unread capability set |
+| Account state `Member` | Offered; which destinations is still the capability set's decision, fail-open answer included |
+| Account state `NoMembership`, `ApplicationPending`, `ApplicationRejected`, `MembershipRevoked`, `BusinessDeactivated`, `MembershipAmbiguous` | Withheld — `BusinessScopeMiddleware` refuses every business call for them, and `accountStateGuard` routes each to the page that explains it |
+| Account state `unavailable` | Offered — the documented fail-open case, unchanged: a failed probe must not strand a legitimate member |
+
+`AppComponent` decides it (`businessNavigation`) and `SidebarNavComponent` renders it through
+`navigationFor`'s third argument, which leaves the business destinations out **structurally** rather
+than through an empty capability set, so a destination that declares no capability of its own cannot
+leak into a withheld menu either. Three things are deliberately unchanged: `AccessService` still
+fails open on its own unreadable answer and is not made to fail closed anywhere; the separately
+authorized `Super Admin` group still follows `GET /api/admin/diagnostics/access` alone, so a
+platform administrator with no business membership is offered that group and nothing else
+(issue #546); and a tab that cannot present a support session still renders no routed page at all
+(issue #668), with its own account state deciding its menu, because its requests resolve the
+administrator's own membership. A changed identity withholds the menu from the moment it changes,
+for the same reason issue #603 publishes `unread` again: the previous account's answer was somebody
+else's. Like every other capability and account-state rendering rule here, **this hides a menu
+rather than protecting a page.**
+
 **What proves this slice.** `account-state.service.spec.ts` (mirroring `access.service.spec.ts`:
 the cached read, every refresh trigger, the unknown-state fallback, a superseded answer discarded,
 and issue #603's shared identity-change suite from `identity-cache.spec-helpers.ts`, asserted
@@ -4889,7 +4933,14 @@ interceptors composed over the real caches: persistent probe refusals settling a
 request count, the one-way refresh, and the preserved notice and suppression), and
 `app.routes.spec.ts`/`app.component.spec.ts` (`accountStateGuard`'s position on every business
 route, the five bypass routes, and the shell asking for no business before the account state is
-known).
+known). Issue #676's withheld navigation adds `business-navigation.spec.ts` (the rule for signed
+out, unread, every published nonmember state, `Member`, the unreadable account state and an
+effective support view), the real shell rendering the real sidebar in `app.component.spec.ts` (each
+of those states, a `Member` whose capability probe failed keeping every destination, an identity
+transition withholding the menu until the new state answers, a platform-only administrator keeping
+`Super Admin` alone, an effective support view, and a tab that cannot present a session), and
+`sidebar-nav.component.spec.ts`/`navigation.spec.ts` (a withheld menu rendering no destination for
+an unreadable capability set while an offered one still renders them all).
 
 ### Admin Users page (issue #534)
 

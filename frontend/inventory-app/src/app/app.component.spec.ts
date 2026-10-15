@@ -7,11 +7,12 @@ import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/
 import { BehaviorSubject, NEVER, Observable, Subject, of } from 'rxjs';
 import packageJson from '../../package.json';
 import { AccessService, MemberAccessState } from './access/access.service';
-import { AccountStateAnswer, AccountStateService } from './access/account-state.service';
+import { ACCOUNT_STATES, AccountStateAnswer, AccountStateName, AccountStateService } from './access/account-state.service';
 import { CAPABILITIES, capabilitySet } from './access/capabilities';
 import { signedInAccountMayHaveChanged } from './access/signed-in-account';
 import { AppComponent } from './app.component';
 import { BusinessTimeZoneService } from './formatting/business-time-zone.service';
+import { NavLink, primaryNavigation } from './layout/navigation';
 import { ConfigService } from './services/config.service';
 import { PlatformDiagnosticsAccessService } from './services/platform-diagnostics-access.service';
 import { SuperAdminBusinessesService } from './services/super-admin-businesses.service';
@@ -178,6 +179,14 @@ async function render(
     accountStateFor?: (identity: string) => AccountStateAnswer | 'pending';
     /** The support-session state the shell sees; defaults to nothing active (issue #668). */
     supportSession?: Observable<SupportSessionState>;
+    /**
+     * The capability answer the rendered sidebar builds its menu from; defaults to every
+     * capability. `unavailable` is what a signed-out visitor and a known nonmember really get
+     * (issue #676), and what a confirmed member's failed capability probe gets too.
+     */
+    access?: Observable<MemberAccessState>;
+    /** The sidebar's separate platform-admin probe; defaults to refused (issue #335). */
+    diagnosticsAccess?: Observable<boolean>;
   } = {}
 ): Promise<Rendered> {
   const signedIn = options.signedIn ?? true;
@@ -227,7 +236,7 @@ async function render(
       // The shell renders the sidebar, which asks the diagnostics API whether to offer the
       // super-admin link (issue #335). The shell itself owns no part of that decision, so the
       // probe is stubbed as refused here and tested where it belongs.
-      { provide: PlatformDiagnosticsAccessService, useValue: { granted$: of(false) } },
+      { provide: PlatformDiagnosticsAccessService, useValue: { granted$: options.diagnosticsAccess ?? of(false) } },
       // The sidebar also reads the pending-business-applications badge (issue #547), tested in
       // sidebar-nav.component.spec.ts; stubbed here only so the real service's HttpClient
       // dependency is not constructed in a shell test that never grants super-admin access.
@@ -238,15 +247,17 @@ async function render(
       {
         provide: AccessService,
         useValue: {
-          access$: of<MemberAccessState>({
-            status: 'granted',
-            access: {
-              role: 'Owner',
-              capabilities: capabilitySet([...CAPABILITIES]),
-              businessName: 'Vending Co',
-              timeZoneId: 'Australia/Sydney'
-            }
-          })
+          access$:
+            options.access ??
+            of<MemberAccessState>({
+              status: 'granted',
+              access: {
+                role: 'Owner',
+                capabilities: capabilitySet([...CAPABILITIES]),
+                businessName: 'Vending Co',
+                timeZoneId: 'Australia/Sydney'
+              }
+            })
         }
       },
       // The shell reads the signed-in operator's business so every instant on the page can be
@@ -1433,6 +1444,181 @@ describe('AppComponent effective business context (issue #671)', () => {
 
     expect(unavailableNotice(rendered.host)).toBeNull();
     expect(rendered.host.querySelector('main [data-testid="support-session-unresolved"]')).not.toBeNull();
+  });
+});
+
+/**
+ * Which authenticated account states the shell offers the ordinary business navigation for
+ * (issue #676).
+ *
+ * The real sidebar is rendered, because what an operator can reach is the rendered menu and
+ * nothing else; only the two access answers it asks for are supplied. `unavailable` is what
+ * `GET /api/me/access` really answers for a signed-out visitor and for a known nonmember - the
+ * state the menu used to read as "offer every destination" - so these states are rendered with it,
+ * and the confirmed member whose probe failed is rendered with it too. The two cases must not
+ * behave the same way, which is the whole defect.
+ */
+describe('AppComponent business navigation by account state (issue #676)', () => {
+  beforeEach(() => stubMatchMedia(true));
+
+  /** Every published state that is not `Member`, so a state added later is covered here too. */
+  const NONMEMBER_STATES = ACCOUNT_STATES.filter((state) => state !== 'Member');
+
+  const UNAVAILABLE_ACCESS = of<MemberAccessState>({ status: 'unavailable' });
+
+  const dana = { name: 'Dana', homeAccountId: 'dana-home-id' } as unknown as AccountInfo;
+  const lee = { name: 'Lee', homeAccountId: 'lee-home-id' } as unknown as AccountInfo;
+
+  function known(state: AccountStateName): AccountStateAnswer {
+    return { status: 'known', accountState: { state, onboardingEnabled: false, rejectionReason: null } };
+  }
+
+  /** Every ordinary business destination the rendered menu offers; `Super Admin` is not one. */
+  function businessDestinations(host: HTMLElement): string[] {
+    const nav = host.querySelector('nav[aria-label="Primary"]');
+    return Array.from(nav?.querySelectorAll('a') ?? [])
+      .map((anchor) => anchor.getAttribute('href') ?? '')
+      .filter((href) => !href.startsWith('/super-admin'));
+  }
+
+  /** The top-level destinations a member is offered before any group is opened. */
+  const memberDestinations = primaryNavigation
+    .filter((item): item is NavLink => item.kind === 'link')
+    .map((item) => item.route);
+
+  it('offers the business navigation to a confirmed Member', async () => {
+    const { host } = await render({ accountState: MEMBER_ACCOUNT_STATE });
+
+    expect(businessDestinations(host)).toEqual(expect.arrayContaining(memberDestinations));
+  });
+
+  it('withholds it from a signed-out visitor', async () => {
+    const { host } = await render({ signedIn: false, access: UNAVAILABLE_ACCESS });
+
+    expect(businessDestinations(host)).toEqual([]);
+  });
+
+  it('withholds it while the account state has not been answered yet', async () => {
+    const rendered = await render({ accountStateFor: () => 'pending' });
+
+    expect(businessDestinations(rendered.host)).toEqual([]);
+
+    rendered.answerAccountState(MEMBER_ACCOUNT_STATE);
+    rendered.fixture.detectChanges();
+
+    expect(businessDestinations(rendered.host)).toEqual(expect.arrayContaining(memberDestinations));
+  });
+
+  it.each(NONMEMBER_STATES)('withholds it from a known %s account', async (state) => {
+    const { host } = await render({ accountState: known(state), access: UNAVAILABLE_ACCESS });
+
+    expect(businessDestinations(host)).toEqual([]);
+  });
+
+  /**
+   * The fallback issue #528 documents, kept exactly as it was: the API refuses what the role may
+   * not do regardless, so a member whose capability probe failed keeps every destination rather
+   * than being stranded with an empty menu. Only the account state withholds the menu now.
+   */
+  it('keeps every destination for a confirmed Member whose capability probe failed', async () => {
+    const { host } = await render({ accountState: MEMBER_ACCOUNT_STATE, access: UNAVAILABLE_ACCESS });
+
+    expect(businessDestinations(host)).toEqual(expect.arrayContaining(memberDestinations));
+  });
+
+  it('withholds it from the moment the signed-in identity changes until the new state answers', async () => {
+    let active: AccountInfo | null = dana;
+    const rendered = await render({
+      activeAccount: () => active,
+      accountStateFor: (identity) => (identity === accountKeyOf(dana) ? MEMBER_ACCOUNT_STATE : 'pending')
+    });
+    expect(businessDestinations(rendered.host)).toEqual(expect.arrayContaining(memberDestinations));
+
+    active = lee;
+    rendered.raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
+    rendered.fixture.detectChanges();
+
+    expect(businessDestinations(rendered.host)).toEqual([]);
+
+    rendered.answerAccountState(known('NoMembership'));
+    rendered.fixture.detectChanges();
+
+    expect(businessDestinations(rendered.host)).toEqual([]);
+  });
+
+  it('offers it again once the new identity answers Member', async () => {
+    let active: AccountInfo | null = dana;
+    const rendered = await render({
+      activeAccount: () => active,
+      accountStateFor: (identity) => (identity === accountKeyOf(dana) ? known('NoMembership') : 'pending')
+    });
+    expect(businessDestinations(rendered.host)).toEqual([]);
+
+    active = lee;
+    rendered.raiseAccountEvent(EventType.ACTIVE_ACCOUNT_CHANGED);
+    rendered.answerAccountState(MEMBER_ACCOUNT_STATE);
+    rendered.fixture.detectChanges();
+
+    expect(businessDestinations(rendered.host)).toEqual(expect.arrayContaining(memberDestinations));
+  });
+
+  /**
+   * The account state is read from `GET /api/me/account-state`, and a read that could not be
+   * answered stays the documented fail-open case (issue #529): `accountStateGuard` lets the
+   * navigation through, and the menu keeps the destinations whose endpoints remain the boundary.
+   */
+  it('offers it when the account state itself could not be read', async () => {
+    const { host } = await render({ accountState: { status: 'unavailable' } });
+
+    expect(businessDestinations(host)).toEqual(expect.arrayContaining(memberDestinations));
+  });
+
+  it('keeps the separately authorized Super Admin group for an administrator with no membership', async () => {
+    const { host } = await render({
+      accountState: known('NoMembership'),
+      access: UNAVAILABLE_ACCESS,
+      diagnosticsAccess: of(true)
+    });
+
+    expect(businessDestinations(host)).toEqual([]);
+    expect(host.querySelector('nav[aria-label="Primary"]')?.textContent).toContain('Super Admin');
+  });
+
+  it('offers the business navigation of an effective support view to an administrator with no membership', async () => {
+    const { host } = await render({
+      accountState: known('NoMembership'),
+      supportSession: of<SupportSessionState>({
+        kind: 'viewing',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      })
+    });
+
+    expect(businessDestinations(host)).toEqual(expect.arrayContaining(memberDestinations));
+  });
+
+  /**
+   * A tab that cannot present the session resolves the administrator's **own** membership
+   * (issue #668), so it is their own account state that decides the menu - and the routed page
+   * stays withheld whatever the menu offers.
+   */
+  it('withholds it in a tab that cannot present the session, whose own account holds no membership', async () => {
+    const { fixture, host } = await render({
+      accountState: known('NoMembership'),
+      access: UNAVAILABLE_ACCESS,
+      supportSession: of<SupportSessionState>({
+        kind: 'unresolved',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      })
+    });
+
+    await TestBed.inject(Router).navigateByUrl('/reports/bookkeeping');
+    fixture.detectChanges();
+
+    expect(businessDestinations(host)).toEqual([]);
+    expect(host.querySelector('main [data-testid="support-session-unresolved"]')).not.toBeNull();
+    expect(host.querySelector('main')?.textContent).not.toContain('page body');
   });
 });
 

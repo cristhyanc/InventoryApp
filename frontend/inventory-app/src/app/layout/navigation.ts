@@ -1,3 +1,4 @@
+import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { Capability, CapabilitySet } from '../access/capabilities';
 
 /**
@@ -188,19 +189,30 @@ export const superAdminNavGroup: NavGroup = {
  * menu over a failed read would be worse than offering a page that answers `403` - see
  * `AccessService`.
  *
+ * `businessNavigation` says whether those business destinations are on offer **at all**
+ * (issue #676). `withheld` leaves none of them in, whatever the capability set says and whether or
+ * not one was ever read: a signed-out visitor and an account the API has already said holds no
+ * usable membership are offered no business menu, which no capability answer could decide, because
+ * the answer for both of them is the fail-open `undefined` one. Withholding is structural rather
+ * than an empty capability set, so a destination that declares no capability of its own cannot
+ * leak into it either. Who that is is `businessNavigationFor`'s decision, not this file's.
+ *
  * `Super Admin` keeps the behaviour issue #335 gave `Platform Diagnostics`, unchanged and
- * independent of any capability: the whole group is appended, last, only while
- * `GET /api/admin/diagnostics/access` confirms access, and neither of its children declares a
- * capability of its own because no business role grants either.
+ * independent of any capability **and of `businessNavigation`**: the whole group is appended,
+ * last, only while `GET /api/admin/diagnostics/access` confirms access, and neither of its
+ * children declares a capability of its own because no business role grants either. An
+ * administrator with no membership of their own is therefore offered that group and nothing else.
  *
  * Everything here copies rather than mutates, so `primaryNavigation` stays the full declared
  * navigation and one member's rendered menu can never leak into another's.
  */
 export function navigationFor(
   capabilities: CapabilitySet | undefined,
-  hasPlatformDiagnosticsAccess: boolean
+  hasPlatformDiagnosticsAccess: boolean,
+  businessNavigation: BusinessNavigationVisibility
 ): readonly NavItem[] {
-  const offered = hasPlatformDiagnosticsAccess ? [...primaryNavigation, superAdminNavGroup] : primaryNavigation;
+  const business: readonly NavItem[] = businessNavigation === 'offered' ? primaryNavigation : [];
+  const offered = hasPlatformDiagnosticsAccess ? [...business, superAdminNavGroup] : business;
 
   if (capabilities === undefined) {
     return offered;
