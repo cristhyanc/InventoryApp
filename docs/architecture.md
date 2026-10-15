@@ -3518,16 +3518,19 @@ back to itself.
 **A tab that was never told the id this way still learns a session is running.** A freshly opened
 or reloaded tab cannot have received a `BroadcastChannel` message for a session that started before
 it existed, so instead it asks `GET /api/super-admin/support-sessions/active` once - the one read
-issue #550 resolves from the authenticated actor rather than from a presented id. That tab can show
-the banner, with the business name and the expiry, and can still end the session (the end call is
-likewise resolved from the actor, not from an id); it cannot itself present the header until another
-tab's `started` broadcast reaches it, because the active read deliberately never answers the id
-either (`SuperAdminActiveSupportSessionResponse` above). This is issue #550's own design surfacing in
-the client, not a frontend gap, and `SupportSessionService`'s own tests assert it rather than work
-around it. The probe itself is asked once per browser session and only for a caller
-`PlatformDiagnosticsAccessService.isGranted()` already confirms is the configured platform
-administrator, the same cached check `platformAdminGuard` uses - asking it unconditionally for every
-signed-in member would be wasted traffic for a surface that can never apply to them.
+issue #550 resolves from the authenticated actor rather than from a presented id. It learns the
+business name and the expiry, and can still end the session (the end call is likewise resolved from
+the actor, not from an id); it cannot itself present the header until another tab's `started`
+broadcast reaches it, because the active read deliberately never answers the id either
+(`SuperAdminActiveSupportSessionResponse` above). **Issue #553 published its banner for that tab
+anyway, which is the defect issue #668 fixed**: such a tab is `unresolved`, not a support view, and
+renders an explanation instead of a page -
+[Failing closed in a tab that cannot present the session](#failing-closed-in-a-tab-that-cannot-present-the-session-issue-668)
+below is the current behaviour of everything in this paragraph. The probe itself is asked once per
+browser session and only for a caller `PlatformDiagnosticsAccessService.isGranted()` already
+confirms is the configured platform administrator, the same cached check `platformAdminGuard` uses -
+asking it unconditionally for every signed-in member would be wasted traffic for a surface that can
+never apply to them.
 
 **`classifyMemberRequest` treats the support-session control surface like the diagnostics probe
 beside it** (`access/member-endpoint.ts`, issue #602's classification, extended here): both are
@@ -3929,6 +3932,80 @@ sync still running outside a session. The five routed Admin pages that compose a
 (`avco-transition`, `costing-repair-page`, `historical-cost-recovery`,
 `historical-gst-classification`, `nayax-sale-timestamp-repair`) were given the same
 `SupportSessionService` stub their child now requires.
+
+### Failing closed in a tab that cannot present the session (issue #668)
+
+Issue #553 gave a reloaded or newly opened tab the banner for a session it had learned about from
+`GET .../active` but held no id for. That tab sends no `X-Support-Session` header, so every request
+it makes resolves the administrator's **own** membership
+([Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551)):
+the page showed the administrator's own business under "Viewing as &lt;other business&gt; -
+read-only". Nothing crossed a tenant boundary - the backend resolved exactly the membership it
+should have - but the label was a lie in the one direction that matters, and an administrator acting
+on what they believed was somebody else's data was acting on their own. This slice separates the two
+states and makes the one that cannot be acted on render nothing.
+
+**Three states, one of which is new.** `SupportSessionState`
+(`support-session/support-session.service.ts`) is now a three-way discriminated union on `kind`:
+
+| `kind` | What it means | What the shell renders |
+| --- | --- | --- |
+| `inactive` | Nothing is running, as far as this tab knows: ordinary context, no header, the administrator's own membership | The routed page, unchanged |
+| `viewing` | An **effective** local support view: this tab holds the id, so its requests present the header and the API resolves the session's business | The routed page, under `SupportSessionBannerComponent`'s "Viewing as" banner |
+| `unresolved` | A session is active on the server for this administrator and this tab holds no id for it | `SupportSessionBlockedComponent`'s explanation and **End session**, in place of the routed page; no banner |
+
+`active$` - the flag every write control reads
+([Hiding write controls and support-view messages](#hiding-write-controls-and-support-view-messages-issue-554))
+- is `true` for both `viewing` and `unresolved`. That is the fail-closed answer: no business page is
+rendered in the `unresolved` state at all, and a control that somehow rendered must not offer a
+write either.
+
+**No page means no business-scoped request.** `AppComponent` subscribes to the same `state$` the
+banner does and withholds `<router-outlet />` while `isSupportViewUnresolved`, ahead of the business
+-context gate issue #499 added: what is wrong is not that the business is unknown but that any page
+rendered here would be the administrator's own data for a session naming another business. Because
+the routed page is never created, the reads it would issue are never issued - this is a render gate
+rather than a request filter, so `GET /api/business/current`, `GET /api/me/access` and
+`GET /api/me/account-state` still answer for the administrator themselves, as they must for the
+shell and for the Super Admin pages to keep working.
+
+**The explanation offers exactly one action, and it is not a repair.**
+`layout/support-session-blocked.component.ts` names the business (or "another business" when the
+active read answered no name), says that this tab does not hold the session's identifier and that
+nothing will be shown here, and offers **End session** - the same actor-resolved
+`POST .../active/end` the banner uses, which needs no id either. A failed end leaves the explanation
+on screen and reports the API's own sentence through `ToastService`, because the session is still
+active on the server and this tab is still one that must not render business data. There is
+deliberately **no** resume, re-open or "restart session" action: the id is memory-only by design
+and the active read never answers it, so the only honest ways forward are the tab the session was
+started in, whose `started` broadcast still resolves this one, and ending the session and starting a
+new one through the explicit **View as this business** flow. Nothing in this slice reads an id from
+the probe response, `localStorage`, `sessionStorage` or the URL, and nothing starts or rotates a
+session on the administrator's behalf.
+
+**Recovery is the two paths that already existed.** A `started` broadcast from a sibling tab turns
+`unresolved` into `viewing` with the id in hand, and the page renders; an end - from this tab,
+another tab, an expiry's `support_session_ended` on some other call, or the business being
+deactivated - returns every tab to `inactive`, which is ordinary context again, with the cached
+business dropped, the capabilities re-read and the dashboard navigated to, exactly as issue #553
+left it. A delayed probe cannot undo either: the boot check publishes `unresolved` only while this
+tab still holds no id and is still `inactive`, so an answer arriving after a sibling tab's broadcast
+leaves the effective support view alone.
+
+**What proves it.** `support-session.service.spec.ts` covers the reloaded tab's probe publishing
+`unresolved` rather than `viewing`, `active$` reporting `true` for it, no id being adopted or stored
+even when the probe response carries one and no replacement session being started, a delayed probe
+answering into `unresolved` and a delayed probe leaving a sibling tab's `viewing` state alone,
+recovery through a sibling tab's `started` broadcast, an end from `unresolved` returning the tab to
+ordinary context, a failed end leaving it `unresolved`, and another tab's end clearing it.
+`support-session-blocked.component.spec.ts` covers the explanation rendering only for `unresolved`
+(nothing for `inactive` or `viewing`), naming the business and falling back to "another business",
+never saying "Viewing as", ending the session, and a failed end re-enabling the action while keeping
+the explanation. `support-session-banner.component.spec.ts` covers the banner showing nothing for
+`unresolved`. `app.component.spec.ts` covers the routed page being withheld for an administrator
+with their own membership and for one with none (whose business is never looked up), **End session**
+being reachable from the main region, the page rendering again once the session is over, and an
+effective support view still rendering its page.
 
 ### Member access: capability-built navigation, guards and hidden actions (issue #528)
 
