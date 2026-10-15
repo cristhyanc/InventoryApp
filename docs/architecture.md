@@ -4184,7 +4184,27 @@ this test instead of agreeing with itself. TypeScript's own excess-property chec
 but the test is what explains the failure and what catches a capability silently *removed* from a
 role's list, which the compiler alone would not.
 
+**Kept in sync with the backend authority, not a second hand-kept table (issue #677).**
+`role-definitions.spec.ts` alone can only catch `role-definitions.ts` disagreeing with itself and
+with the published vocabulary; it never asked `Inventory.Application.Access.RoleCapabilities` what
+a role actually grants, so a capability added, removed or moved to a different role purely on the
+backend disagreed with nothing. `frontend/inventory-app/src/app/architecture/role-capabilities-contract.guard.ts`
+(tested by the co-located `role-capabilities-contract.guard.spec.ts`) closes that gap by reading the
+real `Inventory.Application.Access.Capabilities.cs` and `RoleCapabilities.cs` source files off disk —
+the backend's own `ByRole` table, not a second copy of it someone has to remember to update — and
+comparing the capability set each `[BusinessRole.X] = FrozenSet.ToFrozenSet([...])` entry grants
+against `ROLE_DEFINITIONS`. It fails loudly, rather than passing vacuously, if it cannot find a role
+block or a capability's published name at all, so a `RoleCapabilities` rewritten into a shape the
+parser no longer recognises is a build failure rather than a silent "every role grants nothing" that
+would agree with anything. This needs no live service, no generated artifact and no production
+credentials: it is a plain file read of the checked-out backend source, run inside the same
+`npm run test` step `role-definitions.spec.ts` already runs in.
+
 **What proves this slice.** `role-definitions.spec.ts` (the vocabulary-sync assertions above),
+`role-capabilities-contract.guard.spec.ts` (the backend-source parser's own fixture-based coverage
+of a capability added to a role, one reassigned between roles, and the two failure-loudly cases
+above; and, against the real backend source, that it declares exactly Operator, Manager and Owner
+and that each grants precisely the capabilities `role-definitions.ts` describes and nothing else),
 `roles.component.spec.ts` (the three sections in order, each role's own capabilities rendered and
 no other role's, no form control or action anywhere on the page, and the link back to Admin), and
 `navigation.spec.ts` / `app.routes.spec.ts` (the `Roles` destination offered to an Owner and
