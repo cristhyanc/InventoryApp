@@ -83,11 +83,13 @@ namespace InventoryApi.Auth;
 /// <see cref="SupportSessionHeader"/>. The two values it refreshes decide nothing; this middleware
 /// still resolves access from the <c>(tid, oid)</c> pair and the membership row alone.</para>
 ///
-/// <para><strong>And one thing is recorded (issue #551).</strong> Every request made inside a
-/// support session emits one structured audit event naming the route template, the method and the
-/// status it was answered with - never a path, a query value, a body or anything that was read. It
-/// is the trail of what somebody from outside the business actually looked at, and it belongs here
-/// because the route template and the status are facts only this layer has.</para>
+/// <para><strong>What is recorded happens elsewhere (issue #551, moved by issue #672).</strong>
+/// Every request made inside a support session emits one structured audit event, and
+/// <see cref="SupportSessionAuditMiddleware"/> is what emits it. It used to be emitted here, which
+/// could only ever record the requests that got this far and could only read the status before the
+/// exception handler had mapped one: a refusal decided by the authorization middleware above never
+/// reaches this line, and a thrown refusal unwinds past it. The trail therefore belongs ahead of
+/// both, and this middleware simply runs the request.</para>
 /// </summary>
 public sealed class BusinessScopeMiddleware
 {
@@ -169,7 +171,7 @@ public sealed class BusinessScopeMiddleware
 
             // No profile refresh is scheduled for this path at all, which is issue #524's rule made
             // structural: the supporter's claims are not the member's, and there is no member here.
-            await AuditSupportSessionRequestAsync(context, support);
+            await _next(context);
             return;
         }
 
@@ -188,45 +190,6 @@ public sealed class BusinessScopeMiddleware
         await _next(context);
 
         SchedulePostResponseProfileRefresh(context, memberProfileRefreshScheduler);
-    }
-
-    /// <summary>
-    /// Runs the rest of the request and records one audit event for it (issue #551).
-    ///
-    /// <para>A support session is somebody from outside a business reading its data, so "what did
-    /// they look at?" has to be answerable afterwards. The event carries the route template, the
-    /// method, the status the request was answered with, the business, and the session row's own
-    /// key - so a trail of requests reads as one session, tied to the start event issue #550
-    /// recorded under that same key, which is where the administrator's identity and their stated
-    /// reason are. Repeating the identity on every request would spread it across the trail for no
-    /// extra fact.</para>
-    ///
-    /// <para>It carries <strong>no result data</strong>: not a response body, not a count, not a
-    /// path or a query string, and not the session id in either form. The route template rather than
-    /// the path is the point - <c>api/products/{id}</c> says which endpoint was reached without
-    /// recording which record.</para>
-    ///
-    /// <para>The event is written in a <c>finally</c>, so a request that failed is recorded with the
-    /// status it actually got rather than silently left out of the trail.</para>
-    /// </summary>
-    private async Task AuditSupportSessionRequestAsync(HttpContext context, SupportSessionAccess support)
-    {
-        try
-        {
-            await _next(context);
-        }
-        finally
-        {
-            _logger.LogInformation(
-                "Support session request. SupportSessionKey={SupportSessionKey} BusinessId={BusinessId} "
-                    + "Method={Method} Route={Route} Status={Status} TraceId={TraceId}",
-                support.SessionKey,
-                support.BusinessId,
-                context.Request.Method,
-                (context.GetEndpoint() as RouteEndpoint)?.RoutePattern.RawText,
-                context.Response.StatusCode,
-                Activity.Current?.Id ?? context.TraceIdentifier);
-        }
     }
 
     /// <summary>
