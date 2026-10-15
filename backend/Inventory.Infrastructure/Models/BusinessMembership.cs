@@ -66,19 +66,21 @@ public class BusinessMembership
     /// What this member may do in the business (issue #521), stored as the constrained
     /// <see cref="BusinessRole"/> vocabulary rather than a free-text name or a set of flags.
     ///
-    /// Required, and <see cref="BusinessRole.Owner"/> by default. The default is not a convenience:
-    /// it is the same value the additive migration backfills every existing row with, so a
-    /// membership created by the existing <c>bootstrap-business</c> path keeps exactly the access
-    /// it has today. A creation path that means something else - the member management of issue
-    /// #524 - states the role deliberately instead of relying on it.
+    /// <c>required</c>, and with no default of any kind (issue #679). It used to default to
+    /// <see cref="BusinessRole.Owner"/> - the value the additive migration backfilled every
+    /// existing row with - which made the most privileged role in the business the one a creation
+    /// path could get by saying nothing. Every path now states the role it means: the invite
+    /// redemption the role on the invite, the self-service application <c>Owner</c>, and
+    /// <c>bootstrap-business</c> the configured one. The compiler, not a convention, is what
+    /// requires that.
     ///
-    /// A stored value this code does not declare (a hand-written <c>UPDATE</c>, or a role a newer
-    /// deployment wrote) is carried through to
-    /// <see cref="BusinessMembershipResolutionPolicy"/> unchanged and denies access there. It is
-    /// deliberately not corrected on read: silently reading it as some default role would grant
-    /// access nobody recorded.
+    /// A stored value this code does not declare (a hand-written <c>UPDATE</c>, a role a newer
+    /// deployment wrote, or the <c>0</c> an <c>INSERT</c> that names no role now gets from the
+    /// column default) is carried through to <see cref="BusinessMembershipResolutionPolicy"/>
+    /// unchanged and denies access there. It is deliberately not corrected on read: silently
+    /// reading it as some default role would grant access nobody recorded.
     /// </summary>
-    public BusinessRole Role { get; set; } = BusinessRole.Owner;
+    public required BusinessRole Role { get; set; }
 
     /// <summary>
     /// Revoking a membership sets this to false rather than deleting the row, so the revoked
@@ -94,8 +96,14 @@ public class BusinessMembership
     /// that creates, reactivates or deactivates a membership therefore goes through
     /// <c>Inventory.Application.Tenancy.MembershipWriteGuard</c>, which re-checks
     /// <see cref="MembershipEligibility"/> inside the write transaction the index backs up.
+    ///
+    /// <c>required</c>, and with no default, on <see cref="Role"/>'s terms (issue #679): whether a
+    /// membership grants anything at all is not a value a creation path should be able to leave
+    /// unsaid. The database half needs no migration, because this column never had a default -
+    /// <c>AddBusinessOwnershipModel</c> declared it <c>NOT NULL</c> with none - so an
+    /// <c>INSERT</c> that omits it is rejected by SQLite rather than quietly made active.
     /// </summary>
-    public bool IsActive { get; set; } = true;
+    public required bool IsActive { get; set; }
 
     public DateTime CreatedAtUtc { get; set; }
 

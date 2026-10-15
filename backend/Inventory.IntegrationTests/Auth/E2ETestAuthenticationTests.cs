@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using InventoryApi.Auth.E2ETesting;
 using Microsoft.AspNetCore.Hosting;
@@ -144,6 +145,12 @@ public sealed class E2ETestAuthenticationTests : IClassFixture<E2ETestAuthentica
             [E2ETestActors.BusinessAOwner.ObjectId, E2ETestActors.BusinessBOwner.ObjectId],
             memberships.OrderBy(membership => membership.BusinessId).Select(membership => membership.ObjectId));
         Assert.DoesNotContain(E2ETestActors.NoMembership.ObjectId, memberships.Select(membership => membership.ObjectId));
+
+        // Each synthetic actor is an active Owner of the business it is named for, which is what
+        // the browser suite signs in as. The fixture states both since issue #679 instead of
+        // inheriting them from the entity, so this is where that statement is checked.
+        Assert.All(memberships, membership => Assert.Equal(BusinessRole.Owner, membership.Role));
+        Assert.All(memberships, membership => Assert.True(membership.IsActive));
     }
 
     /// <summary>

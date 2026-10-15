@@ -701,6 +701,8 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
                     BusinessId = CallerBusinessId,
                     DirectoryTenantId = DirectoryTenantId,
                     ObjectId = CallerObjectId,
+                    Role = BusinessRole.Owner,
+                    IsActive = true,
                     CreatedAtUtc = AppliedAt,
                 },
                 new BusinessMembership
@@ -708,6 +710,8 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
                     BusinessId = OtherBusinessId,
                     DirectoryTenantId = DirectoryTenantId,
                     ObjectId = OtherObjectId,
+                    Role = BusinessRole.Owner,
+                    IsActive = true,
                     CreatedAtUtc = AppliedAt,
                 });
             await db.SaveChangesAsync();

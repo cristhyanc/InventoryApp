@@ -614,6 +614,7 @@ public sealed class BusinessSettingsApiTests : IClassFixture<BusinessSettingsApi
                 DirectoryTenantId = DirectoryTenantId,
                 ObjectId = objectId,
                 Role = role,
+                IsActive = true,
                 CreatedAtUtc = CreatedAt,
                 StatusChangedAtUtc = CreatedAt,
             };
