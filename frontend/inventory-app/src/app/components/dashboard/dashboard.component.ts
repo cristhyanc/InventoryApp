@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
@@ -41,6 +42,14 @@ export class DashboardComponent implements OnInit, OnDestroy {
   isLoadingMachines = false;
   isLoadingLowStock = false;
   isSalesSyncFailed = false;
+
+  /**
+   * Whether the synchronization was refused by the business's run limit (issue #681, review of
+   * PR #696). The allowance is the business's, so this is what a member sees when colleagues have
+   * just opened the Dashboard several times between them. A refusal proves runs started inside the
+   * last two minutes, so it is shown as "refreshed recently", never as {@link isSalesSyncFailed}.
+   */
+  isSalesSyncRecentlyRefreshed = false;
   summary: DashboardSummary | null = null;
   isLoadingSummary = false;
   isSummaryFailed = false;
@@ -114,7 +123,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * boundary (issue #187): the latest Nayax sales are synchronized once, then Sites and Machines
    * are loaded from the resulting persisted `NayaxSales` data. If synchronization fails, existing
    * persisted data is still loaded rather than fabricated as zero, but `isSalesSyncFailed` flags
-   * that the figures may be stale so the UI never presents them as freshly synchronized.
+   * that the figures may be stale so the UI never presents them as freshly synchronized. A `429`
+   * from the business's run limit (issue #681) is not a failure: the business refreshed moments
+   * ago, so it loads the same persisted figures under `isSalesSyncRecentlyRefreshed` instead.
    *
    * Inside a support session (issue #661) the synchronization is not attempted at all: it is a
    * `POST`, and it is a Nayax call, and a session is refused on both counts (issue #551). The
@@ -122,6 +133,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
    */
   refreshSalesDashboard(): void {
     this.isSalesSyncFailed = false;
+    this.isSalesSyncRecentlyRefreshed = false;
     this.isSalesSyncSkippedInSupportView = false;
     this.isLoadingSites = true;
     this.isLoadingMachines = true;
@@ -136,8 +148,12 @@ export class DashboardComponent implements OnInit, OnDestroy {
         this.refreshMachines();
         this.refreshSites();
       },
-      error: () => {
-        this.isSalesSyncFailed = true;
+      error: (error: unknown) => {
+        if (error instanceof HttpErrorResponse && error.status === 429) {
+          this.isSalesSyncRecentlyRefreshed = true;
+        } else {
+          this.isSalesSyncFailed = true;
+        }
         this.refreshMachines();
         this.refreshSites();
       }

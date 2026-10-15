@@ -1,3 +1,4 @@
+import { HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
 import { Observable, Subject, of, throwError } from 'rxjs';
@@ -720,6 +721,33 @@ describe('DashboardComponent coordinated sales refresh', () => {
     expect(component.isSalesSyncFailed).toBe(true);
     expect(component.machines).toEqual([MACHINE]);
     expect(component.sites).toEqual([SITE]);
+  });
+
+  it("shows the business's run limit as a recent refresh, not a failure, and still loads Sites and Machines (issue #681)", () => {
+    const component = createComponent(of(SUMMARY), {
+      syncLatest: () =>
+        throwError(() => new HttpErrorResponse({ status: 429, headers: new HttpHeaders({ 'Retry-After': '90' }) })),
+      getAllMachines: () => of([MACHINE]),
+      getAllSites: () => of([SITE])
+    });
+
+    component.ngOnInit();
+
+    expect(component.isSalesSyncRecentlyRefreshed).toBe(true);
+    expect(component.isSalesSyncFailed).toBe(false);
+    expect(component.machines).toEqual([MACHINE]);
+    expect(component.sites).toEqual([SITE]);
+  });
+
+  it('still reports any other refused synchronization as a failure', () => {
+    const component = createComponent(of(SUMMARY), {
+      syncLatest: () => throwError(() => new HttpErrorResponse({ status: 503 }))
+    });
+
+    component.ngOnInit();
+
+    expect(component.isSalesSyncFailed).toBe(true);
+    expect(component.isSalesSyncRecentlyRefreshed).toBe(false);
   });
 });
 

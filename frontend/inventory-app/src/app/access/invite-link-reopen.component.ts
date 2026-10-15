@@ -5,8 +5,9 @@ import { RouterLink } from '@angular/router';
  * The page at the tokenless `/invite` (issue #681, finding 4 of the #328 implementation review).
  *
  * `/invite` is where the address bar is left once an invite link's token has been stripped out of
- * it, so a reload, a Back into that entry, or a sign-in redirect started from it arrives here with
- * no token at all - the token was only ever held in memory, deliberately, and is gone. Rather than
+ * it. The acceptance page answers there only while the tab holds a pending invite it has not read
+ * yet (`pending-invite-token.ts`); once it has, a reload or a Back into that entry arrives here with
+ * no token at all - the page held it only in memory, deliberately, and it is gone. Rather than
  * falling through to the wildcard and landing on the dashboard or the welcome page with no
  * explanation, this page says what happened and how to continue: open the invite link again.
  *

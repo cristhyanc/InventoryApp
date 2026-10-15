@@ -1,13 +1,14 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
+import { Router, provideRouter } from '@angular/router';
 import { Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService } from './access.service';
 import { AccountStateAnswer, AccountStateName, AccountStateService } from './account-state.service';
 import { ACCOUNT_STATE_ROUTE } from './account-state.guard';
 import { InviteAcceptanceComponent } from './invite-acceptance.component';
 import { InviteRedemptionService } from './invite-redemption.service';
+import { PENDING_INVITE_TOKEN_KEY, storePendingInviteToken } from './pending-invite-token';
 
 @Component({ standalone: true, template: 'dashboard' })
 class DashboardPageComponent {}
@@ -19,6 +20,8 @@ class PendingPageComponent {}
 class RejectedPageComponent {}
 @Component({ standalone: true, template: 'unavailable' })
 class UnavailablePageComponent {}
+@Component({ standalone: true, template: 'reopen' })
+class ReopenPageComponent {}
 
 function known(state: AccountStateName): AccountStateAnswer {
   return { status: 'known', accountState: { state, onboardingEnabled: false, rejectionReason: null } };
@@ -35,11 +38,14 @@ interface Harness {
 }
 
 async function createHarness(options: {
-  token?: string;
+  token?: string | null;
   accountState$?: Observable<AccountStateAnswer>;
   redeem?: jest.Mock;
 }): Promise<Harness> {
-  const token = options.token ?? 'secret-token';
+  const token = options.token === undefined ? 'secret-token' : options.token;
+  if (token !== null) {
+    storePendingInviteToken(token);
+  }
   const accountState$ = options.accountState$ ?? of(known('NoMembership'));
   const redeem = options.redeem ?? jest.fn(() => of({ role: 'Manager' }));
   const accountStateRefresh = jest.fn(() => of(known('Member')));
@@ -53,12 +59,9 @@ async function createHarness(options: {
         { path: 'welcome', component: WelcomePageComponent },
         { path: 'application-pending', component: PendingPageComponent },
         { path: 'application-rejected', component: RejectedPageComponent },
-        { path: 'access-unavailable', component: UnavailablePageComponent }
+        { path: 'access-unavailable', component: UnavailablePageComponent },
+        { path: 'invite', component: ReopenPageComponent }
       ]),
-      {
-        provide: ActivatedRoute,
-        useValue: { snapshot: { paramMap: convertToParamMap({ token }) } }
-      },
       { provide: AccountStateService, useValue: { state$: accountState$, refresh: accountStateRefresh } },
       { provide: AccessService, useValue: { refresh: accessRefresh } },
       { provide: InviteRedemptionService, useValue: { redeem } }
@@ -70,30 +73,28 @@ async function createHarness(options: {
 }
 
 /**
- * The invite acceptance page (issue #535, one slice of #505 under #328). It reads the token into
- * memory, strips it from the address bar, lets an eligible account state redeem, and sends every
+ * The invite acceptance page (issue #535, one slice of #505 under #328). It takes the tab's
+ * pending invite token into memory (issue #681), lets an eligible account state redeem, and sends every
  * other state to the page its own account state already calls for.
  */
 describe('InviteAcceptanceComponent (issue #535)', () => {
-  afterEach(() => TestBed.resetTestingModule());
+  afterEach(() => {
+    TestBed.resetTestingModule();
+    sessionStorage.clear();
+  });
 
-  it('removes the token from the address bar with history.replaceState before anything else renders', async () => {
-    const replaceState = jest.spyOn(window.history, 'replaceState');
+  it('takes the pending invite out of the tab storage as soon as it opens, so a reload cannot read it again (issue #681)', async () => {
     const { fixture } = await createHarness({ token: 'super-secret' });
 
     fixture.detectChanges();
 
-    expect(replaceState).toHaveBeenCalledTimes(1);
-    const [, , url] = replaceState.mock.calls[0];
-    expect(url).toBe('/invite');
-    expect(String(url)).not.toContain('super-secret');
-    replaceState.mockRestore();
+    expect(sessionStorage.getItem(PENDING_INVITE_TOKEN_KEY)).toBeNull();
   });
 
-  it('never writes the token to a Storage API or a cookie', async () => {
+  it('never writes the token to a Storage API or a cookie itself', async () => {
+    const { fixture } = await createHarness({ token: 'super-secret' });
     const setItem = jest.spyOn(Storage.prototype, 'setItem');
     const cookie = jest.spyOn(document, 'cookie', 'set');
-    const { fixture } = await createHarness({ token: 'super-secret' });
 
     fixture.detectChanges();
     fixture.componentInstance.accept();
@@ -104,7 +105,7 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
     cookie.mockRestore();
   });
 
-  it('redeems the token it read from the route, after stripping it from the address bar', async () => {
+  it('redeems the pending invite token it took', async () => {
     // The signed-out sign-in redirect round trip itself is driven, through the real route table,
     // by invite-address-bar.guard.spec.ts (issue #681); this asserts only the component's own half.
     const redeem = jest.fn(() => of({ role: 'Manager' }));
@@ -114,6 +115,18 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
     fixture.componentInstance.accept();
 
     expect(redeem).toHaveBeenCalledWith('route-token');
+  });
+
+  it('sends a caller with no pending invite to the open-your-link-again page instead of offering Accept', async () => {
+    const redeem = jest.fn(() => of({ role: 'Manager' }));
+    const { fixture, router } = await createHarness({ token: null, redeem });
+
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(router.url).toBe('/invite');
+    expect(fixture.nativeElement.textContent).not.toContain('Accept');
+    expect(redeem).not.toHaveBeenCalled();
   });
 
   it.each<AccountStateName>(['NoMembership', 'MembershipRevoked', 'ApplicationRejected'])(

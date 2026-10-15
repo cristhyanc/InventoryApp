@@ -1,5 +1,12 @@
 import { TestBed } from '@angular/core/testing';
-import { ActivatedRouteSnapshot, Router, RouterStateSnapshot, provideRouter } from '@angular/router';
+import {
+  ActivatedRouteSnapshot,
+  RedirectCommand,
+  Router,
+  RouterStateSnapshot,
+  UrlSegment,
+  provideRouter
+} from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { MsalGuard } from '@azure/msal-angular';
 import { NEVER, Observable, of } from 'rxjs';
@@ -9,6 +16,7 @@ import { AccountStateAnswer, AccountStateService } from './account-state.service
 import { InviteAcceptanceComponent } from './invite-acceptance.component';
 import { inviteTokenAddressBarGuard } from './invite-address-bar.guard';
 import { InviteRedemptionService } from './invite-redemption.service';
+import { PENDING_INVITE_TOKEN_KEY } from './pending-invite-token';
 
 /** What the stand-in for MSAL's `loginRedirect` saw at the moment `MsalGuard` called it. */
 interface LoginRedirectCall {
@@ -41,22 +49,24 @@ function openInAddressBar(path: string): void {
 }
 
 /**
- * The invite token leaves the address bar before `MsalGuard` can redirect (issue #681, finding 3 of
- * the #328 implementation review). These drive the application's real route table, with only
- * `MsalGuard` and the invite page's own services replaced, through a signed-out visitor's sign-in
- * redirect and back.
+ * The invite token never reaches `MsalGuard`, the address bar or MSAL's redirect (issue #681:
+ * finding 3 of the #328 implementation review, then the review of PR #696). These drive the
+ * application's real route table, with only `MsalGuard` and the invite page's own services
+ * replaced, through a signed-out visitor's sign-in redirect and back.
  */
 describe('inviteTokenAddressBarGuard (issue #681)', () => {
   afterEach(() => {
     TestBed.resetTestingModule();
     openInAddressBar('/');
+    sessionStorage.clear();
   });
 
-  it('strips the token from the address bar before MsalGuard starts the sign-in redirect, and the invite survives the round trip', async () => {
+  it('keeps the token out of the sign-in redirect entirely, and the invite survives the round trip', async () => {
     // Leg 1: a signed-out visitor opens the link. MsalGuard must find the token already gone from
-    // the address bar - the history entry Back returns to - while still handing the token-bearing
-    // URL to MSAL as its redirect start page.
+    // the address bar - the history entry Back returns to - and must be handed a redirect start
+    // page without it, so MSAL never stores or returns to a token-bearing URL.
     openInAddressBar('/invite/super-secret');
+    localStorage.clear();
     let resolveRedirect!: (call: LoginRedirectCall) => void;
     const redirected = new Promise<LoginRedirectCall>((resolve) => (resolveRedirect = resolve));
     TestBed.configureTestingModule({
@@ -68,10 +78,13 @@ describe('inviteTokenAddressBarGuard (issue #681)', () => {
 
     expect(loginRedirect.addressBarPath).toBe('/invite');
     expect(window.location.href).not.toContain('super-secret');
-    expect(loginRedirect.redirectStartPage).toBe('/invite/super-secret');
+    expect(loginRedirect.redirectStartPage).toBe('/invite');
+    // The only copy is this tab's pending invite: nothing went to localStorage.
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.getItem(PENDING_INVITE_TOKEN_KEY)).toContain('super-secret');
 
     // Leg 2: MSAL brings the now signed-in visitor back to that redirect start page, and the invite
-    // page redeems the very token the visitor opened.
+    // page redeems the very token the visitor opened, taking it out of the tab's storage.
     TestBed.resetTestingModule();
     openInAddressBar(loginRedirect.redirectStartPage);
     const redeem = jest.fn(() => of({ role: 'Manager' }));
@@ -95,16 +108,23 @@ describe('inviteTokenAddressBarGuard (issue #681)', () => {
 
     expect(window.location.pathname).toBe('/invite');
     expect(redeem).toHaveBeenCalledWith('super-secret');
+    expect(sessionStorage.getItem(PENDING_INVITE_TOKEN_KEY)).toBeNull();
   });
 
   it("leaves the previous page's history entry alone on an in-app navigation to an invite", () => {
     openInAddressBar('/welcome');
     const replaceState = jest.spyOn(window.history, 'replaceState');
+    TestBed.configureTestingModule({ providers: [provideRouter([])] });
 
-    expect(TestBed.runInInjectionContext(() => inviteTokenAddressBarGuard({ path: 'invite/:token' }, []))).toBe(true);
+    const result = TestBed.runInInjectionContext(() =>
+      inviteTokenAddressBarGuard({ path: 'invite/:token' }, [new UrlSegment('invite', {}), new UrlSegment('in-app', {})])
+    );
 
+    expect(result).toBeInstanceOf(RedirectCommand);
+    expect((result as RedirectCommand).navigationBehaviorOptions?.replaceUrl).toBe(false);
     expect(replaceState).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe('/welcome');
+    expect(sessionStorage.getItem(PENDING_INVITE_TOKEN_KEY)).toContain('in-app');
     replaceState.mockRestore();
   });
 });

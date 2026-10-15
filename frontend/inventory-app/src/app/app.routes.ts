@@ -8,7 +8,11 @@ import { WelcomeComponent } from './access/welcome.component';
 import { ApplicationPendingComponent } from './access/application-pending.component';
 import { ApplicationRejectedComponent } from './access/application-rejected.component';
 import { BusinessApplicationComponent } from './access/business-application.component';
-import { INVITE_ADDRESS_BAR_ROUTE, inviteTokenAddressBarGuard } from './access/invite-address-bar.guard';
+import {
+  INVITE_ADDRESS_BAR_ROUTE,
+  inviteTokenAddressBarGuard,
+  pendingInviteTokenGuard
+} from './access/invite-address-bar.guard';
 import { InviteLinkReopenComponent } from './access/invite-link-reopen.component';
 import { AuthCallbackComponent } from './auth/auth-callback.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
@@ -24,7 +28,7 @@ import { designSystemRoutes } from './design-system/design-system.routes';
  * `Member` to the route that state calls for before the page's own business calls ever run, and
  * protects nothing either way. The routes that deliberately carry no `accountStateGuard` are the
  * ones it would otherwise send somebody *to* - `/welcome`, `/application-pending`,
- * `/application-rejected`, `/access-unavailable`, `/apply` and `/invite/:token` - because a person already
+ * `/application-rejected`, `/access-unavailable`, `/apply` and the `/invite` acceptance page - because a person already
  * sent to one of them must not be sent away from it; `/access-not-allowed` carries no capability
  * for the reason already documented beside it, and `/super-admin/diagnostics` and
  * `/super-admin/businesses` (issues #546, #547) carry neither guard: their authority is the
@@ -78,19 +82,27 @@ export const routes: Routes = [
     component: BusinessApplicationComponent
   },
   {
-    // The invite acceptance page (issue #535): reads the token, strips it from the address bar,
-    // and lets a NoMembership/MembershipRevoked/ApplicationRejected caller redeem it. Carries only
-    // `MsalGuard`, for the reason the comment above gives. `inviteTokenAddressBarGuard` is a
-    // `canMatch` guard, so it runs before `MsalGuard` and decides nothing: it strips the token from
-    // the address bar before a signed-out visitor's sign-in redirect can leave it in history (#681).
+    // An invite link (issue #535). It never activates: `inviteTokenAddressBarGuard` is a `canMatch`
+    // guard, so it runs before any `canActivate` guard, hands the token to this tab's pending
+    // invite (`access/pending-invite-token.ts`), strips it from the address bar and redirects to
+    // `/invite` (issue #681). `MsalGuard` therefore never sees the token, so a signed-out visitor's
+    // sign-in redirect does not carry it. The component is only there because a route needs one.
     path: 'invite/:token',
     canMatch: [inviteTokenAddressBarGuard],
+    component: InviteLinkReopenComponent
+  },
+  {
+    // The invite acceptance page (issue #535), matched only while this tab holds a pending invite
+    // token (issue #681): lets a NoMembership/MembershipRevoked/ApplicationRejected caller redeem
+    // it. Carries only `MsalGuard`, for the reason the comment above gives.
+    path: INVITE_ADDRESS_BAR_ROUTE,
+    canMatch: [pendingInviteTokenGuard],
     canActivate: [MsalGuard],
     loadComponent: () => import('./access/invite-acceptance.component').then((m) => m.InviteAcceptanceComponent)
   },
   {
-    // The tokenless address the invite page leaves in the address bar (issue #681): a reload or a
-    // Back into it explains that the invite link must be opened again, instead of the wildcard
+    // `/invite` with no pending invite (issue #681): a reload or a Back into it after the page read
+    // the token explains that the invite link must be opened again, instead of the wildcard
     // silently landing on the dashboard. Public, like `auth`: it makes no request at all.
     path: INVITE_ADDRESS_BAR_ROUTE,
     component: InviteLinkReopenComponent

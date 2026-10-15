@@ -69,7 +69,9 @@ public class NayaxSalesSyncController : ControllerBase
     /// <summary>
     /// The per-business run limit's refusal. A fixed sentence with no count, no window and no
     /// business in it, exactly as the Nayax connection test's is: how often this business has
-    /// refreshed is not something a response needs to spell out.
+    /// refreshed is not something a response needs to spell out. It names no wait either, and points
+    /// at <c>Retry-After</c> instead, because the wait is anything up to the whole window and a
+    /// sentence promising "a minute" would be wrong for most of it.
     /// </summary>
     private ActionResult TooManySyncs(TimeSpan retryAfter)
     {
@@ -84,7 +86,7 @@ public class NayaxSalesSyncController : ControllerBase
             {
                 Title = TooManySyncsTitle,
                 Detail = "This business has refreshed its Nayax sales too many times recently. "
-                    + "Wait a minute and try again.",
+                    + "Try again once the time given in the Retry-After header has passed.",
                 Status = StatusCodes.Status429TooManyRequests,
             });
     }

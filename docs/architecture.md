@@ -1573,7 +1573,7 @@ The other is `NayaxConnectionController` since issue #537: its test, save and re
 
   The second capability is there because **this endpoint writes**: it persists imported sales and rebuilds inventory costs for the products a completed sale touched. `Dashboard.View` is the read capability every role holds, including any future read-only role #328 anticipates (the Viewer), so an endpoint that writes under it alone is a hole waiting for that role to exist. `Inventory.Operate` is the capability declared because the write is an inventory one — the same capability Sync Restock's write carries — and because every role in the matrix that holds `Dashboard.View` also holds it, so **no current role's sync access changes**. Requirements accumulate, so the declaration narrows and never widens.
 
-  It is also **rate-limited per business** since issue #681: `Inventory.Application.SalesSync.NayaxSalesSyncRateLimiter` allows ten runs per business per two minutes, claimed before the first Nayax call, and a refused run answers `429` with `Retry-After` and reaches neither Nayax nor the database. One run is one Nayax request per machine plus one, and the Dashboard triggers one per load — which a browser repeats on every visit, back-navigation and refresh — so this was the most expensive call in the application and the easiest to repeat, with nothing bounding either the requests against someone else's API or the write amplification in this one. The limit is per business rather than per actor for the reason the connection test's is: what it protects is the business's own Nayax account and its own rows. The window is kept in memory, like every other limiter here (docs § SQLite operating assumptions). A refused run leaves the Dashboard showing its persisted figures flagged as not synchronized — the same state it already shows when Nayax cannot be reached.
+  It is also **rate-limited per business** since issue #681: `Inventory.Application.SalesSync.NayaxSalesSyncRateLimiter` allows ten runs per business per two minutes, claimed before the first Nayax call, and a refused run answers `429` with `Retry-After` and reaches neither Nayax nor the database. One run is one Nayax request per machine plus one, and the Dashboard triggers one per load — which a browser repeats on every visit, back-navigation and refresh — so this was the most expensive call in the application and the easiest to repeat, with nothing bounding either the requests against someone else's API or the write amplification in this one. The limit is per business rather than per actor for the reason the connection test's is: what it protects is the business's own Nayax account and its own rows. The window is kept in memory, like every other limiter here (docs § SQLite operating assumptions). Because the allowance is the business's, members opening the Dashboard together share it: ten simultaneous loads all synchronize (`NayaxSalesSyncControllerTests`), and a load past that is refused. A refusal proves the business started runs inside the last two minutes, so the Dashboard loads its persisted figures and says they were refreshed in the last couple of minutes, not that synchronization failed (`isSalesSyncRecentlyRefreshed`); any other error still shows the not-synchronized warning. The `429` body names no wait and points at `Retry-After`, because the wait can be up to the whole window.
 
 - `GET api/products/inventory-value-summary` → **`Inventory.Operate` and `Dashboard.ViewFinancials`** (issue #681). It is an action on `ProductsController`, so it carries the catalogue's own capability; the second one is declared on the action. The endpoint reports the exact value of the business's inventory at cost, broken down — the figure [issue #527](#dashboard-financial-redaction-issue-527) omits from the dashboard response entirely for a role without `Dashboard.ViewFinancials`, today an Operator. On the catalogue's capability alone, that redaction was a presentation detail rather than a boundary: an Operator could read the number directly. No page calls this endpoint (`ProductService.getInventoryValuationSummary` has no caller since the dashboard stopped using it), so it was gated rather than removed — gating preserves the API contract, which AGENTS.md § Architecture rules asks for, while removing it would be a breaking change for a caller nobody has surveyed. A Manager and an Owner hold both capabilities and are unaffected; an Operator gets the ordinary bare `403`.
 - `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
@@ -5040,61 +5040,56 @@ this slice is the one caller `frontend/inventory-app/src` has for it.
 
 | File | Responsibility |
 | --- | --- |
-| `access/invite-acceptance.component.ts` | `InviteAcceptanceComponent`: reads the token, strips it from the address bar, decides Accept-button vs. redirect from the cached account state, calls the redemption endpoint, and refreshes both caches before landing on the dashboard |
-| `access/invite-address-bar.guard.ts` | `inviteTokenAddressBarGuard` (issue #681): the route's `canMatch` guard, which strips the token from the address bar before `MsalGuard` runs; also names `INVITE_ADDRESS_BAR_ROUTE`, the tokenless `/invite` |
+| `access/invite-acceptance.component.ts` | `InviteAcceptanceComponent`, at `/invite`: takes the tab's pending invite token into memory, decides Accept-button vs. redirect from the cached account state, calls the redemption endpoint, and refreshes both caches before landing on the dashboard |
+| `access/invite-address-bar.guard.ts` | `inviteTokenAddressBarGuard` (issue #681): `/invite/:token`'s `canMatch` guard, which hands the token to the pending invite, strips it from the address bar and redirects to `/invite` before `MsalGuard` runs; `pendingInviteTokenGuard`, which matches the acceptance page at `/invite` only while a pending invite exists; and `INVITE_ADDRESS_BAR_ROUTE` |
+| `access/pending-invite-token.ts` | The pending invite (issue #681): the token held in this tab's `sessionStorage` through a sign-in redirect, read and removed in one step, expiring after 15 minutes |
 | `access/invite-link-reopen.component.ts` | `InviteLinkReopenComponent` (issue #681): the tokenless `/invite` page, telling a person who reloads or returns to it to open their invite link again |
 | `access/invite-redemption.service.ts` | `InviteRedemptionService`: the one `POST /api/invites/redeem` call, with the token in the request body and nothing else |
 | `access/account-state.guard.ts` | Gained `REDEEMABLE_ACCOUNT_STATES` and `nonRedeemableAccountStateDestination`, alongside `ACCOUNT_STATE_ROUTE` |
 
-**The token never leaves memory, and the address bar is cleared before anything else runs.**
-`InviteAcceptanceComponent.ngOnInit` reads the token from the route `ActivatedRoute` already
-matched and holds it only in a component field; its very next statement, before any analytics,
-logging or navigation, is `history.replaceState(history.state, '', '/invite')`. That rewrites the
-browser's own history entry — independently of what Angular's router still thinks the current URL
-is. A link opened from the address bar has already lost its token one step earlier: the route's
-`canMatch` guard, `inviteTokenAddressBarGuard` (issue #681), makes the same `replaceState` call
-during route recognition, before any `canActivate` guard — `MsalGuard` included — is even called.
-Without it a signed-out visitor never reached `ngOnInit`: `MsalGuard` sent them to sign in with
-`/invite/<token>` still in the address bar, and that history entry, which Back returns to, kept
-the token. The guard stores nothing and decides nothing (it always matches); it rewrites the
-address bar only when the browser actually shows an invite link, so an in-app navigation from the
-welcome page's invite field leaves that page's own history entry alone, and the token stays where
-the router already had it — the URL tree of the navigation in progress, which `replaceState` does
-not touch. So no session history entry is left holding the token on either path, signed in or
-signed out: it is in the address bar only while the application itself starts. Application code
-never writes it to `localStorage`, `sessionStorage`, a cookie, a log line or an error report, and
-`InviteRedemptionService` sends it only in this one request's JSON body, never in a URL path or
-query string, so no HTTP or router logging of a request or route *URL* can ever carry it either —
-there is no app-level logging of either kind in this build today, and this is why there will not
-be one carrying it later.
+**The token never reaches the address bar's history, `MsalGuard` or MSAL (issue #681).**
+`/invite/:token` never activates. Its `canMatch` guard, `inviteTokenAddressBarGuard`, runs during
+route recognition, before any `canActivate` guard: it hands the token to the tab's pending invite
+(`access/pending-invite-token.ts`), rewrites the current history entry to `/invite` with
+`history.replaceState` when the address bar shows the link, and redirects the navigation to
+`/invite`. The acceptance page is matched at `/invite` only while a pending invite exists
+(`pendingInviteTokenGuard`), so `MsalGuard` only ever runs on `/invite`. A signed-out visitor's
+sign-in redirect therefore starts from, is stored by MSAL as, and returns to `/invite`: the token is
+not in MSAL's redirect start page or its `localStorage` cache (`auth-config.ts`), not in a history
+entry Back returns to, and not in the page address a `Referer` could be built from. The history
+rewrite is the guard's, not the router's, because the router updates the address bar only after a
+navigation's guards pass, and a signed-out visitor's `MsalGuard` leaves the page before that. An
+in-app navigation from the welcome page's invite field never put the token in the address bar, so
+the guard leaves that page's own history entry alone.
 
-**MSAL's own transient copy is the one accepted residual.** A signed-out visitor reaches this
-component at all only after `MsalGuard` (still the route's only `canActivate` guard — see [Account-state
-routing](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529))
-has sent them through the login redirect, with this exact URL — token included, taken from the
-router's state rather than the already-rewritten address bar — as its own default redirect start
-page, and brought them back to it once the round trip completes. Nothing in
-this slice starts, configures or reads that bookkeeping: it is MSAL's existing
-`BrowserCacheLocation.LocalStorage` (`auth-config.ts`), already relied on by every other bypass
-route on this guard, holding the address for exactly the length of one redirect and clearing it
-once it lands. The token is single-use, expires after seven days, and is stored only as a hash on
-the server (`MemberInviteToken.Hash`, [Invite redemption](#invite-redemption-issue-532)) — so this
-one transient, third-party copy is the full extent of what survives a sign-in round trip, and it is
-accepted rather than worked around.
+**The pending invite is the one place the token waits.** Before the review of PR #696 the token
+crossed the sign-in round trip inside MSAL's redirect start page, which MSAL keeps in
+`localStorage` (shared by every tab and kept after the tab closes) until the redirect lands; that
+was a copy this application neither controlled nor cleared. The pending invite is narrower:
+`sessionStorage`, so one tab only and gone when the tab closes, never sent to any server, removed by
+`InviteAcceptanceComponent.ngOnInit` in the same step that reads it into a component field, and
+treated as absent (and removed) once it is more than 15 minutes old, so an abandoned sign-in does
+not leave an invite waiting. A browser that refuses storage loses the hand-off and shows the
+`/invite` page below. After `ngOnInit`, the token is held only in memory and never written to a
+cookie, a log line or an error report, and `InviteRedemptionService` sends it only in this one
+request's JSON body, never in a URL path or query string, so no HTTP or router logging of a request
+or route *URL* can ever carry it either. The token is single-use, expires after seven days, and is
+stored only as a hash on the server (`MemberInviteToken.Hash`,
+[Invite redemption](#invite-redemption-issue-532)).
 
-**The tokenless `/invite` explains itself (issue #681).** Because the token is held only in memory,
-the `/invite` address left behind cannot bring it back: a reload, a Back into that entry, or a
-sign-in redirect started from it (`MsalInterceptor` uses the current address as its start page)
-arrives with no token. `/invite` is therefore a route of its own, `InviteLinkReopenComponent`, which
-says to open the invite link again and offers the home page, instead of falling through to the
-`'**'` wildcard and landing on the dashboard or the welcome page with no explanation. It carries no
-guard, like the public `auth` route, because it makes no request at all, and
-`memberForbiddenNoticeInterceptor` treats it as one of its bypass routes, like `/invite/:token`.
+**The tokenless `/invite` explains itself (issue #681).** Once the page has taken the pending
+invite, a reload of `/invite` or a Back into it matches the second `/invite` route,
+`InviteLinkReopenComponent`, which says to open the invite link again and offers the home page,
+instead of falling through to the `'**'` wildcard and landing on the dashboard or the welcome page
+with no explanation. It carries no guard, like the public `auth` route, because it makes no request
+at all, and `memberForbiddenNoticeInterceptor` treats `/invite` as one of its bypass routes.
 `invite-address-bar.guard.spec.ts` drives a signed-out visitor through the application's real
 route table, with `MsalGuard` replaced by a stand-in that starts the login redirect from the
-router state's URL: the address bar already reads `/invite` when the redirect starts, the redirect
-start page still carries the token, and the invite page reached from it after sign-in redeems that
-token. `invite-link-reopen.component.spec.ts` pins the tokenless route and its text.
+router state's URL: the address bar reads `/invite` when the redirect starts, the redirect start
+page is `/invite` too, nothing is written to `localStorage`, and the invite page reached after
+sign-in redeems the token and empties the pending invite. `pending-invite-token.spec.ts` covers
+the read-once, expiry and refused-storage rules, and `invite-link-reopen.component.spec.ts` pins
+the tokenless route and its text.
 
 **Eligibility is read from the cached account state, never assumed.**
 `REDEEMABLE_ACCOUNT_STATES` — `NoMembership`, `MembershipRevoked` and `ApplicationRejected` —

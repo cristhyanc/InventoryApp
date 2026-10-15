@@ -79,7 +79,9 @@ public class NayaxSalesSyncControllerTests
         // The fixed sentence the controller declares, asserted as text because the constant itself is
         // internal to InventoryApi: a reader of this test should see what the caller is told.
         Assert.Equal("Too many Nayax sales refreshes", problem.Title);
-        Assert.Contains("Wait a minute", problem.Detail, StringComparison.Ordinal);
+        // It points at Retry-After rather than naming a wait, which can be up to the whole window.
+        Assert.Contains("Retry-After", problem.Detail, StringComparison.Ordinal);
+        Assert.DoesNotContain("minute", problem.Detail, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(
             ((int)NayaxSalesSyncRateLimiter.Window.TotalSeconds).ToString(
                 System.Globalization.CultureInfo.InvariantCulture),
@@ -93,6 +95,34 @@ public class NayaxSalesSyncControllerTests
             x => x.PersistLatestSalesAsync(
                 It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()),
             Times.Exactly(NayaxSalesSyncRateLimiter.MaxRunsPerWindow));
+    }
+
+    /// <summary>
+    /// Several members of one business opening the Dashboard at the same moment (the review of PR
+    /// #696): the allowance is the business's, so their loads share it, and up to
+    /// <see cref="NayaxSalesSyncRateLimiter.MaxRunsPerWindow"/> simultaneous loads all synchronize.
+    /// Only a load past that is refused, and the Dashboard shows that refusal as "refreshed
+    /// recently", not as a failure.
+    /// </summary>
+    [Fact]
+    public async Task SyncLatest_lets_simultaneous_dashboard_loads_of_one_business_share_its_allowance()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachine>());
+        var store = new Mock<ILatestNayaxSalesStore>();
+        store.Setup(x => x.PersistLatestSalesAsync(
+                It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
+        var useCase = TestSalesSync.UseCase(nayax.Object, store.Object, new FakeClock(Now));
+
+        var loads = await Task.WhenAll(Enumerable.Range(0, NayaxSalesSyncRateLimiter.MaxRunsPerWindow)
+            .Select(_ => Task.Run(() => Controller(useCase).SyncLatest(CancellationToken.None))));
+
+        Assert.All(loads, load => Assert.IsType<NoContentResult>(load));
+        Assert.Equal(
+            StatusCodes.Status429TooManyRequests,
+            Assert.IsType<ObjectResult>(await Controller(useCase).SyncLatest(CancellationToken.None)).StatusCode);
     }
 
     /// <summary>
