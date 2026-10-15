@@ -15,6 +15,12 @@ namespace Inventory.Application.Members;
 /// outside the transaction, or audited before the commit, or forgot to say which rules apply, would
 /// be a quiet hole in exactly one of the three.
 ///
+/// <para>Since issue #680 every change also declares the business that must still be
+/// <see cref="BusinessStatus.Active"/>, which the guard re-reads inside the same transaction. The
+/// business id comes from the middleware's resolution when the request arrived, so without that
+/// re-check a reinstatement already in flight could re-activate a membership the Super Admin had
+/// just released from the business they were deactivating.</para>
+///
 /// <para><strong>The authoritative read is inside the transaction.</strong> The mutable facts a
 /// change is decided from - the member's current role and whether their approval is current - are
 /// re-read after <c>BEGIN IMMEDIATE</c> has taken the write lock, so the comparison and the write
@@ -196,6 +202,11 @@ public sealed class MemberChangeWriter
     /// eligibility check. A reinstatement is the mirror image: it gives an identity an active
     /// membership, so eligibility is re-checked for that identity with its own row excluded, and it
     /// cannot remove an Owner, so the Owner rule has nothing to judge.
+    ///
+    /// All three additionally declare the business that must still be <see cref="BusinessStatus.Active"/>
+    /// (issue #680). Changing who may do what inside a business is only meaningful while that
+    /// business trades, and a reinstatement in flight when the Super Admin deactivates and releases
+    /// its members would otherwise re-activate a membership that had just been released.
     /// </summary>
     private static MembershipWriteIntent IntentFor(
         MemberChange change,
@@ -209,8 +220,11 @@ public sealed class MemberChangeWriter
                     // such a row can never resolve at sign-in anyway. Reinstating it would mean
                     // skipping the one-active-membership check entirely, so it is refused instead.
                     ?? throw new DomainConflictException(UnusableStoredIdentityMessage),
-                ExcludedMembershipId: existing.Member.MembershipId),
-            _ => new MembershipWriteIntent(BusinessKeepingAnActiveOwner: businessId),
+                ExcludedMembershipId: existing.Member.MembershipId,
+                BusinessThatMustStillBeActive: businessId),
+            _ => new MembershipWriteIntent(
+                BusinessKeepingAnActiveOwner: businessId,
+                BusinessThatMustStillBeActive: businessId),
         };
 
     /// <summary>

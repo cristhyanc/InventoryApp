@@ -312,6 +312,174 @@ public class MembershipWriteGuardTests
             store.Operations);
     }
 
+    /// <summary>
+    /// The business-status re-check of issue #680: it happens inside the transaction and
+    /// <em>before</em> the write, so a write into a business that has been deactivated never runs at
+    /// all and nothing is committed.
+    /// </summary>
+    [Fact]
+    public async Task A_write_into_a_business_that_is_no_longer_active_is_refused_before_the_write()
+    {
+        var store = new FakeBusinessMembershipWriteStore { Status = BusinessStatus.Deactivated };
+
+        var exception = await Assert.ThrowsAsync<DomainConflictException>(() => Guard(store).ExecuteAsync(
+            new MembershipWriteIntent(BusinessThatMustStillBeActive: BusinessId.From(3)),
+            token =>
+            {
+                store.Record(Written);
+                return Task.CompletedTask;
+            },
+            CancellationToken.None));
+
+        Assert.Equal(ActiveBusinessWritePolicy.NotActiveMessage, exception.Message);
+        Assert.Equal(BusinessId.From(3), store.LastQueriedStatusBusiness);
+        Assert.Equal(
+            [
+                FakeBusinessMembershipWriteStore.Begin,
+                FakeBusinessMembershipWriteStore.StatusRead,
+                FakeBusinessMembershipWriteStore.Dispose,
+            ],
+            store.Operations);
+    }
+
+    /// <summary>
+    /// Every status other than <see cref="BusinessStatus.Active"/> refuses, including a business row
+    /// that is not there at all - the fail-closed direction for a state nobody recorded.
+    /// </summary>
+    [Theory]
+    [InlineData(BusinessStatus.Pending)]
+    [InlineData(BusinessStatus.Rejected)]
+    [InlineData(BusinessStatus.Deactivated)]
+    [InlineData((BusinessStatus)0)]
+    [InlineData((BusinessStatus)99)]
+    [InlineData(null)]
+    public async Task No_status_but_active_permits_the_write(BusinessStatus? status)
+    {
+        var store = new FakeBusinessMembershipWriteStore { Status = status };
+
+        await Assert.ThrowsAsync<DomainConflictException>(() => Guard(store).ExecuteAsync(
+            new MembershipWriteIntent(BusinessThatMustStillBeActive: BusinessId.From(3)),
+            token => Task.CompletedTask,
+            CancellationToken.None));
+
+        Assert.DoesNotContain(FakeBusinessMembershipWriteStore.Commit, store.Operations);
+    }
+
+    /// <summary>
+    /// A write into a business that is still trading commits, which is the case that must not be
+    /// refused: the rule is about a business that has been switched off, not about Owner writes
+    /// being rare.
+    /// </summary>
+    [Fact]
+    public async Task A_write_into_an_active_business_is_committed()
+    {
+        var store = new FakeBusinessMembershipWriteStore { Status = BusinessStatus.Active };
+
+        await Guard(store).ExecuteAsync(
+            new MembershipWriteIntent(BusinessThatMustStillBeActive: BusinessId.From(3)),
+            token =>
+            {
+                store.Record(Written);
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        Assert.Equal(
+            [
+                FakeBusinessMembershipWriteStore.Begin,
+                FakeBusinessMembershipWriteStore.StatusRead,
+                Written,
+                FakeBusinessMembershipWriteStore.Commit,
+                FakeBusinessMembershipWriteStore.Dispose,
+            ],
+            store.Operations);
+    }
+
+    /// <summary>
+    /// The status is read inside the lock rather than before it, which is the whole point: a
+    /// deactivation that commits while this writer waits for <c>BEGIN IMMEDIATE</c> refuses the
+    /// write it was racing.
+    /// </summary>
+    [Fact]
+    public async Task A_deactivation_that_commits_while_the_write_lock_is_awaited_refuses_the_write()
+    {
+        var store = new FakeBusinessMembershipWriteStore();
+        store.WhileWaitingForTheWriteLock = () => store.Status = BusinessStatus.Deactivated;
+
+        var exception = await Assert.ThrowsAsync<DomainConflictException>(() => Guard(store).ExecuteAsync(
+            new MembershipWriteIntent(BusinessThatMustStillBeActive: BusinessId.From(3)),
+            token =>
+            {
+                store.Record(Written);
+                return Task.CompletedTask;
+            },
+            CancellationToken.None));
+
+        Assert.Equal(ActiveBusinessWritePolicy.NotActiveMessage, exception.Message);
+        Assert.DoesNotContain(Written, store.Operations);
+        Assert.DoesNotContain(FakeBusinessMembershipWriteStore.Commit, store.Operations);
+    }
+
+    /// <summary>
+    /// A write that does not declare a business reads no status at all. The lifecycle actions
+    /// themselves are why: a deactivation declaring "this business must still be Active" would
+    /// refuse itself on its second attempt and a reactivation on its first.
+    /// </summary>
+    [Fact]
+    public async Task A_write_that_declares_no_business_is_not_status_checked()
+    {
+        var store = new FakeBusinessMembershipWriteStore { Status = BusinessStatus.Deactivated };
+
+        await Guard(store).ExecuteAsync(
+            default,
+            token =>
+            {
+                store.Record(Written);
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        Assert.DoesNotContain(FakeBusinessMembershipWriteStore.StatusRead, store.Operations);
+        Assert.Contains(FakeBusinessMembershipWriteStore.Commit, store.Operations);
+    }
+
+    /// <summary>
+    /// All three rules around one write, in the order they have to be asked in: the business must be
+    /// trading before anything is attempted, eligibility before the write, and the Owner rule on
+    /// what the write left behind.
+    /// </summary>
+    [Fact]
+    public async Task All_three_rules_are_checked_around_one_write()
+    {
+        var store = new FakeBusinessMembershipWriteStore();
+        store.BusinessMembershipRoles.Add(new BusinessMembershipRole(BusinessRole.Owner, IsActive: true));
+
+        await Guard(store).ExecuteAsync(
+            new MembershipWriteIntent(
+                IdentityGainingAnActiveMembership: Actor(),
+                ExcludedMembershipId: 7,
+                BusinessKeepingAnActiveOwner: BusinessId.From(3),
+                BusinessThatMustStillBeActive: BusinessId.From(3)),
+            token =>
+            {
+                store.Record(Written);
+                return Task.CompletedTask;
+            },
+            CancellationToken.None);
+
+        Assert.Equal(
+            [
+                FakeBusinessMembershipWriteStore.Begin,
+                FakeBusinessMembershipWriteStore.StatusRead,
+                FakeBusinessMembershipWriteStore.IdentityRead,
+                Written,
+                FakeBusinessMembershipWriteStore.BusinessRead,
+                FakeBusinessMembershipWriteStore.Commit,
+                FakeBusinessMembershipWriteStore.Dispose,
+            ],
+            store.Operations);
+    }
+
     [Fact]
     public async Task A_missing_write_is_refused()
     {

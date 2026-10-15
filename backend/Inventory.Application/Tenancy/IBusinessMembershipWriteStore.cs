@@ -59,6 +59,21 @@ public interface IBusinessMembershipWriteStore
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// The stored lifecycle status of the business a write is going into, or <see langword="null"/>
+    /// when there is no such business row - what <see cref="ActiveBusinessWritePolicy"/> needs
+    /// (issue #680).
+    ///
+    /// <para>It is read inside the write transaction, before the caller's write, because the
+    /// business id the write carries was resolved by the middleware when the request arrived and a
+    /// deactivation may have committed since. The status is returned exactly as persistence holds
+    /// it - a value this code does not declare included - so the Domain rule rather than an adapter
+    /// decides what an undeclared state means.</para>
+    /// </summary>
+    Task<BusinessStatus?> FindBusinessStatusAsync(
+        BusinessId businessId,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Whether <paramref name="exception"/> is the database refusing a second active membership for
     /// one identity through the filtered unique index.
     ///

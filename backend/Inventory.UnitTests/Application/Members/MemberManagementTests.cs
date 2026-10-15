@@ -161,6 +161,8 @@ public class MemberManagementTests
                 // transaction, for the immutable facts only.
                 FakeBusinessMemberStore.Find,
                 FakeBusinessMembershipWriteStore.Begin,
+                // The business must still be trading before anything is attempted (issue #680).
+                FakeBusinessMembershipWriteStore.StatusRead,
                 FakeBusinessMemberStore.Find,
                 FakeBusinessMemberStore.WriteRole,
                 FakeBusinessMembershipWriteStore.BusinessRead,
@@ -388,6 +390,63 @@ public class MemberManagementTests
 
         Assert.True((await fixture.Reinstate().Handle(MembershipIdValue, CancellationToken.None))?.IsActive);
         Assert.Null(fixture.Store.LastStatusChangedAtUtc);
+        Assert.Empty(fixture.Audit.Entries);
+    }
+
+    #endregion
+
+    #region The business must still be trading (issue #680)
+
+    /// <summary>
+    /// Every member change declares the business that must still be <see cref="BusinessStatus.Active"/>,
+    /// and is refused with the one fixed sentence when it is not - nothing written, nothing audited.
+    /// The reinstatement is the case with consequences: without this rule one in flight could
+    /// re-activate a membership the Super Admin had just released from a business they were
+    /// deactivating.
+    /// </summary>
+    [Theory]
+    [InlineData(MemberChange.RoleChanged)]
+    [InlineData(MemberChange.Revoked)]
+    [InlineData(MemberChange.Reinstated)]
+    public async Task A_member_change_is_refused_once_the_business_is_no_longer_active(MemberChange change)
+    {
+        var fixture = new Fixture(
+            role: BusinessRole.Operator,
+            isActive: change != MemberChange.Reinstated);
+        fixture.WriteStore.Status = BusinessStatus.Deactivated;
+
+        var refusal = await Assert.ThrowsAsync<DomainConflictException>(() => change switch
+        {
+            MemberChange.RoleChanged =>
+                fixture.ChangeRole().Handle(MembershipIdValue, "Manager", CancellationToken.None),
+            MemberChange.Revoked => fixture.Revoke().Handle(MembershipIdValue, CancellationToken.None),
+            _ => fixture.Reinstate().Handle(MembershipIdValue, CancellationToken.None),
+        });
+
+        Assert.Equal(ActiveBusinessWritePolicy.NotActiveMessage, refusal.Message);
+        Assert.Equal(BusinessId.From(BusinessIdValue), fixture.WriteStore.LastQueriedStatusBusiness);
+        Assert.DoesNotContain(FakeBusinessMemberStore.WriteRole, fixture.Operations);
+        Assert.DoesNotContain(FakeBusinessMemberStore.WriteActive, fixture.Operations);
+        Assert.DoesNotContain(FakeBusinessMembershipWriteStore.Commit, fixture.Operations);
+        Assert.Empty(fixture.Audit.Entries);
+    }
+
+    /// <summary>
+    /// The status is re-read inside the write transaction rather than when the request arrived: a
+    /// deactivation that commits while this change waits for the write lock refuses it.
+    /// </summary>
+    [Fact]
+    public async Task A_deactivation_that_commits_while_the_write_lock_is_awaited_refuses_the_change()
+    {
+        var fixture = new Fixture(role: BusinessRole.Manager);
+        fixture.WriteStore.WhileWaitingForTheWriteLock =
+            () => fixture.WriteStore.Status = BusinessStatus.Deactivated;
+
+        var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
+            fixture.Revoke().Handle(MembershipIdValue, CancellationToken.None));
+
+        Assert.Equal(ActiveBusinessWritePolicy.NotActiveMessage, refusal.Message);
+        Assert.True(fixture.Store.Row(BusinessIdValue, MembershipIdValue).Member.IsActive);
         Assert.Empty(fixture.Audit.Entries);
     }
 
