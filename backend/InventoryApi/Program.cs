@@ -189,6 +189,9 @@ builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<SupportSessionExceptionHandler>();
 builder.Services.AddExceptionHandler<NayaxConnectionExceptionHandler>();
 builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
+// A business whose stored time zone cannot be resolved (issue #499): still a 500, but with the
+// stable code that tells it apart from an anonymous server fault (issue #681).
+builder.Services.AddExceptionHandler<BusinessTimeZoneExceptionHandler>();
 builder.Services.AddExceptionHandler<DomainExceptionHandler>();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddInventoryApiSwagger();

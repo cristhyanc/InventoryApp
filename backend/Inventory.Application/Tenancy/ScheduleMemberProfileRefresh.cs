@@ -44,11 +44,14 @@ public sealed class ScheduleMemberProfileRefresh
             return false;
         }
 
-        if (!_throttle.TryClaim(identity))
+        if (!_throttle.TryClaim(identity, out var claimedAtUtc))
         {
             return false;
         }
 
-        return _queue.TryEnqueue(new MemberProfileRefreshRequest(identity, profile));
+        // The claim's instant travels with the refresh (issue #681): the drain gives the slot back
+        // if the write fails, and it can only give back *this* claim by naming the instant it was
+        // made at.
+        return _queue.TryEnqueue(new MemberProfileRefreshRequest(identity, profile, claimedAtUtc));
     }
 }

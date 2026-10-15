@@ -1,7 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, Input, OnDestroy } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Subject, Subscription, forkJoin, map, switchMap, takeUntil } from 'rxjs';
+import { Observable, Subject, Subscription, catchError, forkJoin, map, of, switchMap, takeUntil } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
 import {
   BusinessApplicationDraft,
@@ -18,6 +18,15 @@ import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.co
 import { SupportSessionService } from '../../../support-session/support-session.service';
 
 export const GENERIC_SAVE_ERROR_MESSAGE = "Your business settings couldn't be saved. Try again.";
+
+/**
+ * Shown when the `PUT` succeeded but the shell refresh after it did not (issue #681): the settings
+ * are stored, so this must not read as a failed save, but the rest of the page may still show the
+ * values just replaced until it is reloaded.
+ */
+export const SAVED_BUT_NOT_REFRESHED_MESSAGE =
+  "Your business settings were saved, but the page couldn't refresh to show them everywhere. " +
+  'Reload the page to see the new settings.';
 
 export const TIME_ZONE_CHANGE_CONFIRMATION_TITLE = 'Change the business time zone?';
 
@@ -76,6 +85,13 @@ function saveErrorMessage(error: unknown): string {
  * success is this component's own message to show, and it may not appear before both refreshes
  * have answered. Nothing on the page has to coordinate with a save, so there is no `@Output` for
  * one - the same shape as `<app-costing-repair [products]="products">`.
+ *
+ * **A refresh that fails after a successful save is not a failed save** (issue #681): the saved
+ * settings become the new baseline as soon as the `PUT` answers, and if either refresh then cannot
+ * read its answer - `BusinessService.refresh()` emits `null` and `AccessService.refresh()` emits
+ * `unavailable` for a failed read, rather than erroring - the form shows
+ * {@link SAVED_BUT_NOT_REFRESHED_MESSAGE} instead of success or the save error, so the Owner is
+ * neither told the change was lost nor asked to confirm a time zone change already made.
  */
 @Component({
   selector: 'app-business-settings-form',
@@ -89,6 +105,9 @@ function saveErrorMessage(error: unknown): string {
         }
         @if (submitError) {
           <p class="mb-3 text-sm text-red-600" data-testid="submit-error">{{ submitError }}</p>
+        }
+        @if (refreshError) {
+          <p class="mb-3 text-sm text-red-600" data-testid="refresh-error">{{ refreshError }}</p>
         }
 
         <form class="flex flex-col gap-4" (ngSubmit)="submit()" novalidate>
@@ -219,6 +238,8 @@ export class BusinessSettingsFormComponent implements OnDestroy {
   saving = false;
   saved = false;
   submitError: string | null = null;
+  /** Set only when the save succeeded but the shell refresh after it did not (issue #681). */
+  refreshError: string | null = null;
   pendingTimeZoneChange = false;
 
   /**
@@ -281,6 +302,7 @@ export class BusinessSettingsFormComponent implements OnDestroy {
 
     this.submitAttempted = true;
     this.submitError = null;
+    this.refreshError = null;
 
     if (Object.keys(this.errors).length > 0) {
       return;
@@ -312,29 +334,47 @@ export class BusinessSettingsFormComponent implements OnDestroy {
     this.saving = true;
     this.saved = false;
     this.submitError = null;
+    this.refreshError = null;
 
     this.businessSettings
       .save(toBusinessApplicationRequest(this.draft))
       .pipe(
-        // The shell must reflect the new business name, time zone and capabilities before success
-        // is shown, never after - see the class doc. Both refresh the same identity's own data, so
-        // either order is safe; both are waited for regardless.
-        switchMap((settings) =>
-          forkJoin([this.business.refresh(), this.access.refresh()]).pipe(map(() => settings))
-        ),
+        // The settings are stored once the PUT answers, so they are the new baseline from here on,
+        // whatever the refresh below does.
+        switchMap((settings) => {
+          this.applyLoadedSettings(settings);
+          return this.refreshShell();
+        }),
         takeUntil(this.destroying$)
       )
       .subscribe({
-        next: (settings) => {
-          this.applyLoadedSettings(settings);
+        next: (refreshed) => {
           this.saving = false;
-          this.saved = true;
+          if (refreshed) {
+            this.saved = true;
+          } else {
+            this.refreshError = SAVED_BUT_NOT_REFRESHED_MESSAGE;
+          }
         },
+        // Only the PUT can reach this: refreshShell() never errors.
         error: (error: unknown) => {
           this.saving = false;
           this.submitError = saveErrorMessage(error);
         }
       });
+  }
+
+  /**
+   * Re-reads the shell's business and capabilities, emitting whether both answered. The shell must
+   * reflect the new business name, time zone and capabilities before success is shown, never
+   * after - see the class doc. Both refresh the same identity's own data, so either order is safe;
+   * both are waited for regardless.
+   */
+  private refreshShell(): Observable<boolean> {
+    return forkJoin([this.business.refresh(), this.access.refresh()]).pipe(
+      map(([business, access]) => business !== null && access.status !== 'unavailable'),
+      catchError(() => of(false))
+    );
   }
 
   private applyLoadedSettings(settings: BusinessSettings): void {

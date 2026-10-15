@@ -447,6 +447,38 @@ public class EfNayaxConnectionStoreTests
         Assert.DoesNotContain(Token, failure.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Issue #681, end to end through the adapter: a stored ciphertext copied onto another
+    /// business's row does not decrypt for that business.
+    ///
+    /// <para>Encryption on its own answered "is this a genuine ciphertext?" and said nothing about
+    /// <em>whose</em>, so until the business id became associated data this read succeeded and
+    /// business B authenticated to Nayax with business A's token. Both reads that handle the secret
+    /// are asserted, because an ordinary Nayax call uses the snapshot one.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_ciphertext_copied_onto_another_businesss_row_does_not_decrypt_for_it()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        await fixture.StoreFor(fixture.BusinessA).SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+        await fixture.StoreFor(fixture.BusinessB)
+            .SaveCredentialAsync(OtherOperatorId, OtherToken, CancellationToken.None);
+
+        await fixture.CopyStoredCiphertextAsync(fixture.BusinessA, fixture.BusinessB);
+
+        var credentialFailure = await Assert.ThrowsAsync<NayaxTokenProtectionException>(
+            () => fixture.StoreFor(fixture.BusinessB).FindCredentialAsync(CancellationToken.None));
+        await Assert.ThrowsAsync<NayaxTokenProtectionException>(
+            () => fixture.StoreFor(fixture.BusinessB).FindForOperationAsync(Allowed, CancellationToken.None));
+
+        Assert.DoesNotContain(Token, credentialFailure.Message, StringComparison.Ordinal);
+
+        // Business A's own row is untouched and still perfectly usable: the binding refuses the copy
+        // rather than breaking the credential it was made from.
+        var owner = await fixture.StoreFor(fixture.BusinessA).FindCredentialAsync(CancellationToken.None);
+        Assert.Equal(Token, owner!.AccessToken);
+    }
+
     [Fact]
     public async Task A_tampered_stored_ciphertext_fails_closed()
     {
@@ -786,13 +818,33 @@ public class EfNayaxConnectionStoreTests
         public async Task TamperWithStoredCiphertextAsync(int businessId)
         {
             var row = await ReadRowAsync(businessId);
-            var stored = Convert.FromBase64String(row.AccessTokenCiphertext);
+            // The version marker issue #681 added is part of the stored text, not of the base64, so
+            // it is split off before the body is corrupted and put back afterwards.
+            var marker = row.AccessTokenCiphertext.StartsWith("v2:", StringComparison.Ordinal) ? "v2:" : string.Empty;
+            var stored = Convert.FromBase64String(row.AccessTokenCiphertext[marker.Length..]);
             stored[^1] ^= 0xFF;
 
             await using var context = TestAppDbContext.Unrestricted(_options);
             var tracked = await context.BusinessNayaxConnections
                 .SingleAsync(connection => connection.BusinessId == businessId);
-            tracked.AccessTokenCiphertext = Convert.ToBase64String(stored);
+            tracked.AccessTokenCiphertext = marker + Convert.ToBase64String(stored);
+            await context.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Copies one business's stored ciphertext and key id onto another business's row, without
+        /// going through any adapter - the shape a hand-written <c>UPDATE</c>, a restored backup or a
+        /// mistaken repair has (issue #681).
+        /// </summary>
+        public async Task CopyStoredCiphertextAsync(int fromBusinessId, int toBusinessId)
+        {
+            var source = await ReadRowAsync(fromBusinessId);
+
+            await using var context = TestAppDbContext.Unrestricted(_options);
+            var target = await context.BusinessNayaxConnections
+                .SingleAsync(connection => connection.BusinessId == toBusinessId);
+            target.AccessTokenCiphertext = source.AccessTokenCiphertext;
+            target.EncryptionKeyId = source.EncryptionKeyId;
             await context.SaveChangesAsync();
         }
 

@@ -48,6 +48,23 @@ public static class MemberInviteRedemptionPolicy
             + "by the platform administrator before you can join anywhere else.";
 
     /// <summary>
+    /// The refusal for a redemption whose own membership row stopped being the row the decision was
+    /// made from while the redemption was being written (issue #681).
+    ///
+    /// <para>It is its own sentence because the standing one claims something the server does not
+    /// know. The conditional reactivation matching no row means the row is no longer the revoked one
+    /// this attempt read: another redemption or an Owner's reinstatement brought it back, or it is
+    /// no longer there at all. Only the first of those makes the caller a member, so refusing all of
+    /// them with "this person is already a member of a business" tells the other cases something
+    /// untrue and leaves nothing to do about it. This sentence describes what happened - nothing was
+    /// recorded - and says what to try next, and like every other refusal here it names no business,
+    /// no role and no member.</para>
+    /// </summary>
+    public const string MembershipChangedMessage =
+        "Your access changed while this invite was being accepted, so nothing was recorded. Check "
+            + "whether you can already sign in, and use the link again if you cannot.";
+
+    /// <summary>
     /// Whether an invite may be redeemed at <paramref name="nowUtc"/>.
     /// </summary>
     /// <param name="storedStatus">The invite's status exactly as persistence read it.</param>

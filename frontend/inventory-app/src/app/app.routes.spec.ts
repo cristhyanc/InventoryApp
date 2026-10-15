@@ -7,6 +7,7 @@ import { AccessNotAllowedComponent } from './access/access-not-allowed.component
 import { AccessUnavailableComponent } from './access/access-unavailable.component';
 import { BusinessApplicationComponent } from './access/business-application.component';
 import { InviteAcceptanceComponent } from './access/invite-acceptance.component';
+import { inviteTokenAddressBarGuard, pendingInviteTokenGuard } from './access/invite-address-bar.guard';
 import { WelcomeComponent } from './access/welcome.component';
 import { ApplicationPendingComponent } from './access/application-pending.component';
 import { ApplicationRejectedComponent } from './access/application-rejected.component';
@@ -203,7 +204,7 @@ describe('capability route guards (issue #528)', () => {
       'application-rejected',
       'access-unavailable',
       'apply',
-      'invite/:token'
+      'invite'
     ]);
   });
 
@@ -239,7 +240,7 @@ describe('account-state routing (issue #529)', () => {
     'application-rejected',
     'access-unavailable',
     'apply',
-    'invite/:token'
+    'invite'
   ];
 
   it('puts accountStateGuard second, after MsalGuard and before the capability guard, on every business route', () => {
@@ -266,8 +267,14 @@ describe('account-state routing (issue #529)', () => {
   });
 
   it('serves the invite acceptance page behind authentication alone (issue #535)', async () => {
-    expect(route('invite/:token').canActivate).toEqual([MsalGuard]);
-    await expect(loadedComponent('invite/:token')).resolves.toBe(InviteAcceptanceComponent);
+    expect(route('invite').canActivate).toEqual([MsalGuard]);
+    await expect(loadedComponent('invite')).resolves.toBe(InviteAcceptanceComponent);
+  });
+
+  it('never activates an invite link itself, so MsalGuard never sees its token (issue #681)', () => {
+    expect(route('invite/:token').canMatch).toEqual([inviteTokenAddressBarGuard]);
+    expect(route('invite/:token').canActivate).toBeUndefined();
+    expect(route('invite').canMatch).toEqual([pendingInviteTokenGuard]);
   });
 
   it('serves the business application form at /apply, behind authentication alone (issue #543)', () => {

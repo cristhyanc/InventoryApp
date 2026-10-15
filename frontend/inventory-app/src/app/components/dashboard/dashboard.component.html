@@ -19,6 +19,9 @@
     <div class="alert alert-warning">
       <p class="alert-title">Latest Nayax sales could not be synchronized. Sites and Machines below show the last successfully synchronized figures, which may be stale.</p>
     </div>
+  } @else if (isSalesSyncRecentlyRefreshed) {
+    <!-- The business's run limit (issue #681): a refresh moments ago, not a failure. -->
+    <p class="text-md-body mb-3">Nayax sales were refreshed for this business in the last couple of minutes, so Sites and Machines below show those figures.</p>
   }
 
   @if (isSummaryFailed) {

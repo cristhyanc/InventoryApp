@@ -10,6 +10,7 @@ import {
 } from '../support-session/support-session-messages';
 import { ACCOUNT_STATE_BYPASS_PATHS, INVITE_ROUTE_PREFIX } from './account-state.guard';
 import { isMemberAccessRefusal } from './access-forbidden.interceptor';
+import { INVITE_ADDRESS_BAR_ROUTE } from './invite-address-bar.guard';
 
 /**
  * Whether `error` is one of the two support-session refusals (issue #554), which
@@ -36,13 +37,15 @@ function normalizedCurrentPath(url: string): string {
 /**
  * Whether `currentUrl` is a route a signed-in person without a usable membership may legitimately
  * be on - the account-state routing destinations and the invite route (issue #529's bypass list,
- * agreed under #328). A `403` on one of them never says "you don't have access to this": it is
- * either expected (the shell's own capability or business-context reads, refused for exactly the
+ * agreed under #328), with the tokenless `/invite` page that route leaves behind (issue #681). A
+ * `403` on one of them never says "you don't have access to this": it is either expected (the shell's own capability or business-context reads, refused for exactly the
  * reason the person is here) or belongs to a page with its own, more specific error handling.
  */
 export function isAccountStateBypassRoute(currentUrl: string): boolean {
   const path = normalizedCurrentPath(currentUrl);
-  return ACCOUNT_STATE_BYPASS_PATHS.has(path) || path.startsWith(INVITE_ROUTE_PREFIX);
+  return (
+    ACCOUNT_STATE_BYPASS_PATHS.has(path) || path === INVITE_ADDRESS_BAR_ROUTE || path.startsWith(INVITE_ROUTE_PREFIX)
+  );
 }
 
 /**

@@ -106,9 +106,26 @@ public class NayaxConnectionCheckPolicyTests
     }
 
     /// <summary>
-    /// The statuses Nayax documents are the four above. A <c>400</c>, a <c>429</c> - the rate limit
-    /// of the app-token troubleshooting page - or anything else is reported as unexpected rather
-    /// than folded into one of them.
+    /// An answer Nayax gives about <em>itself</em> rather than about the credentials is Nayax being
+    /// unavailable (issue #681): a <c>408</c> is its own request timeout and a <c>429</c> is its own
+    /// rate limit, and both mean "ask again shortly". Reported as unexpected - which is what they
+    /// were - they sent an Owner off to request a Nayax permission, which is the one thing that
+    /// would not have helped.
+    /// </summary>
+    [Theory]
+    [InlineData(408)]
+    [InlineData(429)]
+    public void An_answer_about_nayax_itself_is_nayax_being_unavailable(int statusCode)
+    {
+        Assert.Equal(
+            NayaxConnectionCheckFailure.NayaxUnavailable,
+            NayaxConnectionCheckPolicy.Classify(NayaxConnectionCheck.Machines, statusCode));
+    }
+
+    /// <summary>
+    /// The statuses Nayax documents are the four above. A <c>400</c> or anything else still
+    /// unaccounted for is reported as unexpected rather than folded into one of them: guessing which
+    /// verdict an uninterpreted answer means is how a test tells an operator the wrong thing to fix.
     /// </summary>
     [Theory]
     [InlineData(400)]
@@ -116,7 +133,6 @@ public class NayaxConnectionCheckPolicyTests
     [InlineData(405)]
     [InlineData(409)]
     [InlineData(418)]
-    [InlineData(429)]
     [InlineData(600)]
     [InlineData(0)]
     public void Any_other_answer_is_an_unexpected_response(int statusCode)

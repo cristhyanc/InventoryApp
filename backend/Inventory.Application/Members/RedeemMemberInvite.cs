@@ -55,11 +55,15 @@ public sealed record RedeemedMemberInvite(BusinessRole Role);
 /// an instant from before the wait - and what the row and the audit trail record is when the
 /// redemption happened, not when the request arrived.</para>
 ///
-/// <para><strong>Every refusal is one of two sentences.</strong> An unusable invite - expired, used,
-/// cancelled, unknown, of a business that is not active, or granting a role this deployment does
-/// not declare - is <see cref="MemberInviteRedemptionPolicy.InvalidInviteMessage"/>, so none of
-/// those cases can be told apart by whoever submitted the token and none of them reveals a
-/// business. An ineligible caller gets a conflict. Nothing is written in either case.</para>
+/// <para><strong>An unusable invite is always one sentence.</strong> Expired, used, cancelled,
+/// unknown, of a business that is not active, or granting a role this deployment does not declare -
+/// all are <see cref="MemberInviteRedemptionPolicy.InvalidInviteMessage"/>, so none of those cases
+/// can be told apart by whoever submitted the token and none of them reveals a business. An
+/// ineligible caller gets a conflict instead, worded by the state their own account is in. The one
+/// conflict that is neither is the late one below: a membership row that stopped being the row this
+/// attempt decided from gets <see cref="MemberInviteRedemptionPolicy.MembershipChangedMessage"/>
+/// (issue #681), because the server has not established that such a caller is a member of anything.
+/// Nothing is written in any of these cases.</para>
 /// </summary>
 public sealed class RedeemMemberInvite
 {
@@ -299,7 +303,13 @@ public sealed class RedeemMemberInvite
             // The conditional reactivation matched nothing, so the row is no longer the revoked one
             // this decision was made from. Refusing rolls the transaction back rather than
             // reporting a membership nobody granted.
-            throw new DomainConflictException(MembershipEligibility.AlreadyAMemberMessage);
+            //
+            // The wording is its own (issue #681), not the "already a member" sentence: the row
+            // becoming active again is only one of the reasons this statement can match nothing, and
+            // telling the other reasons that the caller is already a member states something the
+            // server has not established. The in-transaction read above is the one place that is
+            // known, and it keeps the standing sentence.
+            throw new DomainConflictException(MemberInviteRedemptionPolicy.MembershipChangedMessage);
         }
 
         return existing.Value.MembershipId;

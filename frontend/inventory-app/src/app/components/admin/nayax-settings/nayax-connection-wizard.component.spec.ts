@@ -382,6 +382,86 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
       expect(request).not.toContain(TOKEN);
     });
 
+    it('names the operator id that was tested, not one typed into the field afterwards', async () => {
+      const { component, fixture, host, enterOperatorId, runTestWith } = await render({ test: refused });
+
+      runTestWith(TOKEN, ' 7788 ');
+      component.goTo(1);
+      enterOperatorId('9999');
+      component.goTo(5);
+      fixture.detectChanges();
+
+      const request = component.supportRequest();
+      expect(request).toContain('Operator ID: 7788');
+      expect(request).not.toContain('9999');
+      expect(host.querySelector<HTMLTextAreaElement>('[data-testid="support-request"]')?.value).toContain(
+        'Operator ID: 7788'
+      );
+    });
+
+    it('asks Nayax only for areas refused for lack of a permission, with its own advice for the rest', async () => {
+      const { component, fixture, host, runTestWith } = await render({
+        test: () =>
+          of(
+            testResult({
+              nothingFailed: false,
+              checks: [
+                { check: 'SignIn', status: 'Passed', failure: null },
+                { check: 'Machines', status: 'Failed', failure: 'PermissionNotGranted' },
+                { check: 'ProductCatalogue', status: 'Failed', failure: 'OperatorIdMismatch' },
+                { check: 'MachineLastSales', status: 'Failed', failure: 'NayaxUnavailable' }
+              ]
+            })
+          )
+      });
+
+      runTestWith();
+      component.next();
+      fixture.detectChanges();
+
+      const request = component.supportRequest();
+      expect(request).toContain('Machine list (GET machines)');
+      expect(request).not.toContain('Operator product catalogue');
+      expect(request).not.toContain('Machine recent sales');
+
+      const mismatch = host.querySelector('[data-testid="refusal-advice-OperatorIdMismatch"]');
+      expect(mismatch?.textContent).toContain('operator id 7788');
+      expect(mismatch?.textContent).toContain('Check the operator id');
+      expect(mismatch?.textContent).toContain('Operator product catalogue');
+      const unavailable = host.querySelector('[data-testid="refusal-advice-NayaxUnavailable"]');
+      expect(unavailable?.textContent).toContain('Try the test again');
+      expect(unavailable?.textContent).toContain('Machine recent sales');
+      expect(host.querySelector('[data-testid="refusal-advice-InvalidOrExpiredToken"]')).toBeNull();
+    });
+
+    it('sends an Owner whose token expired to generate a new one, not to ask for permissions', async () => {
+      const { component, fixture, host, runTestWith } = await render({
+        test: () =>
+          of(
+            testResult({
+              nothingFailed: false,
+              machineCount: null,
+              checks: [
+                { check: 'SignIn', status: 'Failed', failure: 'InvalidOrExpiredToken' },
+                { check: 'Machines', status: 'Failed', failure: 'InvalidOrExpiredToken' },
+                { check: 'Machine', status: 'NotChecked', failure: null }
+              ]
+            })
+          )
+      });
+
+      runTestWith();
+      component.next();
+      fixture.detectChanges();
+
+      expect(component.step).toBe(5);
+      expect(host.querySelector('[data-testid="refusal-advice-InvalidOrExpiredToken"]')?.textContent).toContain(
+        'Generate a new Lynx token'
+      );
+      expect(host.querySelector('[data-testid="support-request"]')).toBeNull();
+      expect(host.querySelector('[data-testid="no-permission-request"]')).toBeTruthy();
+    });
+
     it('offers the Nayax support portal and the integration mailbox as the second contact', async () => {
       const { component, fixture, host, runTestWith } = await render({ test: refused });
 

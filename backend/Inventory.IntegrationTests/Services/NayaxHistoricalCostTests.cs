@@ -10,6 +10,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
+using InventoryApi.Tests.Application.SalesSync;
 using Inventory.Application.Commissions;
 using Inventory.Application.Imports;
 using Inventory.Infrastructure.Imports;
@@ -428,7 +429,7 @@ public class NayaxHistoricalCostTests
     private static SyncLatestNayaxSales LatestSalesSync(AppDbContext db, INayaxLynxClient nayax)
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
-        return new SyncLatestNayaxSales(
+        return TestSalesSync.UseCase(
             nayax, new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild));
     }
 

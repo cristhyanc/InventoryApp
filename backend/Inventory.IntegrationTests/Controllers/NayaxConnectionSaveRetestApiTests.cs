@@ -662,8 +662,11 @@ public sealed class NayaxConnectionSaveRetestApiTests : IClassFixture<NayaxConne
         {
             ArgumentNullException.ThrowIfNull(connection);
 
+            // Decrypted for the business the row belongs to: the ciphertext is bound to it since
+            // issue #681.
             return new AesGcmNayaxTokenProtector(_protection).Unprotect(
-                new ProtectedNayaxToken(connection.EncryptionKeyId, connection.AccessTokenCiphertext));
+                new ProtectedNayaxToken(connection.EncryptionKeyId, connection.AccessTokenCiphertext),
+                BusinessId.From(connection.BusinessId));
         }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)

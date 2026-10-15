@@ -33,6 +33,17 @@ export const NAYAX_SUPPORT_PORTAL_URL = 'https://nayax.service-now.com/csm';
 export const NAYAX_SUPPORT_EMAIL = 'integration-support@nayax.com';
 
 /**
+ * Step 5's advice for refused areas that asking Nayax for a permission would not fix, one entry per
+ * kind of cause, with the areas it covers (issue #681). `Other` is every cause that is not one of
+ * the three named: an answer nobody interpreted is not evidence of a missing permission either.
+ */
+export interface NayaxConnectionRefusalAdvice {
+  readonly cause: 'InvalidOrExpiredToken' | 'OperatorIdMismatch' | 'NayaxUnavailable' | 'Other';
+  readonly advice: string;
+  readonly areas: string[];
+}
+
+/**
  * What a re-test refused for a changed credential means. The server sends this sentence itself, and
  * it is displayed as sent; this constant is what a `409` carrying no body still says, because
  * "something went wrong" would leave an Owner re-testing a token that is no longer stored.
@@ -259,45 +270,63 @@ const STEP_LABELS = [
 
           @if (step === 5 && result) {
             <div data-testid="step-5">
-              <h3 class="text-sm font-semibold text-md-gray-800">Step 5. Ask Nayax for the missing permissions</h3>
-              <p class="mt-1 text-sm value-muted">
-                Nayax grants a token's permissions, so this is a request to them. Copy the text below
-                into a support ticket; it names your operator id and every area that was refused.
-              </p>
-              <label class="field-label mt-3" for="nayax-support-request">Request to send Nayax</label>
-              <textarea
-                #supportRequestField
-                id="nayax-support-request"
-                class="w-full rounded-lg border border-md-gray-200 p-3 font-mono text-xs"
-                rows="12"
-                readonly
-                data-testid="support-request"
-                [value]="supportRequest()"
-              ></textarea>
-              <div class="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  class="btn btn-secondary"
-                  data-testid="copy-support-request"
-                  (click)="copySupportRequest()"
-                >Copy this request</button>
-              </div>
-              <p class="mt-3 text-sm text-md-gray-800">
-                Raise it in the Nayax support portal:
-                <a
-                  class="btn-link"
-                  data-testid="support-portal-link"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  [href]="supportPortalUrl"
-                >{{ supportPortalUrl }}</a>
-              </p>
-              <p class="mt-1 text-sm value-muted">
-                If the portal gets no answer, the integration mailbox is the secondary contact:
-                <a class="btn-link" data-testid="support-email-link" [href]="'mailto:' + supportEmail">
-                  {{ supportEmail }}
-                </a>
-              </p>
+              <h3 class="text-sm font-semibold text-md-gray-800">Step 5. What to do about the refused areas</h3>
+              @for (advice of refusalAdvice(); track advice.cause) {
+                <div class="alert alert-warning mt-3" [attr.data-testid]="'refusal-advice-' + advice.cause">
+                  <p class="alert-title">{{ advice.advice }}</p>
+                  <ul class="mt-1 ml-5 list-disc text-sm">
+                    @for (area of advice.areas; track area) {
+                      <li>{{ area }}</li>
+                    }
+                  </ul>
+                </div>
+              }
+              @if (permissionRefusals().length > 0) {
+                <p class="mt-3 text-sm value-muted">
+                  Nayax grants a token's permissions, so this is a request to them. Copy the text below
+                  into a support ticket; it names the operator id you tested and every area refused for
+                  lack of a permission.
+                </p>
+                <label class="field-label mt-3" for="nayax-support-request">Request to send Nayax</label>
+                <textarea
+                  #supportRequestField
+                  id="nayax-support-request"
+                  class="w-full rounded-lg border border-md-gray-200 p-3 font-mono text-xs"
+                  rows="12"
+                  readonly
+                  data-testid="support-request"
+                  [value]="supportRequest()"
+                ></textarea>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    class="btn btn-secondary"
+                    data-testid="copy-support-request"
+                    (click)="copySupportRequest()"
+                  >Copy this request</button>
+                </div>
+                <p class="mt-3 text-sm text-md-gray-800">
+                  Raise it in the Nayax support portal:
+                  <a
+                    class="btn-link"
+                    data-testid="support-portal-link"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    [href]="supportPortalUrl"
+                  >{{ supportPortalUrl }}</a>
+                </p>
+                <p class="mt-1 text-sm value-muted">
+                  If the portal gets no answer, the integration mailbox is the secondary contact:
+                  <a class="btn-link" data-testid="support-email-link" [href]="'mailto:' + supportEmail">
+                    {{ supportEmail }}
+                  </a>
+                </p>
+              } @else {
+                <p class="mt-3 text-sm value-muted" data-testid="no-permission-request">
+                  No area was refused for lack of a permission, so there is nothing to ask Nayax to
+                  grant. Follow the advice above, then test again.
+                </p>
+              }
             </div>
           }
 
@@ -410,6 +439,13 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
 
   /** The completed test awaiting a save. It carries the draft id and the check lines, never a token. */
   result: NayaxConnectionTestResult | null = null;
+
+  /**
+   * The trimmed operator id {@link result} was tested with (issue #681). Step 5 names this one, not
+   * whatever the step 1 field holds now: the draft a save promotes carries the tested id, so a
+   * request pairing an edited id with another id's refusals would ask Nayax about the wrong operator.
+   */
+  private testedOperatorId = '';
 
   /** The last re-test of the stored credentials. */
   retestResult: NayaxConnectionRetestResult | null = null;
@@ -612,6 +648,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
         if (sequence !== this.testSequence) return;
         this.testing = false;
         this.result = result;
+        this.testedOperatorId = operatorId;
         this.step = 4;
         if (result.nothingFailed) {
           this.toast.success('Every check this token was asked for passed.');
@@ -736,13 +773,15 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * The request to send Nayax: the operator id and every area that was refused, with the cause the
-   * server reported for each. It names no token, and it is built from the one area/cause vocabulary
-   * the checklist uses, so the screen and the ticket cannot say different things.
+   * The request to send Nayax: the operator id that was tested and every area refused for lack of a
+   * permission, with the cause the server reported for each. It names no token, and it is built from
+   * the one area/cause vocabulary the checklist uses, so the screen and the ticket cannot say
+   * different things. Areas refused for any other cause are {@link refusalAdvice}'s, because no
+   * permission Nayax could grant would fix them (issue #681).
    */
   supportRequest(): string {
-    const operatorId = this.operatorId.trim() || '(operator id not entered)';
-    const refused = this.failedChecks().map(
+    const operatorId = this.testedOperatorId || '(operator id not entered)';
+    const refused = this.permissionRefusals().map(
       (line) => `- ${nayaxConnectionAreaLabel(line.check)}: ${nayaxConnectionFailureSentence(line.failure)}`
     );
 
@@ -754,7 +793,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
         'Security and Login › User Tokens)',
       '',
       'We tested this token against the Lynx API endpoints our inventory application reads. These',
-      'areas were refused:',
+      'areas were refused for lack of a permission:',
       ...refused,
       '',
       'Please grant this token read access to the endpoints listed above for this operator id, or',
@@ -783,11 +822,73 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     );
   }
 
+  /** The refused lines a permission from Nayax would fix: the only ones the request names. */
+  permissionRefusals(): NayaxConnectionCheckLine[] {
+    return this.failedChecks().filter((line) => line.failure === 'PermissionNotGranted');
+  }
+
+  /**
+   * What to do about every other refused line, grouped by cause in the order an Owner should act:
+   * a dead token makes every other answer moot, a wrong operator id comes next, and an outage only
+   * needs a retry. The causes are the server's; this only chooses the next step each one asks for.
+   */
+  refusalAdvice(): NayaxConnectionRefusalAdvice[] {
+    const areasFor = (cause: NayaxConnectionRefusalAdvice['cause']): string[] =>
+      this.failedChecks()
+        .filter((line) => line.failure !== 'PermissionNotGranted' && this.adviceCause(line) === cause)
+        .map((line) => nayaxConnectionAreaLabel(line.check));
+
+    const operatorId = this.testedOperatorId || '(operator id not entered)';
+    const advice: NayaxConnectionRefusalAdvice[] = [
+      {
+        cause: 'InvalidOrExpiredToken',
+        advice:
+          'Nayax says this token is invalid or has expired, so asking for permissions will not help. ' +
+          'Generate a new Lynx token in Nayax Core (step 2) and test it.',
+        areas: areasFor('InvalidOrExpiredToken')
+      },
+      {
+        cause: 'OperatorIdMismatch',
+        advice:
+          `Nayax says operator id ${operatorId} is not one this token covers. Check the operator id ` +
+          'in Nayax Core (step 1) and test again.',
+        areas: areasFor('OperatorIdMismatch')
+      },
+      {
+        cause: 'NayaxUnavailable',
+        advice:
+          'Nayax could not be reached for these areas, so nothing was learned about them. Try the ' +
+          'test again in a few minutes.',
+        areas: areasFor('NayaxUnavailable')
+      },
+      {
+        cause: 'Other',
+        advice:
+          'Nayax answered these areas in a way this application does not recognise, so it is not ' +
+          'known whether a permission is missing. Try the test again before asking Nayax about them.',
+        areas: areasFor('Other')
+      }
+    ];
+    return advice.filter((entry) => entry.areas.length > 0);
+  }
+
   /** The lines that were refused. A `NotChecked` line is not one: nothing was asked of it. */
   private failedChecks(): NayaxConnectionCheckLine[] {
     return (this.result?.checks ?? []).filter(
       (line) => line.status !== 'Passed' && line.status !== 'NotChecked'
     );
+  }
+
+  /** Which advice a refused, non-permission line falls under; an unknown or missing cause is `Other`. */
+  private adviceCause(line: NayaxConnectionCheckLine): NayaxConnectionRefusalAdvice['cause'] {
+    switch (line.failure) {
+      case 'InvalidOrExpiredToken':
+      case 'OperatorIdMismatch':
+      case 'NayaxUnavailable':
+        return line.failure;
+      default:
+        return 'Other';
+    }
   }
 
   private previousStep(): number {

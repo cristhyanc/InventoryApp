@@ -20,22 +20,27 @@ namespace InventoryApi.Auth;
 ///
 /// <para><b>Failure recovery is self-healing.</b> Any failure of one refresh is logged and
 /// abandoned - never retried here, never surfaced to a caller, and never allowed to stop the drain.
-/// The cost is staleness of two display values until the member's next request an hour later
-/// schedules the refresh again, and that request re-reads the claims rather than replaying this
-/// one.</para>
+/// Since issue #681 it also <em>gives the hourly slot back</em>: the refresh never happened, so
+/// keeping the slot shut would make a transient write failure cost the member an hour of stale
+/// display details for nothing. Their very next request then schedules another attempt, re-reading
+/// the claims rather than replaying this one. The release names the claim this refresh was carrying,
+/// so a request that has already claimed the slot in the meantime keeps it.</para>
 /// </summary>
 public sealed class MemberProfileRefreshWorker : BackgroundService
 {
     private readonly MemberProfileRefreshQueue _queue;
+    private readonly MemberProfileRefreshThrottle _throttle;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<MemberProfileRefreshWorker> _logger;
 
     public MemberProfileRefreshWorker(
         MemberProfileRefreshQueue queue,
+        MemberProfileRefreshThrottle throttle,
         IServiceScopeFactory scopeFactory,
         ILogger<MemberProfileRefreshWorker> logger)
     {
         _queue = queue;
+        _throttle = throttle;
         _scopeFactory = scopeFactory;
         _logger = logger;
     }
@@ -72,14 +77,21 @@ public sealed class MemberProfileRefreshWorker : BackgroundService
             }
             catch (Exception exception)
             {
+                // The refresh did not happen, so the hour it claimed is given back (issue #681) and
+                // the member's very next request may schedule another attempt. Released before the
+                // log line, so a failure that somehow recurs on every drain still leaves the slot in
+                // the state the next request should find it in.
+                _throttle.Release(request.Identity, request.ClaimedAtUtc);
+
                 // Deliberately identity-free and value-free: the display name and the email address
                 // must not reach a log, and the member's own next request is the retry, so an
                 // operator needs the failure itself rather than whose row it was.
                 _logger.LogWarning(
                     exception,
-                    "A member display-name and email refresh failed and was abandoned. The member's "
-                        + "stored display details stay as they are until their next request "
-                        + "schedules another refresh.");
+                    "A member display-name and email refresh failed and was abandoned. Its hourly "
+                        + "slot was given back, so the member's next request may schedule another "
+                        + "refresh; until one succeeds their stored display details stay as they "
+                        + "are.");
             }
         }
     }

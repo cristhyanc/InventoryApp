@@ -103,7 +103,16 @@ public class NayaxLynxClient : INayaxLynxClient
         where TResponse : new()
     {
         var credential = await _credentials.GetForOperationAsync(ct).ConfigureAwait(false);
-        var path = endpoint(credential.OperatorId);
+
+        // The operator id is escaped before it becomes part of a path (issue #681). The value is
+        // validated as digits where it enters the application (Inventory.Domain.Nayax.NayaxOperatorId,
+        // matching Nayax's own int64 contract for the operator path parameter), so escaping changes
+        // nothing for a legitimate id; what it removes is what a row written before that rule, a
+        // hand-written UPDATE or a future caller could otherwise do - a `/`, `?`, `#` or `..` in the
+        // id does not merely fail, it addresses a *different* Nayax endpoint, and the two
+        // operator-scoped connection checks conclude "that operator is yours" from the absence of a
+        // 404.
+        var path = endpoint(Uri.EscapeDataString(credential.OperatorId));
 
         using var request = new HttpRequestMessage(method, path);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));

@@ -139,6 +139,14 @@ public sealed class SaveNayaxConnection
         _ = await _currentBusiness.RequireBusinessIdAsync(cancellationToken);
         var actor = RequireActor();
 
+        // Outside the transaction below, deliberately (issue #681). An expired draft is already
+        // unclaimable, so this changes nothing about what this save may do; what it does is stop a
+        // credential ciphertext nobody can use any more from sitting in the database until the next
+        // test happens to replace it. Swept here rather than inside the claim because the refusal
+        // further down rolls that transaction back - which is precisely the case that leaves a draft
+        // behind.
+        await _drafts.DiscardExpiredAsync(cancellationToken);
+
         await using var transaction = await _transactions.BeginAsync(cancellationToken);
 
         var claimed = await _drafts.TryClaimAsync(requestedDraftId, actor, cancellationToken)

@@ -1047,12 +1047,15 @@ public sealed class NayaxConnectionMigrationTests
         public async Task TamperWithStoredCiphertextAsync()
         {
             var row = await SingleRowAsync();
-            var stored = Convert.FromBase64String(row.AccessTokenCiphertext);
+            // The version marker issue #681 added is part of the stored text, not of the base64, so
+            // it is split off before the body is corrupted and put back afterwards.
+            var marker = row.AccessTokenCiphertext.StartsWith("v2:", StringComparison.Ordinal) ? "v2:" : string.Empty;
+            var stored = Convert.FromBase64String(row.AccessTokenCiphertext[marker.Length..]);
             stored[^1] ^= 0xFF;
 
             await using var context = TestAppDbContext.Unrestricted(_options);
             var tracked = await context.BusinessNayaxConnections.SingleAsync();
-            tracked.AccessTokenCiphertext = Convert.ToBase64String(stored);
+            tracked.AccessTokenCiphertext = marker + Convert.ToBase64String(stored);
             await context.SaveChangesAsync();
         }
 

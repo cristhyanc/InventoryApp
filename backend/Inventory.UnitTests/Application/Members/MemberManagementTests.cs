@@ -284,6 +284,47 @@ public class MemberManagementTests
         Assert.False(entry.NowActive);
     }
 
+    /// <summary>
+    /// Issue #681, applying to a member change the pattern issue #608 established for the invite
+    /// redemption: the instant a change is stamped and audited with is read <em>after</em>
+    /// <c>BEGIN IMMEDIATE</c> granted the write lock, not before the wait for it.
+    ///
+    /// <para>The wait is the whole point. A request's business is resolved when it arrives, and it
+    /// may then sit behind another writer on a single-writer SQLite file for as long as that writer
+    /// holds the lock. An instant read before the wait makes the row say the membership changed at a
+    /// time that had already passed by the time anything was written, and makes the audit trail
+    /// describe the arrival of the request rather than the change.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_change_is_stamped_and_audited_at_an_instant_read_after_the_write_lock_was_granted()
+    {
+        var fixture = new Fixture(role: BusinessRole.Manager);
+        var afterTheWait = ChangedAt.AddMinutes(3);
+        fixture.WriteStore.WhileWaitingForTheWriteLock = () => fixture.Clock.UtcNow = afterTheWait;
+
+        await fixture.Revoke().Handle(MembershipIdValue, CancellationToken.None);
+
+        Assert.Equal(afterTheWait, fixture.Store.LastStatusChangedAtUtc);
+        Assert.Equal(afterTheWait, Assert.Single(fixture.Audit.Entries).OccurredAtUtc);
+        Assert.NotEqual(ChangedAt, fixture.Store.LastStatusChangedAtUtc);
+    }
+
+    /// <summary>
+    /// The same for a role change, whose audit instant is the only thing it stamps: the row carries
+    /// no instant of its own, so the trail is all there is to get right.
+    /// </summary>
+    [Fact]
+    public async Task A_role_change_is_audited_at_an_instant_read_after_the_write_lock_was_granted()
+    {
+        var fixture = new Fixture(role: BusinessRole.Operator);
+        var afterTheWait = ChangedAt.AddMinutes(7);
+        fixture.WriteStore.WhileWaitingForTheWriteLock = () => fixture.Clock.UtcNow = afterTheWait;
+
+        await fixture.ChangeRole().Handle(MembershipIdValue, "Manager", CancellationToken.None);
+
+        Assert.Equal(afterTheWait, Assert.Single(fixture.Audit.Entries).OccurredAtUtc);
+    }
+
     [Fact]
     public async Task A_revocation_that_removes_the_last_active_owner_is_refused()
     {
@@ -533,8 +574,15 @@ public class MemberManagementTests
                 Store,
                 new MembershipWriteGuard(WriteStore),
                 Audit,
-                new FakeClock(ChangedAt));
+                Clock);
         }
+
+        /// <summary>
+        /// The one clock the writer reads, held here so a test can move it on from
+        /// <c>WhileWaitingForTheWriteLock</c> - which is how the timing regression of issue #681 is
+        /// stated without a wall-clock sleep.
+        /// </summary>
+        public FakeClock Clock { get; } = new(ChangedAt);
 
         public FakeBusinessMembershipWriteStore WriteStore { get; } = new();
 

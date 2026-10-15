@@ -185,6 +185,44 @@ describe('SuperAdminBusinessesComponent (issue #547)', () => {
     expect(error).toHaveBeenCalledWith(message);
   });
 
+  it.each<[string, number]>([
+    ['409 conflict', 409],
+    ['404 not found', 404]
+  ])('reloads the list and notifies the badge after a %s, keeping the error toast (issue #681)', async (_label, status) => {
+    const message = 'This application has already been decided.';
+    const approve = jest.fn(() => throwError(() => ({ status, error: { message } })));
+    const notifyChanged = jest.fn();
+    const list = jest.fn(() => of([business({ status: 'Pending' })]));
+    const error = jest.fn();
+    const { fixture, host } = await render({ list, approve, notifyChanged }, { error });
+
+    buttonWithText(host, 'Approve').click();
+    fixture.detectChanges();
+    buttonWithText(host, 'Confirm').click();
+    fixture.detectChanges();
+
+    expect(error).toHaveBeenCalledWith(message);
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(notifyChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reload after a failure that is not a 409 or 404', async () => {
+    const reactivate = jest.fn(() => throwError(() => ({ status: 500, error: null })));
+    const notifyChanged = jest.fn();
+    const list = jest.fn(() => of([business({ status: 'Deactivated' })]));
+    const error = jest.fn();
+    const { fixture, host } = await render({ list, reactivate, notifyChanged }, { error });
+
+    buttonWithText(host, 'Reactivate').click();
+    fixture.detectChanges();
+    buttonWithText(host, 'Confirm').click();
+    fixture.detectChanges();
+
+    expect(error).toHaveBeenCalledWith('Unable to reactivate this business.');
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(notifyChanged).not.toHaveBeenCalled();
+  });
+
   it("shows reactivate's no-active-Owner refusal verbatim", async () => {
     const message =
       'This business has no active Owner, so it cannot be reactivated. Releasing every Owner of a deactivated ' +

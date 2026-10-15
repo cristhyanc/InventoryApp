@@ -94,6 +94,134 @@ public class TestNayaxConnectionTests
     }
 
     /// <summary>
+    /// Issue #681: an operator id that is not a number is refused before any Nayax call and before
+    /// a rate-limit allowance is spent.
+    ///
+    /// <para>Nayax's own contract declares the operator path parameter as an <c>int64</c>
+    /// (<c>GET /v1/operators/{OperatorID}/products</c>), and the value is interpolated into a
+    /// request path - so the <c>..</c> and <c>/</c> cases below are the ones with teeth: they do not
+    /// merely fail, they address a <em>different</em> endpoint. Two of the checks conclude "that
+    /// operator is not yours" from a <c>404</c>, so an id that reached an endpoint the token
+    /// <em>can</em> read would make that conclusion wrong for an operator the token does not
+    /// cover.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("2002736764/../devices")]
+    [InlineData("../../devices")]
+    [InlineData("2002736764/products")]
+    [InlineData("2002736764?x=1")]
+    [InlineData("2002736764#fragment")]
+    [InlineData("not-a-number")]
+    [InlineData("-2002736764")]
+    [InlineData("2002736764.0")]
+    [InlineData("0")]
+    [InlineData("00000")]
+    [InlineData("12345678901234567890")]
+    public async Task An_operator_id_that_is_not_a_number_is_refused_without_calling_nayax(string operatorId)
+    {
+        var runner = new FakeNayaxConnectionCheckRunner();
+        var test = Create(runner, out var drafts, out _);
+
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(
+            () => test.Handle(operatorId, Token));
+
+        Assert.Equal(NayaxOperatorId.InvalidMessage, exception.Message);
+        Assert.Empty(runner.Candidates);
+        Assert.Null(drafts.Current);
+        // The message tells the Owner where to find the right value and echoes nothing they typed.
+        Assert.DoesNotContain(operatorId, exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The contrast: the operator ids Nayax actually issues are accepted unchanged, so the rule
+    /// above refuses a crafted value rather than a long one.
+    /// </summary>
+    [Theory]
+    [InlineData("1")]
+    [InlineData("2002736764")]
+    [InlineData("9223372036854775807")]
+    public async Task A_numeric_operator_id_is_accepted(string operatorId)
+    {
+        var runner = new FakeNayaxConnectionCheckRunner();
+        var test = Create(runner, out _, out _);
+
+        await test.Handle(operatorId, Token);
+
+        Assert.Equal(operatorId, Assert.Single(runner.Candidates).OperatorId);
+    }
+
+    /// <summary>
+    /// Issue #681: an expired draft is discarded before the Nayax calls, so a credential ciphertext
+    /// nobody can use any more does not sit in the database waiting for the next successful test to
+    /// replace it.
+    ///
+    /// <para>The run that matters is a <em>failing</em> one: the replacement at the end of a
+    /// successful test already clears whatever was there, so the case that left a draft behind was a
+    /// test Nayax never answered.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_expired_draft_is_discarded_even_when_the_test_itself_fails()
+    {
+        var clock = new FakeClock(Now);
+        var drafts = new FakeNayaxConnectionTestDraftStore(clock);
+        var failing = new FakeNayaxConnectionCheckRunner
+        {
+            Failure = new InvalidOperationException("Nayax never answered."),
+        };
+
+        // A draft from an earlier test, which has since expired.
+        await drafts.ReplaceAsync(
+            new NewNayaxConnectionTestDraft(
+                Guid.NewGuid(),
+                new NayaxConnectionCredential(OperatorId, Token, credentialRevision: 0),
+                "{}",
+                Owner,
+                Now.AddMinutes(-30),
+                Now.AddMinutes(-15)),
+            CancellationToken.None);
+        Assert.NotNull(drafts.Current);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Create(failing, drafts, clock).Handle(OperatorId, Token));
+
+        Assert.Equal(1, drafts.ExpiredDiscardCalls);
+        Assert.True(drafts.DiscardedAnExpiredDraft);
+        Assert.Null(drafts.Current);
+    }
+
+    /// <summary>
+    /// A draft that has <em>not</em> expired is left alone by the sweep: it is still claimable, and
+    /// discarding it would throw away a test result the Owner is about to save.
+    /// </summary>
+    [Fact]
+    public async Task A_live_draft_is_not_discarded_by_the_sweep()
+    {
+        var clock = new FakeClock(Now);
+        var drafts = new FakeNayaxConnectionTestDraftStore(clock);
+        var failing = new FakeNayaxConnectionCheckRunner
+        {
+            Failure = new InvalidOperationException("Nayax never answered."),
+        };
+        var liveDraftId = Guid.NewGuid();
+
+        await drafts.ReplaceAsync(
+            new NewNayaxConnectionTestDraft(
+                liveDraftId,
+                new NayaxConnectionCredential(OperatorId, Token, credentialRevision: 0),
+                "{}",
+                Owner,
+                Now,
+                Now.AddMinutes(15)),
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Create(failing, drafts, clock).Handle(OperatorId, Token));
+
+        Assert.False(drafts.DiscardedAnExpiredDraft);
+        Assert.Equal(liveDraftId, drafts.Current!.Id);
+    }
+
+    /// <summary>
     /// A refusal names the field and never any part of the submitted value, because the message is
     /// returned to the caller verbatim.
     /// </summary>

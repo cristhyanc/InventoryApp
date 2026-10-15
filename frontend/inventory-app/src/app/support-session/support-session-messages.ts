@@ -27,3 +27,10 @@ export const READ_ONLY_SUPPORT_SESSION_MESSAGE = 'This action is unavailable: re
  * credentials (issue #551's third criterion).
  */
 export const NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE = 'Nayax is not available in support view';
+
+/**
+ * Shown when a support session ends without the administrator ending it - its own expiry, or the
+ * server refusing a call with `support_session_ended` (issue #681) - so the return to their own
+ * dashboard is explained rather than silent.
+ */
+export const SUPPORT_SESSION_ENDED_MESSAGE = 'Your support session has ended. You are back in your own account.';

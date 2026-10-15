@@ -146,7 +146,19 @@ public sealed class BusinessBootstrapper
             await _db.SaveChangesAsync(cancellationToken);
         }
 
-        var membershipsCreated = await EnsureMembershipsAsync(business.Id, configuredMembers, recordedAt, cancellationToken);
+        var memberships = await EnsureMembershipsAsync(
+            business.Id, configuredMembers, recordedAt, cancellationToken);
+
+        if (memberships.Refusal is { } membershipRefusal)
+        {
+            // Rolled back, so the business row this run may have just created goes with it: a
+            // bootstrap that cannot give the business a member must not leave one behind
+            // (issue #681).
+            await transaction.RollbackAsync(cancellationToken);
+            return Failure(BusinessBootstrapOutcome.MembershipConflict, dryRun, membershipRefusal);
+        }
+
+        var membershipsCreated = memberships.Created;
 
         var tables = OwnedTableNames();
 
@@ -358,14 +370,34 @@ public sealed class BusinessBootstrapper
     }
 
     /// <summary>
+    /// What <see cref="EnsureMembershipsAsync"/> did, or why it refused.
+    /// </summary>
+    /// <param name="Created">How many memberships were inserted.</param>
+    /// <param name="Refusal">
+    /// The operator-facing refusal, or <see langword="null"/> when the memberships were created.
+    /// </param>
+    private sealed record MembershipOutcome(int Created, string? Refusal);
+
+    /// <summary>
     /// Creates the missing memberships in their configured roles (issue #521).
     ///
     /// A membership that already exists is left exactly as it is, role included. Re-running must
     /// not resurrect a revoked approval, and for the same reason it must not change the role
     /// somebody holds: altering an existing member's access is a deliberate act, not a side effect
     /// of re-running a backfill, and it belongs to the member management of issue #524.
+    ///
+    /// <para><strong>The one-active-membership rule is applied here, before anything is inserted</strong>
+    /// (issue #681). This command does not run through <c>MembershipWriteGuard</c> - it is
+    /// human-invoked, runs alone inside its own transaction, and creates a business's <em>first</em>
+    /// memberships, so there is no concurrent membership write to serialise with and no existing
+    /// Owner to protect. What it was missing was the rule the guard applies, not the lock: a
+    /// configured actor who already belongs to another business made the database's filtered unique
+    /// index refuse the insert, and the operator got a raw SQLite constraint failure out of
+    /// <see cref="RunAsync"/> instead of a sentence telling them what to do. The check now uses
+    /// <see cref="MembershipEligibility"/> - the same Domain rule the guard uses, so the two cannot
+    /// disagree - and the refusal carries that rule's own published sentence.</para>
     /// </summary>
-    private async Task<int> EnsureMembershipsAsync(
+    private async Task<MembershipOutcome> EnsureMembershipsAsync(
         int businessId,
         IReadOnlyList<ConfiguredMember> configuredMembers,
         DateTime recordedAt,
@@ -390,6 +422,30 @@ public sealed class BusinessBootstrapper
                 continue;
             }
 
+            // Read across every business, inside this command's own transaction, because the rule
+            // is about the identity rather than about this business: an actor who is an active
+            // member anywhere may not gain a second active membership (issue #522).
+            var elsewhere = await _db.BusinessMemberships
+                .Where(membership =>
+                    membership.DirectoryTenantId == actor.DirectoryTenantId
+                    && membership.ObjectId == actor.ObjectId)
+                .Select(membership => new IdentityMembership(membership.Id, membership.IsActive))
+                .ToListAsync(cancellationToken);
+
+            if (!MembershipEligibility.AllowsActiveMembership(elsewhere))
+            {
+                // The Domain rule's own sentence, plus what the operator can do about it. Neither
+                // half names the actor: an Entra pair is the value every access decision is made
+                // from, and this message is printed to a console and may end up in a run log.
+                return new MembershipOutcome(
+                    created,
+                    $"{MembershipEligibility.AlreadyAMemberMessage} One configured actor in "
+                        + $"{BusinessBootstrapOptions.SectionName}:Members already holds an active "
+                        + "membership, so creating one here would leave them with two and deny them "
+                        + "both. Have that membership revoked deliberately, or configure a different "
+                        + "actor, then run again. Nothing was written.");
+            }
+
             _db.BusinessMemberships.Add(new BusinessMembership
             {
                 BusinessId = businessId,
@@ -410,7 +466,7 @@ public sealed class BusinessBootstrapper
             await _db.SaveChangesAsync(cancellationToken);
         }
 
-        return created;
+        return new MembershipOutcome(created, null);
     }
 
     private static List<string> Verify(

@@ -82,8 +82,10 @@ public class MachinesController : ControllerBase
     // presentation/workflow filters over the same imported facts: fromDate bounds the canonical
     // EventDateTimeGMT, includeReconciled shows or hides events already reconciled as "already
     // recorded manually". Omitting either preserves the original unfiltered behaviour. fromDate is
-    // bound as DateTimeOffset, not DateTime (issue #218): the frontend always sends the operator's
-    // Australia/Canberra calendar boundary already converted to a UTC instant, and ASP.NET Core's
+    // bound as DateTimeOffset, not DateTime (issue #218): the frontend always sends a calendar
+    // boundary in the current business's own configured IANA time zone - the one
+    // GET /api/business/current reports (issue #499), not a fixed Australian one - already converted
+    // to a UTC instant, and ASP.NET Core's
     // default DateTime query binding reinterprets a UTC instant against the server process's local
     // time zone - DateTimeOffset carries its own offset, so UtcDateTime is the exact instant chosen
     // regardless of the server's local time zone.

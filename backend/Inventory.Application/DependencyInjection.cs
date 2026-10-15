@@ -230,6 +230,11 @@ public static class ApplicationServiceCollectionExtensions
         // count is written through that same context.
         services.AddScoped<GetMachineStockReconciliation>();
         services.AddScoped<RecordMachineStockCount>();
+        // The latest-sales synchronization (issue #187) and its per-business run limit (issue #681).
+        // The limiter is a singleton for the reason the connection test's is: the window it
+        // remembers is state about the process rather than about one request, so "this business has
+        // synchronized ten times in the last two minutes" must be the same answer for every request.
+        services.AddSingleton<NayaxSalesSyncRateLimiter>();
         services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<ComputePurchaseGstSummary>();

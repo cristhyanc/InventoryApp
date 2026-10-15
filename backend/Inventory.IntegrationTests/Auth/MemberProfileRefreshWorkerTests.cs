@@ -4,6 +4,7 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Auth;
+using InventoryApi.Tests.Application.Time;
 using InventoryApi.Tests.Http;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -139,6 +140,75 @@ public class MemberProfileRefreshWorkerTests
         }
     }
 
+    /// <summary>
+    /// Issue #681: a refresh that failed gives its hourly slot back, so the member's very next
+    /// request may schedule another attempt instead of their stored details staying stale for an
+    /// hour because of a transient write failure.
+    ///
+    /// <para>The claim is made through the real throttle, exactly as the scheduler makes it, so what
+    /// this asserts is the throttle's own answer afterwards and not a flag the test set.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_failed_refresh_gives_its_hourly_slot_back()
+    {
+        await using var host = await RelationalHost.CreateAsync(failingWriteStore: _ => true);
+        await host.SeedMembershipAsync(Oid);
+
+        Assert.True(host.Throttle.TryClaim(Actor(), out var claimedAtUtc));
+        Assert.False(host.Throttle.TryClaim(Actor()));
+
+        host.Queue.TryEnqueue(new MemberProfileRefreshRequest(Actor(), Profile(), claimedAtUtc));
+        await host.DrainAsync();
+
+        // The slot is free again, inside the hour, because nothing was written.
+        Assert.True(host.Throttle.TryClaim(Actor()));
+    }
+
+    /// <summary>
+    /// The contrast: a refresh that <em>succeeded</em> keeps its slot, so the hourly rule still holds
+    /// for the case it exists for - a member making dozens of requests a minute with the same two
+    /// claims in every one of them.
+    /// </summary>
+    [Fact]
+    public async Task A_successful_refresh_keeps_its_hourly_slot()
+    {
+        await using var host = await RelationalHost.CreateAsync();
+        await host.SeedMembershipAsync(Oid);
+
+        Assert.True(host.Throttle.TryClaim(Actor(), out var claimedAtUtc));
+
+        host.Queue.TryEnqueue(new MemberProfileRefreshRequest(Actor(), Profile(), claimedAtUtc));
+        await host.DrainAsync();
+
+        Assert.Equal(DisplayName, (await host.ReadMembershipAsync(Oid)).DisplayName);
+        Assert.False(host.Throttle.TryClaim(Actor()));
+    }
+
+    /// <summary>
+    /// A release only gives back the claim it was told about. A failure arriving after a later
+    /// request has already claimed the slot must not reopen it, or one member could hold the drain
+    /// open indefinitely by failing repeatedly.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_refresh_does_not_give_back_a_slot_a_later_request_has_claimed()
+    {
+        await using var host = await RelationalHost.CreateAsync(failingWriteStore: _ => true);
+        await host.SeedMembershipAsync(Oid);
+
+        Assert.True(host.Throttle.TryClaim(Actor(), out var firstClaim));
+        host.Queue.TryEnqueue(new MemberProfileRefreshRequest(Actor(), Profile(), firstClaim));
+        await host.DrainAsync();
+
+        // The release above freed the slot; a second request, a minute later, claims it - and the
+        // *first* claim's release, replayed here, must not take that newer claim away.
+        host.ThrottleClock.UtcNow = CreatedAt.AddMinutes(1);
+        Assert.True(host.Throttle.TryClaim(Actor(), out var secondClaim));
+        Assert.NotEqual(firstClaim, secondClaim);
+
+        Assert.False(host.Throttle.Release(Actor(), firstClaim));
+        Assert.False(host.Throttle.TryClaim(Actor()));
+    }
+
     private static void AssertNoDisplayValues(string? text)
     {
         if (text is null)
@@ -197,6 +267,7 @@ public class MemberProfileRefreshWorkerTests
         var queue = new MemberProfileRefreshQueue();
         IHostedService worker = new MemberProfileRefreshWorker(
             queue,
+            new MemberProfileRefreshThrottle(new FakeClock(CreatedAt)),
             provider.GetRequiredService<IServiceScopeFactory>(),
             new CapturingLogger<MemberProfileRefreshWorker>());
 
@@ -283,6 +354,12 @@ public class MemberProfileRefreshWorkerTests
 
         public DbContextOptions<AppDbContext> Options { get; private init; } = null!;
 
+        /// <summary>The throttle the drain gives a failed refresh's hourly slot back to (issue #681).</summary>
+        public MemberProfileRefreshThrottle Throttle { get; private init; } = null!;
+
+        /// <summary>The clock that throttle reads, so a test can tell two claims apart by instant.</summary>
+        public FakeClock ThrottleClock { get; private init; } = null!;
+
         public static async Task<RelationalHost> CreateAsync(Func<ActorIdentity, bool>? failingWriteStore = null)
         {
             var connection = new SqliteConnection("Data Source=:memory:");
@@ -330,15 +407,22 @@ public class MemberProfileRefreshWorkerTests
             var provider = services.BuildServiceProvider();
             var queue = new MemberProfileRefreshQueue();
             var logger = new CapturingLogger<MemberProfileRefreshWorker>();
+            // The real throttle, with a clock a test can move, so the slot a failed refresh gives
+            // back (issue #681) is observable through the throttle's own answer rather than a stub's.
+            var throttleClock = new FakeClock(CreatedAt);
+            var throttle = new MemberProfileRefreshThrottle(throttleClock);
 
             var worker = new MemberProfileRefreshWorker(
                 queue,
+                throttle,
                 provider.GetRequiredService<IServiceScopeFactory>(),
                 logger);
 
             return new RelationalHost(connection, provider, worker, queue, logger, observedScopes)
             {
                 Options = options,
+                Throttle = throttle,
+                ThrottleClock = throttleClock,
             };
         }
 

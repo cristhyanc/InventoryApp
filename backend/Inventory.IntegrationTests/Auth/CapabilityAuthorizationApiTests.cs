@@ -86,6 +86,13 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Purchasing.Operate", "POST", "/api/supplierorders", "Operator,Manager,Owner" },
         { "Suppliers.ManageGstDefaults", "PUT", "/api/suppliers/1/gst-defaults", "Manager,Owner" },
 
+        // Issue #681. The product catalogue is Inventory.Operate, but this one action reports the
+        // exact value of the business's inventory at cost - the figure issue #527 withholds from the
+        // dashboard for a role without Dashboard.ViewFinancials. Leaving it on the catalogue's own
+        // capability made that redaction a presentation detail an Operator could read around, so
+        // this action additionally requires the financial capability and an Operator is refused.
+        { "Dashboard.ViewFinancials", "GET", "/api/products/inventory-value-summary", "Manager,Owner" },
+
         // Issue #526: the Manager surfaces.
         { "Expenses.Manage", "GET", "/api/operating-expenses", "Manager,Owner" },
         { "Expenses.Manage", "GET", $"/api/operating-expenses/{MissingId}", "Manager,Owner" },
@@ -135,6 +142,12 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // Issue #526: the one endpoint that follows a page every role may open. The home Dashboard
         // calls it on load, before Sites and Machines, so both sections read one freshness
         // boundary (issue #187) - an Operator's Dashboard has to be able to refresh.
+        //
+        // Since issue #681 it requires Inventory.Operate as well, because it writes and
+        // Dashboard.View is a read capability. Every role in this matrix that holds Dashboard.View
+        // also holds Inventory.Operate, so the row below is unchanged - which is the point: the
+        // endpoint stopped being reachable under a read-only capability without any current role's
+        // access changing.
         { "Dashboard.View", "POST", "/api/nayax-sales-sync", "Operator,Manager,Owner" },
     };
 

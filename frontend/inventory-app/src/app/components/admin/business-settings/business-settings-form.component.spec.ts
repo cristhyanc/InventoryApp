@@ -3,12 +3,13 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
 import { ABN_INVALID_MESSAGE, NAME_REQUIRED_MESSAGE } from '../../../access/business-application-rules';
-import { BusinessService } from '../../../services/business.service';
+import { BusinessService, CurrentBusiness } from '../../../services/business.service';
 import { BusinessSettings, BusinessSettingsService } from '../../../services/business-settings.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 import {
   BusinessSettingsFormComponent,
   GENERIC_SAVE_ERROR_MESSAGE,
+  SAVED_BUT_NOT_REFRESHED_MESSAGE,
   TIME_ZONE_CHANGE_CONFIRMATION_MESSAGE
 } from './business-settings-form.component';
 
@@ -22,6 +23,9 @@ const SETTINGS: BusinessSettings = {
 
 const LEGACY_SETTINGS: BusinessSettings = { ...SETTINGS, contactEmail: null, gstRegistered: null, abn: null };
 
+/** What a successful `BusinessService.refresh()` emits; `null` is its "could not be read". */
+const CURRENT_BUSINESS: CurrentBusiness = { name: 'Corner Store', timeZoneId: 'Australia/Brisbane' };
+
 interface Harness {
   fixture: ComponentFixture<BusinessSettingsFormComponent>;
   host: HTMLElement;
@@ -34,7 +38,7 @@ async function render(
   options: { settings?: BusinessSettings; save?: jest.Mock; sessionActive?: Observable<boolean> }
 ): Promise<Harness> {
   const save = options.save ?? jest.fn(() => of({ ...SETTINGS, timeZoneId: 'Australia/Brisbane' }));
-  const businessRefresh = jest.fn(() => of(null));
+  const businessRefresh = jest.fn((): Observable<CurrentBusiness | null> => of(CURRENT_BUSINESS));
   const accessRefresh = jest.fn(() => of({ status: 'unread' as const }));
 
   await TestBed.configureTestingModule({
@@ -193,7 +197,7 @@ describe('BusinessSettingsFormComponent (issue #549)', () => {
     const harness = await render({ save });
     harness.businessRefresh.mockImplementation(() => {
       order.push('business-refresh');
-      return of(null);
+      return of(CURRENT_BUSINESS);
     });
     harness.accessRefresh.mockImplementation(() => {
       order.push('access-refresh');
@@ -222,6 +226,39 @@ describe('BusinessSettingsFormComponent (issue #549)', () => {
     );
     expect(byTestId(harness.host, 'save-success')).toBeNull();
     expect(harness.fixture.componentInstance.saving).toBe(false);
+  });
+
+  it.each<[string, (harness: Harness) => void]>([
+    ['the capability read fails', (harness) => harness.accessRefresh.mockReturnValue(of({ status: 'unavailable' as const }))],
+    ['the current business read fails', (harness) => harness.businessRefresh.mockReturnValue(of(null))],
+    ['a refresh errors', (harness) => harness.accessRefresh.mockReturnValue(throwError(() => new Error('boom')))]
+  ])('reports a saved-but-not-refreshed message, not a save failure or success, when %s after the save (issue #681)', async (_label, failRefresh) => {
+    const harness = await render({});
+    failRefresh(harness);
+
+    await submitForm(harness);
+
+    expect(byTestId(harness.host, 'refresh-error')?.textContent).toContain(SAVED_BUT_NOT_REFRESHED_MESSAGE);
+    expect(byTestId(harness.host, 'submit-error')).toBeNull();
+    expect(byTestId(harness.host, 'save-success')).toBeNull();
+    expect(harness.fixture.componentInstance.saving).toBe(false);
+  });
+
+  it('takes the saved settings as the new baseline even when the refresh after the save fails (issue #681)', async () => {
+    const harness = await render({});
+    harness.accessRefresh.mockReturnValue(throwError(() => new Error('boom')));
+    harness.fixture.componentInstance.draft.timeZoneId = 'Australia/Brisbane';
+    await submitForm(harness);
+    harness.fixture.componentInstance.confirmTimeZoneChange();
+    harness.fixture.detectChanges();
+    await harness.fixture.whenStable();
+
+    expect(harness.fixture.componentInstance.draft.timeZoneId).toBe('Australia/Brisbane');
+
+    await submitForm(harness);
+
+    expect(harness.fixture.componentInstance.pendingTimeZoneChange).toBe(false);
+    expect(harness.save).toHaveBeenCalledTimes(2);
   });
 
   it('shows a generic sentence for a refusal with no usable message', async () => {

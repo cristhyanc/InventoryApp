@@ -1,5 +1,5 @@
 import { HttpClient } from '@angular/common/http';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { ConfigService } from './config.service';
 import { BusinessApplicationRequest } from '../access/business-application-rules';
 import { BusinessSettings, BusinessSettingsService, isLegacyBusinessProfile } from './business-settings.service';
@@ -48,6 +48,27 @@ describe('BusinessSettingsService (issue #549)', () => {
       expect(http.put).toHaveBeenCalledWith('/api/business/settings', SAVE_REQUEST);
       done();
     });
+  });
+
+  it('announces a successful save on saved$ with the saved settings (issue #681)', () => {
+    const { service } = createService();
+    const announced: BusinessSettings[] = [];
+    service.saved$.subscribe((settings) => announced.push(settings));
+
+    service.save(SAVE_REQUEST).subscribe();
+
+    expect(announced).toEqual([SETTINGS]);
+  });
+
+  it('announces nothing on saved$ when the save is refused', () => {
+    const { service, http } = createService();
+    http.put.mockReturnValueOnce(throwError(() => new Error('refused')));
+    const announced: BusinessSettings[] = [];
+    service.saved$.subscribe((settings) => announced.push(settings));
+
+    service.save(SAVE_REQUEST).subscribe({ error: () => undefined });
+
+    expect(announced).toEqual([]);
   });
 
   it('builds both URLs from the configured API base, trimming a trailing slash', (done) => {

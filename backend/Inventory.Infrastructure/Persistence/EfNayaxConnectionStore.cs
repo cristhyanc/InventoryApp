@@ -1,6 +1,7 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Nayax;
@@ -133,7 +134,7 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
 
     private async Task<NayaxConnectionCredential?> FindCredentialCoreAsync(CancellationToken cancellationToken)
     {
-        if (_db.CurrentBusinessId is null)
+        if (_db.CurrentBusinessId is not { } businessId)
         {
             return null;
         }
@@ -155,11 +156,15 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
             return null;
         }
 
-        // Throws NayaxTokenProtectionException when the ciphertext is corrupt or its key is not
-        // configured. Deliberately not caught: an undecryptable credential must not look like an
-        // absent or empty one.
+        // Throws NayaxTokenProtectionException when the ciphertext is corrupt, its key is not
+        // configured, or - since issue #681 - it was encrypted for a different business than the row
+        // it was read from. Deliberately not caught: an undecryptable credential must not look like
+        // an absent or empty one. The business id comes from the context's own tenancy scope, which
+        // is the same scope whose query filter selected the row, so the value the ciphertext is
+        // authenticated against is never one a request supplied.
         var accessToken = _protector.Unprotect(
-            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext));
+            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext),
+            BusinessId.From(businessId));
 
         return new NayaxConnectionCredential(stored.OperatorId, accessToken, stored.CredentialRevision);
     }
@@ -190,7 +195,7 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
         Func<NayaxConnectionStatus, bool> mayDecryptToken,
         CancellationToken cancellationToken)
     {
-        if (_db.CurrentBusinessId is null)
+        if (_db.CurrentBusinessId is not { } businessId)
         {
             return null;
         }
@@ -223,11 +228,12 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
             return new NayaxConnectionSnapshot(stored.Status, credential: null);
         }
 
-        // Throws for a corrupt ciphertext or an unconfigured key, exactly as FindCredentialAsync
-        // does, and for the same reason: an undecryptable credential must not look like an absent
-        // one.
+        // Throws for a corrupt ciphertext, an unconfigured key or a ciphertext encrypted for
+        // another business, exactly as FindCredentialAsync does, and for the same reason: an
+        // undecryptable credential must not look like an absent one.
         var accessToken = _protector.Unprotect(
-            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext));
+            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext),
+            BusinessId.From(businessId));
 
         return new NayaxConnectionSnapshot(
             stored.Status,
@@ -265,11 +271,17 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
         string accessToken,
         CancellationToken cancellationToken)
     {
-        RequireCurrentBusinessId("saved");
+        var businessId = RequireCurrentBusinessId("saved");
+
+        // The read-only support-session rule, for the ExecuteUpdate below that never reaches
+        // BusinessOwnershipEnforcer (issue #681).
+        SetBasedWriteEnforcer.RequireWritableScope(_db);
 
         // Encrypted before anything is written, so a key-configuration failure stores nothing at
-        // all rather than a row with an empty token.
-        var protectedToken = _protector.Protect(accessToken);
+        // all rather than a row with an empty token. The ciphertext is bound to this business
+        // (issue #681), so the value this save writes cannot later be decrypted from another
+        // business's row.
+        var protectedToken = _protector.Protect(accessToken, BusinessId.From(businessId));
         var savedAt = _clock.UtcNow;
 
         // A caller that already opened a transaction on this context owns the commit, and this save
@@ -342,6 +354,10 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
         CancellationToken cancellationToken)
     {
         var businessId = RequireCurrentBusinessId("updated");
+
+        // As above (issue #681): the conditional ExecuteUpdate below bypasses SaveChanges, so the
+        // support session's read-only rule is applied here.
+        SetBasedWriteEnforcer.RequireWritableScope(_db);
 
         // One statement: the expected-revision comparison and the write cannot be separated, so a
         // credential save committed after the test started cannot be overwritten by its result.

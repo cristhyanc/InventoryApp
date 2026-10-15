@@ -4,6 +4,7 @@ using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.SalesSync;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -354,7 +355,7 @@ public class InventoryCostTransitionTests
     private static SyncLatestNayaxSales LatestSalesSync(AppDbContext db, INayaxLynxClient nayax)
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
-        return new SyncLatestNayaxSales(
+        return TestSalesSync.UseCase(
             nayax, new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild));
     }
 

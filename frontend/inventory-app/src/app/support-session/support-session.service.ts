@@ -22,6 +22,8 @@ import { BusinessService } from '../services/business.service';
 import { AccessService } from '../access/access.service';
 import { activeAccountKey, signedInAccountMayHaveChanged } from '../access/signed-in-account';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
+import { ToastService } from '../services/toast.service';
+import { SUPPORT_SESSION_ENDED_MESSAGE } from './support-session-messages';
 
 /** The header a request presents to join a support session (`InventoryApi.Auth.SupportSessionHeader`). */
 export const SUPPORT_SESSION_HEADER = 'X-Support-Session';
@@ -241,7 +243,8 @@ export class SupportSessionService implements OnDestroy {
     private readonly platformDiagnosticsAccess: PlatformDiagnosticsAccessService,
     private readonly router: Router,
     private readonly authService: MsalService,
-    private readonly msalBroadcastService: MsalBroadcastService
+    private readonly msalBroadcastService: MsalBroadcastService,
+    private readonly toast: ToastService
   ) {
     this.channel?.addEventListener('message', this.onBroadcastMessage);
     this.contextAccountKey = activeAccountKey(this.authService);
@@ -360,10 +363,39 @@ export class SupportSessionService implements OnDestroy {
    * never active, does nothing further.
    */
   handleSessionEndedSignal(): void {
-    if (this.sessionId === null && this.stateSubject.value.kind === 'inactive') {
+    if (!this.knowsOfSession()) {
       return;
     }
-    this.applyEnded(true);
+    // The administrator did not ask for this, so they are told why the view went away (issue #681).
+    this.applyEnded(true, true);
+  }
+
+  /**
+   * Ends the caller's session before they sign out (issue #681), so signing out does not leave it
+   * running on the server for the rest of its lifetime, with other open tabs still presenting it.
+   *
+   * It always completes, with nothing, and never errors: a sign-out must happen whether or not the
+   * end could be confirmed. A refused or failed end still forgets the session in this tab - the id
+   * must not outlive the identity it was granted to - but only a confirmed end is broadcast, because
+   * a sibling tab dropping a session the server still holds would be telling it something false.
+   * Nothing is navigated: the page is about to be replaced by the sign-out redirect anyway.
+   */
+  endBeforeSignOut(): Observable<void> {
+    if (!this.knowsOfSession()) {
+      return of(undefined);
+    }
+
+    return this.http.post(`${this.baseUrl}/active/end`, {}).pipe(
+      map(() => true),
+      catchError(() => of(false)),
+      tap((ended) => {
+        this.forgetSession();
+        if (ended) {
+          this.broadcast({ type: 'ended' });
+        }
+      }),
+      map(() => undefined)
+    );
   }
 
   ngOnDestroy(): void {
@@ -410,14 +442,33 @@ export class SupportSessionService implements OnDestroy {
       .pipe(catchError(() => of(null)));
   }
 
-  private applyEnded(broadcastIt: boolean): void {
-    this.sessionId = null;
-    this.invalidateRequestContext();
-    this.publish(INACTIVE);
+  /**
+   * Ends the local view. `notify` is for an end the administrator did not ask for themselves - the
+   * session's own expiry, or the server refusing a call because it is over - which used to take them
+   * back to their own dashboard with no word of why (issue #681). An end they pressed, or one they
+   * pressed in another tab, needs no notice.
+   */
+  private applyEnded(broadcastIt: boolean, notify = false): void {
+    this.forgetSession();
     if (broadcastIt) {
       this.broadcast({ type: 'ended' });
     }
+    if (notify) {
+      this.toast.warning(SUPPORT_SESSION_ENDED_MESSAGE, 'Support session ended');
+    }
     this.applyBusinessContextChange();
+  }
+
+  /** Whether this tab holds a session's id or has been told one is running. */
+  private knowsOfSession(): boolean {
+    return this.sessionId !== null || this.stateSubject.value.kind !== 'inactive';
+  }
+
+  /** Drops the id and the banner state, and supersedes every request still in flight. */
+  private forgetSession(): void {
+    this.sessionId = null;
+    this.invalidateRequestContext();
+    this.publish(INACTIVE);
   }
 
   /**
@@ -485,7 +536,7 @@ export class SupportSessionService implements OnDestroy {
 
     this.expiry = timer(remainingMs)
       .pipe(takeUntil(this.destroying$))
-      .subscribe(() => this.applyEnded(false));
+      .subscribe(() => this.applyEnded(false, true));
   }
 
   /**
@@ -521,9 +572,21 @@ export class SupportSessionService implements OnDestroy {
 
     const hadIdentity = this.contextAccountKey !== null;
     this.contextAccountKey = accountKey;
-    if (hadIdentity) {
-      this.invalidateRequestContext();
+    if (!hadIdentity) {
+      return;
     }
+
+    if (this.knowsOfSession()) {
+      // A session belongs to the administrator it was granted to (issue #681). The identity signed
+      // in now cannot end it - the end call is answered for the caller's own session only - so this
+      // tab forgets it instead: its id must not be attached to somebody else's requests, and its
+      // banner must not hide their write controls. Nothing is broadcast, because a message goes out
+      // under the identity signed in now, which no tab still holding that session would accept. The
+      // shell discards the previous identity's business context itself (issue #604).
+      this.forgetSession();
+      return;
+    }
+    this.invalidateRequestContext();
   }
 
   /**
@@ -606,7 +669,7 @@ export class SupportSessionService implements OnDestroy {
       return;
     }
 
-    if (this.sessionId !== null || this.stateSubject.value.kind !== 'inactive') {
+    if (this.knowsOfSession()) {
       this.applyEnded(false);
     }
   };

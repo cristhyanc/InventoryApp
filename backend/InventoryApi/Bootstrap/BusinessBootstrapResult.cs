@@ -41,6 +41,16 @@ public enum BusinessBootstrapOutcome
     /// the Active status is a human decision.
     /// </summary>
     BusinessInactive = 6,
+
+    /// <summary>
+    /// A configured actor already holds an active membership somewhere, so creating one here would
+    /// break issue #522's one-active-membership rule (issue #681). The rule is checked inside the
+    /// bootstrap's own transaction before anything is inserted, and the whole run is rolled back:
+    /// until then the database's filtered unique index refused the insert and the operator saw a raw
+    /// SQLite constraint failure with nothing to act on. Releasing that membership, or configuring a
+    /// different actor, is a human decision.
+    /// </summary>
+    MembershipConflict = 7,
 }
 
 /// <summary>What one table looked like before and after the backfill touched it.</summary>

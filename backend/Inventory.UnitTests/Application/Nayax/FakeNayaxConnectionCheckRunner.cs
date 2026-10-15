@@ -25,6 +25,14 @@ public sealed class FakeNayaxConnectionCheckRunner : INayaxConnectionCheckRunner
     /// <summary>The credentials each run was asked to test, in order.</summary>
     public List<NayaxConnectionCredential> Candidates { get; } = [];
 
+    /// <summary>
+    /// When set, every run throws it instead of answering - how a test stands in for "the test ran
+    /// and Nayax never answered", which is the case that used to leave an expired draft behind
+    /// (issue #681). The real runner turns a Nayax refusal into a report line rather than an
+    /// exception, so this stands in for a failure above that classification.
+    /// </summary>
+    public Exception? Failure { get; set; }
+
     /// <summary>A report in which every check passed, against a business with one machine.</summary>
     public static NayaxConnectionCheckReport AllPassed() =>
         new([.. NayaxConnectionCheckPolicy.All.Select(NayaxConnectionCheckLine.Passed)], 1);
@@ -34,6 +42,9 @@ public sealed class FakeNayaxConnectionCheckRunner : INayaxConnectionCheckRunner
         CancellationToken cancellationToken)
     {
         Candidates.Add(candidate);
-        return Task.FromResult(_report);
+
+        return Failure is { } failure
+            ? Task.FromException<NayaxConnectionCheckReport>(failure)
+            : Task.FromResult(_report);
     }
 }
