@@ -12,6 +12,7 @@ import {
   InventoryCostTransitionPreview,
   InventoryCostTransitionService
 } from '../../../services/inventory-cost-transition.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import { Product } from '../../../models/models';
 
@@ -51,7 +52,8 @@ async function render(
       provideRouter([]),
       { provide: ProductService, useValue: { getAll } },
       { provide: ToastService, useValue: toast },
-      { provide: InventoryCostTransitionService, useValue: transition }
+      { provide: InventoryCostTransitionService, useValue: transition },
+      { provide: SupportSessionService, useValue: { active$: of(false) } }
     ]
   }).compileComponents();
 

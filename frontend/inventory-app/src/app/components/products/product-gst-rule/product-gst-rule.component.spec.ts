@@ -1,16 +1,21 @@
 import { TestBed } from '@angular/core/testing';
-import { of, Subject, throwError } from 'rxjs';
+import { Observable, of, Subject, throwError } from 'rxjs';
 import { ProductGstRuleComponent } from './product-gst-rule.component';
 import { ProductService } from '../../../services/product.service';
 import { GstClassification, ProductGstRule } from '../../../models/models';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 async function render(
   getGstRule: jest.Mock = jest.fn(() => of({ productId: 42, gstRule: GstClassification.Unknown })),
-  setGstRule: jest.Mock = jest.fn(() => of(undefined))
+  setGstRule: jest.Mock = jest.fn(() => of(undefined)),
+  sessionActive: Observable<boolean> = of(false)
 ) {
   await TestBed.configureTestingModule({
     imports: [ProductGstRuleComponent],
-    providers: [{ provide: ProductService, useValue: { getGstRule, setGstRule } }]
+    providers: [
+      { provide: ProductService, useValue: { getGstRule, setGstRule } },
+      { provide: SupportSessionService, useValue: { active$: sessionActive } }
+    ]
   }).compileComponents();
 
   const fixture = TestBed.createComponent(ProductGstRuleComponent);
@@ -210,5 +215,32 @@ describe('ProductGstRuleComponent', () => {
 
     expect(host.textContent).toContain('takes precedence over any supplier default');
     expect(host.textContent).toContain('does not change the GST classification of any');
+  });
+
+  describe('in a support session (issue #661)', () => {
+    const loaded = () => jest.fn(() => of({ productId: 42, gstRule: GstClassification.Taxable }));
+
+    it('disables Save GST rule while a session is active, even once the rule has loaded', async () => {
+      const { saveButton } = await render(loaded(), jest.fn(), of(true));
+
+      expect(saveButton().disabled).toBe(true);
+    });
+
+    it('leaves Save GST rule enabled while no session is active', async () => {
+      const { saveButton } = await render(loaded(), jest.fn(), of(false));
+
+      expect(saveButton().disabled).toBe(false);
+    });
+
+    it('calls no rule API from the guarded handler while a session is active', async () => {
+      const setGstRule = jest.fn();
+      const { fixture } = await render(loaded(), setGstRule, of(true));
+
+      fixture.componentInstance.save();
+
+      expect(setGstRule).not.toHaveBeenCalled();
+      expect(fixture.componentInstance.saving).toBe(false);
+      expect(fixture.componentInstance.saved).toBe(false);
+    });
   });
 });

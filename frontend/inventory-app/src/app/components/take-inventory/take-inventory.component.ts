@@ -1,11 +1,13 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { ProductService } from '../../services/product.service';
 import { InventoryCountService } from '../../services/inventory-count.service';
 import { ToastService } from '../../services/toast.service';
 import { InventoryCountApplyOutcome, Product } from '../../models/models';
 import { ListLoadState } from '../shared/list-load-state';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 /** One product's counting-session state on the Take Inventory page. Entirely client-side except for a successful Apply. */
 export interface TakeInventoryRow {
@@ -30,15 +32,33 @@ export interface TakeInventoryRow {
   imports: [CommonModule, FormsModule],
   templateUrl: './take-inventory.component.html'
 })
-export class TakeInventoryComponent implements OnInit {
+export class TakeInventoryComponent implements OnInit, OnDestroy {
   rows: TakeInventoryRow[] = [];
   readonly loadState = new ListLoadState();
 
+  /**
+   * Whether a support session is active (issue #661): Apply is disabled on every row while it is,
+   * because a session grants `InventoryOperate` - the capability this page and the count endpoint
+   * are gated on - and the backend refuses the write itself only by its read-only method rule,
+   * never by withholding the capability. Confirming an unchanged count stays available: it is
+   * session state in this browser and calls nothing. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
+
   constructor(
-    private productService: ProductService,
-    private inventoryCountService: InventoryCountService,
-    private toastService: ToastService
-  ) {}
+    private readonly productService: ProductService,
+    private readonly inventoryCountService: InventoryCountService,
+    private readonly toastService: ToastService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+  }
 
   ngOnInit(): void {
     const token = this.loadState.start();
@@ -82,6 +102,11 @@ export class TakeInventoryComponent implements OnInit {
   }
 
   apply(row: TakeInventoryRow): void {
+    // Checked here as well as disabled in the template, so the write is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) {
+      return;
+    }
     if (row.countedStock === null) {
       row.error = 'Enter a counted quantity.';
       return;

@@ -1,6 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { Subject, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { NayaxSaleTimestampRepairWorkflowComponent } from './nayax-sale-timestamp-repair-workflow.component';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import {
   NayaxSaleTimestampEvidenceSource,
   NayaxSaleTimestampRepairApplied,
@@ -98,13 +99,18 @@ interface Rendered {
 
 const fixtures: ComponentFixture<NayaxSaleTimestampRepairWorkflowComponent>[] = [];
 
-async function render(previewFn: jest.Mock = jest.fn(() => of(preview())), applyFn: jest.Mock = jest.fn()): Promise<Rendered> {
+async function render(
+  previewFn: jest.Mock = jest.fn(() => of(preview())),
+  applyFn: jest.Mock = jest.fn(),
+  sessionActive: Observable<boolean> = of(false)
+): Promise<Rendered> {
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
   await TestBed.configureTestingModule({
     imports: [NayaxSaleTimestampRepairWorkflowComponent],
     providers: [
       { provide: NayaxSaleTimestampRepairService, useValue: { preview: previewFn, apply: applyFn } },
-      { provide: ToastService, useValue: toast }
+      { provide: ToastService, useValue: toast },
+      { provide: SupportSessionService, useValue: { active$: sessionActive } }
     ]
   }).compileComponents();
 
@@ -768,5 +774,57 @@ describe('NayaxSaleTimestampRepairWorkflowComponent verification (issue #487)', 
     component.runPreview();
     fixture.detectChanges();
     expect(component.applied).toBeNull();
+  });
+});
+
+describe('NayaxSaleTimestampRepairWorkflowComponent in a support session (issue #661)', () => {
+  function previewButton(host: HTMLElement): HTMLButtonElement | undefined {
+    return Array.from(host.querySelectorAll('button')).find(candidate => candidate.textContent?.includes('Preview repair'));
+  }
+
+  it('disables Preview repair while a session is active', async () => {
+    const { host } = await render(jest.fn(), jest.fn(), of(true));
+
+    expect(previewButton(host)?.disabled).toBe(true);
+  });
+
+  it('leaves Preview repair enabled while no session is active', async () => {
+    const { host } = await render(jest.fn(), jest.fn(), of(false));
+
+    expect(previewButton(host)?.disabled).toBe(false);
+  });
+
+  /**
+   * The preview is a `POST` that also writes the server's own plan draft, so a support session's
+   * read-only method rule refuses it as well as the apply; the guard covers both.
+   */
+  it('calls neither the preview nor the apply endpoint from a guarded handler', async () => {
+    const previewFn = jest.fn(() => of(preview()));
+    const applyFn = jest.fn();
+    const { component } = await render(previewFn, applyFn, of(true));
+
+    component.includeLatestSalesApiEvidence = true;
+    component.runPreview();
+    component.preview = preview();
+    component.acknowledged = true;
+    component.applyRepair();
+
+    expect(previewFn).not.toHaveBeenCalled();
+    expect(applyFn).not.toHaveBeenCalled();
+    expect(component.busy).toBe(false);
+  });
+
+  it('never offers Apply while a session is active, even for a repairable plan that was acknowledged', async () => {
+    const { component, fixture, host } = await render(jest.fn(), jest.fn(), of(true));
+
+    component.preview = preview();
+    component.acknowledged = true;
+    fixture.detectChanges();
+
+    expect(component.canApply).toBe(false);
+    const apply = Array.from(host.querySelectorAll('button')).find(candidate =>
+      candidate.textContent?.includes('Apply repair')
+    );
+    expect(apply?.disabled).toBe(true);
   });
 });

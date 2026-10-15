@@ -21,7 +21,11 @@
 </div>
 
 <div class="flex justify-end">
-  <button type="button" class="btn btn-primary" [disabled]="selectedProductIds.size === 0" (click)="openOrderForm()">Mark as ordered</button>
+  <!-- Hidden rather than disabled while a support session is active (issue #661): it opens a
+       dialog whose only purpose is creating a supplier order, so there is nothing to read in it. -->
+  @if (!sessionActive) {
+    <button type="button" class="btn btn-primary" [disabled]="selectedProductIds.size === 0" (click)="openOrderForm()">Mark as ordered</button>
+  }
 </div>
 
 <div class="card">
@@ -96,7 +100,7 @@
                 <td class="table-cell table-num">{{ p.onOrderQuantity }}</td>
                 <td class="table-cell table-num font-semibold value-negative">{{ p.needToOrder }}</td>
                 <td class="table-cell">
-                  <button type="button" class="badge" [ngClass]="p.isActive ? 'badge-success' : 'badge-neutral'" (click)="toggleActive(p)">
+                  <button type="button" class="badge" [ngClass]="p.isActive ? 'badge-success' : 'badge-neutral'" [disabled]="sessionActive" (click)="toggleActive(p)">
                     {{ p.isActive ? 'Active' : 'Inactive' }}
                   </button>
                 </td>

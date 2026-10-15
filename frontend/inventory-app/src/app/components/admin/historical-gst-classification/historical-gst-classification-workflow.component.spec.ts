@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
-import { Subject, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { HistoricalGstClassificationWorkflowComponent } from './historical-gst-classification-workflow.component';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import {
   HistoricalGstClassificationApplied,
   HistoricalGstClassificationPreview,
@@ -39,13 +40,18 @@ function applied(componentsClassified = 4): HistoricalGstClassificationApplied {
   return { summary: summary(), componentsClassified };
 }
 
-async function render(previewFn: jest.Mock, applyFn: jest.Mock = jest.fn()) {
+async function render(
+  previewFn: jest.Mock,
+  applyFn: jest.Mock = jest.fn(),
+  sessionActive: Observable<boolean> = of(false)
+) {
   const toast = { success: jest.fn(), error: jest.fn(), info: jest.fn() };
   await TestBed.configureTestingModule({
     imports: [HistoricalGstClassificationWorkflowComponent],
     providers: [
       { provide: HistoricalGstClassificationService, useValue: { preview: previewFn, apply: applyFn } },
-      { provide: ToastService, useValue: toast }
+      { provide: ToastService, useValue: toast },
+      { provide: SupportSessionService, useValue: { active$: sessionActive } }
     ]
   }).compileComponents();
 
@@ -256,5 +262,46 @@ describe('HistoricalGstClassificationWorkflowComponent apply (issue #433)', () =
 
     expect(component.preview).toBeNull();
     expect(component.loading).toBe(false);
+  });
+});
+
+describe('HistoricalGstClassificationWorkflowComponent in a support session (issue #661)', () => {
+  it('disables Preview classification while a session is active', async () => {
+    const { host } = await render(jest.fn(), jest.fn(), of(true));
+
+    expect(button(host, 'Preview classification')?.disabled).toBe(true);
+  });
+
+  it('leaves Preview classification enabled while no session is active', async () => {
+    const { host } = await render(jest.fn(), jest.fn(), of(false));
+
+    expect(button(host, 'Preview classification')?.disabled).toBe(false);
+  });
+
+  /**
+   * The preview is itself a `POST`, which a support session's read-only method rule refuses the
+   * same as the apply, so the guard covers it rather than only the write it leads to.
+   */
+  it('calls neither the preview nor the apply endpoint from a guarded handler', async () => {
+    const previewFn = jest.fn();
+    const applyFn = jest.fn();
+    const { component } = await render(previewFn, applyFn, of(true));
+
+    component.runPreview();
+    component.preview = preview();
+    component.applyPreview();
+
+    expect(previewFn).not.toHaveBeenCalled();
+    expect(applyFn).not.toHaveBeenCalled();
+    expect(component.loading).toBe(false);
+  });
+
+  it('disables Apply classification while a session is active, when a preview is on screen', async () => {
+    const { component, fixture, host } = await render(jest.fn(), jest.fn(), of(true));
+
+    component.preview = preview();
+    fixture.detectChanges();
+
+    expect(button(host, 'Apply classification')?.disabled).toBe(true);
   });
 });

@@ -1,8 +1,10 @@
-import { Component } from '@angular/core';
+import { Component, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { ImportService } from '../../../services/import.service';
 import { ToastService } from '../../../services/toast.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
  * Dedicated page for the supported import workflows, split out of `AdminComponent`
@@ -34,7 +36,7 @@ import { ToastService } from '../../../services/toast.service';
             <input #salesFile type="file" accept=".xlsx,.xls,.csv" class="hidden" (change)="onSalesSelected($event)" />
             <div class="mt-4 flex flex-wrap gap-2">
               <button type="button" class="btn btn-secondary" (click)="downloadTemplate()">Download template</button>
-              <button type="button" class="btn btn-primary" [disabled]="loading" (click)="salesFile.click()">{{ loading ? 'Importing...' : 'Choose sales file' }}</button>
+              <button type="button" class="btn btn-primary" [disabled]="loading || sessionActive" (click)="salesFile.click()">{{ loading ? 'Importing...' : 'Choose sales file' }}</button>
             </div>
           </div>
         </section>
@@ -43,7 +45,7 @@ import { ToastService } from '../../../services/toast.service';
           <div class="card-body">
             <h2 class="card-title">Import products</h2>
             <p class="mt-1 text-sm value-muted">Refresh the product catalogue from the configured source.</p>
-            <button type="button" class="btn btn-primary mt-4" [disabled]="loading" (click)="importProducts()">Import products</button>
+            <button type="button" class="btn btn-primary mt-4" [disabled]="loading || sessionActive" (click)="importProducts()">Import products</button>
           </div>
         </section>
 
@@ -51,23 +53,46 @@ import { ToastService } from '../../../services/toast.service';
           <div class="card-body">
             <h2 class="card-title">Import XML files</h2>
             <p class="mt-1 text-sm value-muted">Process pending reimbursement XML files.</p>
-            <button type="button" class="btn btn-primary mt-4" [disabled]="loading" (click)="importXml()">Import XML files</button>
+            <button type="button" class="btn btn-primary mt-4" [disabled]="loading || sessionActive" (click)="importXml()">Import XML files</button>
           </div>
         </section>
       </div>
     </div>
   `
 })
-export class AdminImportsComponent {
+export class AdminImportsComponent implements OnDestroy {
   loading = false;
 
-  constructor(private readonly importService: ImportService, private readonly toast: ToastService) {}
+  /**
+   * Whether a support session is active (issue #661): every import on this page is disabled while
+   * it is, because a session grants `ImportsRun` - the capability this page and its endpoints are
+   * gated on - and the backend refuses the write itself only by its read-only method rule, never
+   * by withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
+
+  constructor(
+    private readonly importService: ImportService,
+    private readonly toast: ToastService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+  }
 
   onSalesSelected(event: Event): void {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     input.value = '';
     if (!file) return;
+    // Checked here as well as disabled in the template, so the import is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) return;
     if (!/\.(xlsx|xls|csv)$/i.test(file.name)) {
       this.toast.error('Only .xlsx, .xls, or .csv files are supported.');
       return;
@@ -87,6 +112,7 @@ export class AdminImportsComponent {
   }
 
   importProducts(): void {
+    if (this.sessionActive) return;
     this.loading = true;
     this.importService.importProducts().subscribe({
       next: () => { this.loading = false; this.toast.success('Products imported successfully.'); },
@@ -95,6 +121,7 @@ export class AdminImportsComponent {
   }
 
   importXml(): void {
+    if (this.sessionActive) return;
     this.loading = true;
     this.importService.importPendingXmlFiles().subscribe({
       next: result => { this.loading = false; this.toast.success(`Imported ${result.importedFiles} file(s) and ${result.importedReimbursements} reimbursement(s).`); },

@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
 import { AvcoTransitionWorkflowComponent } from './avco-transition-workflow.component';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import { ToastService } from '../../../services/toast.service';
 import {
   InventoryCostBaselineSource,
@@ -36,7 +37,11 @@ interface TransitionHarness {
   applyAll: jest.Mock;
 }
 
-async function render(overrides: Partial<TransitionHarness> = {}, products: Product[] = []) {
+async function render(
+  overrides: Partial<TransitionHarness> = {},
+  products: Product[] = [],
+  sessionActive: Observable<boolean> = of(false)
+) {
   const transition = {
     preview: jest.fn(() => of(transitionPreview())),
     apply: jest.fn(() => of(transitionPreview())),
@@ -50,7 +55,8 @@ async function render(overrides: Partial<TransitionHarness> = {}, products: Prod
     imports: [AvcoTransitionWorkflowComponent],
     providers: [
       { provide: ToastService, useValue: toast },
-      { provide: InventoryCostTransitionService, useValue: transition }
+      { provide: InventoryCostTransitionService, useValue: transition },
+      { provide: SupportSessionService, useValue: { active$: sessionActive } }
     ]
   }).compileComponents();
 
@@ -333,6 +339,67 @@ describe('AvcoTransitionWorkflowComponent all-products preview and apply (issue 
     component.applyAllTransitions();
 
     expect(toast.error).toHaveBeenCalledWith('Unable to save all transition baselines.');
+    expect(component.loading).toBe(false);
+  });
+});
+
+describe('AvcoTransitionWorkflowComponent in a support session (issue #661)', () => {
+  function button(host: HTMLElement, text: string): HTMLButtonElement | undefined {
+    return Array.from(host.querySelectorAll('button')).find(candidate => candidate.textContent?.includes(text));
+  }
+
+  it('disables Preview transition baseline while a session is active', async () => {
+    const { component, fixture, host } = await render({}, [product(1, 'Coke', 1.5)], of(true));
+
+    component.transitionProductId = 1;
+    fixture.detectChanges();
+
+    expect(button(host, 'Preview transition baseline')?.disabled).toBe(true);
+  });
+
+  it('leaves Preview transition baseline enabled while no session is active', async () => {
+    const { component, fixture, host } = await render({}, [product(1, 'Coke', 1.5)], of(false));
+
+    component.transitionProductId = 1;
+    fixture.detectChanges();
+
+    expect(button(host, 'Preview transition baseline')?.disabled).toBe(false);
+  });
+
+  it('disables both Confirm and save buttons while a session is active', async () => {
+    const { component, fixture, host } = await render({}, [], of(true));
+
+    component.transitionPreview = transitionPreview();
+    fixture.detectChanges();
+    expect(button(host, 'Confirm and save transition baseline')?.disabled).toBe(true);
+
+    component.transitionPreview = null;
+    component.transitionBatchPreview = batchPreview({ productCount: 2 });
+    fixture.detectChanges();
+    expect(button(host, 'Confirm and save all product baselines')?.disabled).toBe(true);
+  });
+
+  /**
+   * Every one of these four calls is a `POST`, preview included, so a support session's read-only
+   * method rule refuses them all and the guard covers them all.
+   */
+  it('calls no transition endpoint from a guarded handler while a session is active', async () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const { component, transition } = await render({}, [product(1, 'Coke', 1.5)], of(true));
+
+    component.transitionProductId = 1;
+    component.previewTransition();
+    component.transitionAllProducts = true;
+    component.previewTransition();
+    component.transitionPreview = transitionPreview();
+    component.applyTransition();
+    component.transitionBatchPreview = batchPreview({ productCount: 2 });
+    component.applyAllTransitions();
+
+    expect(transition.preview).not.toHaveBeenCalled();
+    expect(transition.previewAll).not.toHaveBeenCalled();
+    expect(transition.apply).not.toHaveBeenCalled();
+    expect(transition.applyAll).not.toHaveBeenCalled();
     expect(component.loading).toBe(false);
   });
 });

@@ -13,6 +13,7 @@ import { createFilterTrigger$ } from '../shared/filter-request-trigger';
 import { SortDirection, SortValue, compareSortValues, nextSortState, sortAriaState, sortColumnLabel } from '../shared/sortable-column';
 import { ToastService } from '../../services/toast.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 type NeedsOrderingSortColumn =
   | 'name'
@@ -55,6 +56,14 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     notes: ''
   };
 
+  /**
+   * Whether a support session is active (issue #661): Mark as ordered is hidden and the status
+   * toggle disabled while it is, because a session grants `InventoryOperate` - the capability this
+   * page's two writes would otherwise be shown for - and the backend refuses them only by its
+   * read-only method rule, never by withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
   private readonly search$ = new Subject<string>();
   private readonly immediateFilter$ = new Subject<void>();
   private readonly destroy$ = new Subject<void>();
@@ -65,8 +74,11 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     private supplierService: SupplierService,
     private supplierOrderService: SupplierOrderService,
     private toastService: ToastService,
-    private router: Router
-  ) {}
+    private router: Router,
+    supportSession: SupportSessionService
+  ) {
+    supportSession.active$.pipe(takeUntil(this.destroy$)).subscribe((active) => (this.sessionActive = active));
+  }
 
   ngOnInit(): void {
     this.categoryService.getAll().subscribe((categories) => (this.categories = categories));
@@ -136,7 +148,9 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   }
 
   openOrderForm(): void {
-    if (this.selectedProductIds.size === 0) {
+    // Checked here as well as hidden in the template, so the dialog is actually unavailable
+    // rather than merely unreachable by mouse - the endpoint refuses the order either way.
+    if (this.selectedProductIds.size === 0 || this.sessionActive) {
       return;
     }
 
@@ -152,6 +166,9 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   }
 
   saveOrder(): void {
+    if (this.sessionActive) {
+      return;
+    }
     if (!this.orderForm.supplierId) {
       this.toastService.error('Select a supplier for this order.');
       return;
@@ -280,6 +297,9 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   }
 
   toggleActive(product: Product): void {
+    if (this.sessionActive) {
+      return;
+    }
     this.productService.update(product.id, {
       name: product.name,
       sku: product.sku ?? null,

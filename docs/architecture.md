@@ -3604,8 +3604,9 @@ disable it. `ProductListComponent` (Delete, hidden; the Active/Inactive toggle, 
 `active$` subscription out to every remaining write control across the application is tracked as
 follow-up under #513 - issues #659, #658, #660 and #657 extend this to expenses and site
 commissions, machines and stock, business administration, and Purchases, purchase details/forms
-and Suppliers (below); the remaining write controls stay open under #513. Each page's write
-method (`confirmDelete`, `toggleActive`, `save`) also
+and Suppliers (below), and issue #661 closes the audit over everything those five left
+([Auditing the remaining write actions](#auditing-the-remaining-write-actions-across-the-support-view-ui-issue-661)).
+Each page's write method (`confirmDelete`, `toggleActive`, `save`) also
 checks the flag itself and returns before calling the API, the same belt-and-suspenders the
 capability-gated controls already follow - the control actually becomes unavailable rather than
 merely invisible.
@@ -3835,6 +3836,99 @@ Receive and Cancel being hidden and `cancelOrder` refusing to call the API.
 `supplier-list.component.spec.ts` (new) covers Create/Update being disabled, Delete being hidden,
 `save()` and `remove()` refusing to call the API while a session is active, and normal behaviour
 resuming once a session ends.
+
+### Auditing the remaining write actions across the support view UI (issue #661)
+
+Issues #554, #659, #658, #660 and #657 each guarded one named family of pages. This slice is the
+audit that closes #513's frontend follow-up: every remaining user-triggered write action in the
+Angular application was inventoried, and the ones a support session can still reach now read the
+same `SupportSessionService.active$` flag. Nothing about the signal changed - a session grants the
+capability these pages gate on, so the capability is still the wrong thing to ask
+([Hiding write controls and support-view messages](#hiding-write-controls-and-support-view-messages-issue-554))
+- and nothing about the backend changed: the read-only method rule, the Nayax refusal and the two
+`403` codes are exactly as issue #551 left them.
+
+**A `POST` that only reads is still refused, and that is what made the Admin maintenance pages the
+largest part of this audit.** `SupportSessionAccessPolicy.IsReadMethod` admits `GET` and `HEAD` and
+nothing else, so a Preview/Dry Run step the operator thinks of as a read - Historical GST
+Classification's preview, the AVCO transition's two previews, the costing repair's preview, the
+Nayax sale timestamp repair's preview, the Nayax cost backfill's dry run - is refused exactly as
+its Apply is. Each of those pages is behind `Data.Repair`, which
+`SupportSessionAccessPolicy.Capabilities` grants, so all of them rendered fully operable inside a
+session before this slice. The same reasoning covers `Imports.Run` on Admin → Imports and
+`Inventory.Operate` on Take Inventory and the Products pages below.
+
+**What changed, page by page.**
+
+- `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file, Import
+  products and Import XML files, and `onSalesSelected`, `importProducts` and `importXml` each
+  return before calling `ImportService`. Download template stays enabled: it builds a CSV in the
+  browser and calls no API.
+- `HistoricalGstClassificationWorkflowComponent`, `AvcoTransitionWorkflowComponent`,
+  `CostingRepairComponent`, `HistoricalCostRecoveryWorkflowComponent` and
+  `NayaxSaleTimestampRepairWorkflowComponent` (all `Data.Repair`) disable both their preview and
+  their apply control, and every preview and apply method returns before calling its service. The
+  timestamp repair folds the flag into `canApply` rather than adding a second condition beside it,
+  so Apply is never offered for a plan even when one is on screen and acknowledged. Each page's
+  read-only content - the returned plan, the repair history (`GET`), the explanatory copy - stays
+  on screen, which is why these are disabled rather than hidden.
+- `TakeInventoryComponent` (`take-inventory`, `Inventory.Operate`) disables Apply on every row and
+  `apply()` returns before calling `InventoryCountService`. Confirming an unchanged Current Stock
+  stays available deliberately: it marks the row complete in this browser's session state and calls
+  nothing at all.
+- `ProductNeedsOrderingComponent` (`products/needs-ordering`, `Inventory.Operate`) hides Mark as
+  ordered - it opens a dialog whose only purpose is creating a supplier order - and disables the
+  Active/Inactive toggle, matching `ProductListComponent`'s own toggle. `openOrderForm`, `saveOrder`
+  and `toggleActive` each return before acting.
+- `ProductGstRuleComponent`, composed into the product edit page, disables Save GST rule and
+  `save()` returns before calling `ProductService.setGstRule`.
+- `DashboardComponent` has no write control, but arriving on it posts
+  `POST /api/nayax-sales/sync` - and the Dashboard is exactly where starting a session lands, so
+  every support view began with a refused write and a toast. The call is now skipped entirely
+  while a session is active, and the page says so with
+  `NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE` through a separate
+  `isSalesSyncSkippedInSupportView` flag rather than reusing `isSalesSyncFailed`: a synchronization
+  that was never attempted did not fail, and the persisted Sites and Machines figures are still
+  loaded and still flagged as possibly stale.
+
+**What this audit deliberately excluded, and why.**
+
+- **Admin → Users (members, invites)** - `Members.Manage` is in `SupportSessionAccessPolicy
+  .Excluded`, so `requireCapability` redirects a session before `MemberManagementComponent` or
+  `MemberInvitesComponent` mounts. Recorded by issue #660 and unchanged here.
+- **Supplier GST defaults** - `Suppliers.ManageGstDefaults` is the other excluded capability, so
+  the editor already hides itself. Recorded by issue #657 and unchanged here.
+- **The Super Admin pages** (`super-admin/businesses`, `super-admin/diagnostics`) - these are the
+  platform-admin surface, reached as the administrator themselves under `PlatformAdminPolicy`, not
+  through a session. Approve/reject/deactivate/reactivate/release and the diagnostics query must
+  keep working *while* a session is running, because ending it is one of the actions on that page.
+- **Invite redemption (`/invite/:token`) and the business application (`/apply`)** - both write the
+  caller's **own** membership or application through a `MembershipNotRequiredEndpoint`, neither
+  serves or alters any business's data, and neither route is inside the business shell a support
+  view puts the administrator in. Guarding them would stop a person from joining or applying, which
+  is not what a support session is about.
+- **`SaleCostingBackfillComponent`** - not routed and not imported by any component, so it is
+  unreachable in the running application; it was left exactly as it is rather than guarded, because
+  a guard on dead code proves nothing. Removing it is out of this issue's scope.
+- **Local-only controls** - filters, sorts, the order-quantity inputs, Confirm current stock,
+  Download template, every control that changes component state and issues no request. Only the
+  Save/Apply/Submit at the end of each of those is guarded, the same line #554 drew.
+
+**What proves it.** `admin-imports.component.spec.ts`, `take-inventory.component.spec.ts`,
+`product-needs-ordering.component.spec.ts`, `product-gst-rule.component.spec.ts`,
+`historical-gst-classification-workflow.component.spec.ts`,
+`avco-transition-workflow.component.spec.ts`, `costing-repair.component.spec.ts`,
+`historical-cost-recovery-workflow.component.spec.ts` and
+`nayax-sale-timestamp-repair-workflow.component.spec.ts` each gained a session-active describe
+block covering the control being disabled or hidden while a session is active, every guarded
+handler refusing to call its service when invoked directly - the preview and dry-run handlers
+included - and every control rendering and working normally while no session is active.
+`dashboard.component.spec.ts` covers the sync call never being made in a session, the persisted
+machines and sites still loading, the Nayax sentence replacing the sync-failed warning, and the
+sync still running outside a session. The five routed Admin pages that compose a guarded workflow
+(`avco-transition`, `costing-repair-page`, `historical-cost-recovery`,
+`historical-gst-classification`, `nayax-sale-timestamp-repair`) were given the same
+`SupportSessionService` stub their child now requires.
 
 ### Member access: capability-built navigation, guards and hidden actions (issue #528)
 

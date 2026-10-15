@@ -18,6 +18,7 @@ import {
   toDateTimeLocalValue
 } from '../../../formatting/business-time-zone';
 import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
  * The Admin page's Costing Repair workflow (issue #361, the UI over #359/#360's repair API): the
@@ -111,7 +112,7 @@ import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.
         <button
           type="button"
           class="btn btn-primary mt-3"
-          [disabled]="loading || productId == null"
+          [disabled]="loading || sessionActive || productId == null"
           (click)="previewRepair()"
         >Preview repair</button>
 
@@ -161,7 +162,7 @@ import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.
             <button
               type="button"
               class="btn btn-primary mt-4"
-              [disabled]="loading"
+              [disabled]="loading || sessionActive"
               (click)="applyRepair()"
             >Apply repair</button>
           </div>
@@ -230,6 +231,16 @@ export class CostingRepairComponent implements OnInit, OnDestroy {
   preview: InventoryCostRepairPreview | null = null;
   history: InventoryCostRepairRecord[] = [];
 
+  /**
+   * Whether a support session is active (issue #661): Preview and Apply are disabled while it is,
+   * because a session grants `DataRepair` - the capability this page and both endpoints are gated
+   * on - and the backend refuses them only by its read-only method rule, never by withholding the
+   * capability. The *preview* is guarded too: it is a `POST`, so that rule refuses it as surely as
+   * the apply. The repair history stays readable: it is a `GET`.
+   * See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
   // The product the current preview was requested for, and a sequence number per request kind:
   // a response is only accepted while its sequence number is still the latest, so a response for
   // a product the operator has since switched away from (including A -> B -> A) is discarded.
@@ -239,12 +250,16 @@ export class CostingRepairComponent implements OnInit, OnDestroy {
   private previewSubscription: Subscription | null = null;
   private historySubscription: Subscription | null = null;
   private timeZoneSubscription: Subscription | null = null;
+  private readonly sessionActiveSubscription: Subscription;
 
   constructor(
     private readonly repairService: InventoryCostRepairService,
     private readonly toast: ToastService,
-    private readonly businessTimeZone: BusinessTimeZoneService
-  ) {}
+    private readonly businessTimeZone: BusinessTimeZoneService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
 
   ngOnInit(): void {
     // The default effective time is "now" in the business's own timezone, so it cannot be set
@@ -272,6 +287,7 @@ export class CostingRepairComponent implements OnInit, OnDestroy {
     this.cancelHistory();
     this.timeZoneSubscription?.unsubscribe();
     this.timeZoneSubscription = null;
+    this.sessionActiveSubscription.unsubscribe();
   }
 
   selectProduct(): void {
@@ -282,6 +298,9 @@ export class CostingRepairComponent implements OnInit, OnDestroy {
   }
 
   previewRepair(): void {
+    // Checked here as well as disabled in the template, so the request is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) return;
     if (this.productId == null) {
       this.toast.error('Select a product to preview a costing repair.');
       return;
@@ -332,6 +351,7 @@ export class CostingRepairComponent implements OnInit, OnDestroy {
   }
 
   applyRepair(): void {
+    if (this.sessionActive) return;
     if (!this.preview) return;
     // The apply boundary: only a preview requested for, and returned for, the product currently
     // selected may be applied. Anything else is discarded and must be previewed again.

@@ -7,7 +7,15 @@
 
   <app-legacy-business-settings-prompt></app-legacy-business-settings-prompt>
 
-  @if (isSalesSyncFailed) {
+  <!--
+    Two different statements, never both (issue #661): in a support view the synchronization is
+    deliberately not attempted, so saying it failed would describe an attempt that never happened.
+  -->
+  @if (isSalesSyncSkippedInSupportView) {
+    <div class="alert alert-warning">
+      <p class="alert-title">{{ nayaxUnavailableMessage }}. Sites and Machines below show the last synchronized figures, which may be stale.</p>
+    </div>
+  } @else if (isSalesSyncFailed) {
     <div class="alert alert-warning">
       <p class="alert-title">Latest Nayax sales could not be synchronized. Sites and Machines below show the last successfully synchronized figures, which may be stale.</p>
     </div>
