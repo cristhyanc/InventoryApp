@@ -151,6 +151,27 @@ describe('BusinessService (issue #499)', () => {
     expect(seen).toEqual([{ name: 'Vending Co', timeZoneId: 'Australia/Brisbane' }]);
   });
 
+  /**
+   * The ordinary settings-save refresh is deliberately **not** a context change (issue #671): the
+   * same business is being re-read under the same identity, so the zone it already published stays
+   * published while the read is in flight rather than every date on the page going blank mid-save.
+   * `reset()` is the one that clears it, and only a change of account or of effective business.
+   */
+  it('refresh() keeps the published zone while the re-read is in flight (issue #549)', () => {
+    const saved = new Subject<CurrentBusiness>();
+    let read = 0;
+    const { service, timeZone } = createService(() => (read++ === 0 ? of(sydneyBusiness) : saved.asObservable()));
+    service.load().subscribe();
+    expect(timeZone.timeZoneId).toBe('Australia/Sydney');
+
+    service.refresh().subscribe();
+    expect(timeZone.timeZoneId).toBe('Australia/Sydney');
+
+    saved.next({ name: 'Vending Co', timeZoneId: 'Australia/Brisbane' });
+
+    expect(timeZone.timeZoneId).toBe('Australia/Brisbane');
+  });
+
   it('refresh() asks the endpoint again even though load() already cached an answer', () => {
     const { service, http } = createService();
     service.load().subscribe();

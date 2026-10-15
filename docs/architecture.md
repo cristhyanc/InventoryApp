@@ -3540,6 +3540,15 @@ component. `app.component.spec.ts` covers a direct event-only switch between two
 the previous account's response arriving after the switch, the sign-out event, a duplicate
 notification, and the cleanup on destroy.
 
+**And the shell follows the business in effect now (issue #671).** A changed *identity* is not the
+only thing that changes which business a tab resolves: so does a support-session start, end or
+expiry, and so does the account state turning the identity already signed in into a `Member`. The
+shell reads `GET /api/business/current` again on each of those, publishes the zone it answers with,
+and reports an unanswerable lookup explicitly with a retry rather than letting a page render blank
+instants. See [Reloading the business time zone after a context
+change](#reloading-the-business-time-zone-after-a-context-change-issue-671) for which trigger
+withholds the routed page and which deliberately does not.
+
 Adding a navigation entry is therefore a data change in `layout/navigation.ts` once the page and
 its route exist — not a template change in the shell.
 
@@ -4303,8 +4312,11 @@ anybody else's.
 
 Nothing here changes what the server enforces, the read-only rule, the capability sets, the session's
 server-side lifetime, or where a business comes from. It is the frontend's own answer to "what is on
-screen now", and `BusinessService.reset()` still leaves the shell's cached business unread inside a
-session - the banner names the business from the session itself - which is unchanged from issue #553.
+screen now". At this point `BusinessService.reset()` still left the shell's cached business unread
+inside a session - the banner names the business from the session itself - which was unchanged from
+issue #553; issue #671 is what reads it again, because the zone that dropped with it is what every
+instant on the rebuilt page is rendered in (see [Reloading the business time zone after a context
+change](#reloading-the-business-time-zone-after-a-context-change-issue-671)).
 
 **What proves it.** `support-session-context-transition.spec.ts` renders the **real**
 `AppComponent`, the real router and the real `DashboardComponent` over the production interceptor
@@ -4326,6 +4338,88 @@ the session still rendering no page at all.
 `support-session.interceptor.spec.ts` adds the interceptor's own superseded-generation and
 reordered-reaction cases, and `support-session.service.spec.ts` covers each invalidation trigger
 above, including the two identity notifications that are deliberately not changes.
+
+### Reloading the business time zone after a context change (issue #671)
+
+Dropping a page and rebuilding it (issue #670) replaces what is on screen, but the rebuilt page still
+renders its instants in whatever time zone is **published** - and the zone was read once per
+signed-in account (issues #499 and #604). Two context changes under one identity therefore left it
+wrong or absent:
+
+- **A support start, end or expiry published no zone at all.** The transition calls
+  `BusinessService.reset()`, which drops the cached business *and* the published zone, and nothing
+  read the business now in view. `AppComponent`'s lookup had already run for this account, so every
+  instant on the page the transition built rendered blank - `BusinessDateTimePipe` renders nothing
+  rather than guess - for the rest of the browser session.
+- **An identity that became a `Member` after that lookup never got a zone either.** The lookup waits
+  for the account state and deliberately asks for no business when it is not `Member` (issue #529),
+  then ends. An accepted invite (issue #535) and an approved application (issue #542) both turn the
+  *same* signed-in identity into a `Member` afterwards, and nothing looked again.
+
+**The service reports the effective business change; the shell reads the business.**
+`SupportSessionService.contextChanged$` emits exactly once per transition, from
+`applyBusinessContextChange()`, immediately after `BusinessService.reset()` and before the capability
+re-read and the dashboard navigation - so the read belongs to the new context rather than being
+discarded as an answer from the one it replaced (issue #669). It is deliberately a second observable
+rather than the rising edge of `contextChanging$`: that one reports whether a transition is
+*settling*, so a session ended and another started before the first navigation finished emits one
+`true` for the two of them, and the second business's zone would never be read while its `reset()`
+had already dropped the first's.
+
+`AppComponent` reads the effective business on that signal, and on the account state reporting that
+the identity whose lookup was skipped as a nonmember has become a `Member`:
+
+| What changed | What the shell does |
+| --- | --- |
+| A support session started, ended, expired, was refused `support_session_ended` in the current context, or was started/ended in another tab | reads the business again and **withholds the routed page** until it answers, on top of the transition window issue #670 already withholds it for |
+| The account state reports `Member` for a context whose lookup was skipped because the account held no membership | reads the business again and **leaves the page where it is** |
+| Anything else - a same-identity re-read, an `unavailable` answer, a state that is still not `Member` | nothing; the context that read its business already has it |
+| The signed-in identity changed | unchanged from issue #604: the whole context is discarded and read again |
+
+The two halves of that difference are both deliberate. A support transition's page renders its
+instants in the zone being read, so it waits. A membership transition's page is an onboarding page
+with no business instant on it which is in the middle of the navigation that acceptance or approval
+performs (`InviteAcceptanceComponent`, `ApplicationPendingComponent` - each re-reads the account
+state and the capabilities and *then* navigates): withholding the routed page would destroy that
+component, tear the navigation down with it, and strand the operator on the page they had just been
+approved off.
+
+**The account-state skip does not apply inside an effective support view.** A platform administrator
+may hold no membership of their own, so their account state is `NoMembership` while they are reading
+somebody else's business. In `viewing` the shell reads the business anyway: the request presents
+`X-Support-Session` (`classifyMemberRequest` treats `api/business/current` as an ordinary member
+endpoint), `GET /api/business/current` needs only `Dashboard.View` - which the support capability set
+holds - and is a `GET`, so it answers for the business in the session. Nothing about the server side
+changes: the business still comes from the stored session row, never from the request.
+
+**A zone that cannot be read is said so, with a retry.** After its retries (`businessLookupRetries`,
+with the growing delay), a lookup that still could not be answered leaves the zone unknown - never
+the browser's, never another business's, never a fixed one, exactly as issue #499 requires - and the
+shell now renders an explicit `role="alert"` explanation above the page with a **Try again** control
+that reads it again, instead of leaving the page to render blanks in silence. The application itself
+is still shown rather than waiting forever, which is unchanged from issue #499. An account that
+simply has no business to look up is not that state and is not reported as one.
+
+**The ordinary settings-save refresh is untouched.** `BusinessService.refresh()` (issue #549) is not
+a context change: the same business is being re-read under the same identity, so it neither bumps the
+stale-load generation nor clears the published zone first, and the zone stays on screen while the
+re-read is in flight. `reset()` remains the only thing that clears it, and only for a changed account
+or a changed effective business; a lookup started before a `reset()` can still publish nothing.
+
+**What proves it.** `support-session-business-time-zone.spec.ts` renders the **real** `AppComponent`,
+the real `SupportSessionService`, the real `BusinessService`/`BusinessTimeZoneService`, the real
+router and the production interceptor chain, with a routed page whose only content is one true
+instant - so the zone is observable exactly as an operator sees it - and two businesses in genuinely
+different zones (`Australia/Sydney` and `America/New_York`). It covers a session starting (the page
+withheld, the read presenting the session id, the viewed business's zone published), the session
+ending, an administrator with no membership of their own, a previous context's answer arriving late
+and publishing nothing, two overlapping transitions both being read, another tab's `started` and
+`ended`, and the session's own expiry. `app.component.spec.ts` covers the shell's decisions - when it
+reads again, the page waiting for a support transition and not for a membership transition, the
+`Member` answers that must change nothing, and the unavailable explanation and its retry -
+`support-session.service.spec.ts` covers `contextChanged$` emitting once per transition for each of
+the five transitions, twice for two overlapping ones, and after the cached business is dropped, and
+`business.service.spec.ts` covers the settings-save refresh keeping its published zone.
 
 ### Member access: capability-built navigation, guards and hidden actions (issue #528)
 
@@ -4759,6 +4853,12 @@ first and asks for the business only when it answers `Member` - an account with 
 membership has no business to look up, and the call would only receive the same `403` every other
 member endpoint already gives it. An account state that could not be read still attempts the
 lookup, for the same fail-open reason the guard does: the endpoint itself remains the boundary.
+Since issue #671 that skip has one exception and one consequence: it does not apply inside an
+effective support view, where the business the request resolves is the session's and the
+administrator may hold no membership of their own, and a *later* `Member` answer for the same
+identity - an accepted invite, an approved application - makes the shell read the business it
+skipped. See [Reloading the business time zone after a context
+change](#reloading-the-business-time-zone-after-a-context-change-issue-671).
 
 **And the state it waits for is the current identity's** (issue #604). The shell starts that lookup
 afresh on the same account-change trigger these caches use (see [Application shell and
@@ -6344,6 +6444,7 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **It fails closed.** A request with no resolved business, or a business whose stored id the host's time-zone database cannot resolve, gets `Inventory.Application.Time.BusinessTimeZoneUnavailableException` from every member of the port - never `Australia/Sydney`, never the host's zone, never UTC. A substituted zone would move sales, fees, commissions and profit between business days with nothing looking wrong. The exception is not mapped to a caller-facing status: it falls through to `GlobalExceptionHandler`, which logs it and answers a generic `500`. The middleware does not refuse the whole request when a business has no usable zone (most endpoints derive no business date at all); it logs the condition, and any business-date derivation in that request fails.
 - **Maintenance commands have no business calendar, and need none.** The human-invoked `bootstrap-business`, `migrate-database` and database-backup commands run outside a request, so no business is resolved and no zone is published: resolving `IBusinessCalendar` there succeeds but every member fails closed. None of them derives a business date. `BusinessBootstrapper` creates its business with `Australia/Sydney` stated explicitly - the zone the pre-tenancy data it adopts has always been reported in - rather than relying on a default. A maintenance command that ever does need a business date must construct a `ZonedBusinessCalendar` with the zone it means, explicitly.
 - **The frontend gets the zone from the API.** `GET /api/business/current` returns `{ name, timeZoneId }` for the trusted current business, carrying the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and no identifier in either direction. It replaced the frontend's hard-coded `BUSINESS_TIME_ZONE` constant: `BusinessService` reads it once sign-in has settled - and again whenever the signed-in account changes, including a direct MSAL active-account switch (issue #604, see [Application shell and navigation](#application-shell-and-navigation-issue-391)) - and publishes the zone into `BusinessTimeZoneService`, which `BusinessDateTimePipe` and the calendar-input components read. The shell holds the routed page back until that lookup has settled, so a page on screen is one whose business context is known; a lookup that failed renders the application with dates unavailable rather than in a guessed zone, and a changed account publishes no zone at all until its own business has answered. Issue #521 also surfaces the same name and zone in `GET /api/me/access` alongside the caller's role and capabilities (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)); that endpoint does not replace this one, and the frontend still reads the zone from here.
+- **The zone is re-read whenever the *effective* business changes under one identity** (issue #671), because once per account is not once per business. A support-session start, end or expiry drops the published zone (`BusinessService.reset()`) and the shell reads the business now in view - the session's business inside a support view, the administrator's own outside one - withholding the routed page until it answers; an accepted invite or an approved application that turns the identity already signed in into a `Member` is read the same way, without taking the onboarding page performing that navigation off screen. A lookup that still could not be answered is reported explicitly, with a retry, instead of leaving a page to render blank instants; no zone is ever substituted. The settings-save refresh of issue #549 is deliberately not one of these changes and keeps its published zone while it re-reads. See [Reloading the business time zone after a context change](#reloading-the-business-time-zone-after-a-context-change-issue-671).
 - **A zone change applies to all history.** The owner's decision (recorded on issue #499) is that changing a business's zone later re-derives every historical business day in the new zone, with a warning. Nothing stored is rewritten; the boundaries simply move. Since issue #548 that change is reachable: `PUT /api/business/settings` saves the zone, the next request resolves it from the business's own record, and every business date - for data already stored as much as for new data - is derived in the new zone, including its daylight-saving transitions. See [Business settings API](#business-settings-api-issue-548); the page that shows the warning is issue #549.
 - **Testing.** Two-business relational tests prove isolated boundaries for `Australia/Sydney` and `America/New_York`, including each zone's daylight-saving transition days in both directions (a 23-hour and a 25-hour business day), the write-path refusal, and the fail-closed read for a zone corrupted directly in the database (`PerBusinessTimeZonePersistenceTests`, `ZonedBusinessCalendarTests`, `CurrentBusinessCalendarTests`, `BusinessTimeZonesTests`, `BusinessTimeZoneMigrationTests`, `CurrentBusinessApiTests`).
 

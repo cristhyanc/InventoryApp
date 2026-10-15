@@ -157,10 +157,12 @@ type ReceivedBroadcast = Partial<{
  * {@link applyBusinessContextChange}): a local start or end, the session's own expiry, a
  * `support_session_ended` refusal of the context that is still current, and a valid same-identity
  * `started`/`ended` notification from another tab all forget the cached business the shell reads for
- * every member (`BusinessService.reset`), re-read the capabilities (`AccessService.refresh`) - the
- * support set inside a session, the administrator's own (none) outside one - and take this tab to
- * the dashboard of the business now in view, because neither the page that was on screen before nor
- * the one a stale capability set rendered belongs to it.
+ * every member (`BusinessService.reset`), report the change on {@link contextChanged$} so the shell
+ * reads the business now in effect and publishes **its** time zone (issue #671), re-read the
+ * capabilities (`AccessService.refresh`) - the support set inside a session, the administrator's own
+ * (none) outside one - and take this tab to the dashboard of the business now in view, because
+ * neither the page that was on screen before nor the one a stale capability set rendered belongs
+ * to it.
  *
  * **Reaching the dashboard is not the same as replacing what is on it.** `router.navigate(['/'])`
  * alone leaves a tab that is *already* on `/` exactly as it was - the router has nothing to do, so
@@ -215,6 +217,13 @@ export class SupportSessionService implements OnDestroy {
   private pendingContextChanges = 0;
   private readonly contextChangingSubject = new BehaviorSubject(false);
 
+  /**
+   * One emission per effective business-context change (issue #671), deliberately not derived from
+   * {@link contextChangingSubject}: that one is a settled/unsettled flag, and two overlapping
+   * transitions report `true` once between them, so the second business would never be read.
+   */
+  private readonly contextChangedSubject = new Subject<void>();
+
   /** The session's own lifetime running out, scheduled from the expiry every state carries. */
   private expiry?: Subscription;
 
@@ -260,6 +269,19 @@ export class SupportSessionService implements OnDestroy {
   readonly contextChanging$: Observable<boolean> = this.contextChangingSubject
     .asObservable()
     .pipe(distinctUntilChanged());
+
+  /**
+   * That the effective business has changed, once per transition (issue #671), published the moment
+   * the previous context's cached business is dropped and before anything in the new context is
+   * issued.
+   *
+   * `AppComponent` reads the effective business again from here. {@link contextChanging$} cannot say
+   * this: it reports whether a transition is *settling*, so a session ended and another started
+   * before the first navigation finished emits one `true` for the two of them and the second
+   * business's own time zone would never be read - while `BusinessService.reset()` had already
+   * dropped the first one's.
+   */
+  readonly contextChanged$: Observable<void> = this.contextChangedSubject.asObservable();
 
   /** The id to send as `X-Support-Session`, or `null` while no session is active in this tab. */
   currentSessionId(): string | null {
@@ -414,6 +436,13 @@ export class SupportSessionService implements OnDestroy {
    */
   private applyBusinessContextChange(): void {
     this.business.reset();
+    // Dropping the cached business is not reading the new one (issue #671): the business this tab
+    // resolves after this transition - the session's inside a support view, the administrator's own
+    // outside one - has its own time zone, and every instant the next page renders is rendered in
+    // it. The shell is what reads it, because the shell is what holds the page back until it has
+    // answered. Published here, before the capability re-read and the navigation below, so that
+    // read belongs to the new context rather than being discarded as an answer from the old one.
+    this.contextChangedSubject.next();
     this.access.refresh().subscribe();
 
     this.pendingContextChanges++;

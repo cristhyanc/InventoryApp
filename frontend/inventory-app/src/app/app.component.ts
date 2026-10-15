@@ -12,7 +12,7 @@ import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav
 import { SupportSessionBannerComponent } from './layout/support-session-banner.component';
 import { SupportSessionBlockedComponent } from './layout/support-session-blocked.component';
 import { UserMenuComponent } from './layout/user-menu.component';
-import { AccountStateService } from './access/account-state.service';
+import { AccountStateAnswer, AccountStateService } from './access/account-state.service';
 import { activeAccountKey, signedInAccountMayHaveChanged } from './access/signed-in-account';
 import { BusinessService } from './services/business.service';
 import { SupportSessionService } from './support-session/support-session.service';
@@ -62,6 +62,20 @@ import { loginRequest } from './auth-config';
  * what *replaces* it: the component holding those figures is destroyed, and the one created when
  * the window closes reads the effective context from scratch, which a navigation to the URL the
  * tab is already on could never do on its own.
+ *
+ * **The business context is read again whenever the effective business changes** (issue #671). The
+ * once-per-account lookup above is not enough on its own: a support start, end or expiry drops the
+ * previous context's published zone (`BusinessService.reset`) without reading the new one, and an
+ * accepted invite or an approved application turns the identity that is **already** signed in into a
+ * `Member` after that one lookup has settled with no business at all. Both re-read it now -
+ * `SupportSessionService.contextChanged$` for the first, the account state's own
+ * nonmember-to-`Member` transition for the second - so what is on screen is the effective business's
+ * own zone rather than no zone at all. A support transition withholds the page until the new zone
+ * has answered, because that page's instants are rendered in it; a membership transition does not,
+ * because the page on screen is an onboarding page with no business instant on it that is in the
+ * middle of the navigation acceptance or approval performs, and destroying it would strand the
+ * operator there. A lookup that cannot be answered says so, with a retry
+ * ({@link isBusinessUnavailable}), instead of leaving every instant blank with no explanation.
  */
 @Component({
   selector: 'app-root',
@@ -105,6 +119,31 @@ export class AppComponent implements OnInit, OnDestroy {
   /** Whether the signed-in operator's business lookup has settled (issue #499). */
   private isBusinessSettled = false;
   private businessRequested = false;
+
+  /**
+   * Whether the settled lookup could not read the business at all (issue #671), which is the one
+   * state the shell used to keep to itself: no zone was published, so every instant on the page
+   * rendered blank with nothing saying why and nothing to press. It is deliberately not set for an
+   * account that simply has no business to look up - there is nothing wrong there - and it is
+   * cleared the moment a new lookup is made.
+   */
+  isBusinessUnavailable = false;
+
+  /**
+   * Whether the lookup was deliberately not made because the account state said this account is not
+   * a member of any business (issue #529). It is what tells an accepted invite or an approved
+   * application apart from any other account-state answer: the same identity becoming a `Member`
+   * then has a business to read that nothing has read (issue #671).
+   */
+  private isBusinessSkippedForNonMember = false;
+
+  /**
+   * Whether this tab is in an **effective** support view (issue #671). The business its requests
+   * resolve is then the session's own, so the account-state skip above must not apply to the
+   * lookup: a platform administrator may hold no membership at all, and `GET /api/business/current`
+   * in a session answers for the business being viewed.
+   */
+  private isSupportViewEffective = false;
 
   /**
    * Whether a support session is active for this administrator that this tab cannot present
@@ -216,12 +255,32 @@ export class AppComponent implements OnInit, OnDestroy {
     // starts the service's one-time own-session check, exactly as the banner's subscription does.
     this.supportSession.state$
       .pipe(takeUntil(this.destroying$))
-      .subscribe((state) => (this.isSupportViewUnresolved = state.kind === 'unresolved'));
+      .subscribe((state) => {
+        this.isSupportViewUnresolved = state.kind === 'unresolved';
+        // Which business the next lookup would be answered for (issue #671), kept here rather than
+        // asked for inside the lookup so it is already the new one when a transition reports.
+        this.isSupportViewEffective = state.kind === 'viewing';
+      });
 
     // What a changed business context does to the page on screen (issue #670).
     this.supportSession.contextChanging$
       .pipe(takeUntil(this.destroying$))
       .subscribe((changing) => this.applyBusinessContextChange(changing));
+
+    // The effective business itself changed (issue #671), which is a different question from
+    // whether its transition is still settling: the zone the previous context published has been
+    // dropped, and the business now in view has its own. The page waits for it, exactly as it waits
+    // for the first lookup of a signed-in account.
+    this.supportSession.contextChanged$
+      .pipe(takeUntil(this.destroying$))
+      .subscribe(() => this.requestBusinessContext(true));
+
+    // A nonmember account that becomes a `Member` (issue #671): an accepted invite (#535) and an
+    // approved application (#542) both publish that here, after the shell's own lookup has already
+    // settled with no business. The page is **not** withheld for it - see `applyAccountState`.
+    this.accountState.state$
+      .pipe(takeUntil(this.destroying$))
+      .subscribe((answer) => this.applyAccountState(answer));
   }
 
   ngOnDestroy(): void {
@@ -267,6 +326,16 @@ export class AppComponent implements OnInit, OnDestroy {
       account: account ?? undefined,
       postLogoutRedirectUri: window.location.origin
     });
+  }
+
+  /**
+   * Reads the business again after a lookup that could not be answered (issue #671), from the retry
+   * the shell offers beside that explanation. It withholds the page while it runs, because the
+   * operator asked for it: the loading state is the honest answer to a control they just pressed,
+   * and the page rebuilt afterwards is one whose instants have the zone.
+   */
+  retryBusinessContext(): void {
+    this.requestBusinessContext(true);
   }
 
   /**
@@ -347,62 +416,111 @@ export class AppComponent implements OnInit, OnDestroy {
       this.businessService.reset();
       this.businessRequested = false;
       this.isBusinessSettled = false;
+      this.isBusinessUnavailable = false;
+      this.isBusinessSkippedForNonMember = false;
     }
 
     if (this.isLoggedIn && !this.businessRequested) {
-      // The business's own name and time zone, which every operator-facing date/time is rendered
-      // in (issue #499). It is an authenticated read, so it cannot happen at bootstrap; it is
-      // requested here, once sign-in has settled or the signed-in account has changed. The routed
-      // page waits for it (see isBusinessContextReady), because a page rendered before the
-      // business is known would show its instants in no time zone at all.
-      //
-      // It waits for the account state first (issue #529): a person who is not `Member` has no
-      // business to look up, and `GET /api/business/current` would only answer the same `403`
-      // `BusinessScopeMiddleware` already gives every other member endpoint. An account state that
-      // could not be read is treated the same way `accountStateGuard` treats it - the lookup is
-      // attempted anyway, because the membership check on the endpoint itself is the real boundary.
-      //
-      // The answer it waits for is the **current** identity's (issue #604). `AccountStateService`
-      // publishes `unread` again from the moment the identity changes (issue #603) and the shell
-      // starts this lookup afresh on the same signal, so the one answer that can decide the new
-      // account's business is the new account's own; `take(1)` ends this subscription on it, and a
-      // later identity change replaces the whole subscription rather than repairing it.
-      this.businessRequested = true;
-      this.businessLookup = this.accountState.state$
-        .pipe(
-          filter((answer) => answer.status !== 'unread'),
-          take(1),
-          switchMap((answer) => {
-            if (answer.status === 'known' && answer.accountState.state !== 'Member') {
-              return of(null);
-            }
-
-            return defer(() => this.businessService.load()).pipe(
-              // A failed lookup emits null and is retryable (BusinessService drops it), so it is
-              // asked again, with a growing delay, before the shell gives up on it.
-              map((business) => {
-                if (business === null) {
-                  throw new Error('The current business could not be read.');
-                }
-                return business;
-              }),
-              retry({
-                count: AppComponent.businessLookupRetries,
-                delay: (_error, attempt) => timer(attempt * AppComponent.businessLookupRetryDelayMs)
-              }),
-              catchError(() => of(null))
-            );
-          }),
-          takeUntil(this.destroying$)
-        )
-        .subscribe(() => {
-          // Settled either way. A lookup that still failed after its retries published no zone,
-          // so dates render as unavailable - but the application is still shown rather than
-          // waiting forever. Only the current identity's lookup reaches this: a superseded one was
-          // unsubscribed above, so a response that arrives late can neither mark this context
-          // ready nor publish the previous business's zone (`BusinessService.reset`).
-          this.isBusinessSettled = true;
-        });
+      this.requestBusinessContext(true);
     }
+  }
+
+  /**
+   * Reads the **effective** business and publishes its time zone, which every operator-facing
+   * date/time on the page is rendered in (issue #499).
+   *
+   * It is an authenticated read, so it cannot happen at bootstrap. It is made once sign-in has
+   * settled, again whenever the signed-in account changes (issue #604), and again whenever the
+   * business this tab resolves changes under the same identity (issue #671): a support start, end or
+   * expiry, and the account state becoming `Member`.
+   *
+   * It waits for the account state first (issue #529): a person who is not `Member` has no business
+   * to look up, and `GET /api/business/current` would only answer the same `403`
+   * `BusinessScopeMiddleware` already gives every other member endpoint. An account state that could
+   * not be read is treated the same way `accountStateGuard` treats it - the lookup is attempted
+   * anyway, because the membership check on the endpoint itself is the real boundary. Inside an
+   * effective support view the skip does not apply at all (issue #671): the business the request
+   * resolves is the session's, not this administrator's own membership, which they may not have.
+   *
+   * The answer it waits for is the **current** identity's (issue #604). `AccountStateService`
+   * publishes `unread` again from the moment the identity changes (issue #603) and this lookup is
+   * started afresh on the same signal, so the one answer that can decide the new account's business
+   * is the new account's own; `take(1)` ends the subscription on it, and every later request
+   * replaces the whole subscription rather than repairing it - which is also what keeps a superseded
+   * response from readying this context or publishing the previous business's zone.
+   *
+   * `withholdThePage` says whether the routed page waits for the answer. It does for the first
+   * lookup of an account and for a support transition, whose page renders instants in the zone being
+   * read. It deliberately does not for a membership transition: the page on screen then is an
+   * onboarding page with no business instant on it, in the middle of the navigation acceptance or
+   * approval performs, and destroying it would tear that navigation down and strand the operator
+   * there.
+   */
+  private requestBusinessContext(withholdThePage: boolean): void {
+    this.businessLookup?.unsubscribe();
+    this.businessRequested = true;
+    this.isBusinessUnavailable = false;
+    this.isBusinessSkippedForNonMember = false;
+    if (withholdThePage) {
+      this.isBusinessSettled = false;
+    }
+
+    this.businessLookup = this.accountState.state$
+      .pipe(
+        filter((answer) => answer.status !== 'unread'),
+        take(1),
+        switchMap((answer) => {
+          if (answer.status === 'known' && answer.accountState.state !== 'Member' && !this.isSupportViewEffective) {
+            this.isBusinessSkippedForNonMember = true;
+            return of(null);
+          }
+
+          return defer(() => this.businessService.load()).pipe(
+            // A failed lookup emits null and is retryable (BusinessService drops it), so it is
+            // asked again, with a growing delay, before the shell gives up on it.
+            map((business) => {
+              if (business === null) {
+                throw new Error('The current business could not be read.');
+              }
+              return business;
+            }),
+            retry({
+              count: AppComponent.businessLookupRetries,
+              delay: (_error, attempt) => timer(attempt * AppComponent.businessLookupRetryDelayMs)
+            }),
+            catchError(() => of(null))
+          );
+        }),
+        takeUntil(this.destroying$)
+      )
+      .subscribe((business) => {
+        // Settled either way, so the application is shown rather than waiting forever. A lookup
+        // that still failed after its retries published no zone - dates stay unavailable, never the
+        // browser's or another business's - and the shell now says so and offers the retry
+        // (issue #671) instead of leaving the page to render blanks silently. An account with no
+        // business to look up is not that case and is not reported as one.
+        this.isBusinessSettled = true;
+        this.isBusinessUnavailable = business === null && !this.isBusinessSkippedForNonMember;
+      });
+  }
+
+  /**
+   * Reads the business when the account state reports the same identity has become a `Member`
+   * (issue #671) - an accepted invite (#535) or an approved application (#542) - and the lookup this
+   * context already made was skipped because that account held no membership. Nothing else about an
+   * account-state answer concerns the business context: an identity *change* is handled by
+   * `updateLoginState`, which drops the previous context first, and a `Member` answer for a context
+   * that already read its business is the answer that read it.
+   */
+  private applyAccountState(answer: AccountStateAnswer): void {
+    if (!this.isBusinessSkippedForNonMember || !this.isLoggedIn) {
+      return;
+    }
+
+    if (answer.status !== 'known' || answer.accountState.state !== 'Member') {
+      return;
+    }
+
+    this.requestBusinessContext(false);
   }
 }

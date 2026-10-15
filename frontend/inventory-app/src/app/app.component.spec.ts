@@ -86,6 +86,13 @@ interface Rendered {
    * before Angular would otherwise look again.
    */
   changeBusinessContext: (changing: boolean) => void;
+  /**
+   * Reports that the **effective business** changed, as `SupportSessionService` does once per
+   * transition after dropping the previous context's cached business (issue #671). It is a separate
+   * signal from the settling window above on purpose: two overlapping transitions report one
+   * settling window and two effective changes.
+   */
+  changeEffectiveBusiness: () => void;
 }
 
 const MEMBER_ACCOUNT_STATE: AccountStateAnswer = {
@@ -189,6 +196,7 @@ async function render(
   const logoutRedirect = jest.fn();
   const supportSessionEnd = jest.fn(() => of(undefined));
   const contextChanging = new BehaviorSubject(false);
+  const contextChanged = new Subject<void>();
   const msalService = {
     instance: {
       getActiveAccount: () => activeAccount(),
@@ -265,6 +273,7 @@ async function render(
         useValue: {
           state$: options.supportSession ?? of<SupportSessionState>({ kind: 'inactive' }),
           contextChanging$: contextChanging,
+          contextChanged$: contextChanged,
           end: supportSessionEnd
         }
       }
@@ -290,7 +299,8 @@ async function render(
     answerAccountState: (answer: AccountStateAnswer) => accountState.answer(answer),
     accountStateReads: accountState.reads,
     supportSessionEnd,
-    changeBusinessContext: (changing: boolean) => contextChanging.next(changing)
+    changeBusinessContext: (changing: boolean) => contextChanging.next(changing),
+    changeEffectiveBusiness: () => contextChanged.next()
   };
 }
 
@@ -1203,6 +1213,225 @@ describe('AppComponent business-context transition (issue #670)', () => {
     rendered.fixture.detectChanges();
 
     expect(main(rendered.host)).not.toContain('page body');
+    expect(rendered.host.querySelector('main [data-testid="support-session-unresolved"]')).not.toBeNull();
+  });
+});
+
+/**
+ * The shell reads the **effective** business whenever the business it resolves changes under the
+ * same signed-in identity (issue #671), which the once-per-account lookup of issues #499 and #604
+ * did not cover: a support start, end or expiry dropped the published zone without reading the new
+ * one, and an accepted invite or an approved application turned the identity already signed in into
+ * a `Member` long after that lookup had settled with no business at all.
+ *
+ * What is asserted here is the shell's own decisions - when it reads again, whether the page waits
+ * for the answer, and what it says when there is none. Which zone actually reaches the page over the
+ * real `BusinessService`, the real session and the production interceptor chain is
+ * `support-session/support-session-business-time-zone.spec.ts`.
+ */
+describe('AppComponent effective business context (issue #671)', () => {
+  beforeEach(() => stubMatchMedia(true));
+
+  const sydney: CurrentBusiness = { name: 'Vending Co', timeZoneId: 'Australia/Sydney' };
+  const newYork: CurrentBusiness = { name: 'Snack Co', timeZoneId: 'America/New_York' };
+
+  const NO_MEMBERSHIP: AccountStateAnswer = {
+    status: 'known',
+    accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null }
+  };
+  const APPLICATION_PENDING: AccountStateAnswer = {
+    status: 'known',
+    accountState: { state: 'ApplicationPending', onboardingEnabled: true, rejectionReason: null }
+  };
+
+  /** The sum of the growing delays between the lookup's retries. */
+  const allRetryDelaysMs =
+    (AppComponent.businessLookupRetryDelayMs *
+      (AppComponent.businessLookupRetries * (AppComponent.businessLookupRetries + 1))) /
+    2;
+
+  function main(host: HTMLElement): string {
+    return host.querySelector('main')?.textContent ?? '';
+  }
+
+  function unavailableNotice(host: HTMLElement): HTMLElement | null {
+    return host.querySelector<HTMLElement>('main [data-testid="business-context-unavailable"]');
+  }
+
+  function tryAgain(host: HTMLElement): HTMLButtonElement {
+    const button = Array.from(unavailableNotice(host)?.querySelectorAll('button') ?? []).find(
+      (candidate) => candidate.textContent?.trim() === 'Try again'
+    );
+    expect(button).toBeDefined();
+    return button as HTMLButtonElement;
+  }
+
+  async function onAPage(rendered: Rendered): Promise<Element | null> {
+    await TestBed.inject(Router).navigateByUrl('/reports/bookkeeping');
+    rendered.fixture.detectChanges();
+    expect(main(rendered.host)).toContain('page body');
+    return rendered.host.querySelector('main router-outlet');
+  }
+
+  it('reads the business again when the effective business changes, holding the page until it answers', async () => {
+    const changed = new Subject<CurrentBusiness | null>();
+    let lookup = 0;
+    const rendered = await render({ business: () => (lookup++ === 0 ? of(sydney) : changed.asObservable()) });
+    await onAPage(rendered);
+
+    rendered.changeEffectiveBusiness();
+    rendered.fixture.detectChanges();
+
+    expect(rendered.businessLoad).toHaveBeenCalledTimes(2);
+    expect(main(rendered.host)).toContain('Loading your business');
+    expect(main(rendered.host)).not.toContain('page body');
+
+    changed.next(newYork);
+    rendered.fixture.detectChanges();
+
+    expect(main(rendered.host)).toContain('page body');
+  });
+
+  /** The case the settling window cannot report: one `true` covers two effective changes. */
+  it('reads the business for every effective change, including two inside one settling window', async () => {
+    const rendered = await render();
+    await onAPage(rendered);
+
+    rendered.changeBusinessContext(true);
+    rendered.changeEffectiveBusiness();
+    rendered.changeEffectiveBusiness();
+    rendered.changeBusinessContext(false);
+    rendered.fixture.detectChanges();
+
+    expect(rendered.businessLoad).toHaveBeenCalledTimes(3);
+    expect(main(rendered.host)).toContain('page body');
+  });
+
+  it.each([
+    ['an accepted invite', NO_MEMBERSHIP],
+    ['an approved application', APPLICATION_PENDING]
+  ])('reads the business when %s makes the same identity a Member, leaving the page alone', async (_case, before) => {
+    const joined = new Subject<CurrentBusiness | null>();
+    const rendered = await render({ accountState: before, business: () => joined.asObservable() });
+    const page = await onAPage(rendered);
+    expect(rendered.businessLoad).not.toHaveBeenCalled();
+
+    rendered.answerAccountState(MEMBER_ACCOUNT_STATE);
+    rendered.fixture.detectChanges();
+
+    expect(rendered.businessLoad).toHaveBeenCalledTimes(1);
+    // The page is the one the acceptance or approval is navigating away from, and it is still
+    // performing that navigation: taking it off screen would tear it down with it.
+    expect(main(rendered.host)).toContain('page body');
+    expect(rendered.host.querySelector('main router-outlet')).toBe(page);
+
+    joined.next(sydney);
+    rendered.fixture.detectChanges();
+
+    expect(main(rendered.host)).toContain('page body');
+    expect(unavailableNotice(rendered.host)).toBeNull();
+  });
+
+  it('publishes the business’s own zone once a nonmember account becomes a Member', async () => {
+    const rendered = await render({ accountState: NO_MEMBERSHIP, businessHttp: [() => of(newYork)] });
+    expect(rendered.businessGet).not.toHaveBeenCalled();
+    expect(rendered.timeZone.timeZoneId).toBeNull();
+
+    rendered.answerAccountState(MEMBER_ACCOUNT_STATE);
+
+    expect(rendered.businessGet).toHaveBeenCalledTimes(1);
+    expect(rendered.timeZone.timeZoneId).toBe('America/New_York');
+  });
+
+  it('reads no business for an account-state answer that is still not a Member', async () => {
+    const rendered = await render({ accountState: NO_MEMBERSHIP });
+
+    rendered.answerAccountState(APPLICATION_PENDING);
+    rendered.answerAccountState({ status: 'unavailable' });
+    rendered.fixture.detectChanges();
+
+    expect(rendered.businessLoad).not.toHaveBeenCalled();
+    expect(unavailableNotice(rendered.host)).toBeNull();
+  });
+
+  it('reads one business when a Member answer is published again for the context that read it', async () => {
+    const rendered = await render();
+    expect(rendered.businessLoad).toHaveBeenCalledTimes(1);
+
+    rendered.answerAccountState(MEMBER_ACCOUNT_STATE);
+
+    expect(rendered.businessLoad).toHaveBeenCalledTimes(1);
+  });
+
+  it('says the business could not be read, rather than leaving every instant blank in silence', async () => {
+    jest.useFakeTimers();
+    try {
+      const rendered = await render({ business: () => of(null) });
+
+      jest.advanceTimersByTime(allRetryDelaysMs);
+      rendered.fixture.detectChanges();
+
+      const notice = unavailableNotice(rendered.host);
+      expect(notice).not.toBeNull();
+      expect(notice?.getAttribute('role')).toBe('alert');
+      expect(notice?.textContent).toContain('dates and times are unavailable');
+      // The application is still rendered rather than waiting forever (issue #499), and no zone was
+      // published, so instants render as unavailable and never in the browser's own zone.
+      expect(main(rendered.host)).not.toContain('Loading your business');
+      expect(rendered.host.querySelector('main router-outlet')).not.toBeNull();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('reads the business again from that retry, and stops saying so once it answers', async () => {
+    jest.useFakeTimers();
+    try {
+      const retried = new Subject<CurrentBusiness | null>();
+      let attempt = 0;
+      const rendered = await render({
+        business: () => (++attempt <= 1 + AppComponent.businessLookupRetries ? of(null) : retried.asObservable())
+      });
+      jest.advanceTimersByTime(allRetryDelaysMs);
+      rendered.fixture.detectChanges();
+
+      tryAgain(rendered.host).click();
+      rendered.fixture.detectChanges();
+
+      expect(rendered.businessLoad).toHaveBeenCalledTimes(2 + AppComponent.businessLookupRetries);
+      expect(unavailableNotice(rendered.host)).toBeNull();
+      expect(main(rendered.host)).toContain('Loading your business');
+
+      retried.next(sydney);
+      rendered.fixture.detectChanges();
+
+      expect(unavailableNotice(rendered.host)).toBeNull();
+      expect(main(rendered.host)).not.toContain('Loading your business');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('says nothing about an account that simply has no business to look up', async () => {
+    const rendered = await render({ accountState: NO_MEMBERSHIP });
+
+    expect(rendered.businessLoad).not.toHaveBeenCalled();
+    expect(unavailableNotice(rendered.host)).toBeNull();
+  });
+
+  it('renders no page, and no explanation, while this tab cannot present the session', async () => {
+    const rendered = await render({
+      business: () => of(null),
+      supportSession: of<SupportSessionState>({
+        kind: 'unresolved',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      })
+    });
+
+    rendered.fixture.detectChanges();
+
+    expect(unavailableNotice(rendered.host)).toBeNull();
     expect(rendered.host.querySelector('main [data-testid="support-session-unresolved"]')).not.toBeNull();
   });
 });
