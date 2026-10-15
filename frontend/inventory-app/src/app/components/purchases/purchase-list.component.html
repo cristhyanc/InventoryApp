@@ -3,12 +3,16 @@
     <div>
       <h1 class="page-title">Purchases</h1>
     </div>
-    <div class="page-actions">
-      <a routerLink="/purchases/new" class="btn btn-primary">
-        <app-icon name="add" [size]="16" />
-        Add Purchase
-      </a>
-    </div>
+    <!-- Hidden rather than disabled while a support session is active (issue #657): a session
+         grants PurchasingOperate, so this create control would otherwise still render. -->
+    @if (!sessionActive) {
+      <div class="page-actions">
+        <a routerLink="/purchases/new" class="btn btn-primary">
+          <app-icon name="add" [size]="16" />
+          Add Purchase
+        </a>
+      </div>
+    }
   </header>
 
   @if (purchases.length === 0) {
@@ -118,10 +122,14 @@
                       <app-icon name="edit" [size]="16" />
                       Edit
                     </a>
-                    <button type="button" class="btn btn-sm btn-danger" (click)="remove(r)">
-                      <app-icon name="delete" [size]="16" />
-                      Delete
-                    </button>
+                    <!-- Hidden rather than disabled while a support session is active (issue #657):
+                         a session grants PurchasingOperate, so this write would otherwise still render. -->
+                    @if (!sessionActive) {
+                      <button type="button" class="btn btn-sm btn-danger" (click)="remove(r)">
+                        <app-icon name="delete" [size]="16" />
+                        Delete
+                      </button>
+                    }
                   </div>
                 </td>
               </tr>

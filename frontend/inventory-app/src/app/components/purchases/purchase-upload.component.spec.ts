@@ -1,5 +1,6 @@
-import { convertToParamMap, ActivatedRoute, Router } from '@angular/router';
-import { of } from 'rxjs';
+import { TestBed } from '@angular/core/testing';
+import { convertToParamMap, ActivatedRoute, provideRouter, Router } from '@angular/router';
+import { Observable, of } from 'rxjs';
 import { PurchaseUploadComponent } from './purchase-upload.component';
 import { PurchaseService } from '../../services/purchase.service';
 import { SupplierService } from '../../services/supplier.service';
@@ -8,6 +9,7 @@ import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
 import { PurchaseItemPayload, PurchaseUploadPayload } from '../../services/purchase.service';
 import { GstClassification, Purchase, SupplierOrder } from '../../models/models';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 function supplierOrder(): SupplierOrder {
   return {
@@ -32,7 +34,7 @@ function supplierOrder(): SupplierOrder {
   };
 }
 
-function createHarness(supplierOrderId: string | null) {
+function createHarness(supplierOrderId: string | null, sessionActive: Observable<boolean> = of(false)) {
   const route = {
     queryParamMap: of(convertToParamMap(supplierOrderId ? { supplierOrderId } : {}))
   } as unknown as ActivatedRoute;
@@ -43,6 +45,7 @@ function createHarness(supplierOrderId: string | null) {
   const supplierOrderService = { getById: jest.fn(() => of(supplierOrder())) } as unknown as SupplierOrderService;
   const productService = { getAll: jest.fn(() => of([])) } as unknown as ProductService;
   const toastService = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } as unknown as ToastService;
+  const supportSession = { active$: sessionActive } as unknown as SupportSessionService;
 
   const component = new PurchaseUploadComponent(
     purchaseService,
@@ -51,7 +54,8 @@ function createHarness(supplierOrderId: string | null) {
     productService,
     route,
     { navigate } as unknown as Router,
-    toastService
+    toastService,
+    supportSession
   );
   component.ngOnInit();
 
@@ -70,8 +74,8 @@ function uploadedItems(upload: jest.Mock): PurchaseItemPayload[] {
 }
 
 /** A ready-to-submit manual purchase form with one line. */
-function readyToUpload(supplierOrderId: string | null = null) {
-  const harness = createHarness(supplierOrderId);
+function readyToUpload(supplierOrderId: string | null = null, sessionActive: Observable<boolean> = of(false)) {
+  const harness = createHarness(supplierOrderId, sessionActive);
   harness.component.selectedFile = new File(['content'], 'invoice.pdf', { type: 'application/pdf' });
   harness.component.form.title = 'Weekly restock';
   harness.component.addItem();
@@ -164,5 +168,54 @@ describe('PurchaseUploadComponent GST classification mapping (issue #431)', () =
 
     expect(component.items).toHaveLength(1);
     expect(component.items[0].gstClassification).toBe(GstClassification.Unknown);
+  });
+});
+
+/**
+ * Add Purchase while a support session is active (issue #657, extending #554). A session grants
+ * `PurchasingOperate`, so this write would otherwise still be offered - disabling it is this page's
+ * own job, not the capability check's.
+ */
+describe('PurchaseUploadComponent write controls during a support session (issue #657)', () => {
+  it('writes nothing while a session is active, even if the write method is invoked directly', () => {
+    const { component, upload } = readyToUpload(null, of(true));
+
+    component.upload();
+
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('still uploads while no session is active', () => {
+    const { component, upload } = readyToUpload(null, of(false));
+
+    component.upload();
+
+    expect(upload).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables the Add Purchase button while a session is active, and leaves it enabled while none is', async () => {
+    const route = { queryParamMap: of(convertToParamMap({})) } as unknown as ActivatedRoute;
+    const sessionActive$ = of(true);
+
+    await TestBed.configureTestingModule({
+      imports: [PurchaseUploadComponent],
+      providers: [
+        { provide: PurchaseService, useValue: { upload: jest.fn(() => of({} as Purchase)) } },
+        { provide: SupplierService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierOrderService, useValue: { getById: jest.fn() } },
+        { provide: ProductService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: sessionActive$ } },
+        { provide: ActivatedRoute, useValue: route },
+        provideRouter([])
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(PurchaseUploadComponent);
+    fixture.detectChanges();
+    const host = fixture.nativeElement as HTMLElement;
+
+    const submit = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Add Purchase') as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
   });
 });

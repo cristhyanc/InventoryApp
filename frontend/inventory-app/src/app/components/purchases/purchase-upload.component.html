@@ -184,7 +184,7 @@
           </div>
 
           <div class="page-actions">
-            <button type="submit" class="btn btn-primary" [disabled]="saving">Add Purchase</button>
+            <button type="submit" class="btn btn-primary" [disabled]="saving || sessionActive">Add Purchase</button>
             <a [routerLink]="supplierOrderId ? '/purchases/orders' : '/purchases'" class="btn btn-secondary">Cancel</a>
           </div>
         </form>

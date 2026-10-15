@@ -1,10 +1,11 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
-import { BehaviorSubject, NEVER, of, throwError } from 'rxjs';
+import { BehaviorSubject, NEVER, Observable, of, throwError } from 'rxjs';
 import { PurchaseEditPageComponent } from './purchase-edit-page.component';
 import { PurchaseService, PurchaseUpdatePayload } from '../../../services/purchase.service';
 import { SupplierService } from '../../../services/supplier.service';
 import { ProductService } from '../../../services/product.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import {
   GstClassification,
   GstClassificationSource,
@@ -81,6 +82,7 @@ interface Stubs {
   get?: jest.Mock;
   update?: jest.Mock;
   id?: string;
+  sessionActive?: Observable<boolean>;
 }
 
 /** The routed page with its route id, built the way a direct URL entry or a refresh builds it. */
@@ -96,8 +98,9 @@ function createPage(stubs: Stubs = {}) {
   const route = { paramMap: paramMap.asObservable() } as unknown as ActivatedRoute;
   const navigate = jest.fn();
   const router = { navigate } as unknown as Router;
+  const supportSession = { active$: stubs.sessionActive ?? of(false) } as unknown as SupportSessionService;
 
-  const component = new PurchaseEditPageComponent(purchaseService, supplierService, productService, router, route);
+  const component = new PurchaseEditPageComponent(purchaseService, supplierService, productService, router, route, supportSession);
   component.ngOnInit();
 
   return { component, get, update, navigate, paramMap };
@@ -253,13 +256,14 @@ describe('PurchaseEditPageComponent saving (issue #475)', () => {
 });
 
 describe('PurchaseEditPageComponent template (issue #475)', () => {
-  const render = async (stubs: { get: jest.Mock }) => {
+  const render = async (stubs: { get: jest.Mock; sessionActive?: Observable<boolean> }) => {
     await TestBed.configureTestingModule({
       imports: [PurchaseEditPageComponent],
       providers: [
         { provide: PurchaseService, useValue: { get: stubs.get, update: jest.fn(() => of(purchase())) } },
         { provide: SupplierService, useValue: { getAll: jest.fn(() => of([])) } },
         { provide: ProductService, useValue: { getAll: jest.fn(() => of([product(10, 'Coke')])) } },
+        { provide: SupportSessionService, useValue: { active$: stubs.sessionActive ?? of(false) } },
         provideRouter([]),
         { provide: ActivatedRoute, useValue: { paramMap: of(convertToParamMap({ id: '42' })) } }
       ]
@@ -306,5 +310,34 @@ describe('PurchaseEditPageComponent template (issue #475)', () => {
     const unavailable = host.querySelector('[data-testid="purchase-edit-unavailable"]');
     expect(unavailable?.textContent).toContain('no longer available');
     expect(host.querySelector('[data-testid="purchase-edit-back"]')).not.toBeNull();
+  });
+
+  /**
+   * Save while a support session is active (issue #657, extending #554). A session grants
+   * `PurchasingOperate`, so this write would otherwise still be offered - disabling it is this
+   * page's own job, not the capability check's.
+   */
+  it('passes sessionActive through to the form, disabling Save', async () => {
+    const { host } = await render({ get: jest.fn(() => of(purchase())), sessionActive: of(true) });
+
+    const save = host.querySelector('[data-testid="edit-purchase-save"]') as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+  });
+
+  it('leaves Save enabled while no session is active', async () => {
+    const { host } = await render({ get: jest.fn(() => of(purchase())), sessionActive: of(false) });
+
+    const save = host.querySelector('[data-testid="edit-purchase-save"]') as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+  });
+});
+
+describe('PurchaseEditPageComponent write controls during a support session (issue #657)', () => {
+  it('does not save while a session is active, even if onSave is invoked directly', () => {
+    const { component, update } = createPage({ sessionActive: of(true) });
+
+    component.onSave(PAYLOAD);
+
+    expect(update).not.toHaveBeenCalled();
   });
 });
