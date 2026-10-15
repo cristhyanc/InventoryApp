@@ -51,8 +51,11 @@ public sealed class GetSiteSummaries
             .ToDictionary(fact => fact.ProductId, fact => fact.IsActive);
         if (sites.Count == 0) return [];
 
-        // The per-machine Nayax requests stay a concurrent fan-out, unchanged: they are independent
-        // remote reads that touch no AppDbContext. Only the facts-store reads are serialized.
+        // The per-machine Nayax requests stay a concurrent fan-out: that bound belongs to the remote
+        // system, not to the database. Since issue #520 each of them does resolve the business's
+        // Nayax credentials through the request's own scoped AppDbContext, so the fan-out is awaited
+        // before the completed-sales read starts (issue #667) - a remote read in flight beside a
+        // facts-store read would be two operations on a context that supports one.
         var pending = sites
             .Select(site => (
                 site.SiteId,
@@ -61,22 +64,22 @@ public sealed class GetSiteSummaries
                     machine => _nayax.GetMachineProductsAsync(machine.MachineID, cancellationToken)))))
             .ToList();
 
-        var machineProductsTask = Task.WhenAll(pending.Select(site => site.MachineProducts));
+        // Resolved while the fan-out runs, exactly where it was before: the periods every summary is
+        // built from come from one instant, taken once.
+        var window = MachineDashboardWindow.Resolve(_clock, _businessCalendar);
+
+        // One await over every site's fan-out, so a failing machine request propagates and no task
+        // is left unobserved when another one fails first.
+        await Task.WhenAll(pending.Select(site => site.MachineProducts));
 
         // One scoped read covers every site's machines over the same 16-day lookback the former
         // per-site reads each requested, instead of one overlapping read per site; the facts carry
         // their machine id, so each site's own sales are selected from the result in memory. The
         // lookback counts back from the current UTC instant, the time base the sale facts are stored in.
-        var window = MachineDashboardWindow.Resolve(_clock, _businessCalendar);
-        var salesTask = _facts.GetRecentCompletedSalesAsync(
-            pending.SelectMany(site => site.Machines).Select(machine => machine.MachineID).Distinct().ToList(),
-            window.NowUtc.AddDays(-16),
-            cancellationToken);
-
-        // Awaits both together, as before, so a failure on either side propagates and no fan-out
-        // task is left unobserved when the other side fails first.
-        await Task.WhenAll(machineProductsTask, salesTask);
-        var salesByMachine = (await salesTask)
+        var salesByMachine = (await _facts.GetRecentCompletedSalesAsync(
+                pending.SelectMany(site => site.Machines).Select(machine => machine.MachineID).Distinct().ToList(),
+                window.NowUtc.AddDays(-16),
+                cancellationToken))
             .GroupBy(sale => sale.MachineId)
             .ToDictionary(group => group.Key, group => group.ToList());
 
