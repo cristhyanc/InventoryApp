@@ -77,6 +77,8 @@ interface Rendered {
   answerAccountState: (answer: AccountStateAnswer) => void;
   /** The identity of every account-state read, in order (issue #604). */
   accountStateReads: readonly string[];
+  /** Every `End session` the blocked explanation asked for (issue #668). */
+  supportSessionEnd: jest.Mock;
 }
 
 const MEMBER_ACCOUNT_STATE: AccountStateAnswer = {
@@ -160,6 +162,8 @@ async function render(
     accountState?: AccountStateAnswer;
     /** Per-identity account-state answers; `'pending'` holds the read unanswered (issue #604). */
     accountStateFor?: (identity: string) => AccountStateAnswer | 'pending';
+    /** The support-session state the shell sees; defaults to nothing active (issue #668). */
+    supportSession?: Observable<SupportSessionState>;
   } = {}
 ): Promise<Rendered> {
   const signedIn = options.signedIn ?? true;
@@ -176,6 +180,7 @@ async function render(
   const broadcast = { inProgress$, msalSubject$ } as unknown as MsalBroadcastService;
   const loginRedirect = jest.fn();
   const logoutRedirect = jest.fn();
+  const supportSessionEnd = jest.fn(() => of(undefined));
   const msalService = {
     instance: {
       getActiveAccount: () => activeAccount(),
@@ -243,10 +248,17 @@ async function render(
       // that gating is what app.component business-context tests below exercise, so the answer
       // comes from the double above rather than through the real cached service.
       { provide: AccountStateService, useValue: { state$: accountState.state$ } },
-      // The shell renders the support-session banner on every page (issue #553). The shell owns
-      // no part of that decision either, so it is stubbed inactive here and tested in
-      // support-session-banner.component.spec.ts and support-session.service.spec.ts.
-      { provide: SupportSessionService, useValue: { state$: of<SupportSessionState>({ active: false }) } }
+      // The shell renders the support-session banner on every page (issue #553) and withholds the
+      // routed page while a session cannot be presented by this tab (issue #668). What the state
+      // itself is decided from is `SupportSessionService`'s own (support-session.service.spec.ts);
+      // the shell's part is only which of the two it renders, so the state is supplied here.
+      {
+        provide: SupportSessionService,
+        useValue: {
+          state$: options.supportSession ?? of<SupportSessionState>({ kind: 'inactive' }),
+          end: supportSessionEnd
+        }
+      }
     ]
   }).compileComponents();
 
@@ -267,7 +279,8 @@ async function render(
     },
     raiseAccountEvent: (eventType: EventType) => msalSubject$.next({ eventType } as EventMessage),
     answerAccountState: (answer: AccountStateAnswer) => accountState.answer(answer),
-    accountStateReads: accountState.reads
+    accountStateReads: accountState.reads,
+    supportSessionEnd
   };
 }
 
@@ -1021,6 +1034,95 @@ describe('AppComponent routing (issue #391)', () => {
 
     expect((fixture.nativeElement as HTMLElement).querySelector('main')?.textContent).toContain('page body');
     expect(sidebar(fixture.nativeElement as HTMLElement)?.querySelector('a[href="/reports/bookkeeping"]')).not.toBeNull();
+  });
+});
+
+/**
+ * The shell's own part of issue #668: which of the two it renders in the main region while the
+ * administrator's support session cannot be presented by this tab. Whether the state is
+ * `unresolved` at all is `SupportSessionService`'s decision and is tested there; what matters here
+ * is that no routed page - and so no business-scoped request a page would make - is rendered under
+ * it, for an administrator who has their own membership and for one who has none.
+ */
+describe('AppComponent support session this tab cannot present (issue #668)', () => {
+  beforeEach(() => stubMatchMedia(true));
+
+  const UNRESOLVED: SupportSessionState = {
+    kind: 'unresolved',
+    businessName: 'Snack Co',
+    expiresAtUtc: '2026-02-01T01:00:00Z'
+  };
+
+  const NO_MEMBERSHIP: AccountStateAnswer = {
+    status: 'known',
+    accountState: { state: 'NoMembership', onboardingEnabled: false, rejectionReason: null }
+  };
+
+  async function navigatedMain(fixture: ComponentFixture<AppComponent>): Promise<string> {
+    await TestBed.inject(Router).navigateByUrl('/reports/bookkeeping');
+    fixture.detectChanges();
+    return (fixture.nativeElement as HTMLElement).querySelector('main')?.textContent ?? '';
+  }
+
+  it('renders the explanation instead of the routed page for an administrator with their own membership', async () => {
+    const { fixture, host } = await render({ supportSession: of(UNRESOLVED) });
+
+    const main = await navigatedMain(fixture);
+
+    expect(main).not.toContain('page body');
+    expect(host.querySelector('main [data-testid="support-session-unresolved"]')).not.toBeNull();
+    expect(host.textContent).not.toContain('Viewing as');
+  });
+
+  it('renders the explanation instead of the routed page for an administrator with no membership', async () => {
+    const { fixture, host, businessLoad } = await render({
+      supportSession: of(UNRESOLVED),
+      accountState: NO_MEMBERSHIP
+    });
+
+    const main = await navigatedMain(fixture);
+
+    expect(businessLoad).not.toHaveBeenCalled();
+    expect(main).not.toContain('page body');
+    expect(host.querySelector('main [data-testid="support-session-unresolved"]')).not.toBeNull();
+  });
+
+  it('offers End session from the explanation, which is what returns the tab to ordinary context', async () => {
+    const { fixture, host, supportSessionEnd } = await render({ supportSession: of(UNRESOLVED) });
+    await navigatedMain(fixture);
+
+    const end = Array.from(host.querySelectorAll('main button')).find(
+      (button) => button.textContent?.trim() === 'End session'
+    );
+    expect(end).toBeDefined();
+    (end as HTMLButtonElement).click();
+    fixture.detectChanges();
+
+    expect(supportSessionEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the routed page again once the session is over', async () => {
+    const state = new BehaviorSubject<SupportSessionState>(UNRESOLVED);
+    const { fixture, host } = await render({ supportSession: state });
+    expect(await navigatedMain(fixture)).not.toContain('page body');
+
+    state.next({ kind: 'inactive' });
+
+    expect(await navigatedMain(fixture)).toContain('page body');
+    expect(host.querySelector('[data-testid="support-session-unresolved"]')).toBeNull();
+  });
+
+  it('renders the routed page for an effective support view, which does present the header', async () => {
+    const { fixture, host } = await render({
+      supportSession: of<SupportSessionState>({
+        kind: 'viewing',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      })
+    });
+
+    expect(await navigatedMain(fixture)).toContain('page body');
+    expect(host.querySelector('[data-testid="support-session-unresolved"]')).toBeNull();
   });
 });
 

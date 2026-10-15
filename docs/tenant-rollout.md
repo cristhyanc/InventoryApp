@@ -678,6 +678,42 @@ does not remove them, so a rollback of #520 still has a working client. Keep
 `NayaxTokenProtection__*` forever: removing the key that encrypted a stored token is what makes that
 token undecryptable.
 
+## Using the support view (issues #553 and #668)
+
+The Super Admin can look at one business's data read-only for an hour: Super Admin → Businesses →
+**View as this business**, with a reason, for a business that is `Active`. The session is read-only
+everywhere — every write is refused by the API, not merely hidden by the page — Nayax is unavailable
+inside it, and it ends when you press **End session**, when the hour is up, or when the business is
+deactivated. See
+[docs/architecture.md § Support sessions](architecture.md#support-sessions-the-store-and-the-control-endpoints-issue-550)
+for the design.
+
+**The session's identifier lives in the browser tab's memory and is never stored.** It is answered
+once, by the start call, and never written to `localStorage`, `sessionStorage` or the URL, so a
+saved page, a shared link or a browser history entry cannot carry it. Other tabs that are already
+open are told the identifier directly, so the support view works across all of them.
+
+**Reloading, or opening a new tab, therefore leaves that tab out of the session.** The tab can still
+see *that* a session is running — it asks the server — but it cannot present the identifier, so its
+requests would read **your own** businesses rather than the business under support. Since issue #668
+such a tab shows no business page at all: it explains that it is not part of the session and offers
+**End session**, and the "Viewing as" banner is deliberately absent. That is the fail-closed answer,
+and it is the whole behaviour you should expect — a tab never shows your own data under another
+business's name.
+
+What to do when you see that explanation:
+
+1. **Go back to the tab the session was started in**, if it is still open. Everything continues
+   there, and that tab's own state will also bring the reloaded tab back into the session.
+2. **Otherwise press End session, then start a new one** from Super Admin → Businesses →
+   **View as this business**. Starting a session is always that explicit flow: nothing restarts or
+   re-issues a session for you, and no identifier can be recovered.
+3. **If End session fails** (a network blip, for example), the explanation stays and nothing is
+   shown. Try again; if it keeps failing, the session expires by itself within the hour, and a
+   deactivation of that business also ends it.
+
+Nothing here needs configuration, and no step of the rollout procedure changes.
+
 ## Not part of this rollout
 
 - **Onboarding a second business.** The Nayax *credential* is now per business: issue #519's

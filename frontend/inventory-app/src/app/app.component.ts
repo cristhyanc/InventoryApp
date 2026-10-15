@@ -10,10 +10,12 @@ import { LoadingIndicatorComponent } from './components/shared/loading-indicator
 import { BreadcrumbsComponent } from './layout/breadcrumbs/breadcrumbs.component';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav.component';
 import { SupportSessionBannerComponent } from './layout/support-session-banner.component';
+import { SupportSessionBlockedComponent } from './layout/support-session-blocked.component';
 import { UserMenuComponent } from './layout/user-menu.component';
 import { AccountStateService } from './access/account-state.service';
 import { activeAccountKey, signedInAccountMayHaveChanged } from './access/signed-in-account';
 import { BusinessService } from './services/business.service';
+import { SupportSessionService } from './support-session/support-session.service';
 import { loginRequest } from './auth-config';
 
 /**
@@ -42,6 +44,15 @@ import { loginRequest } from './auth-config';
  * previous account's business context and published time zone, cancels its lookup, and closes the
  * routed-page gate until the new account's own business has answered. A superseded lookup can
  * neither publish nor open that gate; a sign-out clears the context with no authenticated call.
+ *
+ * **A tab that cannot present the administrator's support session renders no page at all**
+ * (issue #668). `SupportSessionService` publishes `{ kind: 'unresolved' }` for a reloaded or newly
+ * opened tab that learned a session is running but holds no id for it; such a tab's requests would
+ * resolve the administrator's **own** membership, so the shell shows
+ * `SupportSessionBlockedComponent`'s explanation and its **End session** action in place of the
+ * routed page - no routed page means no business-scoped request a page would make - while the
+ * "Viewing as" banner stays off. An effective support view (`viewing`) and ordinary context
+ * (`inactive`) both render the page exactly as before.
  */
 @Component({
   selector: 'app-root',
@@ -54,7 +65,8 @@ import { loginRequest } from './auth-config';
     ToastContainerComponent,
     LoadingIndicatorComponent,
     BreadcrumbsComponent,
-    SupportSessionBannerComponent
+    SupportSessionBannerComponent,
+    SupportSessionBlockedComponent
   ],
   templateUrl: './app.component.html'
 })
@@ -86,6 +98,16 @@ export class AppComponent implements OnInit, OnDestroy {
   private businessRequested = false;
 
   /**
+   * Whether a support session is active for this administrator that this tab cannot present
+   * (issue #668), which is what withholds the routed page. It is `SupportSessionService`'s own
+   * `unresolved` state and nothing else: the shell neither decides it nor tries to repair it, and
+   * it takes precedence over the business-context gate below - what is wrong is not that the
+   * business is unknown but that any page rendered here would be the administrator's own data for
+   * a session that names somebody else's business.
+   */
+  isSupportViewUnresolved = false;
+
+  /**
    * The signed-in identity the business context above was requested for, or `null` when nobody is
    * signed in. A different identity means a different business, so the context is discarded and
    * read again rather than kept from the previous account. It is keyed by `activeAccountKey`, the
@@ -107,7 +129,8 @@ export class AppComponent implements OnInit, OnDestroy {
     private readonly authService: MsalService,
     private readonly msalBroadcastService: MsalBroadcastService,
     private readonly accountState: AccountStateService,
-    private readonly businessService: BusinessService
+    private readonly businessService: BusinessService,
+    private readonly supportSession: SupportSessionService
   ) {}
 
   /** The sidebar is only off the page when a narrow layout has dismissed its drawer. */
@@ -170,6 +193,12 @@ export class AppComponent implements OnInit, OnDestroy {
         this.ensureActiveAccount();
         this.updateLoginState();
       });
+
+    // Whether this tab may render a business page at all (issue #668). Subscribing is also what
+    // starts the service's one-time own-session check, exactly as the banner's subscription does.
+    this.supportSession.state$
+      .pipe(takeUntil(this.destroying$))
+      .subscribe((state) => (this.isSupportViewUnresolved = state.kind === 'unresolved'));
   }
 
   ngOnDestroy(): void {

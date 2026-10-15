@@ -26,14 +26,31 @@ function buttonWithText(host: HTMLElement, text: string): HTMLButtonElement {
 
 describe('SupportSessionBannerComponent (issue #553)', () => {
   it('renders nothing while no session is active', async () => {
-    const { host } = await render({ state$: of<SupportSessionState>({ active: false }) });
+    const { host } = await render({ state$: of<SupportSessionState>({ kind: 'inactive' }) });
+
+    expect(host.textContent?.trim()).toBe('');
+  });
+
+  /**
+   * Issue #668: a tab that holds no session id would send its requests as the administrator
+   * themselves, so this banner's claim would be false for whatever such a page showed.
+   * `SupportSessionBlockedComponent` is what that tab renders instead.
+   */
+  it('shows no "Viewing as" banner for a session this tab cannot present (issue #668)', async () => {
+    const { host } = await render({
+      state$: of<SupportSessionState>({
+        kind: 'unresolved',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      })
+    });
 
     expect(host.textContent?.trim()).toBe('');
   });
 
   it('shows the business, read-only and the expiry, with an End session action', async () => {
     const { host } = await render({
-      state$: of<SupportSessionState>({ active: true, businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' })
+      state$: of<SupportSessionState>({ kind: 'viewing', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' })
     });
 
     expect(host.textContent).toContain('Viewing as Snack Co');
@@ -44,7 +61,7 @@ describe('SupportSessionBannerComponent (issue #553)', () => {
   it('ends the session from the banner', async () => {
     const end = jest.fn(() => of(undefined));
     const { fixture, host } = await render({
-      state$: of<SupportSessionState>({ active: true, businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }),
+      state$: of<SupportSessionState>({ kind: 'viewing', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }),
       end
     });
 
@@ -59,7 +76,7 @@ describe('SupportSessionBannerComponent (issue #553)', () => {
     const toastError = jest.fn();
     const { fixture, host } = await render(
       {
-        state$: of<SupportSessionState>({ active: true, businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }),
+        state$: of<SupportSessionState>({ kind: 'viewing', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }),
         end
       },
       toastError
@@ -76,11 +93,11 @@ describe('SupportSessionBannerComponent (issue #553)', () => {
     const state$ = new Subject<SupportSessionState>();
     const { fixture, host } = await render({ state$ });
 
-    state$.next({ active: true, businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' });
+    state$.next({ kind: 'viewing', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' });
     fixture.detectChanges();
     expect(host.textContent).toContain('Snack Co');
 
-    state$.next({ active: false });
+    state$.next({ kind: 'inactive' });
     fixture.detectChanges();
     expect(host.textContent?.trim()).toBe('');
   });

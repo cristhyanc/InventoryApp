@@ -1,6 +1,6 @@
 import { HttpClient } from '@angular/common/http';
 import { Router } from '@angular/router';
-import { firstValueFrom, of } from 'rxjs';
+import { Subject, firstValueFrom, of, throwError } from 'rxjs';
 import { AccessService, MemberAccessState } from '../access/access.service';
 import { ConfigService } from '../services/config.service';
 import { BusinessService } from '../services/business.service';
@@ -65,6 +65,15 @@ const STARTED_RESPONSE = {
   sessionId: 'session-abc',
   businessId: 9,
   businessName: 'Snack Co',
+  startedAtUtc: '2026-02-01T00:00:00Z',
+  expiresAtUtc: '2026-02-01T01:00:00Z'
+};
+
+/** `GET .../active` as issue #550 answers it: the business and the instants, never the id. */
+const ACTIVE_ON_SERVER = {
+  businessId: 9,
+  businessName: 'Snack Co',
+  reason: 'Investigating a reported bug',
   startedAtUtc: '2026-02-01T00:00:00Z',
   expiresAtUtc: '2026-02-01T01:00:00Z'
 };
@@ -144,8 +153,8 @@ describe('SupportSessionService (issue #553)', () => {
 
       expect(post).toHaveBeenCalledWith('/api/super-admin/support-sessions/9', { reason: 'Investigating a reported bug' });
       expect(observed).toEqual([
-        { active: false },
-        { active: true, businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }
+        { kind: 'inactive' },
+        { kind: 'viewing', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }
       ]);
       expect(service.currentSessionId()).toBe('session-abc');
     });
@@ -184,8 +193,8 @@ describe('SupportSessionService (issue #553)', () => {
       await firstValueFrom(tabA.service.start(9, 'Investigating a reported bug'));
 
       expect(observedB).toEqual([
-        { active: false },
-        { active: true, businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }
+        { kind: 'inactive' },
+        { kind: 'viewing', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }
       ]);
       expect(tabB.service.currentSessionId()).toBe('session-abc');
     });
@@ -228,7 +237,7 @@ describe('SupportSessionService (issue #553)', () => {
 
       expect(post).toHaveBeenCalledWith('/api/super-admin/support-sessions/active/end', {});
       expect(service.currentSessionId()).toBeNull();
-      expect(observed[observed.length - 1]).toEqual({ active: false });
+      expect(observed[observed.length - 1]).toEqual({ kind: 'inactive' });
       expect(businessReset).toHaveBeenCalledTimes(1);
       expect(accessRefresh).toHaveBeenCalledTimes(1);
       expect(navigate).toHaveBeenCalledWith(['/']);
@@ -278,28 +287,21 @@ describe('SupportSessionService (issue #553)', () => {
   });
 
   describe('a new or reloaded tab (issue #553: "a new tab asks the server\'s get-active endpoint")', () => {
-    it('shows the banner for the platform administrator’s own active session, without its id', async () => {
-      const { service, get, isGranted, states } = harness({
-        activeOnServer: {
-          businessId: 9,
-          businessName: 'Snack Co',
-          reason: 'Investigating a reported bug',
-          startedAtUtc: '2026-02-01T00:00:00Z',
-          expiresAtUtc: '2026-02-01T01:00:00Z'
-        }
-      });
+    it('reports the administrator’s own active session as unresolved, never as a support view', async () => {
+      const { service, get, isGranted, states } = harness({ activeOnServer: ACTIVE_ON_SERVER });
 
       // The boot check resolves synchronously here (every double answers with `of(...)`), so a
       // subscriber that starts after it has already run - the realistic case, since nothing
       // subscribes to `state$` before the banner does - only ever observes the settled answer, not
-      // a transient `{ active: false }` on the way to it.
+      // a transient `{ kind: 'inactive' }` on the way to it.
       const observed = states();
 
       expect(isGranted).toHaveBeenCalledTimes(1);
       expect(get).toHaveBeenCalledWith('/api/super-admin/support-sessions/active');
-      expect(observed).toEqual([{ active: true, businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }]);
-      // The active read never answers the id (issue #550's own design), so this tab cannot itself
-      // present the header until another tab's `started` broadcast reaches it.
+      // The active read never answers the id (issue #550's own design), so this tab could only
+      // send requests as the administrator themselves: it is `unresolved`, not a support view
+      // (issue #668).
+      expect(observed).toEqual([{ kind: 'unresolved', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }]);
       expect(service.currentSessionId()).toBeNull();
     });
 
@@ -318,7 +320,7 @@ describe('SupportSessionService (issue #553)', () => {
       const observed = states();
       await Promise.resolve();
 
-      expect(observed).toEqual([{ active: false }]);
+      expect(observed).toEqual([{ kind: 'inactive' }]);
     });
 
     it('asks the server only once, however many subscribers the banner and other pages start', () => {
@@ -328,6 +330,138 @@ describe('SupportSessionService (issue #553)', () => {
       states();
 
       expect(get).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * The unresolved state (issue #668): a session is active on the server for this administrator,
+   * and this tab cannot present its id. Everything here is about that tab never acting as though it
+   * were inside the session, and never trying to get hold of the id by another route.
+   */
+  describe('a reloaded tab with no usable session id (issue #668)', () => {
+    it('reports the session as active to every write control, so none is offered', () => {
+      const { service } = harness({ activeOnServer: ACTIVE_ON_SERVER });
+      const observed: boolean[] = [];
+
+      service.active$.subscribe((active) => observed.push(active));
+
+      expect(observed).toEqual([true]);
+    });
+
+    it('never adopts, recovers or stores an id, whatever the active read carries', () => {
+      const localSet = jest.spyOn(Storage.prototype, 'setItem');
+      const originalPushState = window.history.pushState.bind(window.history);
+      const pushState = jest.spyOn(window.history, 'pushState').mockImplementation(originalPushState);
+      // The contract does not answer the id at all; this double answers one anyway, because what
+      // must hold is that the client does not read one from here even if it appears.
+      const { service, post, states } = harness({
+        activeOnServer: { ...ACTIVE_ON_SERVER, sessionId: 'session-from-the-probe' }
+      });
+
+      states();
+
+      expect(service.currentSessionId()).toBeNull();
+      expect(localSet).not.toHaveBeenCalled();
+      expect(pushState).not.toHaveBeenCalled();
+      expect(window.location.href).not.toContain('session-from-the-probe');
+      // Nor does it quietly start a replacement session: a new session is the explicit start flow.
+      expect(post).not.toHaveBeenCalled();
+
+      localSet.mockRestore();
+      pushState.mockRestore();
+    });
+
+    it('stays in ordinary context until a delayed probe answers, then reports it unresolved', () => {
+      const answer = new Subject<unknown>();
+      const { service, states } = harness({ get: jest.fn(() => answer) });
+      const observed = states();
+
+      expect(observed).toEqual([{ kind: 'inactive' }]);
+
+      answer.next(ACTIVE_ON_SERVER);
+
+      expect(observed).toEqual([
+        { kind: 'inactive' },
+        { kind: 'unresolved', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }
+      ]);
+      expect(service.currentSessionId()).toBeNull();
+    });
+
+    it('leaves a support view another tab already shared alone when a delayed probe answers after it', async () => {
+      const answer = new Subject<unknown>();
+      const tabA = harness();
+      const tabB = harness({ get: jest.fn(() => answer) });
+      const observedB = tabB.states();
+
+      await firstValueFrom(tabA.service.start(9, 'Investigating a reported bug'));
+      answer.next(ACTIVE_ON_SERVER);
+
+      expect(observedB[observedB.length - 1]).toEqual({
+        kind: 'viewing',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      });
+      expect(tabB.service.currentSessionId()).toBe('session-abc');
+    });
+
+    it('recovers to a support view when another tab shares the id it holds', async () => {
+      const tabA = harness({ activeOnServer: null });
+      const tabB = harness({ activeOnServer: ACTIVE_ON_SERVER });
+      const observedB = tabB.states();
+
+      await firstValueFrom(tabA.service.start(9, 'Investigating a reported bug'));
+
+      expect(observedB).toEqual([
+        { kind: 'unresolved', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' },
+        { kind: 'viewing', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }
+      ]);
+      expect(tabB.service.currentSessionId()).toBe('session-abc');
+    });
+
+    it('returns to ordinary context when the session is ended from it', async () => {
+      const { service, post, businessReset, accessRefresh, navigate, states } = harness({
+        activeOnServer: ACTIVE_ON_SERVER,
+        post: jest.fn(() => of(undefined))
+      });
+      const observed = states();
+
+      await firstValueFrom(service.end());
+
+      expect(post).toHaveBeenCalledWith('/api/super-admin/support-sessions/active/end', {});
+      expect(observed[observed.length - 1]).toEqual({ kind: 'inactive' });
+      expect(businessReset).toHaveBeenCalledTimes(1);
+      expect(accessRefresh).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledWith(['/']);
+    });
+
+    it('stays unresolved when ending fails, rather than falling back to ordinary context', async () => {
+      const { service, businessReset, navigate, states } = harness({
+        activeOnServer: ACTIVE_ON_SERVER,
+        post: jest.fn(() => throwError(() => ({ status: 500 })))
+      });
+      const observed = states();
+
+      await expect(firstValueFrom(service.end())).rejects.toEqual({ status: 500 });
+
+      expect(observed[observed.length - 1]).toEqual({
+        kind: 'unresolved',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      });
+      expect(businessReset).not.toHaveBeenCalled();
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('applies another tab’s end, so nothing is left blocked once the session is over', async () => {
+      const tabA = harness();
+      const tabB = harness({ activeOnServer: ACTIVE_ON_SERVER });
+      const observedB = tabB.states();
+      await firstValueFrom(tabA.service.start(9, 'Investigating a reported bug'));
+
+      await firstValueFrom(tabA.service.end());
+
+      expect(observedB[observedB.length - 1]).toEqual({ kind: 'inactive' });
+      expect(tabB.service.currentSessionId()).toBeNull();
     });
   });
 });

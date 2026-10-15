@@ -25,16 +25,32 @@ export const SUPPORT_SESSION_HEADER = 'X-Support-Session';
 /** The `BroadcastChannel` name the open tabs of one browser share a session's id and end over. */
 const BROADCAST_CHANNEL_NAME = 'inventory-app:support-session';
 
-/** What the banner renders: never the session id, which this application never reads back either. */
-export interface SupportSessionBanner {
+/** What a session names: never its id, which this application never reads back either. */
+export interface SupportSessionDetails {
   readonly businessName: string;
   readonly expiresAtUtc: string;
 }
 
-/** The banner's own state (issue #553): nothing active, or one session to show and end. */
-export type SupportSessionState = { readonly active: false } | ({ readonly active: true } & SupportSessionBanner);
+/**
+ * What this tab can do about the administrator's support session (issues #553 and #668).
+ *
+ * - `inactive` - nothing is running as far as this tab knows, so the tab is in ordinary context:
+ *   its requests carry no support header and resolve the administrator's own membership.
+ * - `viewing` - an **effective** local support view. This tab holds the session id, so its requests
+ *   present `X-Support-Session`, the API resolves the session's business, and the "Viewing as"
+ *   banner is the truth about what is on screen.
+ * - `unresolved` - a session is active on the server for this administrator, but this tab does not
+ *   hold its id and never can (it is memory-only, and the active read deliberately never answers
+ *   it). Its requests would resolve the administrator's **own** membership instead, so this tab
+ *   must not label anything "Viewing as" and must not render or fetch business-scoped page data at
+ *   all; `SupportSessionBlockedComponent` explains that and offers **End session**.
+ */
+export type SupportSessionState =
+  | { readonly kind: 'inactive' }
+  | ({ readonly kind: 'viewing' } & SupportSessionDetails)
+  | ({ readonly kind: 'unresolved' } & SupportSessionDetails);
 
-const INACTIVE: SupportSessionState = { active: false };
+const INACTIVE: SupportSessionState = { kind: 'inactive' };
 
 interface StartedSupportSession {
   readonly sessionId: string;
@@ -76,13 +92,18 @@ type SupportSessionBroadcast =
  * environment, so it is used only when the global exists (`typeof BroadcastChannel`), the same
  * feature-detection `AppComponent` already uses for `matchMedia`.
  *
- * **A tab that was never told the id still learns a session is running.** A freshly opened or
- * reloaded tab cannot have received a `BroadcastChannel` message for a session that started before
- * it existed, so it asks `GET .../active` once instead - the one read that is resolved from the
- * authenticated actor rather than from a presented id (issue #550's own design: the id is returned
- * by the start call and nowhere else). That tab can show the banner and end the session, but cannot
- * itself present the header until another tab's `started` broadcast reaches it - a documented
- * limitation of holding the id in memory only, not a bug.
+ * **A tab that was never told the id learns a session is running, and fails closed** (issue #668).
+ * A freshly opened or reloaded tab cannot have received a `BroadcastChannel` message for a session
+ * that started before it existed, so it asks `GET .../active` once instead - the one read that is
+ * resolved from the authenticated actor rather than from a presented id (issue #550's own design:
+ * the id is returned by the start call and nowhere else). Such a tab publishes
+ * `{ kind: 'unresolved' }` and **not** `viewing`: without the id its requests would carry no
+ * support header and resolve the administrator's own membership, so labelling the page "Viewing as
+ * &lt;business&gt;" would label the administrator's own data as somebody else's. The tab explains
+ * itself and offers **End session** instead ({@link SupportSessionState}), and recovers only the two
+ * honest ways - another tab's `started` broadcast arriving with the id, or the session being ended
+ * and a new one started through the explicit start flow. Nothing here reads the id out of the probe,
+ * storage or the URL, and nothing restarts the session on the administrator's behalf.
  *
  * **Start, end and expiry all do the same three things**: forget the cached business the shell
  * reads for every member (`BusinessService.reset`), re-read the capabilities
@@ -114,7 +135,7 @@ export class SupportSessionService implements OnDestroy {
     this.channel?.addEventListener('message', this.onBroadcastMessage);
   }
 
-  /** The banner's own state; subscribing starts the one-time boot check documented above. */
+  /** The shell's own support-session state; subscribing starts the one-time boot check above. */
   readonly state$: Observable<SupportSessionState> = defer(() => {
     this.ensureBoot();
     return this.stateSubject;
@@ -132,9 +153,13 @@ export class SupportSessionService implements OnDestroy {
    * `Inventory.Application.Access.SupportSessionAccessPolicy`), so hiding or disabling a write
    * control is this flag's job and never the capability check's. Subscribing starts the same
    * one-time boot check {@link state$} does.
+   *
+   * An `unresolved` session counts as active here, which is the fail-closed answer: the shell does
+   * not render a business page in that state at all (issue #668), and a control that somehow
+   * rendered must not offer a write either.
    */
   readonly active$: Observable<boolean> = this.state$.pipe(
-    map((state) => state.active),
+    map((state) => state.kind !== 'inactive'),
     distinctUntilChanged()
   );
 
@@ -143,7 +168,7 @@ export class SupportSessionService implements OnDestroy {
     return this.http.post<StartedSupportSession>(`${this.baseUrl}/${businessId}`, { reason }).pipe(
       tap((started) => {
         this.sessionId = started.sessionId;
-        this.publish({ active: true, businessName: started.businessName, expiresAtUtc: started.expiresAtUtc });
+        this.publish({ kind: 'viewing', businessName: started.businessName, expiresAtUtc: started.expiresAtUtc });
         this.broadcast({
           type: 'started',
           sessionId: started.sessionId,
@@ -169,7 +194,7 @@ export class SupportSessionService implements OnDestroy {
    * never active, does nothing further.
    */
   handleSessionEndedSignal(): void {
-    if (this.sessionId === null && !this.stateSubject.value.active) {
+    if (this.sessionId === null && this.stateSubject.value.kind === 'inactive') {
       return;
     }
     this.applyEnded(true);
@@ -195,8 +220,15 @@ export class SupportSessionService implements OnDestroy {
         takeUntil(this.destroying$)
       )
       .subscribe((active) => {
-        if (active !== null && this.sessionId === null && !this.stateSubject.value.active) {
-          this.publish({ active: true, businessName: active.businessName ?? '', expiresAtUtc: active.expiresAtUtc });
+        if (active !== null && this.sessionId === null && this.stateSubject.value.kind === 'inactive') {
+          // Unresolved, never `viewing` (issue #668): the read says a session is running, and this
+          // tab has no id to present on its requests, so the business it names is not what this tab
+          // would be shown. Nothing here asks for the id, and nothing starts a replacement session.
+          this.publish({
+            kind: 'unresolved',
+            businessName: active.businessName ?? '',
+            expiresAtUtc: active.expiresAtUtc
+          });
         }
       });
   }
@@ -234,11 +266,11 @@ export class SupportSessionService implements OnDestroy {
     const message = event.data;
     if (message.type === 'started') {
       this.sessionId = message.sessionId;
-      this.publish({ active: true, businessName: message.businessName, expiresAtUtc: message.expiresAtUtc });
+      this.publish({ kind: 'viewing', businessName: message.businessName, expiresAtUtc: message.expiresAtUtc });
       return;
     }
 
-    if (this.sessionId !== null || this.stateSubject.value.active) {
+    if (this.sessionId !== null || this.stateSubject.value.kind !== 'inactive') {
       this.applyEnded(false);
     }
   };
