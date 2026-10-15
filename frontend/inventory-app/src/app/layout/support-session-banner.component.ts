@@ -11,13 +11,19 @@ import { SupportSessionService, SupportSessionState } from '../support-session/s
  * with every other open tab, and gone the moment it ends, expires, or the server answers
  * `support_session_ended` on any call (`SupportSessionService`, which owns all of that; this
  * component only renders its state and asks it to end the session).
+ *
+ * **It renders only an effective support view** (`{ kind: 'viewing' }`, issue #668). A tab that
+ * knows a session is running but holds no id for it cannot present the header, so its requests
+ * resolve the administrator's own membership and this banner's "Viewing as" claim would be false
+ * about everything on the page; such a tab renders `SupportSessionBlockedComponent` instead of a
+ * page and this banner shows nothing.
  */
 @Component({
   selector: 'app-support-session-banner',
   standalone: true,
   imports: [CommonModule, DatePipe],
   template: `
-    @if (state.active) {
+    @if (state.kind === 'viewing') {
       <div class="support-session-banner" role="status">
         <span>Viewing as {{ state.businessName }} — read-only — ends at {{ state.expiresAtUtc | date: 'shortTime' }}</span>
         <button type="button" class="btn btn-secondary btn-sm" [disabled]="ending" (click)="endSession()">
@@ -45,7 +51,7 @@ import { SupportSessionService, SupportSessionState } from '../support-session/s
   ]
 })
 export class SupportSessionBannerComponent implements OnInit, OnDestroy {
-  state: SupportSessionState = { active: false };
+  state: SupportSessionState = { kind: 'inactive' };
   ending = false;
 
   private readonly destroying$ = new Subject<void>();
