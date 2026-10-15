@@ -15,7 +15,7 @@ function isSessionEndedRefusal(error: HttpErrorResponse): boolean {
 
 /**
  * Joins the Super Admin's support session, and discards whatever it is no longer current for
- * (issue #553).
+ * (issues #553 and #669).
  *
  * **Attaches the header while a session is active**, and only to a request this application's own
  * API would read it from: `classifyMemberRequest`'s `platform-admin` kind is the support-session
@@ -27,14 +27,22 @@ function isSessionEndedRefusal(error: HttpErrorResponse): boolean {
  * `BusinessScopeMiddleware` decides a `PlatformDiagnosticsEndpointAttribute` endpoint before it
  * resolves a session at all, so the header was never read on one.
  *
- * **Discards a response sent under an id that is no longer current**, whether that is because this
- * very response answered `support_session_ended` (the session died mid-request) or because
- * something else - another tab's end, a different concurrent request's own
- * `support_session_ended` - moved the session on while this one was in flight. Both are one rule:
- * compare the id this request carried against {@link SupportSessionService.currentSessionId} once
- * the response (or refusal) has been fully processed, and if they differ, let the caller see
- * neither a value nor an error - exactly `EMPTY` would. A request this tab sent with no session
- * active is untouched by that rule, because there was never an id for it to become stale against.
+ * **Captures the business context of every request it lets through, and discards every answer from
+ * a context that no longer exists.** `SupportSessionService.captureRequestContext()` is taken
+ * before the request is sent - for a request made with no session as much as for one presenting an
+ * id, because an ordinary-context answer arriving into a support view is the same defect the other
+ * way round (issue #669) - and `isCurrentContext` is asked again when the answer arrives. A session
+ * started, ended or replaced meanwhile, a tab learning it cannot present the session, and a change
+ * of signed-in identity all supersede it, and a superseded answer leaves the caller with neither a
+ * value nor an error - exactly `EMPTY` would.
+ *
+ * **The comparison happens before anything reacts to the answer.** This interceptor is installed
+ * innermost (`app.config.ts`), so discarding here keeps a superseded answer away from the page, the
+ * capability and account-state caches and the global `403` notice; and the one reaction it performs
+ * itself - `support_session_ended` ending the session - is gated on the same comparison, so one
+ * session's delayed refusal can no longer end whichever session happens to be current when it
+ * lands. A refusal of the context that is still current does end it, and the caller is told nothing
+ * either way, because the session it asked under is over.
  */
 export const supportSessionInterceptor: HttpInterceptorFn = (req, next) => {
   const session = inject(SupportSessionService);
@@ -45,19 +53,27 @@ export const supportSessionInterceptor: HttpInterceptorFn = (req, next) => {
     return next(req);
   }
 
-  const sentWithId = session.currentSessionId();
-  const outgoing = sentWithId === null ? req : req.clone({ setHeaders: { [SUPPORT_SESSION_HEADER]: sentWithId } });
-  const isStale = (): boolean => sentWithId !== null && session.currentSessionId() !== sentWithId;
+  const context = session.captureRequestContext();
+  const outgoing =
+    context.sessionId === null ? req : req.clone({ setHeaders: { [SUPPORT_SESSION_HEADER]: context.sessionId } });
 
   return next(outgoing).pipe(
     tap({
       error: (error: unknown) => {
-        if (sentWithId !== null && error instanceof HttpErrorResponse && error.status === 403 && isSessionEndedRefusal(error)) {
+        if (
+          context.sessionId !== null &&
+          session.isCurrentContext(context) &&
+          error instanceof HttpErrorResponse &&
+          error.status === 403 &&
+          isSessionEndedRefusal(error)
+        ) {
+          // Ending the session supersedes this request's own context, which is what leaves the
+          // caller with neither a value nor an error below: the session it asked under is over.
           session.handleSessionEndedSignal();
         }
       }
     }),
-    filter(() => !isStale()),
-    catchError((error: unknown) => (isStale() ? EMPTY : throwError(() => error)))
+    filter(() => session.isCurrentContext(context)),
+    catchError((error: unknown) => (session.isCurrentContext(context) ? throwError(() => error) : EMPTY))
   );
 };

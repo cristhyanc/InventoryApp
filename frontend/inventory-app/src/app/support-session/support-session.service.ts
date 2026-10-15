@@ -1,6 +1,7 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, OnDestroy } from '@angular/core';
 import { Router } from '@angular/router';
+import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import {
   BehaviorSubject,
   Observable,
@@ -17,6 +18,7 @@ import {
 import { ConfigService } from '../services/config.service';
 import { BusinessService } from '../services/business.service';
 import { AccessService } from '../access/access.service';
+import { activeAccountKey, signedInAccountMayHaveChanged } from '../access/signed-in-account';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 
 /** The header a request presents to join a support session (`InventoryApi.Auth.SupportSessionHeader`). */
@@ -51,6 +53,23 @@ export type SupportSessionState =
   | ({ readonly kind: 'unresolved' } & SupportSessionDetails);
 
 const INACTIVE: SupportSessionState = { kind: 'inactive' };
+
+/**
+ * The business context one request was sent in, captured by `supportSessionInterceptor` before the
+ * request leaves and compared against the current one before its answer is allowed to change
+ * anything (issue #669).
+ *
+ * The `sessionId` is what the request actually presented, and `null` for an ordinary-context
+ * request. The `generation` is everything the id cannot see: a session started, ended or replaced
+ * while the request was in flight, a tab learning it cannot present the session at all, and a
+ * change of signed-in identity. An ordinary-context request has no id to become stale against -
+ * which is exactly how a delayed answer used to restore the administrator's own business data into
+ * a page that had moved on - so the generation is what makes it comparable.
+ */
+export interface SupportRequestContext {
+  readonly sessionId: string | null;
+  readonly generation: number;
+}
 
 interface StartedSupportSession {
   readonly sessionId: string;
@@ -110,6 +129,16 @@ type SupportSessionBroadcast =
  * (`AccessService.refresh`) - the support set inside a session, the administrator's own (none)
  * outside one - and navigate to the dashboard, because neither the page that was on screen before
  * nor the one a stale capability set rendered belongs to the business now in view.
+ *
+ * **Every one of those changes also invalidates the request context** (issue #669). This service is
+ * the one place that knows which business a request would resolve, so it is also the one place that
+ * can say whether an answer still belongs to the context that asked for it:
+ * {@link captureRequestContext} and {@link isCurrentContext} are that question, asked by
+ * `supportSessionInterceptor` and nothing else. The generation moves on a session starting, ending
+ * or being replaced (here, in another tab, or because the server refused a request with
+ * `support_session_ended`), on a tab learning from the boot probe that it cannot present the
+ * session at all, and on the signed-in identity changing - because each of those changes which
+ * business the next request resolves, or whose data an answer already in flight belongs to.
  */
 @Injectable({ providedIn: 'root' })
 export class SupportSessionService implements OnDestroy {
@@ -117,6 +146,25 @@ export class SupportSessionService implements OnDestroy {
 
   /** The session id, held in memory only. Read by `supportSessionInterceptor` and nothing else. */
   private sessionId: string | null = null;
+
+  /**
+   * Bumped by every effective business-context change (issue #669). A request carrying an older
+   * generation was sent in a context that no longer exists, whether or not it presented an id.
+   */
+  private contextGeneration = 0;
+
+  /**
+   * The signed-in identity the current generation belongs to, and `null` while nobody is signed in.
+   *
+   * It starts as whoever MSAL already reports, and a later notification that resolves to the same
+   * key changes nothing - one sign-in reports itself twice (an account event and `inProgress$`
+   * settling), and neither may invalidate a context. Learning an identity where there was none is
+   * not a change either: a request issued before anybody was signed in waits for MSAL's token
+   * before it is even sent, so invalidating there would discard the first answer of every page
+   * loaded straight into a sign-in redirect. Losing one (a sign-out) and swapping one for another
+   * both are.
+   */
+  private contextAccountKey: string | null;
 
   private booted = false;
   private readonly destroying$ = new Subject<void>();
@@ -130,9 +178,13 @@ export class SupportSessionService implements OnDestroy {
     private readonly business: BusinessService,
     private readonly access: AccessService,
     private readonly platformDiagnosticsAccess: PlatformDiagnosticsAccessService,
-    private readonly router: Router
+    private readonly router: Router,
+    private readonly authService: MsalService,
+    private readonly msalBroadcastService: MsalBroadcastService
   ) {
     this.channel?.addEventListener('message', this.onBroadcastMessage);
+    this.contextAccountKey = activeAccountKey(this.authService);
+    this.observeSignedInAccount();
   }
 
   /** The shell's own support-session state; subscribing starts the one-time boot check above. */
@@ -144,6 +196,27 @@ export class SupportSessionService implements OnDestroy {
   /** The id to send as `X-Support-Session`, or `null` while no session is active in this tab. */
   currentSessionId(): string | null {
     return this.sessionId;
+  }
+
+  /**
+   * The business context a request is about to be sent in (issue #669): the id it will present, and
+   * the generation that id alone cannot tell apart. Captured by `supportSessionInterceptor` for
+   * every business-scoped request, including one sent with no id at all.
+   */
+  captureRequestContext(): SupportRequestContext {
+    return { sessionId: this.currentSessionId(), generation: this.contextGeneration };
+  }
+
+  /**
+   * Whether `context` is still the context this tab is in - asked of an answer before it is allowed
+   * to change the session, the page or anything the interceptors above would report.
+   *
+   * Both halves are compared: the generation covers every change this service made, and the id is
+   * the one thing about a request that the server itself saw, so a session replaced between a
+   * capture and its answer is caught even if a generation were ever missed.
+   */
+  isCurrentContext(context: SupportRequestContext): boolean {
+    return context.generation === this.contextGeneration && context.sessionId === this.currentSessionId();
   }
 
   /**
@@ -168,6 +241,9 @@ export class SupportSessionService implements OnDestroy {
     return this.http.post<StartedSupportSession>(`${this.baseUrl}/${businessId}`, { reason }).pipe(
       tap((started) => {
         this.sessionId = started.sessionId;
+        // Before the capability re-read below is issued, so that read belongs to the new context
+        // rather than being discarded as an answer from the one this call just replaced.
+        this.invalidateRequestContext();
         this.publish({ kind: 'viewing', businessName: started.businessName, expiresAtUtc: started.expiresAtUtc });
         this.broadcast({
           type: 'started',
@@ -224,6 +300,11 @@ export class SupportSessionService implements OnDestroy {
           // Unresolved, never `viewing` (issue #668): the read says a session is running, and this
           // tab has no id to present on its requests, so the business it names is not what this tab
           // would be shown. Nothing here asks for the id, and nothing starts a replacement session.
+          //
+          // The context moves on even though the id does not (issue #669): this tab renders no
+          // business page from here, so an answer to a request it issued while it still believed
+          // itself to be in ordinary context must not reach one either.
+          this.invalidateRequestContext();
           this.publish({
             kind: 'unresolved',
             businessName: active.businessName ?? '',
@@ -241,6 +322,7 @@ export class SupportSessionService implements OnDestroy {
 
   private applyEnded(broadcastIt: boolean): void {
     this.sessionId = null;
+    this.invalidateRequestContext();
     this.publish(INACTIVE);
     if (broadcastIt) {
       this.broadcast({ type: 'ended' });
@@ -252,6 +334,44 @@ export class SupportSessionService implements OnDestroy {
     this.business.reset();
     this.access.refresh().subscribe();
     this.router.navigate(['/']);
+  }
+
+  /**
+   * Moves the request context on (issue #669), so every answer still in flight is superseded.
+   *
+   * It is called before the new context issues anything of its own, and it is deliberately a
+   * counter rather than a comparison of states: two contexts that look alike - ordinary context
+   * before and after a whole session was looked at and ended, the same business viewed under a new
+   * session - are still two different contexts, and an answer from the first belongs to neither the
+   * page nor the session the second is in.
+   */
+  private invalidateRequestContext(): void {
+    this.contextGeneration++;
+  }
+
+  private observeSignedInAccount(): void {
+    signedInAccountMayHaveChanged(this.msalBroadcastService)
+      .pipe(takeUntil(this.destroying$))
+      .subscribe(() => this.applySignedInAccount());
+  }
+
+  /**
+   * An actual change of signed-in identity supersedes every answer in flight: it was asked for as
+   * somebody else, whether or not a support session was involved, and the capabilities, the cached
+   * business and the account state all belong to whoever is signed in now. See
+   * {@link contextAccountKey} for which notifications count as a change.
+   */
+  private applySignedInAccount(): void {
+    const accountKey = activeAccountKey(this.authService);
+    if (accountKey === this.contextAccountKey) {
+      return;
+    }
+
+    const hadIdentity = this.contextAccountKey !== null;
+    this.contextAccountKey = accountKey;
+    if (hadIdentity) {
+      this.invalidateRequestContext();
+    }
   }
 
   private publish(state: SupportSessionState): void {
@@ -266,6 +386,7 @@ export class SupportSessionService implements OnDestroy {
     const message = event.data;
     if (message.type === 'started') {
       this.sessionId = message.sessionId;
+      this.invalidateRequestContext();
       this.publish({ kind: 'viewing', businessName: message.businessName, expiresAtUtc: message.expiresAtUtc });
       return;
     }
