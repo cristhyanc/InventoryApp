@@ -48,9 +48,9 @@ export class TakeInventoryComponent implements OnInit, OnDestroy {
   private readonly sessionActiveSubscription: Subscription;
 
   constructor(
-    private productService: ProductService,
-    private inventoryCountService: InventoryCountService,
-    private toastService: ToastService,
+    private readonly productService: ProductService,
+    private readonly inventoryCountService: InventoryCountService,
+    private readonly toastService: ToastService,
     supportSession: SupportSessionService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));

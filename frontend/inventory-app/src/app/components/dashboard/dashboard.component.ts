@@ -67,11 +67,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
   private readonly sessionActiveSubscription: Subscription;
 
   constructor(
-    private productService: ProductService,
-    private machineService: MachineService,
-    private siteService: SiteService,
-    private nayaxSalesSyncService: NayaxSalesSyncService,
-    private dashboardService: DashboardService,
+    private readonly productService: ProductService,
+    private readonly machineService: MachineService,
+    private readonly siteService: SiteService,
+    private readonly nayaxSalesSyncService: NayaxSalesSyncService,
+    private readonly dashboardService: DashboardService,
     supportSession: SupportSessionService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
