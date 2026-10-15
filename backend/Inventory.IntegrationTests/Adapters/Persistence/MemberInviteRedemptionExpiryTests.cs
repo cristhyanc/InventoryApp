@@ -302,6 +302,11 @@ public class MemberInviteRedemptionExpiryTests : IAsyncDisposable
             CancellationToken cancellationToken) =>
             inner.FindBusinessMembershipRolesAsync(businessId, cancellationToken);
 
+        public Task<BusinessStatus?> FindBusinessStatusAsync(
+            BusinessId businessId,
+            CancellationToken cancellationToken) =>
+            inner.FindBusinessStatusAsync(businessId, cancellationToken);
+
         public bool IsDuplicateActiveMembership(Exception exception) =>
             inner.IsDuplicateActiveMembership(exception);
     }

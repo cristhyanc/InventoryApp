@@ -132,6 +132,24 @@ public sealed class EfBusinessMembershipWriteStore : IBusinessMembershipWriteSto
             .ConfigureAwait(false);
 
     /// <summary>
+    /// One business's stored lifecycle status, by primary key (issue #680). <c>Businesses</c> is one
+    /// of the deliberately global tables - it is the owner, not owned - so the key is the whole of
+    /// what scopes this read, and it is only ever one tenancy resolution produced from the
+    /// authenticated actor's membership. The status is projected exactly as the column holds it,
+    /// including a value this deployment does not declare, because
+    /// <c>ActiveBusinessWritePolicy</c> is the one place that decides what such a value means.
+    /// </summary>
+    public async Task<BusinessStatus?> FindBusinessStatusAsync(
+        BusinessId businessId,
+        CancellationToken cancellationToken) =>
+        await _db.Businesses
+            .AsNoTracking()
+            .Where(business => business.Id == businessId.Value)
+            .Select(business => (BusinessStatus?)business.Status)
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+    /// <summary>
     /// Recognises the filtered unique index refusing a second active membership, and nothing else.
     ///
     /// SQLite names the columns rather than the index in its message, and the two unique indexes on

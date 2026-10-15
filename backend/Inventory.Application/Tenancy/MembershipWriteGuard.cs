@@ -18,6 +18,20 @@ namespace Inventory.Application.Tenancy;
 /// read, the rule and the write have to be one operation, and this is where that happens
 /// (docs/architecture.md § One active membership per identity).
 ///
+/// Since issue #680 it is also where an Owner's write is serialised with the Super Admin's
+/// <c>BusinessLifecycleWriter</c>: a write that declares
+/// <see cref="MembershipWriteIntent.BusinessThatMustStillBeActive"/> has that business's stored
+/// status re-read inside this same transaction, before the write, and is refused by
+/// <see cref="ActiveBusinessWritePolicy"/> unless it is still <see cref="BusinessStatus.Active"/>.
+/// The reason is the same one as above, with the state being something other than a membership: the
+/// business id an Owner's request carries was resolved by the middleware when the request arrived,
+/// so an invite creation, a settings save or a member change already in flight would otherwise
+/// commit onto a business that has just been switched off - and an invite is the case with teeth,
+/// because a <c>Pending</c> invite on a deactivated business becomes redeemable again as soon as the
+/// business is reactivated. That is also why the three writes that declare it are not all membership
+/// changes: what this class serialises is a state-dependent write, and the business's lifecycle
+/// status is such a state.
+///
 /// It deliberately writes no row itself. What belongs in a membership row for a creation, an
 /// approval, a revocation or a role change is the operation's own business, and those operations
 /// arrive in later tasks; what must be true around it is this class's business, and that is fixed.
@@ -26,9 +40,9 @@ namespace Inventory.Application.Tenancy;
 ///
 /// A refusal is a <see cref="DomainConflictException"/>, which the API boundary's
 /// <c>DomainExceptionHandler</c> returns as <c>409 Conflict</c> with the message verbatim
-/// (docs/architecture.md § Domain and application error mapping). The two messages are fixed
+/// (docs/architecture.md § Domain and application error mapping). The three messages are fixed
 /// sentences from the Domain rules, so every endpoint that uses this path refuses the same way,
-/// and neither message names another business, member or role.
+/// and none of them names another business, member or role.
 /// </summary>
 public sealed class MembershipWriteGuard
 {
@@ -52,9 +66,10 @@ public sealed class MembershipWriteGuard
     /// <param name="cancellationToken">Cancellation for the whole operation, transaction included.</param>
     /// <returns>Whatever <paramref name="write"/> returned, once the change is committed.</returns>
     /// <exception cref="DomainConflictException">
-    /// The identity already holds an active membership elsewhere (including the database refusing
-    /// the write through the filtered unique index), or the change would leave the business with no
-    /// active Owner. Nothing is committed in either case.
+    /// The business the write goes into is no longer <see cref="BusinessStatus.Active"/> (issue
+    /// #680), the identity already holds an active membership elsewhere (including the database
+    /// refusing the write through the filtered unique index), or the change would leave the business
+    /// with no active Owner. Nothing is committed in any of those cases.
     /// </exception>
     public async Task<T> ExecuteAsync<T>(
         MembershipWriteIntent intent,
@@ -76,6 +91,23 @@ public sealed class MembershipWriteGuard
 
         await using var transaction = await _store.BeginWriteTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
+
+        // First, and before the write: the business this change goes into must still be trading
+        // (issue #680). The caller's business id was resolved by the middleware when the request
+        // arrived, and a deactivation that commits in between would otherwise be overtaken by a
+        // write that was decided on a business that no longer accepts one. A business row that is
+        // not there at all is refused the same way, which is the fail-closed direction.
+        if (intent.BusinessThatMustStillBeActive is { } writtenBusinessId)
+        {
+            var status = await _store
+                .FindBusinessStatusAsync(writtenBusinessId, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (status is not { } current || !ActiveBusinessWritePolicy.AllowsWrite(current))
+            {
+                throw new DomainConflictException(ActiveBusinessWritePolicy.NotActiveMessage);
+            }
+        }
 
         // Re-checked here, inside the write transaction, not wherever the caller last looked. The
         // write lock is already held, so this answer cannot be overtaken by another membership
