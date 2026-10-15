@@ -4076,6 +4076,22 @@ and it renders none again from the moment the signed-in identity changes until t
 own answer arrives (issue #603); `Platform Diagnostics` is unchanged and still independent of every
 capability.
 
+**The Admin hub follows the same destination permissions as the sidebar (issue #674).**
+`AdminComponent` (`/admin`) is a second entry point into the same pages the sidebar's `Admin` group
+lists — see [Application shell and navigation](#application-shell-and-navigation-issue-391) — so it
+renders a card only while the member holds the capability `layout/navigation.ts`'s `adminNavGroup`
+declares for that destination's route, read from the same `AccessService.access$` the sidebar
+renders from. It introduces no role-name check and fetches no protected page data of its own to
+decide a card's visibility: a hidden card hides a page rather than protects one, exactly as a
+hidden sidebar entry does, because the endpoint behind each page authorizes every request itself.
+A Manager therefore sees `Imports` and `Site Commission Agreements` without any Owner-only repair
+or integration card, and an Owner sees every destination the sidebar does, including `Users`,
+`Roles` and `Business Settings` — before this the hub rendered its eight repair/integration cards
+unconditionally and had no card for those last three at all, even though the sidebar and each
+page's own "Back to Admin" link already reached them. The hub renders no card at all until the
+capability set has been read, and none again for the window after the signed-in identity changes
+until the new identity's own answer arrives, the same two rules the sidebar follows.
+
 **Route guards are presentation.** Every authenticated route declares
 `canActivate: [MsalGuard, requireCapability(...)]`, with `MsalGuard` first so authentication is
 still decided first, and the guard redirects to `/access-not-allowed` when the capability set is
@@ -4853,17 +4869,21 @@ calculates, caches or persists anything: no limit is restated, no result is writ
 storage or a log, and no value is rendered as markup.
 
 With this split `AdminComponent` is a link hub only: it holds no workflow state, no service
-dependency and no second copy of any Admin tool, so it no longer owns duplicate costing, import or
-configuration logic. It deliberately keeps its own `/admin` address rather than redirecting to
-`/admin/nayax-settings`, because the home Dashboard's "Open Admin" action and each
-dedicated page's "Back to Admin" link point at it. The sidebar's `Admin` group (issue #391) is now
-the primary way into the eight dedicated pages, so `AdminComponent` is a second, still valid entry
-point rather than the only one; the root shell no longer links to `/admin` itself, because the
-group heading replaced that single header link. The hub links to only those eight pages, and never
-to `/super-admin/diagnostics`, because that page is offered only to the configured platform
-administrator, in its own group, and only the diagnostics API can say who that is. It is reached
-from the sidebar's `Super Admin` group, or by URL, and the page's own "Back to Admin" link still
-points at the business hub, the way every dedicated page's does.
+dependency beyond the cached capability read, and no second copy of any Admin tool, so it no
+longer owns duplicate costing, import or configuration logic. It deliberately keeps its own
+`/admin` address rather than redirecting to `/admin/nayax-settings`, because the home Dashboard's
+"Open Admin" action and each dedicated page's "Back to Admin" link point at it. The sidebar's
+`Admin` group (issue #391) is now the primary way into its eleven dedicated pages, so
+`AdminComponent` is a second, still valid entry point rather than the only one; the root shell no
+longer links to `/admin` itself, because the group heading replaced that single header link. The
+hub links to all eleven of those pages — never to `/super-admin/diagnostics`, because that page is
+offered only to the configured platform administrator, in its own group, and only the diagnostics
+API can say who that is — but renders only the cards the signed-in member's own capabilities allow,
+the same destinations and the same rule the sidebar's `Admin` group uses (issue #674; see [Member
+access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)).
+`/super-admin/diagnostics` is reached from the sidebar's `Super Admin` group, or by URL, and the
+page's own "Back to Admin" link still points at the business hub, the way every dedicated page's
+does.
 
 ### Runtime configuration and API contracts
 
