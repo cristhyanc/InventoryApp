@@ -25,10 +25,13 @@ export interface CurrentBusiness {
  * unavailable rather than in a zone nobody confirmed, and the shell still renders the application
  * instead of waiting forever. Calling `load()` again retries.
  *
- * The cached answer belongs to one signed-in identity. When the account changes, the shell calls
+ * The cached answer belongs to one business context. When the account changes, the shell calls
  * `reset()`, which drops the cached answer and the published zone and makes any lookup still in
  * flight for the previous account inert, so its late response can never publish the previous
- * business's zone for the new account.
+ * business's zone for the new account. A support-session start, end or expiry does the same through
+ * `SupportSessionService`, which then reports the change so the shell reads the business now in
+ * effect (issue #671) - dropping the previous one's zone is not the same as publishing the new
+ * one's.
  */
 @Injectable({ providedIn: 'root' })
 export class BusinessService {
@@ -83,9 +86,10 @@ export class BusinessService {
   }
 
   /**
-   * Forgets the current business, for a change of signed-in account: the cached answer and the
+   * Forgets the current business, for a change of the business this tab resolves - a change of
+   * signed-in account, or a support-session start, end or expiry: the cached answer and the
    * published zone are dropped, and a lookup still in flight can no longer publish. The next
-   * `load()` asks the endpoint again, as the new account.
+   * `load()` asks the endpoint again, in the new context.
    */
   reset(): void {
     this.generation++;
@@ -99,9 +103,10 @@ export class BusinessService {
    * without a reload.
    *
    * Unlike `reset()` this does not forget the published zone first and does not bump the
-   * generation: the signed-in identity has not changed, so there is no previous answer to
-   * invalidate and nothing from a superseded identity that could wrongly publish - only a newer
-   * answer for the same business, which `BusinessTimeZoneService.publish` simply overwrites.
+   * generation: the business context has not changed, so there is no previous answer to invalidate
+   * and nothing from a superseded context that could wrongly publish - only a newer answer for the
+   * same business, which `BusinessTimeZoneService.publish` simply overwrites. That is deliberate
+   * and is why a save does not blank every date on the page while it re-reads (issue #671).
    */
   refresh(): Observable<CurrentBusiness | null> {
     this.current$ = undefined;

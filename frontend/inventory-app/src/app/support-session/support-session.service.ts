@@ -159,10 +159,10 @@ type ReceivedBroadcast = Partial<{
  * `started`/`ended` notification from another tab all forget the cached business the shell reads for
  * every member (`BusinessService.reset`), report the change on {@link contextChanged$} so the shell
  * reads the business now in effect and publishes **its** time zone (issue #671), re-read the
- * capabilities (`AccessService.refresh`) - the
- * support set inside a session, the administrator's own (none) outside one - and take this tab to
- * the dashboard of the business now in view, because neither the page that was on screen before nor
- * the one a stale capability set rendered belongs to it.
+ * capabilities (`AccessService.refresh`) - the support set inside a session, the administrator's own
+ * (none) outside one - and take this tab to the dashboard of the business now in view, because
+ * neither the page that was on screen before nor the one a stale capability set rendered belongs
+ * to it.
  *
  * **Reaching the dashboard is not the same as replacing what is on it.** `router.navigate(['/'])`
  * alone leaves a tab that is *already* on `/` exactly as it was - the router has nothing to do, so
