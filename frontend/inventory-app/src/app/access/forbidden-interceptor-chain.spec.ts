@@ -12,6 +12,8 @@ import { FORBIDDEN_INTERCEPTORS } from './forbidden-interceptors';
 const ACCESS_PROBE = '/api/me/access';
 const ACCOUNT_STATE_PROBE = '/api/me/account-state';
 const DIAGNOSTICS_PROBE = '/api/admin/diagnostics/access';
+/** The sidebar badge's own read of the Super Admin businesses surface (issue #673). */
+const PENDING_COUNT = '/api/super-admin/businesses/pending-count';
 const MEMBER_MESSAGE = "You don't have access to this.";
 
 interface Harness {
@@ -181,6 +183,38 @@ describe('the composed forbidden-interceptor chain (issue #602)', () => {
     expect(harness.toastError).not.toHaveBeenCalled();
     expect(harness.httpMock.match(() => true)).toEqual([]);
     expect(failure()?.status).toBe(403);
+  });
+
+  /**
+   * The Super Admin businesses surface (issue #673). The sidebar's badge reads
+   * `GET .../pending-count` on its own, with no page behind it, so a refusal that refreshed the
+   * member caches put one request per access emission back on the wire - and each refreshed
+   * capability set asked the sidebar for the count again.
+   */
+  it.each([
+    '/api/super-admin/businesses',
+    PENDING_COUNT,
+    `${PENDING_COUNT}?at=now`,
+    `${PENDING_COUNT}/`,
+    '/api/super-admin/businesses/7/members/19/release'
+  ])('neither reports nor refreshes anything for a refused %s', (url) => {
+    const harness = configure('/super-admin/businesses');
+
+    const failure = issue(harness, url);
+
+    expect(refuseEverything(harness)).toEqual([url]);
+    expect(harness.toastError).not.toHaveBeenCalled();
+    expect(failure()?.status).toBe(403);
+  });
+
+  it('classifies the Super Admin businesses surface on a deployed API origin too (issue #673)', () => {
+    const harness = configure('/super-admin/businesses', 'https://api.example.test/api/');
+    const url = `https://api.example.test/api${PENDING_COUNT.slice('/api'.length)}`;
+
+    harness.http.get(url).subscribe({ error: () => undefined });
+
+    expect(refuseEverything(harness)).toEqual([url]);
+    expect(harness.toastError).not.toHaveBeenCalled();
   });
 
   it('never treats a request to another origin as a member endpoint', () => {

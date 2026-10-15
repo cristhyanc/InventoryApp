@@ -2025,11 +2025,11 @@ The two slices above are the API; this one, one slice of [#510](https://github.c
 
 **The table shows exactly the directory's ten fields, minus the one instant the page has no use for.** Name, status, applied date, contact email, ABN, active member count and whether Nayax is configured — `decidedAtUtc` is read by the API but not rendered, because the acceptance criteria name only the first seven. Pending applications sort first because the directory read already returns them that way; the status filter narrows the same ordered list rather than requesting a different one, since the list endpoint takes no server-side filter at all (see [Super Admin businesses API](#super-admin-businesses-api-issue-544) above). Approve and Reject are offered only for a `Pending` business, Deactivate and **View as this business** only for `Active`, and Reactivate and Members only for `Deactivated` — the same `BusinessDecisionPolicy`/`BusinessLifecyclePolicy` gates the API itself enforces, mirrored here only to decide which buttons to show, never to decide whether an action succeeds.
 
-**The pending-count badge (on the sidebar's `Super Admin` group and its `Businesses` link) is re-read after every action, not cached state the page pushes to it.** `SuperAdminBusinessesService.notifyChanged()` is a plain `Subject<void>` notification with no payload, called once a mutating call — approve, reject, deactivate, reactivate or release — has itself completed; `SidebarNavComponent` is the one subscriber, and on each notification (while platform-admin access is granted) it re-reads `GET .../pending-count` itself rather than trusting a number the mutating caller computed. The badge is `null` — rendered as no badge at all — until access is granted and a first read returns, and it is cleared the moment access is lost, the same rule issue #605 already gives the group itself.
+**The pending-count badge (on the sidebar's `Super Admin` group and its `Businesses` link) is re-read after every action, not cached state the page pushes to it.** `SuperAdminBusinessesService.notifyChanged()` is a plain `Subject<void>` notification with no payload, called once a mutating call — approve, reject, deactivate, reactivate or release — has itself completed; `SidebarNavComponent` is the one subscriber, and on each notification (while platform-admin access is granted) it re-reads `GET .../pending-count` itself rather than trusting a number the mutating caller computed. The badge is `null` — rendered as no badge at all — until access is granted and a first read returns, and it is cleared the moment access is lost, the same rule issue #605 already gives the group itself. **A refused read reaches that same stable `null` and asks for nothing further** (issue #673): `GET .../pending-count` is classified `platform-admin`, so its `403` refreshes neither member cache, and it was the capability refresh — not the badge — that used to bring the read straight back round. See [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) for the classification and the loop.
 
 **"View as this business" (issue #553, one slice of #513) is the one action here that does not stay on this page.** `ViewAsBusinessDialogComponent`, composed the same way Reject and Members already are, starts a support session through `SupportSessionService`; see [Support session banner and the in-memory session id](#support-session-banner-and-the-in-memory-session-id-issue-553) for what that does next. No backend change came with it: the dialog calls the one endpoint #550 already shipped (`POST /api/super-admin/support-sessions/{businessId}`), unchanged. Hiding write controls and support-view messages once inside the session is issue #554's separate follow-up.
 
-**What proves it.** `super-admin-businesses.service.spec.ts` covers the eight HTTP calls, including the trimmed/blank/absent reason on reject and the `changed$` notification. `business-reject-dialog.component.spec.ts` and `business-members-dialog.component.spec.ts` cover each dedicated workflow's own load, confirmation, success and API-refusal-shown-verbatim paths; `view-as-business-dialog.component.spec.ts` is the same shape for the required-reason dialog issue #553 added. `super-admin-businesses.component.spec.ts` covers the status filter, which actions each status offers (including **View as this business** for `Active` alone), each confirmation, the reactivate no-active-Owner refusal shown verbatim, and that a reload (and a badge notification) follows every completed action. `sidebar-nav.component.spec.ts` covers the badge itself: hidden until access is granted, hidden again at zero, shown on both the group and the `Businesses` link once a count is read, re-read on a `changed$` notification, and cleared the moment access is lost. `navigation.spec.ts` and `app.routes.spec.ts` cover the real `Businesses` `NavLink` replacing issue #546's placeholder and the route's guards.
+**What proves it.** `super-admin-businesses.service.spec.ts` covers the eight HTTP calls, including the trimmed/blank/absent reason on reject and the `changed$` notification. `business-reject-dialog.component.spec.ts` and `business-members-dialog.component.spec.ts` cover each dedicated workflow's own load, confirmation, success and API-refusal-shown-verbatim paths; `view-as-business-dialog.component.spec.ts` is the same shape for the required-reason dialog issue #553 added. `super-admin-businesses.component.spec.ts` covers the status filter, which actions each status offers (including **View as this business** for `Active` alone), each confirmation, the reactivate no-active-Owner refusal shown verbatim, and that a reload (and a badge notification) follows every completed action. `sidebar-nav.component.spec.ts` covers the badge itself: hidden until access is granted, hidden again at zero, shown on both the group and the `Businesses` link once a count is read, re-read on a `changed$` notification, cleared the moment access is lost, and — composed with the real `AccessService`, the real `SuperAdminBusinessesService` and the production `403` chain (issue #673) — settling on a persistent refusal instead of looping, with the badge `null`, the group still offered and no toast. `navigation.spec.ts` and `app.routes.spec.ts` cover the real `Businesses` `NavLink` replacing issue #546's placeholder and the route's guards.
 
 #### Support sessions: the store and the control endpoints (issue #550)
 
@@ -3604,6 +3604,9 @@ the account-state cache's refresh trigger and the global "you don't have access 
 exactly as a refusal of the diagnostics probe already was. Without that extension, an ordinary
 member's browser asking `GET .../active` (or, for a platform administrator outside an eligible
 window, the dialog's own start call) would have its expected `403` misread as a member refusal.
+Issue #673 completed the set by classifying the Super Admin businesses surface the same way; see
+[Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) for
+the full classification table and for the request loop the missing third prefix caused.
 
 **`supportSessionInterceptor` (`support-session/support-session.interceptor.ts`) is what a request
 actually joins a session through.** For every request this build's own API - never the support-
@@ -3640,10 +3643,11 @@ reaching `localStorage`/`sessionStorage`/the URL, a new or reloaded tab's own-se
 once, gated on platform-admin eligibility, and never answering the id), and the two `BroadcastChannel`
 cases: a session shared to another open tab and an end applied in every other open tab.
 `support-session.interceptor.spec.ts` covers the header being attached and withheld, every one of the
-control surface and the diagnostics probe never receiving it, the `support_session_ended` reaction,
-and a stale response - successful or refused - being discarded while an unchanged id is left alone.
-`member-endpoint.spec.ts` covers the new `platform-admin` classification of the support-session
-control surface. `view-as-business-dialog.component.spec.ts` and
+control surface, the diagnostics probe and (since issue #673) the Super Admin businesses surface
+never receiving it, the `support_session_ended` reaction, and a stale response - successful or
+refused - being discarded while an unchanged id is left alone. `member-endpoint.spec.ts` covers the
+`platform-admin` classification of the support-session control surface and of the Super Admin
+businesses surface. `view-as-business-dialog.component.spec.ts` and
 `support-session-banner.component.spec.ts` are the two components' own behaviour, and
 `super-admin-businesses.component.spec.ts` covers **View as this business** being offered only for
 an `Active` business and composed the same way Reject and Members already are (see
@@ -4036,7 +4040,7 @@ is dropped or read again on exactly these triggers:
 | Sign-in | The previous answer is dropped and the capabilities are read as the newly signed-in identity |
 | Sign-out | Cleared without reading again — there is nobody to read it for |
 | MSAL active-account change | The previous identity's answer is dropped immediately and the capabilities are read again, unconditionally, because an answer in flight may have been issued as the previous identity |
-| Any `403` from a member endpoint | Read again unless a read is already in flight. Only a refusal `classifyMemberRequest` calls a `member` one counts: both cache probes, the platform diagnostics surface, `/assets/*` and every other origin are excluded, so a refusal can never drive a refresh loop |
+| Any `403` from a member endpoint | Read again unless a read is already in flight. Only a refusal `classifyMemberRequest` calls a `member` one counts: both cache probes, all three platform-admin surfaces, `/assets/*` and every other origin are excluded, so a refusal can never drive a refresh loop |
 | Window focus more than 5 minutes after the last answer | Read again, so a tab left open all day stops rendering a menu built from a role somebody has since changed |
 | An explicit `refresh()` | Read again, unconditionally. This is what other work calls after changing something relevant |
 
@@ -4098,7 +4102,7 @@ request URL and the API base URL that `ConfigService` resolved and comparing the
 | `member` | Every endpoint under the configured API base that is not named below | Refreshes the capability cache and the account-state cache, and shows the global `403` notice |
 | `access-probe` | `GET /api/me/access`, this cache's own read | Refreshes the account state only, one way (issue #529) |
 | `account-state-probe` | `GET /api/me/account-state`, the sibling cache's own read | Nothing |
-| `platform-admin` | `/api/admin/diagnostics/*` (issue #336), authorized by the configured Entra `(tid, oid)` pair and by no business role | Nothing |
+| `platform-admin` | The three class-2 surfaces, authorized by the configured Entra `(tid, oid)` pair and by no business role: `/api/admin/diagnostics/*` (issue #336), `/api/super-admin/businesses/*` (issues #544 and #545, classified here by issue #673) and `/api/super-admin/support-sessions/*` (issue #550) | Nothing |
 | `non-api` | `/assets/*`, any other origin (MSAL's own traffic), and any path outside the API base | Nothing |
 
 The classification is by path **segment**, so a query string, a trailing slash, a doubled slash and
@@ -4108,7 +4112,28 @@ origin is the configured API's and its path starts with the API's own segments; 
 anything else under that base stays `member`, because an endpoint this build has never heard of
 still refuses a member whose role has changed. The other `/api/admin/*` controllers — historical GST
 classification, the repairs — are ordinary capability-policy member endpoints and are deliberately
-**not** part of `platform-admin`.
+**not** part of `platform-admin`, and neither is a segment that merely begins with the same letters
+(`/api/super-admin/businesses-archive`, were there such a thing).
+
+**`platform-admin` is matched as a prefix per surface, and that is what makes it complete.** Every
+endpoint under one of the three is platform-admin authorized *by construction* — `PlatformAdminPolicy`
+together with `PlatformDiagnosticsEndpointAttribute`, [class 2](#capability-authorization-issue-525)
+— so the Super Admin businesses prefix covers the directory, `pending-count`, `{businessId}/approve`,
+`.../reject`, `.../deactivate`, `.../reactivate`, `.../members` and `.../members/{membershipId}/release`
+without naming them, and would cover a ninth endpoint on that controller the day one is added.
+**The pending-count badge is why that mattered enough to be a defect** (issue #673). It is the one
+platform-admin read made from the shell rather than from behind `platformAdminGuard`'s page, on
+`SidebarNavComponent`'s own long-lived subscription, so while it was classified `member` a persistent
+`403` from it — a grant withdrawn, a configuration change, an administrator signed in elsewhere —
+refreshed the member capability cache, and every capability emission asked the sidebar for the count
+again: refusal, capability read, count, refusal, without end, for a surface no business role was ever
+going to be granted. The badge now reads the count once per access emission, a refusal leaves it
+`null` (no badge at all, the same stable state a failed read always left), and the `Super Admin`
+group it sits on is unaffected — that stays `PlatformDiagnosticsAccessService`'s separate answer.
+Issue #673 changed only the classification; the authorization rules, the endpoints and the probe are
+untouched, and `supportSessionInterceptor` consequently stops attaching `X-Support-Session` to the
+businesses surface, which the API never read on it anyway (`BusinessScopeMiddleware` decides a
+`PlatformDiagnosticsEndpointAttribute` endpoint before it resolves a session at all).
 
 **The refresh reads are bounded, and the table above is why.** `member` refreshes both caches,
 `access-probe` refreshes the account state, and `account-state-probe` refreshes nothing: the edges
@@ -4214,17 +4239,24 @@ flight, and a same-identity refresh keeping its own answer),
 `navigation.spec.ts` (the per-role menus, written out literally from #328's table, a partly-allowed
 group, the empty and unknown capability sets, and the diagnostics link's independence),
 `sidebar-nav.component.spec.ts` (the rendered menu per role, no destination before the first answer,
-a re-render when the capabilities change, and the menu emptied and rebuilt across an account change
-against the real service), `capability.guard.spec.ts` (allowed, refused, any-of, fail-open, waiting
+a re-render when the capabilities change, the menu emptied and rebuilt across an account change
+against the real service, and — for issue #673 — the really rendered sidebar composed with the real
+`AccessService`, the real `SuperAdminBusinessesService` and the production `403` chain, proving that
+a persistently refused pending-count read settles after the two reads the access emissions ask for,
+leaves the badge `null` with the group still offered, and tells the operator nothing),
+`capability.guard.spec.ts` (allowed, refused, any-of, fail-open, waiting
 for an unread answer, waiting for the new account instead of deciding from the previous account's
 capabilities, and the page naming no capability or role), `app.routes.spec.ts` (every authenticated
 route guarded, the two exceptions, and `MsalGuard` first),
 `access-forbidden.interceptor.spec.ts` (the `403`
 trigger, the excluded probes, diagnostics surface and assets, and every other status ignored),
 `member-endpoint.spec.ts` (every classification, for the local and the deployed API base URL, with
-query strings, trailing slashes, other origins and the member `/api/admin/*` controllers),
+query strings, trailing slashes, mixed case, other origins, the member `/api/admin/*` controllers
+and — for issue #673 — each of the eight Super Admin businesses endpoints plus the look-alike
+segments that stay `member`),
 `forbidden-interceptor-chain.spec.ts` (the composed chain: the asserted request count for
-persistent probe refusals, coalescing, the silent diagnostics probe and the preserved notice),
+persistent probe refusals, coalescing, the silent diagnostics probe, the silent Super Admin
+businesses surface on both the local and the deployed base, and the preserved notice),
 `supplier-gst-defaults.component.spec.ts` (the hidden Save, the read-only pickers, no `PUT`, the
 control returning on a refresh, and — against the real service — the Save control taken away the
 moment the signed-in account changes, no `PUT` issued in that window, a late answer for the
@@ -4353,7 +4385,9 @@ endpoint - `classifyMemberRequest`, the same classification `accessForbiddenInte
 the two interceptors cannot disagree about what counts as one. A `403` from
 `GET /api/admin/diagnostics/access` is therefore silent on every route: that probe is the sidebar's
 quiet platform-admin question (issue #335), its refusal is the expected answer for every ordinary
-member, and it says nothing about a business membership. It does not fire while the current route is
+member, and it says nothing about a business membership. The two other platform-admin surfaces are
+silent for the same reason — the support-session control endpoints, and (issue #673) the sidebar's
+other quiet shell read, `GET /api/super-admin/businesses/pending-count`. It does not fire while the current route is
 `/welcome`,
 `/application-pending`, `/application-rejected`, `/access-unavailable` or `/invite/:token`
 (`ACCOUNT_STATE_BYPASS_PATHS`, matched by prefix for the invite token): a person on one of them has

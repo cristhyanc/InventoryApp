@@ -21,8 +21,11 @@ function isSessionEndedRefusal(error: HttpErrorResponse): boolean {
  * API would read it from: `classifyMemberRequest`'s `platform-admin` kind is the support-session
  * control surface itself (`/api/super-admin/support-sessions/*`, reached as the administrator and
  * never inside a session - docs/architecture.md § Support sessions: the store and the control
- * endpoints) and the diagnostics probe beside it, so neither carries the header, and `non-api`
- * requests - static assets, MSAL's own traffic - never did either.
+ * endpoints), the diagnostics probe beside it and, since issue #673, the Super Admin businesses
+ * surface, so none of them carries the header, and `non-api` requests - static assets, MSAL's own
+ * traffic - never did either. The API reaches the same conclusion for all three on its own:
+ * `BusinessScopeMiddleware` decides a `PlatformDiagnosticsEndpointAttribute` endpoint before it
+ * resolves a session at all, so the header was never read on one.
  *
  * **Discards a response sent under an id that is no longer current**, whether that is because this
  * very response answered `support_session_ended` (the session died mid-request) or because

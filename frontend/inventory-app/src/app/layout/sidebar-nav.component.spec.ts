@@ -1,3 +1,5 @@
+import { provideHttpClient, withInterceptors } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
@@ -6,11 +8,14 @@ import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/
 import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService, MemberAccess, MemberAccessState } from '../access/access.service';
 import { CAPABILITIES, Capability, capabilitySet } from '../access/capabilities';
+import { FORBIDDEN_INTERCEPTORS } from '../access/forbidden-interceptors';
 import { apiConfig, queuedReads, readingHttp, signedInIdentity } from '../access/identity-cache.spec-helpers';
 import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
+import { ConfigService } from '../services/config.service';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { PlatformDiagnosticsAccess, PlatformDiagnosticsService } from '../services/platform-diagnostics.service';
 import { SuperAdminBusinessesService } from '../services/super-admin-businesses.service';
+import { ToastService } from '../services/toast.service';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './sidebar-nav.component';
 import { NavGroup, navLinks, primaryNavigation } from './navigation';
 
@@ -386,6 +391,121 @@ describe('SidebarNavComponent pending-business badge (issue #547)', () => {
     fixture.detectChanges();
 
     expect(component.pendingBusinessCount).toBeNull();
+  });
+});
+
+/**
+ * The badge and the composed `403` chain together (issue #673). Nothing here is doubled except
+ * MSAL, the configured API base URL, the toast and the platform-admin probe: the real
+ * `AccessService`, the real `SuperAdminBusinessesService`, the production `403` interceptors and
+ * the really rendered sidebar are all installed, because the loop this covers lives in none of
+ * them on its own. A refused `GET .../pending-count` refreshed the member capability cache, and
+ * every capability emission asked this component for the count again.
+ */
+describe('SidebarNavComponent pending-count refusal (issue #673)', () => {
+  const ACCESS_READ = '/api/me/access';
+  const PENDING_COUNT = '/api/super-admin/businesses/pending-count';
+
+  interface ComposedRender extends Rendered {
+    httpMock: HttpTestingController;
+    toastError: jest.Mock;
+  }
+
+  async function renderWithRealChain(): Promise<ComposedRender> {
+    const identity = signedInIdentity();
+    const toastError = jest.fn();
+
+    await TestBed.configureTestingModule({
+      imports: [SidebarNavComponent],
+      providers: [
+        provideRouter([{ path: '**', component: BlankPageComponent }]),
+        provideHttpClient(withInterceptors([...FORBIDDEN_INTERCEPTORS])),
+        provideHttpClientTesting(),
+        { provide: ConfigService, useValue: apiConfig() },
+        { provide: ToastService, useValue: { error: toastError } },
+        { provide: MsalService, useValue: identity.msal },
+        { provide: MsalBroadcastService, useValue: identity.broadcast },
+        // Platform access was confirmed and is still cached, which is the state the loop needed:
+        // the group is rendered, so the badge keeps asking for a count the server now refuses.
+        { provide: PlatformDiagnosticsAccessService, useValue: { granted$: of(true) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(SidebarNavComponent);
+    fixture.componentRef.setInput('expanded', true);
+    fixture.detectChanges();
+
+    return {
+      fixture,
+      component: fixture.componentInstance,
+      host: fixture.nativeElement as HTMLElement,
+      httpMock: TestBed.inject(HttpTestingController),
+      toastError
+    };
+  }
+
+  /**
+   * Answers every outstanding request - the capability read with an Owner's own answer, everything
+   * else with `403` - round after round until nothing is issuing any more, and returns the URLs in
+   * the order they were answered. A chain that never settles is the defect, so the rounds are
+   * capped and exhausting the cap fails loudly rather than hanging the suite.
+   */
+  function settle(rendered: ComposedRender, rounds = 12): string[] {
+    const answered: string[] = [];
+
+    for (let round = 0; round < rounds; round++) {
+      const outstanding = rendered.httpMock.match(() => true);
+      if (outstanding.length === 0) {
+        rendered.fixture.detectChanges();
+        return answered;
+      }
+
+      for (const request of outstanding) {
+        answered.push(request.request.url);
+        if (request.request.url === ACCESS_READ) {
+          request.flush({
+            role: 'Owner',
+            capabilities: [...CAPABILITIES],
+            businessName: 'Vending Co',
+            timeZoneId: 'Australia/Sydney'
+          });
+        } else {
+          request.flush('refused', { status: 403, statusText: 'Forbidden' });
+        }
+      }
+
+      rendered.fixture.detectChanges();
+    }
+
+    throw new Error(`the chain was still issuing requests after ${rounds} rounds: ${answered.join(', ')}`);
+  }
+
+  it('settles instead of looping when the pending count keeps being refused', async () => {
+    const rendered = await renderWithRealChain();
+
+    // One read when the cached platform grant arrives and one when the capability set is first
+    // answered, and then nothing: the refusals themselves drive no further request at all.
+    expect(settle(rendered)).toEqual([ACCESS_READ, PENDING_COUNT, PENDING_COUNT]);
+    rendered.httpMock.verify();
+  });
+
+  it('leaves the badge in a stable unavailable state, with the group still offered', async () => {
+    const rendered = await renderWithRealChain();
+
+    settle(rendered);
+
+    expect(rendered.component.pendingBusinessCount).toBeNull();
+    expect(groupToggle(rendered.host, 'Super Admin').textContent?.trim()).toBe('Super Admin▾');
+  });
+
+  it('tells the operator nothing and leaves the member capability set alone', async () => {
+    const rendered = await renderWithRealChain();
+
+    settle(rendered);
+
+    expect(rendered.toastError).not.toHaveBeenCalled();
+    // The capabilities were read once, for this identity, and the refusals never re-read them.
+    expect(rendered.component.navigation.length).toBeGreaterThan(0);
   });
 });
 

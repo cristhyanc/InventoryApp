@@ -53,10 +53,11 @@ export function isAccountStateBypassRoute(currentUrl: string): boolean {
  * It reuses `isMemberAccessRefusal`'s member-endpoint test - the same one `accessForbiddenInterceptor`
  * uses to decide whether a refusal says anything about the caller's role - so the two stay in
  * agreement about what counts as a member endpoint. That test now classifies the configured API
- * origin and path explicitly (issue #602), which is what keeps the two cache probes, the platform
- * diagnostics probe (`GET /api/admin/diagnostics/access`, expected to refuse everyone but the
- * configured platform administrator), static assets and other origins from being reported to an
- * ordinary member as "you don't have access to this".
+ * origin and path explicitly (issue #602), which is what keeps the two cache probes, the
+ * platform-admin surfaces (the diagnostics probe, the Super Admin businesses surface of issue #673
+ * and the support-session control surface - all expected to refuse everyone but the configured
+ * platform administrator), static assets and other origins from being reported to an ordinary
+ * member as "you don't have access to this".
  *
  * It does **not** fire while the current route is one of {@link isAccountStateBypassRoute}'s: a
  * person there has already been told, by the account-state routing itself or by the page they are
