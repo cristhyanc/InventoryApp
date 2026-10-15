@@ -16,6 +16,17 @@ namespace Inventory.Application.Nayax;
 /// <see cref="NayaxConnectionCredential"/>, and the adapter behind it owns protecting it at rest -
 /// which is what keeps Key Vault, key ids and cipher choices out of Inventory.Application and
 /// Inventory.Domain entirely.
+///
+/// <para><strong>Several calls of one request may be in flight at once, and that is safe</strong>
+/// (issue #667). A bounded Nayax fan-out resolves credentials once per remote call and may report
+/// several <c>401</c>s at the same time, so an implementation must tolerate overlapping callers
+/// within one request: each one still gets its own snapshot of the row as of its own read, and
+/// waiting for a turn is not permission to answer from an earlier caller's snapshot. Making that
+/// true is the adapter's job - the EF one shares the request's single <c>AppDbContext</c>, which
+/// supports one operation at a time, and admits one operation at a time accordingly. This says
+/// nothing about *other* ports: a use case that starts other scoped persistence work while a Nayax
+/// call is in flight is still putting two operations on one context (docs/architecture.md
+/// § Concurrency inside one request).</para>
 /// </summary>
 public interface INayaxConnectionStore
 {

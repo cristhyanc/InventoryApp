@@ -47,8 +47,11 @@ public sealed class ImportNayaxProductCatalog
     /// </summary>
     public async Task Handle(CancellationToken cancellationToken)
     {
-        // Two independent remote reads, so they stay a concurrent fan-out; neither touches the
-        // request's scoped persistence (docs/architecture.md § Concurrency inside one request).
+        // Two independent remote reads, so they stay a concurrent fan-out. Each resolves the
+        // business's Nayax credentials through the request's scoped context (issue #520), and those
+        // two reads are serialized by EfNayaxConnectionStore rather than by holding the remote
+        // requests apart; the import's own store calls follow, one at a time
+        // (docs/architecture.md § Concurrency inside one request).
         var productsTask = _nayax.GetProductsAsync(cancellationToken);
         var groupsTask = _nayax.GetProductGroupssAsync(cancellationToken);
         await Task.WhenAll(productsTask, groupsTask);

@@ -994,9 +994,21 @@ usually finishes the first call before the second begins, which hides the defect
 runs while a genuinely asynchronous provider rejects it, so this is a source-level rule rather than
 something a passing test suite demonstrates.
 
-- **Concurrency is correct for independent remote reads.** The bounded per-site/per-machine
-  `INayaxLynxClient.GetMachineProductsAsync` fan-out shares no `DbContext` and stays a `Task.WhenAll`
-  fan-out. Do not serialize remote requests to avoid a database problem they do not cause.
+- **Concurrency is correct for independent remote reads, and the bounded Nayax fan-outs stay
+  concurrent.** The per-site/per-machine `INayaxLynxClient.GetMachineProductsAsync` fan-out is a bound
+  on the *remote* system, and it is kept. Do not serialize remote requests to avoid a database problem
+  they do not cause.
+- **A Nayax call is not free of the context any more, and the credential path owns that (issue
+  #667).** Since [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520) every
+  ordinary Nayax call resolves the business's own operator id and token through the request's scoped
+  `AppDbContext`, and a Nayax `401` writes a status back through it. Several calls of one fan-out
+  therefore reach the context at once. `Inventory.Infrastructure.Persistence.EfNayaxConnectionStore`
+  admits one of them at a time — the database work only, so the HTTP requests still overlap, each
+  caller still reads its own snapshot and a cancelled caller stops waiting. **The use case's own
+  obligation is unchanged and now covers the remote calls too:** do not start other scoped
+  persistence work while a Nayax call is in flight. `GetNayaxCatalogReconciliation` awaits its two
+  remote reads before its local ones, and `GetSiteSummaries` awaits the machine-product fan-out
+  before its batched completed-sales read, for exactly that reason.
 - **Serialize or batch the scoped reads.** Either await the port calls one at a time
   (`ResolveMachineProductPricing`, `GetSiteProducts`), or replace an overlapping per-item read with one
   scoped read whose facts are distributed in memory (`GetSiteSummaries` loads every site's recent
@@ -1012,7 +1024,8 @@ something a passing test suite demonstrates.
   failure propagate: a partial result must never be returned as a complete one.
 
 Call-sequence regression tests are what hold this in place; see
-[Backend tests](#backend-tests) for the yielding-recorder pattern they use.
+[Backend tests](#backend-tests) for the yielding-recorder pattern they use and for the EF command
+interceptor that makes the overlap itself fail deterministically on SQLite.
 
 ### Inventory.Infrastructure
 
@@ -2462,6 +2475,40 @@ business's token to outlive its request. `NayaxLynxClient` queries no EF Core; t
 `INayaxConnectionStore`, which reads the business the `AppDbContext` tenant filters already resolved.
 A caller with no resolved business reads nothing and therefore calls nothing.
 
+**A Nayax call therefore touches the request's persistence, and the store owns that context (issue
+#667).** The credential read is a real `SELECT`, and a `401` is a real `UPDATE`, on the one scoped
+`AppDbContext` of the request that made the call — not on a context of the Nayax client's own. That
+is the right ownership (a second context would be a second tenant scope, which
+[Concurrency inside one request](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)
+rules out), but it means the bounded parallel Nayax fan-outs — the reorder and Pick List fan-outs,
+the per-site machine reads, the catalogue import, the cost-transition preview — put several
+credential reads, and sometimes several `401` writes, on a context that supports exactly one
+operation at a time. **`EfNayaxConnectionStore` admits one operation at a time**, with a gate that is
+per request (the adapter is scoped beside the context it guards), is held for the database work only,
+and is never re-entered: its `SaveCredentialAsync` reads back through the private core rather than
+through its own public `FindAsync`. What that does *not* change is as important as what it does:
+
+- **The fan-out stays parallel.** Only the database statement is serialized, so the remote requests
+  still overlap and the bound on them is still the fan-out's own
+  `MaxConcurrentMachineRequests`. Cancellation is honoured while waiting for a turn, so a cancelled
+  caller stops rather than queuing.
+- **Waiting is not caching.** Every call still resolves its own snapshot when its turn comes, so the
+  status gate still closes mid-fan-out: a call whose turn arrives after a `401` has been recorded
+  reads `NeedsAttention` and fails closed instead of being handed a credential the request resolved
+  earlier. The status, operator id, token and revision of each snapshot still come from one statement,
+  and a refused status still never reaches the ciphertext.
+- **Which `401` wins is still decided by the revision, not by the order of arrival.** The conditional
+  `UPDATE ... WHERE CredentialRevision = @r` is evaluated against the row as it stands when the
+  statement runs, so a whole fan-out of results produced for a superseded revision is discarded, one
+  structured "stale Nayax status result discarded" event each, and the replacement credentials keep
+  their own `PendingPermissions`.
+- **The use case still may not overlap *other* scoped persistence with a Nayax call.** The gate makes
+  the credential path safe against itself, not against the rest of the request;
+  `GetNayaxCatalogReconciliation` and `GetSiteSummaries` await their remote reads before the local
+  ones for that reason.
+- **A support session resolves nothing**, before any of this: the refusal below is taken in the
+  provider, before the store is reached at all.
+
 **And a support session resolves nothing at all** (issue #551). The provider's first act is to refuse
 when the request carries `BusinessScopeState.SupportReadOnly`: before the connection is read, before
 the gate is applied and before any token could be decrypted, with `403` and the stable code
@@ -2581,10 +2628,17 @@ failing closed while the other is connected, a denied caller calling nothing, ea
 whether a call happens, a 401 marking only the calling business's row, the call after a 401 being
 refused by the gate, a 403 leaving the row byte-for-byte unchanged, a credential replaced *while the
 request is in flight* leaving the new revision's status alone, and an existing consumer
-(`NayaxCatalogSnapshotProvider`) working unchanged. `NayaxConnectionExceptionHandlerTests` pins the
-`409` contract and its log; `NayaxLynxClientDependencyInjectionTests` pins the base address, that
-registration needs no credential and registers none, and that the registered client is built from the
-provider.
+(`NayaxCatalogSnapshotProvider`) working unchanged. `NayaxParallelCredentialAccessTests` runs the same
+real stack through the real fan-out use cases with the EF command recorder attached (issue #667): a
+bounded reorder fan-out that keeps its remote requests concurrent while one operation at a time
+reaches the context and resolves one credential read per call, concurrent `401`s all answering with
+the stable not-connected error and leaving one `NeedsAttention` row, a whole fan-out of `401`s from a
+superseded revision discarded with the replacement credentials untouched, two businesses each using
+their own credentials and their own status row, and the catalog reconciliation and site dashboard
+keeping their local reads off the context while their remote reads run.
+`NayaxConnectionExceptionHandlerTests` pins the `409` contract and its log;
+`NayaxLynxClientDependencyInjectionTests` pins the base address, that registration needs no credential
+and registers none, and that the registered client is built from the provider.
 
 ### Nayax connection checks and the Test endpoint (issue #536)
 
@@ -8395,7 +8449,7 @@ files" as the historical record of that slice, not as a test to look for today.
 9. **Sites and Machines dashboard slice done** (issue #241, a child of the #147 umbrella; #240 migrates Products separately). `SiteService.GetAll`/`GetProducts` and `MachineService.GetById`/`GetAll` are the migrated endpoints; `MachineService.GetMachineProducts` was left to the sibling Products migration because it returned the EF `Product` entity directly, and issue #240 has since migrated it in full to `Inventory.Application.Machines.ListMachineProducts` - see item 6 above.
    - `Inventory.Domain.Sites.SiteStockPolicy` computes a site's overall stock percentage and its low/empty product alert counts from already-fetched machine-product facts; `Inventory.Domain.Sites.SiteProductPricingPolicy` computes the site product preview's average retail price and estimated card-sale profit, given an already-resolved per-item commission amount and fee rate. `Inventory.Domain.Machines.MachineDashboardPeriods` is the pure today/week-to-date/previous-comparable-week/last-week/month-to-date/two-weeks-ago range arithmetic, moved out of the former `MachineService` statics unchanged; `Inventory.Domain.Machines.MachineDashboardDirectProfitPolicy` and `MachineProfitabilityStatusPolicy` are the machine dashboard's period direct-profit and status-message rules, given already-resolved facts. Both direct-profit policies are deliberately kept separate from `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy`, which answers the same question at report-row (aggregate period) granularity rather than the dashboard's fixed rolling periods, matching the precedent the reporting slice already documented for row-level versus aggregate rules.
    - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same bounded per-site/per-machine fan-out (`Task.WhenAll` over each site's/machine's `GetMachineProductsAsync` calls) the former services used. `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Issue #150 moved commission/fee resolution and payment/status classification to Domain-owned rules and Application use cases/ports; these consumers use those authorities rather than API service wrappers. The ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (the exact per-price Domain commission calculation computes each entry, not a re-derived multiplier), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact. `ResolveMachineProductPricing` uses the same Sites financial port, while `EfLatestNayaxSalesStore` uses the Domain transaction-status classifier.
-   - **Scoped EF reads serialized (issue #313).** The Nayax fan-out above is unchanged and still concurrent, but no two `ISiteFactsStore` calls are ever in flight together, because the store is scoped and its EF adapter shares one `AppDbContext` (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). `GetSiteProducts` awaits its cost-basis, commission and fee reads one at a time instead of starting all three and joining them with `Task.WhenAll`. `GetSiteSummaries` no longer builds its per-site summaries concurrently: it reads the catalogue activity facts, then loads every site's recent completed sales through one scoped read over the whole fleet's machine ids with the same 16-day lookback each per-site read used, and distributes them per machine in memory, so the per-site aggregation itself is pure. Site-name ordering, machine counts, stock percentages, alert counts, per-site revenue attribution, financial-configuration handling, the API routes and response JSON, and exception behaviour are unchanged; tenancy is unchanged too, since the batched read is still scoped only by the central `AppDbContext` query filters. The focused regression tests live in `backend/Inventory.IntegrationTests/Application/Sites/` (call-sequence recorders plus the behavioural assertions) and in `EfSiteFactsStoreTenancyTests` (the batched completed-sales read loads no other business's sales).
+   - **Scoped EF reads serialized (issue #313).** The Nayax fan-out above is unchanged and still concurrent, but no two `ISiteFactsStore` calls are ever in flight together, because the store is scoped and its EF adapter shares one `AppDbContext` (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). `GetSiteProducts` awaits its cost-basis, commission and fee reads one at a time instead of starting all three and joining them with `Task.WhenAll`. `GetSiteSummaries` no longer builds its per-site summaries concurrently: it reads the catalogue activity facts, then loads every site's recent completed sales through one scoped read over the whole fleet's machine ids with the same 16-day lookback each per-site read used, and distributes them per machine in memory, so the per-site aggregation itself is pure. Site-name ordering, machine counts, stock percentages, alert counts, per-site revenue attribution, financial-configuration handling, the API routes and response JSON, and exception behaviour are unchanged; tenancy is unchanged too, since the batched read is still scoped only by the central `AppDbContext` query filters. The focused regression tests live in `backend/Inventory.IntegrationTests/Application/Sites/` (call-sequence recorders plus the behavioural assertions) and in `EfSiteFactsStoreTenancyTests` (the batched completed-sales read loads no other business's sales). Issue #667 later moved that one batched read to after the machine-product fan-out completes, because a Nayax call resolves its credentials through the same context since issue #520; the fan-out itself is still concurrent.
    - `EfSiteFactsStore`/`EfMachineDashboardFactsStore`, `EfSiteCommissionStore`, `EfNayaxProcessingFeeFactsProvider`, and `EfNayaxSalesQueries` were temporary API-owned adapters because they depend on `AppDbContext` and persistence models. `SiteNameResolverAdapter` was one of them until issue #306, which found it had no `AppDbContext` dependency at all and merged it into `Inventory.Infrastructure.Sites.SiteNameResolver`; `EfNayaxProcessingFeeFactsProvider` and `EfNayaxSalesQueries` left with the reporting adapters in issue #308 (Persistence 7/8) for `Inventory.Infrastructure.Reporting.Persistence` and `Inventory.Infrastructure.Data`; the first three followed in issue #309 (Persistence 8/8) for `Inventory.Infrastructure.Persistence`, beside the `AppDbContext`, the entities and the migrations issue #307 had already moved. Entity-specific EF query expressions stay in those persistence adapters; they implement Application-owned ports and apply the authoritative Domain rules. The existing report facts adapters likewise compose the migrated commission and fee use cases and Domain rules. Issue #154 closed this item's remaining architectural debt rather than relocating anything further: the commission, fee, payment-method and transaction-status rules issue #150 moved into `Inventory.Domain` are now asserted to be declared there and nowhere else, no file under `InventoryApi` names one, `Inventory.Domain`/`Inventory.Application` are asserted to declare no `IQueryable` or expression tree at all, and `EfNayaxSalesQueries` is `internal` so the completed-sale predicate cannot be called from outside `Inventory.Infrastructure` - see [InventoryApi](#inventoryapi).
    - `InventoryApi.Services.SiteService`/`MachineService` were not deleted by this slice: it left them as thin delegators that only mapped the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine`/`Product` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal — and physically deleting them was left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.
    - **Sites/Machines delegators removed and the machine responses are API-owned** (issue #302, child 1 of 8 of #153).
@@ -8549,6 +8603,8 @@ EF Core InMemory tests remain useful for fast service checks but must not be the
 `CalculateReorderNeedsTests.Handle_BoundsPerMachineConcurrency_ToTheConfiguredLimit`, which waits on the use case with a wall-clock hang guard, runs the use case off xUnit's test synchronization context (`Task.Run`), as ASP.NET Core does. Otherwise the use case's continuations queue for one of xUnit's few test threads, which in the integration project are often busy with long synchronous SQLite tests, and the guard can expire after the work has finished.
 
 **Call-sequence (yielding-recorder) tests.** Some defects are about *when* calls happen rather than what they return; two operations overlapping on one request-scoped `AppDbContext` is the current example (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). Neither an InMemory nor a relational SQLite test can prove that one, because SQLite's synchronous async implementation completes each call before the next one starts. Such behavior is tested instead with an in-memory fake of the port that records a `start:`/`end:` marker per call, tracks how many calls were ever in flight at once, and awaits `Task.Yield()` before completing — so an implementation that starts two calls before awaiting either produces an interleaved trace and a concurrency count above one. `ResolveMachineProductPricingTests`' call-sequence recorder and the Sites equivalents (`backend/Inventory.IntegrationTests/Application/Sites/RecordingSiteFactsStore.cs`, plus `RecordingNayaxLynxClient`, which gates its machine-product calls so a serialized fan-out fails rather than hangs) are the examples. Pair them with the behavioral assertions the serialization must not change — per-site totals and revenue attribution, ordering, failure propagation, and the relational two-business isolation tests — so a concurrency fix cannot silently drop a site or move revenue between sites.
+
+**Parked-command tests, when the overlap is inside a real adapter.** A recorder fake proves when a *port* is called, but not when the real EF adapter behind it reaches the context — and since issue #520 that happens inside the Nayax client, where no fake is wanted. `NayaxParallelCredentialAccessTests` (issue #667) instead attaches a `DbCommandInterceptor` to the request's own `AppDbContext` options which parks every command briefly, inside EF's critical section, and records how many were ever in flight. That makes the context genuinely asynchronous for the length of the park, so the defect is a deterministic failure (EF's "a second operation was started on this context instance") rather than a source-level argument, and the fixed code is asserted positively: one command in flight at a time, with the remote fan-out still concurrent at the HTTP handler. The window closes as soon as an overlap is seen, so a failing run is fast and a serialized one costs one short park per command. Use it with the real provider, the real store and relational SQLite — the HTTP handler is the only double — and keep the behavioural assertions beside it (which credentials went on the wire, which status row was written, two businesses), so a serialization fix cannot quietly change what a call resolves.
 
 **Two-writer tests.** A check-then-write rule enforced by a transaction needs two *real* writers, which neither an InMemory provider (no locking) nor a shared in-memory SQLite database (one connection) can provide. Such a test uses a temporary SQLite **file** instead, with one `AppDbContext` and connection per writer, and releases the operations together at a `Barrier` so the window the rule has to close is actually opened; it then asserts both the surviving data and that the loser was refused with the rule's own message rather than a provider error. `BusinessMembershipWriteTransactionTests` (issue #522) is the example — two simultaneous activations of one identity, and two Owners demoting each other — and it is written so that both cases fail if the write transaction is downgraded from `BEGIN IMMEDIATE` to the provider's deferred default. Delete the file in `Dispose` and clear the connection pool with it, so a run leaves nothing behind.
 

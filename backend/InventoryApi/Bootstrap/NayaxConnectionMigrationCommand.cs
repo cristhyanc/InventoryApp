@@ -131,6 +131,7 @@ public static class NayaxConnectionMigrationCommand
         await using var tenancyDb = new AppDbContext(dbOptions, new BusinessScope());
 
         var scopedContexts = new List<AppDbContext>();
+        var scopedStores = new List<EfNayaxConnectionStore>();
 
         try
         {
@@ -144,13 +145,14 @@ public static class NayaxConnectionMigrationCommand
                     // The context and the store built over it travel together, because the apply's
                     // transaction is begun on that context and only covers writes the store makes
                     // through it (see NayaxConnectionMigrationTarget).
-                    return new NayaxConnectionMigrationTarget(
+                    var scopedStore = new EfNayaxConnectionStore(
                         scopedDb,
-                        new EfNayaxConnectionStore(
-                            scopedDb,
-                            protector,
-                            clock,
-                            loggerFactory.CreateLogger<EfNayaxConnectionStore>()));
+                        protector,
+                        clock,
+                        loggerFactory.CreateLogger<EfNayaxConnectionStore>());
+                    scopedStores.Add(scopedStore);
+
+                    return new NayaxConnectionMigrationTarget(scopedDb, scopedStore);
                 },
                 lynxOptions.OperatorId,
                 configuredAccessToken,
@@ -164,6 +166,13 @@ public static class NayaxConnectionMigrationCommand
         }
         finally
         {
+            // Each store is disposed with the context it was built over, the same pairing the
+            // request scope makes in the composition root.
+            foreach (var scopedStore in scopedStores)
+            {
+                scopedStore.Dispose();
+            }
+
             foreach (var scopedDb in scopedContexts)
             {
                 await scopedDb.DisposeAsync();

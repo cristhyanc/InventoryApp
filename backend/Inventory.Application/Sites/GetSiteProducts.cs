@@ -54,8 +54,10 @@ public sealed class GetSiteProducts
         // Awaited one at a time, deliberately not with Task.WhenAll: all three reads land on the same
         // scoped ISiteFactsStore, whose EF adapter shares one AppDbContext, and a DbContext supports
         // only one operation at a time. SQLite's synchronous async implementation would usually hide
-        // the overlap locally while failing against a real asynchronous provider. The Nayax requests
-        // above stay a concurrent fan-out: they are independent remote reads that touch no DbContext.
+        // the overlap locally while failing against a real asynchronous provider. They also start
+        // only after the Nayax fan-out above has completed, because since issue #520 each of those
+        // remote reads resolves the business's credentials through that same context (issue #667);
+        // the fan-out itself stays concurrent, with its credential reads serialized in the store.
         var costBasis = await _facts.GetProductCostBasisAsync(cancellationToken);
         var commission = await _facts.ResolveCardCommissionAsync(siteId, today, distinctPrices, cancellationToken);
         var feeExGst = await _facts.ResolveEffectiveFeeExGstAsync(today, cancellationToken);
