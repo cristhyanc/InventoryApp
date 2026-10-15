@@ -210,6 +210,12 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * Reads the count once, for the state the subscription above is in. A refusal leaves the badge
+   * `null` and asks for nothing further: `GET .../pending-count` is classified `platform-admin`
+   * (issue #673), so its `403` refreshes neither member cache - and a refreshed capability set is
+   * exactly what used to bring this method straight back round.
+   */
   private refreshPendingBusinessCount(): void {
     this.superAdminBusinesses
       .pendingCount()

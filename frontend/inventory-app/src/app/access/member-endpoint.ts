@@ -13,9 +13,10 @@
  * - `access-probe` - `GET /api/me/access`, the capability cache's own read (issue #521).
  * - `account-state-probe` - `GET /api/me/account-state`, the account-state cache's own read
  *   (issue #523). Membership-exempt, so its refusal says nothing about a membership at all.
- * - `platform-admin` - the platform diagnostics surface (`/api/admin/diagnostics/*`, issue #336) and
+ * - `platform-admin` - the platform diagnostics surface (`/api/admin/diagnostics/*`, issue #336),
+ *   the Super Admin businesses surface (`/api/super-admin/businesses/*`, issues #544 and #545) and
  *   the Super Admin support-session control surface (`/api/super-admin/support-sessions/*`, issue
- *   #550), both authorized by the configured Entra `(tid, oid)` pair and by no business role. A
+ *   #550), all authorized by the configured Entra `(tid, oid)` pair and by no business role. A
  *   `403` is their expected answer for every ordinary member.
  * - `non-api` - a static asset, another origin, or anything else outside the configured API base.
  */
@@ -28,24 +29,30 @@ const ACCESS_PROBE_PATH = 'me/access';
 const ACCOUNT_STATE_PROBE_PATH = 'me/account-state';
 
 /**
- * The platform diagnostics surface, relative to the configured API base URL: `access` and `query`
- * today (issue #336). Matched as a prefix rather than endpoint by endpoint, because every endpoint
- * under it is platform-admin authorized by construction - `PlatformAdminPolicy` together with
- * `PlatformDiagnosticsEndpointAttribute`. The other `/api/admin/*` controllers are ordinary
- * capability-policy member endpoints and are deliberately not covered.
+ * The platform-admin surfaces, relative to the configured API base URL. Each is matched as a
+ * prefix rather than endpoint by endpoint, because every endpoint under one of them is
+ * platform-admin authorized by construction - `PlatformAdminPolicy` together with
+ * `PlatformDiagnosticsEndpointAttribute`, class 2 of the four endpoint authorization classes
+ * (docs/architecture.md § Capability authorization) - and so refuses every ordinary member and
+ * every administrator whose configured grant has gone:
+ *
+ * - `admin/diagnostics` - the platform diagnostics surface, `access` and `query` today (issue
+ *   #336). The other `/api/admin/*` controllers are ordinary capability-policy member endpoints and
+ *   are deliberately not covered.
+ * - `super-admin/businesses` - the Super Admin businesses collection and every one of its
+ *   subresources (issues #544 and #545, and issue #673 for this classification): the directory
+ *   itself, `pending-count`, `{businessId}/approve`, `.../reject`, `.../deactivate`,
+ *   `.../reactivate`, `.../members` and `.../members/{membershipId}/release`. The sidebar's
+ *   pending-count badge reads one of these on its own, with no page behind it, so a refusal of it
+ *   must drive nothing: refreshing the member capability cache from one made every capability
+ *   emission ask the badge for the count again.
+ * - `super-admin/support-sessions` - the control surface of issue #550: `{businessId}`, `active`
+ *   and `active/end`, reached as the administrator themselves and never inside a session, so a
+ *   refusal here says nothing about a business role either. Issue #553's own calls to it (the "view
+ *   as this business" dialog, the banner's end action, and a tab's own-session probe) must not be
+ *   read as a member refusal any more than the diagnostics probe is.
  */
-const PLATFORM_ADMIN_PREFIX = 'admin/diagnostics';
-
-/**
- * The Super Admin support-session control surface (issue #550): `{businessId}`, `active` and
- * `active/end`. The same platform-admin authorization class as the diagnostics prefix above - class
- * 2, no capability (docs/architecture.md § Support sessions: the store and the control endpoints) -
- * and reached as the administrator themselves, never inside a session, so a refusal here says
- * nothing about a business role either. Issue #553's own calls to it (the "view as this business"
- * dialog, the banner's end action, and a tab's own-session probe) must not be read as a member
- * refusal any more than the diagnostics probe is.
- */
-const SUPPORT_SESSION_CONTROL_PREFIX = 'super-admin/support-sessions';
+const PLATFORM_ADMIN_PREFIXES = ['admin/diagnostics', 'super-admin/businesses', 'super-admin/support-sessions'];
 
 /** Static and runtime-configuration assets (`/assets/config.json`), which are not API calls. */
 const ASSETS_SEGMENT = 'assets';
@@ -92,9 +99,9 @@ function segmentsOf(path: string): string[] {
  * call only when its origin is the API's own and its path starts with the API's path segments, so
  * a static asset, an MSAL or other third-party origin, and a path that merely begins with the same
  * letters (`/apiary/...`) are all `non-api` and drive nothing. Within the API, the two cache
- * probes and the platform diagnostics surface are named rather than inferred, and every other
- * endpoint is a `member` one - the default has to stay that way round, because an endpoint this
- * build has never heard of still refuses a member whose role changed.
+ * probes and each {@link PLATFORM_ADMIN_PREFIXES} surface are named rather than inferred, and every
+ * other endpoint is a `member` one - the default has to stay that way round, because an endpoint
+ * this build has never heard of still refuses a member whose role changed.
  */
 export function classifyMemberRequest(url: string, apiBaseUrl: string): MemberRequestKind {
   const request = absolute(url);
@@ -128,12 +135,7 @@ export function classifyMemberRequest(url: string, apiBaseUrl: string): MemberRe
   if (endpointPath === ACCOUNT_STATE_PROBE_PATH) {
     return 'account-state-probe';
   }
-  if (
-    endpointPath === PLATFORM_ADMIN_PREFIX ||
-    endpointPath.startsWith(`${PLATFORM_ADMIN_PREFIX}/`) ||
-    endpointPath === SUPPORT_SESSION_CONTROL_PREFIX ||
-    endpointPath.startsWith(`${SUPPORT_SESSION_CONTROL_PREFIX}/`)
-  ) {
+  if (PLATFORM_ADMIN_PREFIXES.some((prefix) => endpointPath === prefix || endpointPath.startsWith(`${prefix}/`))) {
     return 'platform-admin';
   }
 

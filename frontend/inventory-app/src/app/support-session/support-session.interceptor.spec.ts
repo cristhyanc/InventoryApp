@@ -80,7 +80,14 @@ describe('supportSessionInterceptor (issue #553)', () => {
     ['the start call', '/api/super-admin/support-sessions/9'],
     ['the active probe', '/api/super-admin/support-sessions/active'],
     ['the end call', '/api/super-admin/support-sessions/active/end'],
-    ['the diagnostics probe', '/api/admin/diagnostics/access']
+    ['the diagnostics probe', '/api/admin/diagnostics/access'],
+    // Issue #673 classified these as platform-admin too. They are reached as the administrator and
+    // the API ignores the header on them either way - `PlatformDiagnosticsEndpointAttribute` is
+    // decided before a session is resolved - so withholding it changes nothing but says what is
+    // true: a business decision is not something anybody makes from inside a support session.
+    ['the businesses directory', '/api/super-admin/businesses'],
+    ['the pending-count badge read', '/api/super-admin/businesses/pending-count'],
+    ['a business decision', '/api/super-admin/businesses/9/approve']
   ])('never attaches the header to %s - the control surface, reached as the administrator', (_name, url) => {
     const harness = configure();
     harness.setSessionId('session-abc');

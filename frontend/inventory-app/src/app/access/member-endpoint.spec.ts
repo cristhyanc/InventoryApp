@@ -59,11 +59,37 @@ describe('classifyMemberRequest (issue #602)', () => {
       expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
     });
 
-    it('classifies the Super Admin businesses API as an ordinary member endpoint', () => {
-      // Unlike the support-session control surface, this one is only ever called from behind
-      // `platformAdminGuard`'s routed page, so a refusal reaching it at all is not the expected
-      // case the exclusion above exists for.
-      expect(classifyMemberRequest('/api/super-admin/businesses', LOCAL)).toBe('member');
+    /**
+     * The Super Admin businesses collection and every one of its subresources (issue #673). It is
+     * the same class-2 platform-admin authorization as the two surfaces above, so a `403` is the
+     * expected answer for every ordinary member and for an administrator whose grant has gone -
+     * and the sidebar's pending-count badge reads one of these on its own, outside any page.
+     */
+    it.each([
+      '/api/super-admin/businesses',
+      '/api/super-admin/businesses/',
+      '/api/super-admin/businesses/pending-count',
+      '/api/super-admin/businesses/pending-count?at=now',
+      '/api/super-admin/businesses/pending-count#x',
+      '/api/Super-Admin/Businesses/Pending-Count',
+      '/api//super-admin/businesses/pending-count',
+      '/api/super-admin/businesses/7/approve',
+      '/api/super-admin/businesses/7/reject',
+      '/api/super-admin/businesses/7/deactivate',
+      '/api/super-admin/businesses/7/reactivate',
+      '/api/super-admin/businesses/7/members',
+      '/api/super-admin/businesses/7/members/19/release'
+    ])('classifies %s as the platform-admin surface (issue #673)', (url) => {
+      expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
+    });
+
+    it.each([
+      // A segment that merely begins with the same letters is a different endpoint, and the
+      // default for anything the exclusions do not name has to stay `member`.
+      '/api/super-admin/businesses-archive',
+      '/api/super-admin-businesses/pending-count'
+    ])('classifies %s as a member endpoint', (url) => {
+      expect(classifyMemberRequest(url, LOCAL)).toBe('member');
     });
 
     it.each([
@@ -98,6 +124,21 @@ describe('classifyMemberRequest (issue #602)', () => {
 
     it('classifies the platform diagnostics probe', () => {
       expect(classifyMemberRequest(`${DEPLOYED}/admin/diagnostics/access`, DEPLOYED)).toBe('platform-admin');
+    });
+
+    it.each([
+      `${DEPLOYED}/super-admin/businesses`,
+      `${DEPLOYED}/super-admin/businesses/pending-count`,
+      `${DEPLOYED}/super-admin/businesses/pending-count?x=1`,
+      `${DEPLOYED}/super-admin/businesses/7/members/19/release`
+    ])('classifies %s as the platform-admin surface (issue #673)', (url) => {
+      expect(classifyMemberRequest(url, DEPLOYED)).toBe('platform-admin');
+    });
+
+    it('classifies the pending-count read when the configured base carries a trailing slash', () => {
+      expect(classifyMemberRequest(`${DEPLOYED}/super-admin/businesses/pending-count`, `${DEPLOYED}/`)).toBe(
+        'platform-admin'
+      );
     });
 
     it.each([

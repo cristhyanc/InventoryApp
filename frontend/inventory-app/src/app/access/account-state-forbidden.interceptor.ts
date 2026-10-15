@@ -34,8 +34,9 @@ export function isMemberAccountStateRefusal(url: string, apiBaseUrl: string): bo
  * interceptor ignores that probe's refusal and `accessForbiddenInterceptor` now ignores it too. A
  * persistent `403` therefore costs at most one read of each cache and stops.
  *
- * The platform diagnostics surface, static assets and other origins are excluded by the same
- * classification (see {@link classifyMemberRequest}).
+ * The platform-admin surfaces - the diagnostics one, the Super Admin businesses one (issue #673)
+ * and the support-session control one - together with static assets and other origins, are
+ * excluded by the same classification (see {@link classifyMemberRequest}).
  *
  * It reports nothing to the operator and routes nowhere, exactly like `accessForbiddenInterceptor`.
  * Showing "you don't have access to this" is `memberForbiddenNoticeInterceptor`'s separate job.
