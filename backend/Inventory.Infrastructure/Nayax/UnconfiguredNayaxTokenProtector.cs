@@ -1,3 +1,5 @@
+using Inventory.Domain.Tenancy;
+
 namespace Inventory.Infrastructure.Nayax;
 
 /// <summary>
@@ -14,10 +16,11 @@ namespace Inventory.Infrastructure.Nayax;
 public sealed class UnconfiguredNayaxTokenProtector : INayaxTokenProtector
 {
     /// <inheritdoc />
-    public ProtectedNayaxToken Protect(string accessToken) => throw NotConfigured();
+    public ProtectedNayaxToken Protect(string accessToken, BusinessId businessId) => throw NotConfigured();
 
     /// <inheritdoc />
-    public string Unprotect(ProtectedNayaxToken protectedToken) => throw NotConfigured();
+    public string Unprotect(ProtectedNayaxToken protectedToken, BusinessId businessId) =>
+        throw NotConfigured();
 
     private static NayaxTokenProtectionException NotConfigured() =>
         new("No Nayax token encryption key is configured, so a per-business Nayax access token "

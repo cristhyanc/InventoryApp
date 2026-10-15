@@ -87,7 +87,10 @@ public sealed class EfNayaxConnectionTestDraftStore : INayaxConnectionTestDraftS
     {
         ArgumentNullException.ThrowIfNull(actor);
 
-        RequireCurrentBusinessId("claimed");
+        var businessId = RequireCurrentBusinessId("claimed");
+
+        // As above (issue #681): a claim is a DELETE, and a DELETE bypasses SaveChanges.
+        SetBasedWriteEnforcer.RequireWritableScope(_db);
 
         var now = _clock.UtcNow;
 
@@ -122,11 +125,14 @@ public sealed class EfNayaxConnectionTestDraftStore : INayaxConnectionTestDraftS
         }
 
         // Decrypted before the row is removed, so a key-configuration failure claims nothing at all
-        // rather than consuming a draft it cannot hand back. Throws for a corrupt ciphertext or an
-        // unconfigured key, exactly as the connection store does: an undecryptable credential must
-        // never look like an absent draft.
+        // rather than consuming a draft it cannot hand back. Throws for a corrupt ciphertext, an
+        // unconfigured key or a ciphertext encrypted for another business (issue #681), exactly as
+        // the connection store does: an undecryptable credential must never look like an absent
+        // draft. The business id comes from the context's own tenancy scope - the same scope whose
+        // query filter selected the row - and never from a request.
         var accessToken = _protector.Unprotect(
-            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext));
+            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext),
+            BusinessId.From(businessId));
 
         var claimed = await claimable.ExecuteDeleteAsync(cancellationToken).ConfigureAwait(false);
         if (claimed != 1)
@@ -145,15 +151,45 @@ public sealed class EfNayaxConnectionTestDraftStore : INayaxConnectionTestDraftS
     }
 
     /// <inheritdoc />
+    public async Task<bool> DiscardExpiredAsync(CancellationToken cancellationToken)
+    {
+        RequireCurrentBusinessId("discarded");
+
+        // The read-only support-session rule, for a DELETE that never reaches
+        // BusinessOwnershipEnforcer (issue #681).
+        SetBasedWriteEnforcer.RequireWritableScope(_db);
+
+        var now = _clock.UtcNow;
+
+        // One conditional DELETE, with the owning business contributed by the central query filter
+        // rather than by a predicate written here, and the expiry boundary matching the one every
+        // read and the claim use: a draft is expired *at* its expiry, so the reads' `> now` and this
+        // statement's `<= now` partition the table between them and neither can act on a row the
+        // other would still honour.
+        var discarded = await _db.NayaxConnectionTestDrafts
+            .Where(draft => draft.ExpiresAt <= now)
+            .ExecuteDeleteAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return discarded > 0;
+    }
+
+    /// <inheritdoc />
     public async Task ReplaceAsync(NewNayaxConnectionTestDraft draft, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(draft);
 
-        RequireCurrentBusinessId();
+        var businessId = RequireCurrentBusinessId();
+
+        // As above (issue #681): the replacing DELETE bypasses SaveChanges, so the read-only
+        // support-session rule is applied before anything is encrypted or written.
+        SetBasedWriteEnforcer.RequireWritableScope(_db);
 
         // Encrypted before anything is written, so a key-configuration failure stores nothing at all
-        // rather than replacing a usable draft with a row holding an empty token.
-        var protectedToken = _protector.Protect(draft.Credential.AccessToken);
+        // rather than replacing a usable draft with a row holding an empty token. Bound to this
+        // business (issue #681), so the draft's ciphertext cannot be claimed from another
+        // business's row.
+        var protectedToken = _protector.Protect(draft.Credential.AccessToken, BusinessId.From(businessId));
 
         // The delete and the insert are one change. Without the transaction a failure between them
         // would leave the business with no draft at all, having just discarded a usable one; with it
@@ -198,16 +234,13 @@ public sealed class EfNayaxConnectionTestDraftStore : INayaxConnectionTestDraftS
     /// would carry no business predicate and reach every business's draft.
     /// </summary>
     /// <param name="operation">What was attempted, for the refusal message.</param>
-    private void RequireCurrentBusinessId(string operation = "stored")
-    {
-        if (_db.CurrentBusinessId is not null)
-        {
-            return;
-        }
-
-        throw new CrossBusinessAccessException(
-            $"A Nayax connection test draft cannot be {operation} without a single resolved current "
-                + "business. The caller has no business membership, or the context was "
-                + "constructed unscoped, so the write is refused.");
-    }
+    /// <returns>
+    /// The resolved business's key, which is also what the ciphertext is bound to (issue #681).
+    /// </returns>
+    private int RequireCurrentBusinessId(string operation = "stored") =>
+        _db.CurrentBusinessId
+            ?? throw new CrossBusinessAccessException(
+                $"A Nayax connection test draft cannot be {operation} without a single resolved "
+                    + "current business. The caller has no business membership, or the context was "
+                    + "constructed unscoped, so the write is refused.");
 }

@@ -87,7 +87,28 @@ public class ProductsController : ControllerBase
         return product is null ? NotFound() : Ok(ProductRecordResponseMapper.ToResponse(product));
     }
 
+    /// <summary>
+    /// The business's inventory valuation: quantity at cost, and the total value of it.
+    ///
+    /// <para><strong>It needs <c>Dashboard.ViewFinancials</c> as well as the controller's
+    /// <c>Inventory.Operate</c></strong> (issue #681). Issue #527 established that the exact value
+    /// of a business's inventory at cost is a financial figure an Operator is not shown: the
+    /// dashboard omits <c>inventory.inventoryValueAtCost</c> from the response entirely for a role
+    /// without that capability. This endpoint reports the same figure, broken down, so leaving it on
+    /// the catalogue's own capability made the dashboard's redaction a presentation detail rather
+    /// than a boundary - an Operator could read the number directly. Capability requirements
+    /// accumulate down an endpoint, so this narrows one action and widens nothing: a Manager and an
+    /// Owner hold both capabilities and are unaffected.</para>
+    /// </summary>
+    /// <response code="200">The valuation summary.</response>
+    /// <response code="403">
+    /// The caller's role does not grant <c>Dashboard.ViewFinancials</c> - today an Operator. The
+    /// refusal names no capability and no role, like every other capability refusal.
+    /// </response>
     [HttpGet("inventory-value-summary")]
+    [RequireCapability(Capability.DashboardViewFinancials)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public Task<InventoryValuationSummaryDto> InventoryValueSummary(CancellationToken ct) =>
         _getInventoryValuationSummary.Handle(ct);
 

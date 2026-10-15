@@ -1,4 +1,5 @@
 using System.Globalization;
+using Inventory.Domain.Tenancy;
 
 namespace Inventory.Infrastructure.Nayax;
 
@@ -57,16 +58,40 @@ public sealed class NayaxTokenProtectionException : Exception
 /// Implementations fail closed. Neither member returns a "could not decrypt" value; a corrupt
 /// ciphertext, a tampered one, an unknown key id or a missing key configuration throws
 /// <see cref="NayaxTokenProtectionException"/>.
+///
+/// <para><strong>A ciphertext belongs to one business, and both members say which</strong> (issue
+/// #681). The owning business id is authenticated data of the encryption, not a parameter that
+/// merely selects a row: a value encrypted for one business does not decrypt for another, so a
+/// ciphertext copied between rows - by a hand-written <c>UPDATE</c>, a restored backup or a mistaken
+/// repair - fails its authentication check instead of yielding that business's token. The business
+/// id is resolved by the adapter from the context's own tenancy scope and never from a request.</para>
 /// </summary>
 public interface INayaxTokenProtector
 {
-    /// <summary>Encrypts <paramref name="accessToken"/> with the currently active key.</summary>
+    /// <summary>
+    /// Encrypts <paramref name="accessToken"/> with the currently active key, bound to
+    /// <paramref name="businessId"/>.
+    /// </summary>
+    /// <param name="accessToken">The plaintext Lynx access token. A secret.</param>
+    /// <param name="businessId">
+    /// The business the ciphertext is being stored for. It is authenticated with the ciphertext, so
+    /// only <see cref="Unprotect"/> for this same business can decrypt the result.
+    /// </param>
     /// <exception cref="NayaxTokenProtectionException">No usable encryption key is configured.</exception>
-    ProtectedNayaxToken Protect(string accessToken);
+    ProtectedNayaxToken Protect(string accessToken, BusinessId businessId);
 
-    /// <summary>Decrypts <paramref name="protectedToken"/> with the key it names.</summary>
+    /// <summary>
+    /// Decrypts <paramref name="protectedToken"/> with the key it names, for
+    /// <paramref name="businessId"/>.
+    /// </summary>
+    /// <param name="protectedToken">The stored key id and ciphertext.</param>
+    /// <param name="businessId">
+    /// The business the row the ciphertext came from belongs to. A business-bound ciphertext stored
+    /// against any other business fails its authentication check.
+    /// </param>
     /// <exception cref="NayaxTokenProtectionException">
-    /// The key id is not configured, or the ciphertext is malformed or has been tampered with.
+    /// The key id is not configured, or the ciphertext is malformed, has been tampered with, or was
+    /// encrypted for another business.
     /// </exception>
-    string Unprotect(ProtectedNayaxToken protectedToken);
+    string Unprotect(ProtectedNayaxToken protectedToken, BusinessId businessId);
 }

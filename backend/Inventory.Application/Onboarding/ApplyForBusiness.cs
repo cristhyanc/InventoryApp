@@ -215,7 +215,7 @@ public sealed class ApplyForBusiness
 
         // Claimed before the membership read and the write, so several simultaneous submissions cost
         // one allowance each rather than all passing a count nothing has incremented yet.
-        if (!_rateLimiter.TryClaim(actor.Identity, out var retryAfter))
+        if (!_rateLimiter.TryClaim(actor.Identity, out var retryAfter, out var claimedAtUtc))
         {
             return BusinessApplicationOutcome.RateLimited(retryAfter);
         }
@@ -225,6 +225,15 @@ public sealed class ApplyForBusiness
         {
             // The application they already have, reported back unchanged. Nothing was written, so
             // nothing is audited: one application is one audit event.
+            //
+            // And the allowance is given back (issue #681). This branch exists so a lost response
+            // cannot create a second business, which means it is the branch a person with a bad
+            // connection reaches repeatedly - and it opens no transaction and writes no row, so
+            // charging it an attempt locked somebody out of an endpoint that was answering
+            // correctly the whole time. The claim is still taken first, before any read, so several
+            // simultaneous submissions still cost one allowance each.
+            _rateLimiter.Release(actor.Identity, claimedAtUtc);
+
             return BusinessApplicationOutcome.Recorded(waiting);
         }
 

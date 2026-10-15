@@ -292,6 +292,55 @@ public class ApplyForBusinessTests
     }
 
     /// <summary>
+    /// Issue #681: an identical resubmission costs no allowance.
+    ///
+    /// <para>This branch exists so a lost response cannot create a second business, which makes it
+    /// the branch a person on a bad connection reaches repeatedly - and it writes nothing and opens
+    /// no transaction. Charging it an attempt locked such an applicant out of an endpoint that had
+    /// been answering "here is the application you already have" correctly the whole time.</para>
+    /// </summary>
+    [Fact]
+    public async Task An_identical_resubmission_costs_no_rate_limit_allowance()
+    {
+        var world = PendingApplicant(Validated());
+
+        // More resubmissions than the window allows attempts: every one of them must be answered.
+        for (var attempt = 0; attempt < BusinessApplicationRateLimiter.MaxApplicationsPerWindow + 3; attempt++)
+        {
+            var outcome = await world.Apply(Submission());
+
+            Assert.Null(outcome.RetryAfter);
+            Assert.Equal(BusinessId.From(7), outcome.Application?.BusinessId);
+        }
+
+        // Nothing is left tracked either: the only attempts recorded were given straight back.
+        Assert.Equal(0, world.RateLimiter.TrackedIdentities);
+        Assert.Empty(world.WriteStore.Operations);
+        Assert.Empty(world.Audit.Entries);
+    }
+
+    /// <summary>
+    /// The contrast that keeps the limit meaningful: a resubmission whose details <em>differ</em> is
+    /// a refusal, not a replay, so it keeps its allowance - a person editing the form over and over
+    /// is exactly the case the limit is for.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_resubmission_still_costs_its_allowance()
+    {
+        var world = PendingApplicant(Validated());
+
+        await Assert.ThrowsAsync<DomainConflictException>(
+            () => world.Apply(new BusinessApplicationSubmission(
+                "Inland Vending",
+                "owner@coastal.example.com",
+                "51 824 753 556",
+                true,
+                "Australia/Brisbane")));
+
+        Assert.Equal(1, world.RateLimiter.TrackedIdentities);
+    }
+
+    /// <summary>
     /// The pending application is read by the id the caller's <em>own</em> membership row reported,
     /// never by anything a request supplied - there is nothing in the contract that could supply
     /// one.

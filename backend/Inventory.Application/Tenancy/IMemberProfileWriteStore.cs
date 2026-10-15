@@ -22,6 +22,13 @@ public interface IMemberProfileWriteStore
     /// <summary>
     /// Writes <paramref name="profile"/> onto the active membership of <paramref name="identity"/>,
     /// and only where it differs from what is already stored.
+    ///
+    /// <para><strong>A value <paramref name="profile"/> does not carry is left exactly as it is</strong>
+    /// (issue #681). An absent claim is the absence of a statement, not a statement that the stored
+    /// value is gone, so a token reporting a display name and no email address updates the name and
+    /// leaves the address alone. That is the same rule the invite redemption's reactivation applies
+    /// to the same two columns, which is the point: two write paths for one pair of columns must not
+    /// disagree about what an absent claim means.</para>
     /// </summary>
     /// <returns>
     /// The number of rows changed: <c>1</c> when the stored profile was out of date, and <c>0</c>

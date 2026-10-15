@@ -32,40 +32,45 @@ namespace InventoryApi.Tests.Architecture;
 public class MembershipNotRequiredEndpointAllowlistTests
 {
     /// <summary>
-    /// Every endpoint allowed to carry the marker, as its route template - the one list, owned by
-    /// the endpoint-classification test. Adding a line there is the reviewed exemption; see that
-    /// test's remarks before doing it.
+    /// Every endpoint allowed to carry the marker, as its route template and HTTP method - the one
+    /// list, owned by the endpoint-classification test. Adding a line there is the reviewed
+    /// exemption; see that test's remarks before doing it. Since issue #681 an entry names the
+    /// method as well as the route, because an exemption belongs to one endpoint.
     /// </summary>
-    private static readonly string[] Allowlist =
+    private static readonly EndpointAuthorizationClassificationTests.MembershipNotRequiredEndpoint[] Allowlist =
         EndpointAuthorizationClassificationTests.MembershipNotRequiredAllowlist;
 
     private static readonly Assembly ApiAssembly = typeof(Program).Assembly;
 
-    private const BindingFlags DeclaredActions = BindingFlags.Public
-        | BindingFlags.Instance
-        | BindingFlags.DeclaredOnly;
+    /// <summary>
+    /// Inherited actions included (issue #681), for the reason the classification test gives: an
+    /// action declared on a base controller in this assembly is routed by its derived controller, so
+    /// a marker on it has to be visible here too.
+    /// </summary>
+    private const BindingFlags ActionCandidates = BindingFlags.Public | BindingFlags.Instance;
 
     [Fact]
     public void Only_allowlisted_endpoints_may_skip_the_membership_requirement()
     {
         var marked = MarkedActions()
-            .Select(action => RouteOf(action.Controller, action.Method))
+            .Select(action => Endpoint(action.Controller, action.Method).ToString())
             .Order(StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(Allowlist.Order(StringComparer.Ordinal), marked);
+        Assert.Equal(Allowlist.Select(entry => entry.ToString()).Order(StringComparer.Ordinal), marked);
     }
 
     /// <summary>
-    /// The allowlist is a list of endpoints that exist: an entry whose endpoint was renamed or
-    /// removed would otherwise keep an exemption alive for a route nobody can see any more.
+    /// The allowlist is a list of endpoints that exist: an entry whose endpoint was renamed, removed
+    /// or moved to another HTTP method would otherwise keep an exemption alive for an endpoint nobody
+    /// can see any more.
     /// </summary>
     [Fact]
     public void Every_allowlisted_endpoint_still_carries_the_marker()
     {
-        var marked = MarkedActions().Select(action => RouteOf(action.Controller, action.Method)).ToList();
+        var marked = MarkedActions().Select(action => Endpoint(action.Controller, action.Method)).ToList();
 
-        Assert.All(Allowlist, route => Assert.Contains(route, marked));
+        Assert.All(Allowlist, entry => Assert.Contains(entry, marked));
     }
 
     /// <summary>
@@ -78,7 +83,7 @@ public class MembershipNotRequiredEndpointAllowlistTests
     {
         foreach (var (controller, method) in MarkedActions())
         {
-            var route = RouteOf(controller, method);
+            var route = Endpoint(controller, method).ToString();
 
             Assert.True(
                 HasAttribute<AuthorizeAttribute>(controller, method),
@@ -95,8 +100,15 @@ public class MembershipNotRequiredEndpointAllowlistTests
     private static List<(Type Controller, MethodInfo Method)> MarkedActions() =>
         ApiAssembly.GetTypes()
             .Where(type => typeof(ControllerBase).IsAssignableFrom(type) && !type.IsAbstract)
-            .SelectMany(type => type.GetMethods(DeclaredActions).Select(method => (Controller: type, Method: method)))
+            .SelectMany(type => type.GetMethods(ActionCandidates)
+                .Where(method => method.DeclaringType is { } declaring
+                    && declaring.Assembly == ApiAssembly
+                    && typeof(ControllerBase).IsAssignableFrom(declaring))
+                .Where(method => !method.IsSpecialName)
+                .Where(method => !method.GetCustomAttributes<NonActionAttribute>().Any())
+                .Select(method => (Controller: type, Method: method)))
             .Where(action => HasAttribute<MembershipNotRequiredEndpointAttribute>(action.Controller, action.Method))
+            .Where(action => action.Method.GetCustomAttributes<HttpMethodAttribute>().Any())
             .ToList();
 
     /// <summary>
@@ -109,6 +121,18 @@ public class MembershipNotRequiredEndpointAllowlistTests
         where TAttribute : Attribute =>
         method.GetCustomAttributes<TAttribute>().Any()
         || controller.GetCustomAttributes<TAttribute>(inherit: true).Any();
+
+    /// <summary>
+    /// The endpoint as the allowlist states it: the route template and the HTTP method (issue #681).
+    /// </summary>
+    private static EndpointAuthorizationClassificationTests.MembershipNotRequiredEndpoint Endpoint(
+        Type controller,
+        MethodInfo method) =>
+        new(
+            RouteOf(controller, method),
+            method.GetCustomAttributes<HttpMethodAttribute>()
+                .SelectMany(attribute => attribute.HttpMethods)
+                .FirstOrDefault() ?? "GET");
 
     /// <summary>
     /// The endpoint's route as a reviewer reads it in the controller: the controller's own

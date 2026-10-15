@@ -16,7 +16,8 @@ only the schema-migration step's "deploy and let startup apply it" alternative i
 | Create the `Business` record, in the `Active` lifecycle status | **Human**, via `bootstrap-business` (see [The business lifecycle status](#the-business-lifecycle-status-issue-540)) |
 | Create the **first** `BusinessMembership` row from the supplied Entra mapping, in the role it names | **Human**, via `bootstrap-business` (see [The member's role](#the-members-role-issue-521)) |
 | Add any **later** member | An **Owner of that business**, by creating an invite link the person redeems — no operator run and no Entra ids needed (issue #532; see [Adding a member after the bootstrap](#adding-a-member-after-the-bootstrap-invite-links-issues-531-and-532)) |
-| Release a member whose own business has been deactivated, so they can join elsewhere | **Human**, by revoking that membership row deliberately — no Owner of a deactivated business can be reached |
+| Release a member whose own business has been deactivated, so they can join elsewhere | A **Super Admin**, through the Businesses page's member list (`POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release`, issues #545 and #547) — no Owner of a deactivated business can be reached, which is why this is a platform-admin action rather than a hand-written row revocation |
+| Approve or reject a self-service business application | A **Super Admin**, through the same Businesses page (`POST /api/super-admin/businesses/{businessId}/approve` and `.../reject`, issues #544 and #547) |
 | Assign existing rows to that business | **Human**, via `bootstrap-business --apply` |
 | Move the global Nayax operator id and token into that business's record | **Human**, via `migrate-nayax-connection --apply` (issue #519; see [Migrating the Nayax connection](#migrating-the-nayax-connection-into-the-business-issue-519)) |
 | Remove the global `NayaxLynx` operator id and token | **Human**, once the per-business record is in use and verified (the client reads it since issue #520; `NayaxLynx__BaseUrl` stays) |
@@ -218,10 +219,13 @@ What this changes for an operator:
   who already belongs to a business cannot redeem an invite into another: they are refused with
   `409` and "This person is already a member of a business.", and the invite is left unused. The
   remedy is the deliberate one — an Owner of their current business revokes their membership first.
-- **One case needs you.** If that person's business has been **deactivated**, no Owner of it can be
-  reached to revoke their membership, so the refusal tells them they "must first be released by the
-  platform administrator". Releasing them means revoking that membership row deliberately; there is
-  no self-service path, and it is a human decision about access to financial data.
+- **One case needs a platform administrator.** If that person's business has been **deactivated**,
+  no Owner of it can be reached to revoke their membership, so the refusal tells them they "must
+  first be released by the platform administrator". Releasing them is a Super Admin action on the
+  Businesses page's member list of a deactivated business
+  (`POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release`, issues #545 and
+  #547), not a hand-written row revocation. There is still no self-service path, and it is still a
+  human decision about access to financial data.
 - **Nothing a redemption is told reveals a business.** An expired, used, withdrawn or unknown token,
   and an invite of a business that is not active, all answer with one `400` and the same sentence,
   and a successful redemption reports only the role. That is deliberate: an invite token is a
@@ -246,7 +250,8 @@ application or decision instant, and leaves every profile column the application
 inventing a value for a business that predates the form. The self-service application that creates a
 `Pending` business is issue #541's, behind the flag described in
 [Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541) below, and
-approving, rejecting or deactivating one is issue #509; neither goes through this command.
+approving, rejecting, deactivating or reactivating one is the Super Admin businesses API of issues
+#544 and #545, driven from the page of issue #547; none of them goes through this command.
 
 Two consequences for this procedure. The bootstrap refuses to assign data to a business in any other
 status and names the status in its message (see
@@ -327,13 +332,15 @@ Switching the flag on is a configuration change in the production App Service
 restart; switching it back off is the same change in reverse and disables the endpoint again without
 touching any business that was already created.
 
-**What the flag does not gate.** Approving and rejecting applications is issue #509's work and does
-not exist yet, so while the flag is on, applications accumulate as `Pending` businesses that nobody
-can yet approve and whose applicants see a waiting screen. Do not switch the flag on before that
-side exists, unless the intent is specifically to collect applications and decide on them by hand.
+**What the flag does not gate.** Deciding an application is a separate, Super Admin surface, and it
+exists: `POST /api/super-admin/businesses/{businessId}/approve` and `.../reject` (issue #544), driven
+from the Super Admin Businesses page (issue #547). The flag therefore controls only whether an
+application can be *submitted* — switching it on does not approve anything, and an application waits
+as a `Pending` business, with its applicant on a waiting screen, until a Super Admin decides it.
 A `Pending` business reaches no data and reports an unfinished rollout to the startup readiness
 check (see [The business lifecycle status](#the-business-lifecycle-status-issue-540) above), so
-expect `TenantOwnershipReadiness` to count it as a business that is not active.
+expect `TenantOwnershipReadiness` to count it as a business that is not active for as long as it
+waits.
 
 ## Rollout sequence
 
@@ -727,10 +734,12 @@ Nothing here needs configuration, and no step of the rollout procedure changes.
   so an Owner can now connect, save and re-test their own account from the application. Since
   issue #541 the *application* side of onboarding exists too, behind a flag that is off by default
   and gated as [Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541)
-  describes. What is still missing is the rest of the journey: approving or rejecting an
-  application is #509's (the application form at `/apply` exists since #543), the approval page is #510's, and the connection
-  banners are #539's; the business that is live today had its credential moved in by that
-  human-run command. Do not add a second live business until the flow is complete.
+  describes. The rest of the journey exists too: the application form at `/apply` since #543,
+  approving and rejecting an application through the Super Admin businesses API of #544 and the
+  Businesses page of #547 (the approval user interface #510 asked for), and the Nayax connection
+  banners of #539 on the screens that depend on Nayax. The business that is live today had its
+  credential moved in by that human-run command; a second live business is a human decision about
+  production data, not a missing feature.
 - **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred, and still
   **required**. This is an outstanding integrity step, not a decision that the constraint is
   unnecessary.

@@ -1536,7 +1536,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Page | Endpoints | Capability | Operator | Manager | Owner |
 | --- | --- | --- | --- | --- | --- |
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
-| Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` | ✔ | ✔ | ✔ |
+| Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` **and** `Inventory.Operate` (issue #681) | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
 | Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Purchases, Supplier Orders, Suppliers | `api/purchases`, `api/supplierorders`, `api/suppliers` | `Purchasing.Operate` | ✔ | ✔ | ✔ |
@@ -1567,9 +1567,15 @@ The other is `NayaxConnectionController` since issue #537: its test, save and re
 
 **A preview is as restricted as its apply.** All five repair controllers put `Data.Repair` on the controller, covering preview, dry run, history read and apply alike. A preview reads exactly the financial history its apply rewrites and returns the fingerprint or plan id the apply is authorised by, and on `api/sale-costing` the only difference between projecting the change and writing it is a `dryRun` flag. Restricting the apply while leaving the preview open would restrict nothing anybody cares about and hand every member the business's costing ledger. `EndpointAuthorizationClassificationTests.Every_action_of_a_repair_controller_requires_only_the_data_repair_capability` pins that none of them drifts onto a weaker capability later.
 
-**The two endpoints no page owns, and the reviewed reasoning for each.** Issue #526 says `NayaxSalesSyncController` and `DataQualityController` follow the page that calls them:
+**The endpoints no page owns, and the reviewed reasoning for each.** Issue #526 says `NayaxSalesSyncController` and `DataQualityController` follow the page that calls them; issue #681 added the third entry, an action whose own page stopped calling it:
 
-- `POST api/nayax-sales-sync` → **`Dashboard.View`**. The home Dashboard calls it on load, before Sites and Machines, so both sections calculate from one freshness boundary (issue #187). `Imports.Run` would leave an Operator's Dashboard refreshing nothing and reporting stale sales on every visit — the page broken for them rather than a decision anybody made. It surfaces no figure the Dashboard does not already show, and redacting those figures by role is [issue #527](#dashboard-financial-redaction-issue-527) below.
+- `POST api/nayax-sales-sync` → **`Dashboard.View`**, and since issue #681 **`Inventory.Operate`** as well. The home Dashboard calls it on load, before Sites and Machines, so both sections calculate from one freshness boundary (issue #187). `Imports.Run` would leave an Operator's Dashboard refreshing nothing and reporting stale sales on every visit — the page broken for them rather than a decision anybody made. It surfaces no figure the Dashboard does not already show, and redacting those figures by role is [issue #527](#dashboard-financial-redaction-issue-527) below.
+
+  The second capability is there because **this endpoint writes**: it persists imported sales and rebuilds inventory costs for the products a completed sale touched. `Dashboard.View` is the read capability every role holds, including any future read-only role #328 anticipates (the Viewer), so an endpoint that writes under it alone is a hole waiting for that role to exist. `Inventory.Operate` is the capability declared because the write is an inventory one — the same capability Sync Restock's write carries — and because every role in the matrix that holds `Dashboard.View` also holds it, so **no current role's sync access changes**. Requirements accumulate, so the declaration narrows and never widens.
+
+  It is also **rate-limited per business** since issue #681: `Inventory.Application.SalesSync.NayaxSalesSyncRateLimiter` allows ten runs per business per two minutes, claimed before the first Nayax call, and a refused run answers `429` with `Retry-After` and reaches neither Nayax nor the database. One run is one Nayax request per machine plus one, and the Dashboard triggers one per load — which a browser repeats on every visit, back-navigation and refresh — so this was the most expensive call in the application and the easiest to repeat, with nothing bounding either the requests against someone else's API or the write amplification in this one. The limit is per business rather than per actor for the reason the connection test's is: what it protects is the business's own Nayax account and its own rows. The window is kept in memory, like every other limiter here (docs § SQLite operating assumptions). A refused run leaves the Dashboard showing its persisted figures flagged as not synchronized — the same state it already shows when Nayax cannot be reached.
+
+- `GET api/products/inventory-value-summary` → **`Inventory.Operate` and `Dashboard.ViewFinancials`** (issue #681). It is an action on `ProductsController`, so it carries the catalogue's own capability; the second one is declared on the action. The endpoint reports the exact value of the business's inventory at cost, broken down — the figure [issue #527](#dashboard-financial-redaction-issue-527) omits from the dashboard response entirely for a role without `Dashboard.ViewFinancials`, today an Operator. On the catalogue's capability alone, that redaction was a presentation detail rather than a boundary: an Operator could read the number directly. No page calls this endpoint (`ProductService.getInventoryValuationSummary` has no caller since the dashboard stopped using it), so it was gated rather than removed — gating preserves the API contract, which AGENTS.md § Architecture rules asks for, while removing it would be a breaking change for a caller nobody has surveyed. A Manager and an Owner hold both capabilities and are unaffected; an Operator gets the ordinary bare `403`.
 - `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
 
 **What an Operator and a Manager lose, and when.** An Operator can no longer reach expenses, any report or export, the imports, the site commission surface, the Nayax fee rates, the catalogue reconciliation or any repair. A Manager additionally cannot reach the Nayax fee rates, the catalogue reconciliation or any repair — a Manager may read a report whose underlying fee rate only an Owner may change, which is the agreed table and not a defect. Routes, verbs, request shapes and success responses are unchanged; the only new answer is the bare `403` an under-privileged caller receives. Every member of the one live business is an `Owner`, so nothing anybody reaches changes until non-Owner roles are assigned.
@@ -2356,7 +2362,7 @@ allow-list and must not be added to it.
 
 **Encryption lives in Infrastructure, behind `INayaxTokenProtector`.** `AesGcmNayaxTokenProtector`
 encrypts with AES-256-GCM, a fresh random nonce per encryption, and stores
-`base64(nonce || tag || ciphertext)` with the key id in its own column. Authenticated encryption is
+`v2:base64(nonce || tag || ciphertext)` with the key id in its own column. Authenticated encryption is
 the point: a tampered ciphertext fails its tag check and throws rather than decrypting to a
 different token that would then be sent to Nayax, and a per-save nonce means the column cannot
 reveal that two businesses configured the same credential. The key id travels with the ciphertext so
@@ -2373,6 +2379,29 @@ starts and runs normally, and only storing or reading a per-business token fails
 provisioning the key is a human step (see README.md § Configuration and secrets). Since issue #520
 that is what every Nayax call does, so in an environment that uses Nayax a missing key means the
 Nayax features fail closed until a human provisions one — and nothing else does.
+
+**The ciphertext is bound to its business, and that is authenticated rather than merely stored**
+(issue #681). Both members of `INayaxTokenProtector` take a `BusinessId`, and the owning business's
+key is the AES-GCM *associated data*, so the authentication tag covers it: a value encrypted for
+business 4 fails its tag check the moment it is presented as business 9's, whatever the key. Before
+this, encryption on its own answered "is this a genuine ciphertext?" and said nothing about *whose* —
+so a value copied between rows by a hand-written `UPDATE`, a restored backup or a mistaken repair
+decrypted perfectly, and the other business then authenticated to Nayax with it. The business id is
+not a secret and does not have to be; the property wanted is that it cannot be changed without
+invalidating the tag. The adapters resolve it from the context's own tenancy scope — the same scope
+whose query filter selected the row — so it is never a value a request supplied, and both
+`EfNayaxConnectionStore` and `EfNayaxConnectionTestDraftStore` bind it the same way.
+
+**Two stored formats, and the format is self-describing.** A value written since issue #681 carries
+the `v2:` marker and is business-bound. A value written before it is bare base64, is decrypted with
+no associated data, and therefore still decrypts — existing rows keep working across the deployment
+with no migration and no re-encryption step. The marker is unambiguous because base64 contains no
+`:`, so neither format can be mistaken for the other. A legacy row is consequently **not**
+business-bound: re-encrypting one happens when an Owner saves their connection again, or through the
+human-run `migrate-nayax-connection` command, and never as an automatic rewrite — AGENTS.md
+§ Database and migrations forbids a startup data operation, and the protector holds no database to
+do one with. A deployment that wants every row bound re-saves each business's connection
+deliberately, and the marker is how an operator tells a bound row from one still to do.
 
 **`CredentialRevision` is what makes a status write safe.** The Application port is
 `Inventory.Application.Nayax.INayaxConnectionStore`, implemented by

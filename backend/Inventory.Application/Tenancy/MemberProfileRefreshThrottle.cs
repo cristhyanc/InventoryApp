@@ -49,14 +49,21 @@ public sealed class MemberProfileRefreshThrottle
     ///
     /// The claim is made before the refresh is written, not after, and that is deliberate: it is
     /// what makes several simultaneous requests from one member produce one refresh rather than
-    /// several. A refresh that then fails is not retried inside the hour, which costs nothing - the
-    /// member's next request after it schedules a fresh one from the claims they present then.
+    /// several. A refresh that then <em>fails</em> gives its claim back through
+    /// <see cref="Release"/> (issue #681), so the member's next request can try again instead of
+    /// their stored details staying stale for an hour because of a transient write failure.
     /// </summary>
-    public bool TryClaim(ActorIdentity identity)
+    /// <param name="identity">Whose slot to claim.</param>
+    /// <param name="claimedAtUtc">
+    /// The instant this claim was recorded at, which <see cref="Release"/> needs in order to give
+    /// back <em>this</em> claim and not a later one. Meaningful only when the claim succeeded.
+    /// </param>
+    public bool TryClaim(ActorIdentity identity, out DateTime claimedAtUtc)
     {
         ArgumentNullException.ThrowIfNull(identity);
 
         var now = _clock.UtcNow;
+        claimedAtUtc = now;
 
         // At most two iterations: a lost race means another request has just claimed the slot, and
         // the re-read then sees its instant and refuses. Compare-and-swap rather than AddOrUpdate,
@@ -85,6 +92,41 @@ public sealed class MemberProfileRefreshThrottle
                 return true;
             }
         }
+    }
+
+    /// <summary>
+    /// The same claim for a caller that will not give it back, so it has no use for the instant.
+    /// </summary>
+    /// <param name="identity">Whose slot to claim.</param>
+    public bool TryClaim(ActorIdentity identity) => TryClaim(identity, out _);
+
+    /// <summary>
+    /// Gives back a claim whose refresh did not happen (issue #681), so the member's next request
+    /// schedules another attempt instead of waiting out the hour.
+    ///
+    /// <para><strong>It gives back only the claim it was told about.</strong> The removal matches
+    /// the identity <em>and</em> the instant <see cref="TryClaim(ActorIdentity, out DateTime)"/>
+    /// recorded, so a release that
+    /// arrives after a later request has already claimed the slot removes nothing and leaves that
+    /// newer claim in force - which is what keeps "at most one refresh an hour" true even while a
+    /// failed one is being given back.</para>
+    ///
+    /// <para>It is deliberately not called when the queue drops a refresh:
+    /// <see cref="ScheduleMemberProfileRefresh"/> explains why a full queue is the one case where
+    /// consuming the hour is the right answer. This is for a refresh that was accepted and then
+    /// failed - a transient write failure, a cancelled drain - where nothing was written and nothing
+    /// would be gained by keeping the slot shut.</para>
+    /// </summary>
+    /// <param name="identity">Whose slot to give back.</param>
+    /// <param name="claimedAtUtc">
+    /// The instant <see cref="TryClaim(ActorIdentity, out DateTime)"/> reported for that claim.
+    /// </param>
+    /// <returns><c>true</c> when the claim was still the current one and was given back.</returns>
+    public bool Release(ActorIdentity identity, DateTime claimedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+
+        return _lastClaimedUtc.TryRemove(new KeyValuePair<ActorIdentity, DateTime>(identity, claimedAtUtc));
     }
 
     /// <summary>

@@ -85,18 +85,36 @@ public class EndpointAuthorizationClassificationTests
     /// does not change its classification - a disabled endpoint still has to declare how it is
     /// authorized when it is on.</para>
     /// </summary>
-    internal static readonly string[] MembershipNotRequiredAllowlist =
+    /// <remarks>
+    /// Since issue #681 an entry is a route <em>and</em> an HTTP method. Matching by route alone made
+    /// the exemption wider than the reviewed decision: adding, say, a <c>DELETE</c> on
+    /// <c>api/invites/redeem</c> and marking it would have been classified as the allowlisted
+    /// endpoint and let past the membership requirement without anybody deciding that. An exemption
+    /// is granted to one endpoint, and an endpoint is a route and a method.
+    /// </remarks>
+    internal static readonly MembershipNotRequiredEndpoint[] MembershipNotRequiredAllowlist =
     [
-        "api/me/account-state",
-        "api/invites/redeem",
-        "api/onboarding/business-applications",
+        new("api/me/account-state", "GET"),
+        new("api/invites/redeem", "POST"),
+        new("api/onboarding/business-applications", "POST"),
     ];
+
+    /// <summary>One allowlisted endpoint: the route template and the HTTP method together.</summary>
+    internal sealed record MembershipNotRequiredEndpoint(string Route, string Method)
+    {
+        /// <inheritdoc />
+        public override string ToString() => $"{Method} {Route}";
+    }
 
     /// <summary>
     /// Class 4: the one endpoint that is its own class. It is named rather than marked, because a
-    /// marker would be a mechanism somebody could reuse.
+    /// marker would be a mechanism somebody could reuse - and it is named by route <em>and</em>
+    /// method (issue #681), so a second action added at this route would be classified on its own
+    /// merits rather than inheriting this one's exemption.
     /// </summary>
     private const string OwnAccessRoute = "api/me/access";
+
+    private const string OwnAccessMethod = "GET";
 
     /// <summary>
     /// The five maintenance data-repair controllers (issue #526). They are named here so the test
@@ -116,9 +134,15 @@ public class EndpointAuthorizationClassificationTests
 
     private static readonly Assembly ApiAssembly = typeof(Program).Assembly;
 
-    private const BindingFlags DeclaredActions = BindingFlags.Public
-        | BindingFlags.Instance
-        | BindingFlags.DeclaredOnly;
+    /// <summary>
+    /// Every public instance method a controller offers, <strong>inherited ones included</strong>
+    /// (issue #681). <c>DeclaredOnly</c> was the original filter, and it meant an action declared on
+    /// a base controller in this assembly - a shape nothing stops a future controller from using -
+    /// was invisible to every rule below: the derived controller routed it, and no rule asked what
+    /// it required. <see cref="IsDeclaredOnAnApiController"/> is what keeps the framework's own
+    /// <c>ControllerBase</c> members out of the result instead.
+    /// </summary>
+    private const BindingFlags ActionCandidates = BindingFlags.Public | BindingFlags.Instance;
 
     /// <summary>How an endpoint declares its authorization. Exactly four, and no "other".</summary>
     private enum EndpointClass
@@ -237,7 +261,9 @@ public class EndpointAuthorizationClassificationTests
             .Where(type => type.Name.EndsWith("Controller", StringComparison.Ordinal))
             .SelectMany(controller => controller
                 .GetCustomAttributes()
-                .Concat(controller.GetMethods(DeclaredActions).SelectMany(method => method.GetCustomAttributes()))
+                .Concat(controller.GetMethods(ActionCandidates)
+                    .Where(IsDeclaredOnAnApiController)
+                    .SelectMany(method => method.GetCustomAttributes()))
                 .SelectMany(attribute => attribute.GetType().GetProperties()
                     .Where(property => property.PropertyType == typeof(Inventory.Domain.Tenancy.BusinessRole))
                     .Select(property => $"{controller.Name} -> {attribute.GetType().Name}.{property.Name}")))
@@ -479,11 +505,35 @@ public class EndpointAuthorizationClassificationTests
     {
         var marked = Endpoints()
             .Where(HasMembershipNotRequiredMarker)
-            .Select(endpoint => endpoint.Route)
+            .Select(endpoint => new MembershipNotRequiredEndpoint(endpoint.Route, endpoint.HttpMethod))
+            .Select(entry => entry.ToString())
             .Order(StringComparer.Ordinal)
             .ToArray();
 
-        Assert.Equal(MembershipNotRequiredAllowlist.Order(StringComparer.Ordinal), marked);
+        Assert.Equal(
+            MembershipNotRequiredAllowlist.Select(entry => entry.ToString()).Order(StringComparer.Ordinal),
+            marked);
+    }
+
+    /// <summary>
+    /// The allowlist is matched by method as well as route (issue #681). A marked endpoint at an
+    /// allowlisted <em>route</em> but a different method is not the exemption that was reviewed, and
+    /// is classified on its own merits - which for a marker-only endpoint means not classified at
+    /// all, and so a build failure.
+    /// </summary>
+    [Fact]
+    public void An_allowlisted_route_does_not_exempt_a_different_method_on_it()
+    {
+        var reviewed = MembershipNotRequiredAllowlist[0];
+        var sameRouteAnotherMethod = reviewed with { Method = "DELETE" };
+
+        Assert.DoesNotContain(sameRouteAnotherMethod, MembershipNotRequiredAllowlist);
+        Assert.Contains(reviewed, MembershipNotRequiredAllowlist);
+
+        // Every entry names a method, so no entry can mean "every method at this route".
+        Assert.All(
+            MembershipNotRequiredAllowlist,
+            entry => Assert.False(string.IsNullOrWhiteSpace(entry.Method)));
     }
 
     #endregion
@@ -574,6 +624,149 @@ public class EndpointAuthorizationClassificationTests
 
     #endregion
 
+    #region Minimal APIs and inherited actions (issue #681)
+
+    /// <summary>
+    /// The only non-controller endpoint registrations this application is allowed to make, by the
+    /// mapping call that makes them. Both are the anonymous health probes of issue #164, which serve
+    /// no business data and resolve no business at all - they are deliberately outside the four
+    /// classes, and that decision is recorded here.
+    /// </summary>
+    private static readonly string[] AllowedEndpointMappings = ["MapControllers", "MapHealthChecks"];
+
+    /// <summary>
+    /// Every mapping call a minimal API is registered with. <c>MapGroup</c> is in the list because a
+    /// group is where a set of them would be hung.
+    /// </summary>
+    private static readonly string[] MinimalApiMappings =
+    [
+        "MapGet",
+        "MapPost",
+        "MapPut",
+        "MapPatch",
+        "MapDelete",
+        "MapMethods",
+        "MapGroup",
+    ];
+
+    /// <summary>
+    /// The classification rules read controllers, so an endpoint registered as a minimal API would
+    /// not be classified at all - and would not fail anything (issue #681). Rather than teach the
+    /// reflection scan a second endpoint model, this makes introducing one a build failure: a
+    /// minimal API is an endpoint, an endpoint must declare how it is authorized, and the four
+    /// classes are declared with attributes on a controller action.
+    ///
+    /// <para>Checked against the source text, like
+    /// <see cref="NayaxRetestCredentialBoundaryTests.No_ordinary_consumer_calls_the_gate_free_credential_read"/>
+    /// and <see cref="TimeAcquisitionTests"/>: what has to be caught is a call, and a call is not
+    /// something a type-level rule or an attribute scan can see.</para>
+    /// </summary>
+    [Fact]
+    public void No_endpoint_is_registered_as_a_minimal_api()
+    {
+        var offenders = ApiSourceFiles()
+            .SelectMany(path => File.ReadAllLines(path)
+                .Select((line, index) => (Line: line, Number: index + 1))
+                .Where(line => MinimalApiMappings.Any(mapping =>
+                    line.Line.Contains($".{mapping}(", StringComparison.Ordinal)))
+                .Select(line => $"{Path.GetFileName(path)}:{line.Number}"))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(
+            offenders.Length == 0,
+            "Every endpoint declares how it is authorized, and the four classes are declared with "
+                + "attributes on a controller action - so this application registers no minimal API. "
+                + "A minimal-API endpoint is invisible to the classification rules above and would "
+                + "be reachable by every active member of its business with nothing in the diff "
+                + "saying so (AGENTS.md § Architecture rules, docs/architecture.md § Capability "
+                + $"authorization). Registration(s): {string.Join(", ", offenders)}. The only "
+                + $"endpoint mappings this application makes are: {string.Join(", ", AllowedEndpointMappings)}.");
+    }
+
+    /// <summary>
+    /// The companion fact, so the rule above is about this application rather than about a string
+    /// that happens not to appear: the mappings that <em>are</em> made are exactly the reviewed ones.
+    /// </summary>
+    [Fact]
+    public void The_only_endpoint_mappings_are_the_controllers_and_the_health_probes()
+    {
+        var mappings = ApiSourceFiles()
+            .SelectMany(File.ReadAllLines)
+            .SelectMany(line => AllowedEndpointMappings.Where(mapping =>
+                line.Contains($".{mapping}(", StringComparison.Ordinal)))
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(AllowedEndpointMappings.Order(StringComparer.Ordinal), mappings);
+    }
+
+    /// <summary>
+    /// An action a controller <em>inherits</em> from a base controller in this assembly is scanned
+    /// and classified like any other (issue #681). The scan used to read declared methods only, so
+    /// such an action was routed by the derived controller and asked about by nothing.
+    ///
+    /// <para>This asserts the mechanism rather than a current controller, because no controller uses
+    /// that shape today - which is exactly why the gap was invisible. The fixture below is a
+    /// controller hierarchy of the banned shape, and what is asserted is that the scan's own filter
+    /// sees the inherited action on the derived type.</para>
+    /// </summary>
+    [Fact]
+    public void An_action_inherited_from_a_base_controller_is_scanned()
+    {
+        var fixtureAssembly = typeof(DerivedFixtureController).Assembly;
+        var inherited = typeof(DerivedFixtureController)
+            .GetMethods(ActionCandidates)
+            .Where(method => IsDeclaredOnAControllerIn(method, fixtureAssembly))
+            .Select(method => method.Name)
+            .ToArray();
+
+        // The base's action is reached through the derived controller, and the framework's own
+        // ControllerBase members are not in the result.
+        Assert.Contains(nameof(BaseFixtureController.InheritedAction), inherited);
+        Assert.DoesNotContain("Ok", inherited);
+        Assert.DoesNotContain("NotFound", inherited);
+    }
+
+    /// <summary>
+    /// A controller with an action on its base, and the derived type that routes it. It is
+    /// <c>abstract</c> plus a concrete derivation rather than two real controllers so that it
+    /// declares no route and reaches no pipeline: what it exists for is the reflection shape.
+    /// </summary>
+    private abstract class BaseFixtureController : ControllerBase
+    {
+        [HttpGet("inherited")]
+        public IActionResult InheritedAction() => Ok();
+    }
+
+    private sealed class DerivedFixtureController : BaseFixtureController;
+
+    private static IEnumerable<string> ApiSourceFiles() =>
+        Directory.EnumerateFiles(
+                Path.Combine(BackendRoot, "InventoryApi"),
+                "*.cs",
+                SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+
+    private static readonly string BackendRoot = FindBackendRoot();
+
+    private static string FindBackendRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null && !Directory.Exists(Path.Combine(current.FullName, "InventoryApi")))
+        {
+            current = current.Parent;
+        }
+
+        return current?.FullName
+            ?? throw new InvalidOperationException(
+                "Could not locate the backend directory containing the InventoryApi project.");
+    }
+
+    #endregion
+
     #region There is no pending list
 
     /// <summary>
@@ -618,9 +811,8 @@ public class EndpointAuthorizationClassificationTests
     /// no action escapes this list that way.
     /// </summary>
     private static List<ApiEndpoint> Endpoints() =>
-        ApiAssembly.GetTypes()
-            .Where(type => typeof(ControllerBase).IsAssignableFrom(type) && !type.IsAbstract)
-            .SelectMany(type => type.GetMethods(DeclaredActions)
+        Controllers()
+            .SelectMany(type => ActionCandidatesOf(type)
                 .SelectMany(method => method.GetCustomAttributes<HttpMethodAttribute>()
                     .Select(http => new ApiEndpoint(
                         type,
@@ -628,6 +820,43 @@ public class EndpointAuthorizationClassificationTests
                         RouteOf(type, http),
                         http.HttpMethods.FirstOrDefault() ?? "GET"))))
             .ToList();
+
+    private static IEnumerable<Type> Controllers() =>
+        ApiAssembly.GetTypes()
+            .Where(type => typeof(ControllerBase).IsAssignableFrom(type) && !type.IsAbstract);
+
+    /// <summary>
+    /// The methods of one controller that could be actions: its own and the ones it inherits from a
+    /// controller in this assembly (issue #681), minus the ones MVC itself never routes.
+    /// </summary>
+    private static IEnumerable<MethodInfo> ActionCandidatesOf(Type controller) =>
+        controller.GetMethods(ActionCandidates)
+            .Where(IsDeclaredOnAnApiController)
+            .Where(method => !method.IsSpecialName)
+            // [NonAction] is MVC's own "this is not an endpoint", so it is honoured here rather than
+            // guessed at from the method's shape.
+            .Where(method => !method.GetCustomAttributes<NonActionAttribute>().Any());
+
+    /// <summary>
+    /// Whether a method was written on a controller in this application rather than inherited from
+    /// the framework. It is what lets the scan include inherited actions without also including
+    /// every public member of <see cref="ControllerBase"/>.
+    /// </summary>
+    private static bool IsDeclaredOnAnApiController(MethodInfo method) =>
+        IsDeclaredOnAControllerIn(method, ApiAssembly);
+
+    /// <summary>
+    /// The rule itself, with the assembly as a parameter so the fixture test below can exercise it
+    /// over a controller hierarchy of its own rather than having to add one to the API.
+    /// </summary>
+    private static bool IsDeclaredOnAControllerIn(MethodInfo method, Assembly assembly) =>
+        method.DeclaringType is { } declaring
+        && declaring.Assembly == assembly
+        && typeof(ControllerBase).IsAssignableFrom(declaring);
+
+    private static bool IsAllowlisted(ApiEndpoint endpoint) =>
+        MembershipNotRequiredAllowlist.Contains(
+            new MembershipNotRequiredEndpoint(endpoint.Route, endpoint.HttpMethod));
 
     /// <summary>
     /// The guard under <see cref="Endpoints"/>: no public action is left out of the classification
@@ -639,12 +868,11 @@ public class EndpointAuthorizationClassificationTests
     [Fact]
     public void No_public_controller_method_is_routed_without_an_http_method_attribute()
     {
-        var unrouted = ApiAssembly.GetTypes()
-            .Where(type => typeof(ControllerBase).IsAssignableFrom(type) && !type.IsAbstract)
-            .SelectMany(type => type.GetMethods(DeclaredActions)
-                .Where(method => !method.IsSpecialName)
+        var unrouted = Controllers()
+            .SelectMany(type => ActionCandidatesOf(type)
                 .Where(method => !method.GetCustomAttributes<HttpMethodAttribute>().Any())
                 .Select(method => $"{type.Name}.{method.Name}"))
+            .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
 
@@ -707,13 +935,15 @@ public class EndpointAuthorizationClassificationTests
             classes.Add(EndpointClass.PlatformDiagnostics);
         }
 
-        if (HasMembershipNotRequiredMarker(endpoint)
-            && MembershipNotRequiredAllowlist.Contains(endpoint.Route, StringComparer.Ordinal))
+        // Matched on route and method, not route alone (issue #681): an exemption belongs to one
+        // endpoint, and a second action at the same route is a second endpoint.
+        if (HasMembershipNotRequiredMarker(endpoint) && IsAllowlisted(endpoint))
         {
             classes.Add(EndpointClass.MembershipNotRequired);
         }
 
-        if (string.Equals(endpoint.Route, OwnAccessRoute, StringComparison.Ordinal))
+        if (string.Equals(endpoint.Route, OwnAccessRoute, StringComparison.Ordinal)
+            && string.Equals(endpoint.HttpMethod, OwnAccessMethod, StringComparison.Ordinal))
         {
             classes.Add(EndpointClass.OwnAccess);
         }

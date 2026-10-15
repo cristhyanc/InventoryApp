@@ -154,11 +154,23 @@ public class EfMemberProfileWriteStoreTests
     }
 
     /// <summary>
-    /// A claim that disappeared from the token clears the stored value rather than leaving a stale
-    /// one: the row says what the token last reported, and "no longer reported" is an answer.
+    /// A claim the token did not carry leaves the stored value exactly as it is (issue #681).
+    ///
+    /// <para><strong>This reverses what this path used to do</strong>, deliberately. It used to name
+    /// both columns in every statement, so a token reporting a name and no email address erased a
+    /// stored email address - while the invite redemption's own reactivation, from the same issue
+    /// #524, kept it. Two write paths for one pair of columns cannot disagree about what an absent
+    /// claim means: a member's email address would disappear from the Owner's members list and come
+    /// back depending on which path ran last and which claims their identity provider happened to
+    /// include that time.</para>
+    ///
+    /// <para>The redemption's rule is the one kept, because an absent claim is not a statement that
+    /// the value is gone - it is the absence of a statement - and because the column exists so an
+    /// Owner can see who their members are. Nothing is changed, so no row is written at all: the
+    /// name the token did report already matched.</para>
     /// </summary>
     [Fact]
-    public async Task A_claim_that_is_no_longer_reported_clears_the_stored_value()
+    public async Task A_claim_that_is_no_longer_reported_leaves_the_stored_value_alone()
     {
         var (connection, options) = await CreateSqliteAsync();
         await using (connection)
@@ -168,11 +180,59 @@ public class EfMemberProfileWriteStoreTests
                 displayName: "Ada Lovelace",
                 email: "ada@vending.example");
 
-            Assert.Equal(1, await RefreshAsync(options, Actor(), Profile(email: null)));
+            Assert.Equal(0, await RefreshAsync(options, Actor(), Profile(email: null)));
 
             var membership = await ReadAsync(options, membershipId);
             Assert.Equal("Ada Lovelace", membership.DisplayName);
-            Assert.Null(membership.Email);
+            Assert.Equal("ada@vending.example", membership.Email);
+        }
+    }
+
+    /// <summary>
+    /// The value the token <em>did</em> report is still written when it differs, so an absent claim
+    /// freezes one column rather than the whole refresh (issue #681).
+    /// </summary>
+    [Fact]
+    public async Task A_token_reporting_only_one_value_updates_that_one_and_preserves_the_other()
+    {
+        var (connection, options) = await CreateSqliteAsync();
+        await using (connection)
+        {
+            var membershipId = await SeedAsync(
+                options,
+                displayName: "Ada Lovelace",
+                email: "ada@vending.example");
+
+            Assert.Equal(1, await RefreshAsync(options, Actor(), Profile("Ada King", email: null)));
+
+            var membership = await ReadAsync(options, membershipId);
+            Assert.Equal("Ada King", membership.DisplayName);
+            Assert.Equal("ada@vending.example", membership.Email);
+        }
+    }
+
+    /// <summary>
+    /// The mirror image, for the other column: a token with an email address and no name updates the
+    /// address and leaves the name.
+    /// </summary>
+    [Fact]
+    public async Task A_token_reporting_only_an_email_updates_it_and_preserves_the_name()
+    {
+        var (connection, options) = await CreateSqliteAsync();
+        await using (connection)
+        {
+            var membershipId = await SeedAsync(
+                options,
+                displayName: "Ada Lovelace",
+                email: "ada@vending.example");
+
+            Assert.Equal(
+                1,
+                await RefreshAsync(options, Actor(), Profile(displayName: null, email: "ada.king@vending.example")));
+
+            var membership = await ReadAsync(options, membershipId);
+            Assert.Equal("Ada Lovelace", membership.DisplayName);
+            Assert.Equal("ada.king@vending.example", membership.Email);
         }
     }
 

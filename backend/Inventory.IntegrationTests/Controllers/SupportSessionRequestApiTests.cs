@@ -916,9 +916,11 @@ public class SupportSessionRequestApiTests
     {
         public const string KeyId = "test-pass-through";
 
-        public ProtectedNayaxToken Protect(string accessToken) => new(KeyId, accessToken);
+        public ProtectedNayaxToken Protect(string accessToken, BusinessId businessId) =>
+            new(KeyId, accessToken);
 
-        public string Unprotect(ProtectedNayaxToken protectedToken) => protectedToken.Ciphertext;
+        public string Unprotect(ProtectedNayaxToken protectedToken, BusinessId businessId) =>
+            protectedToken.Ciphertext;
     }
 
     /// <summary>

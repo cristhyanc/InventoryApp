@@ -37,7 +37,7 @@ public class SyncLatestNayaxSalesTests
     private static SyncLatestNayaxSales UseCase(AppDbContext db, INayaxLynxClient nayax)
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
-        return new SyncLatestNayaxSales(
+        return TestSalesSync.UseCase(
             nayax, new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild));
     }
 
@@ -117,7 +117,7 @@ public class SyncLatestNayaxSalesTests
         var store = new Mock<ILatestNayaxSalesStore>(MockBehavior.Strict);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => new SyncLatestNayaxSales(nayax.Object, store.Object).Handle());
+            () => TestSalesSync.UseCase(nayax.Object, store.Object).Handle());
 
         store.Verify(
             x => x.PersistLatestSalesAsync(It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()),
@@ -133,7 +133,7 @@ public class SyncLatestNayaxSalesTests
                 It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new LatestNayaxSalesPersistResult(affected));
 
-        await new SyncLatestNayaxSales(SingleMachineNayax().Object, store.Object).Handle();
+        await TestSalesSync.UseCase(SingleMachineNayax().Object, store.Object).Handle();
 
         store.Verify(
             x => x.RebuildInventoryCostsAsync(affected, It.IsAny<CancellationToken>()), Times.Once);
@@ -147,7 +147,7 @@ public class SyncLatestNayaxSalesTests
                 It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new LatestNayaxSalesPersistResult(new Dictionary<long, DateTime>()));
 
-        await new SyncLatestNayaxSales(SingleMachineNayax().Object, store.Object).Handle();
+        await TestSalesSync.UseCase(SingleMachineNayax().Object, store.Object).Handle();
 
         store.Verify(
             x => x.RebuildInventoryCostsAsync(

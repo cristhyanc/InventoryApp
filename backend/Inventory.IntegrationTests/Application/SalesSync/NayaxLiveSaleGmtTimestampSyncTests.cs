@@ -316,7 +316,7 @@ public sealed class NayaxLiveSaleGmtTimestampSyncTests : IDisposable
         await using var db = TestAppDbContext.For(_options, businessId);
         var rebuild = TestCostingUseCases.Rebuild(db);
         var store = new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild);
-        await new SyncLatestNayaxSales(CreateClient(lastSalesPayload), store).Handle(CancellationToken.None);
+        await TestSalesSync.UseCase(CreateClient(lastSalesPayload), store).Handle(CancellationToken.None);
     }
 
     private static NayaxLynxClient CreateClient(string lastSalesPayload)

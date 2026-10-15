@@ -35,11 +35,42 @@ public sealed class FakeNayaxConnectionTestDraftStore : INayaxConnectionTestDraf
     /// </summary>
     public List<Guid> Claimed { get; } = [];
 
+    /// <summary>
+    /// How many times a caller swept the expired draft, so a use-case test can assert that the
+    /// sweep happens and when (issue #681).
+    /// </summary>
+    public int ExpiredDiscardCalls { get; private set; }
+
+    /// <summary>
+    /// Whether the last sweep actually removed a draft, so "there was an expired one and it is gone"
+    /// is assertable (issue #681).
+    /// </summary>
+    public bool DiscardedAnExpiredDraft { get; private set; }
+
     public Task ReplaceAsync(NewNayaxConnectionTestDraft draft, CancellationToken cancellationToken)
     {
         Current = draft;
         Stored.Add(draft);
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Removes the held draft when it has passed its expiry, reproducing the real adapter's
+    /// conditional <c>DELETE</c> (issue #681). The boundary is the same one both reads use - a draft
+    /// is expired <em>at</em> its expiry - so this and they can never disagree about one row.
+    /// </summary>
+    public Task<bool> DiscardExpiredAsync(CancellationToken cancellationToken)
+    {
+        ExpiredDiscardCalls++;
+
+        var discarded = Current is { } draft && draft.ExpiresAtUtc <= _clock.UtcNow;
+        if (discarded)
+        {
+            Current = null;
+        }
+
+        DiscardedAnExpiredDraft = discarded;
+        return Task.FromResult(discarded);
     }
 
     public Task<StoredNayaxConnectionTestDraft?> FindAsync(
