@@ -6,6 +6,7 @@ import {
   BehaviorSubject,
   Observable,
   Subject,
+  Subscription,
   catchError,
   defer,
   distinctUntilChanged,
@@ -13,7 +14,8 @@ import {
   of,
   switchMap,
   takeUntil,
-  tap
+  tap,
+  timer
 } from 'rxjs';
 import { ConfigService } from '../services/config.service';
 import { BusinessService } from '../services/business.service';
@@ -24,8 +26,13 @@ import { PlatformDiagnosticsAccessService } from '../services/platform-diagnosti
 /** The header a request presents to join a support session (`InventoryApi.Auth.SupportSessionHeader`). */
 export const SUPPORT_SESSION_HEADER = 'X-Support-Session';
 
-/** The `BroadcastChannel` name the open tabs of one browser share a session's id and end over. */
-const BROADCAST_CHANNEL_NAME = 'inventory-app:support-session';
+/**
+ * The `BroadcastChannel` name the open tabs of one browser share a session's id and end over.
+ *
+ * It is exported so a test can act as one of those other tabs - which is the only way to exercise a
+ * malformed or another identity's message (issue #670), since a legitimate sibling never sends one.
+ */
+export const SUPPORT_SESSION_BROADCAST_CHANNEL = 'inventory-app:support-session';
 
 /** What a session names: never its id, which this application never reads back either. */
 export interface SupportSessionDetails {
@@ -88,9 +95,28 @@ interface ActiveSupportSession {
 }
 
 /** The two things one tab tells its siblings over `BroadcastChannel` - never the storage or the URL. */
-type SupportSessionBroadcast =
+type SupportSessionBroadcastBody =
   | { readonly type: 'started'; readonly sessionId: string; readonly businessName: string; readonly expiresAtUtc: string }
   | { readonly type: 'ended' };
+
+/**
+ * The same message as it travels, which is with the signed-in identity it belongs to (issue #670).
+ *
+ * A `BroadcastChannel` is shared by every tab of the origin, and a support session belongs to one
+ * administrator: a message naming anybody else is not this tab's session to adopt or to end. The
+ * account key is the one MSAL already shares between the tabs of a browser
+ * (`activeAccountKey`), never the session id, which no message but `started` carries at all.
+ */
+type SupportSessionBroadcast = SupportSessionBroadcastBody & { readonly accountKey: string };
+
+/** A received message, before anything about it is known: every field has to be checked. */
+type ReceivedBroadcast = Partial<{
+  type: unknown;
+  accountKey: unknown;
+  sessionId: unknown;
+  businessName: unknown;
+  expiresAtUtc: unknown;
+}>;
 
 /**
  * Starting, ending and sharing the Super Admin's one support session across every page and every
@@ -109,7 +135,10 @@ type SupportSessionBroadcast =
  * `support_session_ended` on some unrelated call - broadcasts (or locally applies) the same "nothing
  * is active now" state everywhere. `BroadcastChannel` is unavailable in this build's Jest
  * environment, so it is used only when the global exists (`typeof BroadcastChannel`), the same
- * feature-detection `AppComponent` already uses for `matchMedia`.
+ * feature-detection `AppComponent` already uses for `matchMedia`. Every message names the identity
+ * it belongs to and is checked field by field before it is acted on (issue #670,
+ * {@link readBroadcast}): a malformed message, and one from another signed-in identity, can neither
+ * adopt a session here nor end the one this tab is in.
  *
  * **A tab that was never told the id learns a session is running, and fails closed** (issue #668).
  * A freshly opened or reloaded tab cannot have received a `BroadcastChannel` message for a session
@@ -124,11 +153,23 @@ type SupportSessionBroadcast =
  * and a new one started through the explicit start flow. Nothing here reads the id out of the probe,
  * storage or the URL, and nothing restarts the session on the administrator's behalf.
  *
- * **Start, end and expiry all do the same three things**: forget the cached business the shell
- * reads for every member (`BusinessService.reset`), re-read the capabilities
- * (`AccessService.refresh`) - the support set inside a session, the administrator's own (none)
- * outside one - and navigate to the dashboard, because neither the page that was on screen before
- * nor the one a stale capability set rendered belongs to the business now in view.
+ * **Every effective context change takes one transition path** (issue #670,
+ * {@link applyBusinessContextChange}): a local start or end, the session's own expiry, a
+ * `support_session_ended` refusal of the context that is still current, and a valid same-identity
+ * `started`/`ended` notification from another tab all forget the cached business the shell reads for
+ * every member (`BusinessService.reset`), re-read the capabilities (`AccessService.refresh`) - the
+ * support set inside a session, the administrator's own (none) outside one - and take this tab to
+ * the dashboard of the business now in view, because neither the page that was on screen before nor
+ * the one a stale capability set rendered belongs to it.
+ *
+ * **Reaching the dashboard is not the same as replacing what is on it.** `router.navigate(['/'])`
+ * alone leaves a tab that is *already* on `/` exactly as it was - the router has nothing to do, so
+ * the page component is reused and the previous business's figures stay on screen under a banner
+ * that has already changed or disappeared. The transition therefore publishes
+ * {@link contextChanging$} around its navigation, which the shell withholds (and so destroys) the
+ * routed page for, and asks for the destination to be re-validated with `onSameUrlNavigation:
+ * 'reload'`; the page the operator then sees is a new instance that reads the effective context
+ * from scratch.
  *
  * **Every one of those changes also invalidates the request context** (issue #669). This service is
  * the one place that knows which business a request would resolve, so it is also the one place that
@@ -166,11 +207,22 @@ export class SupportSessionService implements OnDestroy {
    */
   private contextAccountKey: string | null;
 
+  /**
+   * Whether a business-context transition is still settling (issue #670). It is a count rather than
+   * a flag because two transitions can overlap - a session ended and another started before the
+   * first navigation settled - and the page may only come back when the last of them has.
+   */
+  private pendingContextChanges = 0;
+  private readonly contextChangingSubject = new BehaviorSubject(false);
+
+  /** The session's own lifetime running out, scheduled from the expiry every state carries. */
+  private expiry?: Subscription;
+
   private booted = false;
   private readonly destroying$ = new Subject<void>();
 
   private readonly channel: BroadcastChannel | null =
-    typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(BROADCAST_CHANNEL_NAME);
+    typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(SUPPORT_SESSION_BROADCAST_CHANNEL);
 
   constructor(
     private readonly http: HttpClient,
@@ -192,6 +244,22 @@ export class SupportSessionService implements OnDestroy {
     this.ensureBoot();
     return this.stateSubject;
   });
+
+  /**
+   * Whether an effective business-context transition is still settling (issue #670): `true` from
+   * the moment one starts until the dashboard navigation it performs has settled.
+   *
+   * `AppComponent` withholds the routed page while it is `true`, and that is what *clears* the
+   * previous business's data rather than merely navigating away from it: withholding the page
+   * destroys the component holding those figures, and releasing it again creates a new one that
+   * reads the effective context from scratch. It is the same gate the shell already applies while
+   * the business lookup settles (issue #499) and while a tab cannot present the session
+   * (issue #668), and it works on `/` - where the navigation itself has nothing to do - exactly as
+   * it works anywhere else.
+   */
+  readonly contextChanging$: Observable<boolean> = this.contextChangingSubject
+    .asObservable()
+    .pipe(distinctUntilChanged());
 
   /** The id to send as `X-Support-Session`, or `null` while no session is active in this tab. */
   currentSessionId(): string | null {
@@ -330,10 +398,65 @@ export class SupportSessionService implements OnDestroy {
     this.applyBusinessContextChange();
   }
 
+  /**
+   * The one path every effective business-context change takes (issue #670): a local start or end,
+   * the session's own expiry, a `support_session_ended` refusal of the current context, and a valid
+   * same-identity `started`/`ended` notification from another tab.
+   *
+   * It drops the cached business and re-reads the capabilities, then takes this tab to the
+   * dashboard of the business now in view - and makes sure the page the operator ends up looking at
+   * is a **new** one. {@link contextChanging$} is what does that: the shell withholds the routed
+   * page while it is `true`, which destroys the component the previous business's figures were
+   * rendered by, and creates a fresh one when it goes `false` again. That is the whole reason it
+   * exists - `router.navigate(['/'])` has nothing to do for a tab already on `/`, and
+   * `onSameUrlNavigation: 'reload'` only re-runs the guards and resolvers of a route whose
+   * component the router still reuses.
+   */
   private applyBusinessContextChange(): void {
     this.business.reset();
     this.access.refresh().subscribe();
-    this.router.navigate(['/']);
+
+    this.pendingContextChanges++;
+    this.contextChangingSubject.next(true);
+    const settled = (): void => {
+      this.pendingContextChanges--;
+      if (this.pendingContextChanges === 0) {
+        this.contextChangingSubject.next(false);
+      }
+    };
+    // A navigation that is refused, redirected or superseded releases the page just the same: the
+    // alternative is a shell that withholds every page for the rest of the browser session.
+    this.router.navigate(['/'], { onSameUrlNavigation: 'reload' }).then(settled, settled);
+  }
+
+  /**
+   * Ends the local view when the session's own lifetime runs out (issue #670), through the same
+   * transition everything else takes. It is scheduled from the expiry every active state carries,
+   * so the tab a session was started in, a tab it was shared with and a tab that only learned about
+   * it from `GET .../active` all end it at the same instant without telling each other - which is
+   * why an expiry is not broadcast.
+   *
+   * **The browser's clock is not the authority here, and is never allowed to act like it.** An
+   * unreadable instant, or one this clock says has already passed, schedules nothing at all: the
+   * server decides when a session is over and refuses the next call with `support_session_ended`
+   * (which reaches the same transition), and a clock that is hours fast must not be able to end a
+   * session that has just been granted.
+   */
+  private scheduleExpiry(expiresAtUtc: string | null): void {
+    this.expiry?.unsubscribe();
+    this.expiry = undefined;
+    if (expiresAtUtc === null) {
+      return;
+    }
+
+    const remainingMs = Date.parse(expiresAtUtc) - Date.now();
+    if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+      return;
+    }
+
+    this.expiry = timer(remainingMs)
+      .pipe(takeUntil(this.destroying$))
+      .subscribe(() => this.applyEnded(false));
   }
 
   /**
@@ -374,20 +497,83 @@ export class SupportSessionService implements OnDestroy {
     }
   }
 
+  /**
+   * Publishes the state, and schedules (or cancels) the expiry it carries - the one place that
+   * happens, so an active state and the instant it ends at can never be published apart.
+   */
   private publish(state: SupportSessionState): void {
+    this.scheduleExpiry(state.kind === 'inactive' ? null : state.expiresAtUtc);
     this.stateSubject.next(state);
   }
 
-  private broadcast(message: SupportSessionBroadcast): void {
-    this.channel?.postMessage(message);
+  private broadcast(message: SupportSessionBroadcastBody): void {
+    if (this.contextAccountKey === null) {
+      // Nobody is signed in here, so there is no identity to send this under and no sibling tab
+      // could act on it: a session is always started and ended by an authenticated administrator.
+      return;
+    }
+    const outgoing: SupportSessionBroadcast = { ...message, accountKey: this.contextAccountKey };
+    this.channel?.postMessage(outgoing);
   }
 
-  private readonly onBroadcastMessage = (event: MessageEvent<SupportSessionBroadcast>): void => {
-    const message = event.data;
+  /**
+   * What a received `BroadcastChannel` message may be acted on as, or `null` when it may not be
+   * (issue #670).
+   *
+   * The channel is shared by every tab of this origin and carries a session **id** - the one
+   * credential this application holds - so nothing about a message is assumed. It must name the
+   * identity signed in here (which also refuses one from a tab signed in as somebody else, and one
+   * arriving at a tab that does not know who is signed in yet), it must be one of the two message
+   * kinds by exact name, and a `started` must carry a non-empty id, a business name and an expiry.
+   * Anything else is ignored entirely: it can neither adopt a session here - the `started` handler
+   * is the only thing in this service that ever learns an id it was not answered directly - nor end
+   * the one this tab is in.
+   */
+  private readBroadcast(data: unknown): SupportSessionBroadcastBody | null {
+    if (typeof data !== 'object' || data === null) {
+      return null;
+    }
+
+    const message = data as ReceivedBroadcast;
+    if (typeof message.accountKey !== 'string' || message.accountKey !== this.contextAccountKey) {
+      return null;
+    }
+
+    if (message.type === 'ended') {
+      return { type: 'ended' };
+    }
+
+    if (message.type !== 'started') {
+      return null;
+    }
+
+    const { sessionId, businessName, expiresAtUtc } = message;
+    if (
+      typeof sessionId !== 'string' ||
+      sessionId === '' ||
+      typeof businessName !== 'string' ||
+      typeof expiresAtUtc !== 'string'
+    ) {
+      return null;
+    }
+
+    return { type: 'started', sessionId, businessName, expiresAtUtc };
+  }
+
+  private readonly onBroadcastMessage = (event: MessageEvent<unknown>): void => {
+    const message = this.readBroadcast(event.data);
+    if (message === null) {
+      return;
+    }
+
     if (message.type === 'started') {
       this.sessionId = message.sessionId;
       this.invalidateRequestContext();
       this.publish({ kind: 'viewing', businessName: message.businessName, expiresAtUtc: message.expiresAtUtc });
+      // The same transition a local start takes (issue #670): this tab is now reading another
+      // business, so the cached business, the capabilities and the page on screen all belong to a
+      // context it has left - issue #553 moved only the id and the banner here.
+      this.applyBusinessContextChange();
       return;
     }
 

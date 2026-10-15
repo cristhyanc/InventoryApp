@@ -79,6 +79,13 @@ interface Rendered {
   accountStateReads: readonly string[];
   /** Every `End session` the blocked explanation asked for (issue #668). */
   supportSessionEnd: jest.Mock;
+  /**
+   * Reports a business-context transition starting or settling, the way `SupportSessionService`
+   * does around its own dashboard navigation (issue #670). It deliberately does **not** run change
+   * detection: the shell has to render the page's removal itself, because a transition can settle
+   * before Angular would otherwise look again.
+   */
+  changeBusinessContext: (changing: boolean) => void;
 }
 
 const MEMBER_ACCOUNT_STATE: AccountStateAnswer = {
@@ -181,6 +188,7 @@ async function render(
   const loginRedirect = jest.fn();
   const logoutRedirect = jest.fn();
   const supportSessionEnd = jest.fn(() => of(undefined));
+  const contextChanging = new BehaviorSubject(false);
   const msalService = {
     instance: {
       getActiveAccount: () => activeAccount(),
@@ -256,6 +264,7 @@ async function render(
         provide: SupportSessionService,
         useValue: {
           state$: options.supportSession ?? of<SupportSessionState>({ kind: 'inactive' }),
+          contextChanging$: contextChanging,
           end: supportSessionEnd
         }
       }
@@ -280,7 +289,8 @@ async function render(
     raiseAccountEvent: (eventType: EventType) => msalSubject$.next({ eventType } as EventMessage),
     answerAccountState: (answer: AccountStateAnswer) => accountState.answer(answer),
     accountStateReads: accountState.reads,
-    supportSessionEnd
+    supportSessionEnd,
+    changeBusinessContext: (changing: boolean) => contextChanging.next(changing)
   };
 }
 
@@ -1123,6 +1133,77 @@ describe('AppComponent support session this tab cannot present (issue #668)', ()
 
     expect(await navigatedMain(fixture)).toContain('page body');
     expect(host.querySelector('[data-testid="support-session-unresolved"]')).toBeNull();
+  });
+});
+
+/**
+ * The shell's own part of issue #670: the routed page is withheld - and so destroyed, and so built
+ * again - for exactly the window `SupportSessionService` reports a business-context transition in.
+ * Which transitions there are, and what else each of them does, is the service's own decision
+ * (`support-session.service.spec.ts`), and what the operator then sees on a real Dashboard is
+ * `support-session-context-transition.spec.ts`.
+ */
+describe('AppComponent business-context transition (issue #670)', () => {
+  beforeEach(() => stubMatchMedia(true));
+
+  function main(host: HTMLElement): string {
+    return host.querySelector('main')?.textContent ?? '';
+  }
+
+  async function onAPage(rendered: Rendered): Promise<Element | null> {
+    await TestBed.inject(Router).navigateByUrl('/reports/bookkeeping');
+    rendered.fixture.detectChanges();
+    expect(main(rendered.host)).toContain('page body');
+    return rendered.host.querySelector('main router-outlet');
+  }
+
+  it('takes the routed page off screen as soon as a transition starts', async () => {
+    const rendered = await render();
+    await onAPage(rendered);
+
+    // No `detectChanges` here on purpose: a transition can settle in the same turn it started in -
+    // a tab already on the dashboard has nothing to navigate - so a shell that waited for Angular
+    // to look again would leave the previous business's page exactly where it was.
+    rendered.changeBusinessContext(true);
+
+    expect(main(rendered.host)).not.toContain('page body');
+    expect(rendered.host.querySelector('main router-outlet')).toBeNull();
+    expect(main(rendered.host)).toContain('Loading your business…');
+  });
+
+  /** The same turn, which is the case a flag alone cannot survive. */
+  it('builds a new page when a transition starts and settles before Angular looks again', async () => {
+    const rendered = await render();
+    const before = await onAPage(rendered);
+
+    rendered.changeBusinessContext(true);
+    rendered.changeBusinessContext(false);
+    rendered.fixture.detectChanges();
+
+    const after = rendered.host.querySelector('main router-outlet');
+    expect(main(rendered.host)).toContain('page body');
+    expect(after).not.toBeNull();
+    // A different outlet is a different page instance: the figures the previous business's page
+    // held are gone with it, rather than being reused for the business now in view.
+    expect(after).not.toBe(before);
+  });
+
+  it('renders no page for a tab that cannot present the session, whatever the transition reports', async () => {
+    const rendered = await render({
+      supportSession: of<SupportSessionState>({
+        kind: 'unresolved',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      })
+    });
+
+    rendered.changeBusinessContext(true);
+    rendered.changeBusinessContext(false);
+    await TestBed.inject(Router).navigateByUrl('/reports/bookkeeping');
+    rendered.fixture.detectChanges();
+
+    expect(main(rendered.host)).not.toContain('page body');
+    expect(rendered.host.querySelector('main [data-testid="support-session-unresolved"]')).not.toBeNull();
   });
 });
 

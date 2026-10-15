@@ -1,4 +1,4 @@
-import { Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
+import { ChangeDetectorRef, Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AuthenticationResult } from '@azure/msal-browser';
@@ -53,6 +53,15 @@ import { loginRequest } from './auth-config';
  * routed page - no routed page means no business-scoped request a page would make - while the
  * "Viewing as" banner stays off. An effective support view (`viewing`) and ordinary context
  * (`inactive`) both render the page exactly as before.
+ *
+ * **A support-context transition takes the page off screen before the new context loads**
+ * (issue #670). `SupportSessionService.contextChanging$` is `true` while a start, end, expiry,
+ * refusal or cross-tab notification is settling, and the shell withholds the routed page for
+ * exactly that window - flushing the removal there and then, so the previous business's figures
+ * leave with its banner rather than at the end of the navigation. Withholding the page is also
+ * what *replaces* it: the component holding those figures is destroyed, and the one created when
+ * the window closes reads the effective context from scratch, which a navigation to the URL the
+ * tab is already on could never do on its own.
  */
 @Component({
   selector: 'app-root',
@@ -108,6 +117,14 @@ export class AppComponent implements OnInit, OnDestroy {
   isSupportViewUnresolved = false;
 
   /**
+   * Whether a business-context transition is still settling (issue #670), which is the other reason
+   * the routed page is withheld. It is `SupportSessionService.contextChanging$` and nothing the
+   * shell decides: the service owns when a context changes, and the shell owns what that does to
+   * what is on screen.
+   */
+  private isBusinessContextChanging = false;
+
+  /**
    * The signed-in identity the business context above was requested for, or `null` when nobody is
    * signed in. A different identity means a different business, so the context is discarded and
    * read again rather than kept from the previous account. It is keyed by `activeAccountKey`, the
@@ -130,7 +147,8 @@ export class AppComponent implements OnInit, OnDestroy {
     private readonly msalBroadcastService: MsalBroadcastService,
     private readonly accountState: AccountStateService,
     private readonly businessService: BusinessService,
-    private readonly supportSession: SupportSessionService
+    private readonly supportSession: SupportSessionService,
+    private readonly changeDetector: ChangeDetectorRef
   ) {}
 
   /** The sidebar is only off the page when a narrow layout has dismissed its drawer. */
@@ -154,7 +172,7 @@ export class AppComponent implements OnInit, OnDestroy {
    * immediately, as there is no business to read.
    */
   get isBusinessContextReady(): boolean {
-    return !this.isLoggedIn || this.isBusinessSettled;
+    return !this.isLoggedIn || (this.isBusinessSettled && !this.isBusinessContextChanging);
   }
 
   get sidebarToggleLabel(): string {
@@ -199,6 +217,11 @@ export class AppComponent implements OnInit, OnDestroy {
     this.supportSession.state$
       .pipe(takeUntil(this.destroying$))
       .subscribe((state) => (this.isSupportViewUnresolved = state.kind === 'unresolved'));
+
+    // What a changed business context does to the page on screen (issue #670).
+    this.supportSession.contextChanging$
+      .pipe(takeUntil(this.destroying$))
+      .subscribe((changing) => this.applyBusinessContextChange(changing));
   }
 
   ngOnDestroy(): void {
@@ -244,6 +267,32 @@ export class AppComponent implements OnInit, OnDestroy {
       account: account ?? undefined,
       postLogoutRedirectUri: window.location.origin
     });
+  }
+
+  /**
+   * Withholds the routed page while a business context transition settles, and renders the removal
+   * **immediately** (issue #670).
+   *
+   * The flush is the point. A transition is reported from a response callback or a
+   * `BroadcastChannel` message, and the navigation it performs can settle in the same turn - a tab
+   * already on `/` has nothing to navigate - so a flag set and cleared before Angular's next change
+   * detection would never take the page off screen at all, and the previous business's figures
+   * would stay exactly where they were. Flushing here destroys that page component the moment the
+   * context changes, which is also what makes the page created when the transition finishes a new
+   * one that reads the effective context from scratch.
+   *
+   * It is only ever flushed on the way *in*: releasing the page is Angular's ordinary change
+   * detection, and a flush during the shell's own first render would be re-entrant.
+   */
+  private applyBusinessContextChange(changing: boolean): void {
+    if (changing === this.isBusinessContextChanging) {
+      return;
+    }
+
+    this.isBusinessContextChanging = changing;
+    if (changing) {
+      this.changeDetector.detectChanges();
+    }
   }
 
   private observeLayoutWidth(): void {

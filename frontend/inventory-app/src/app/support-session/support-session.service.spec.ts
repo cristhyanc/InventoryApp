@@ -7,61 +7,16 @@ import { SignedInIdentityDoubles, signedInIdentity } from '../access/identity-ca
 import { ConfigService } from '../services/config.service';
 import { BusinessService } from '../services/business.service';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
-import { SupportSessionService, SupportSessionState } from './support-session.service';
-
-/**
- * A same-process double for the global `BroadcastChannel`, scoped by channel name the way the real
- * one is scoped by origin: two instances constructed with the same name deliver to each other, and
- * neither ever delivers its own posted message back to itself - the one asymmetry that makes the
- * multi-tab tests below mean anything (`FakeBroadcastChannel` would otherwise just be an event
- * emitter talking to itself).
- */
-class FakeBroadcastChannel {
-  private static readonly channels = new Map<string, Set<FakeBroadcastChannel>>();
-  private readonly listeners = new Set<(event: MessageEvent) => void>();
-  private closed = false;
-
-  constructor(private readonly name: string) {
-    const peers = FakeBroadcastChannel.channels.get(name) ?? new Set();
-    peers.add(this);
-    FakeBroadcastChannel.channels.set(name, peers);
-  }
-
-  postMessage(data: unknown): void {
-    if (this.closed) {
-      return;
-    }
-    const peers = FakeBroadcastChannel.channels.get(this.name);
-    if (!peers) {
-      return;
-    }
-    for (const peer of peers) {
-      if (peer === this || peer.closed) {
-        continue;
-      }
-      for (const listener of peer.listeners) {
-        listener({ data } as MessageEvent);
-      }
-    }
-  }
-
-  addEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
-    this.listeners.add(listener);
-  }
-
-  removeEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
-    this.listeners.delete(listener);
-  }
-
-  close(): void {
-    this.closed = true;
-    FakeBroadcastChannel.channels.get(this.name)?.delete(this);
-  }
-
-  static reset(): void {
-    FakeBroadcastChannel.channels.clear();
-  }
-}
+import {
+  FakeBroadcastChannel,
+  installBroadcastChannel,
+  removeBroadcastChannel
+} from './broadcast-channel.spec-helpers';
+import {
+  SUPPORT_SESSION_BROADCAST_CHANNEL,
+  SupportSessionService,
+  SupportSessionState
+} from './support-session.service';
 
 const STARTED_RESPONSE = {
   sessionId: 'session-abc',
@@ -79,6 +34,16 @@ const ACTIVE_ON_SERVER = {
   startedAtUtc: '2026-02-01T00:00:00Z',
   expiresAtUtc: '2026-02-01T01:00:00Z'
 };
+
+/**
+ * The dashboard navigation every transition performs (issue #670). The destination is re-validated
+ * even when the tab is already on it; what replaces the page itself is the shell withholding it,
+ * which `app.component.spec.ts` and `support-session-context-transition.spec.ts` cover.
+ */
+const DASHBOARD_NAVIGATION = { onSameUrlNavigation: 'reload' };
+
+/** The identity `signedInIdentity()` reports as signed in, as a broadcast message names it. */
+const ACCOUNT_KEY = 'member-1';
 
 interface Harness {
   service: SupportSessionService;
@@ -103,6 +68,7 @@ function harness(
     activeOnServer?: unknown;
     post?: jest.Mock;
     get?: jest.Mock;
+    navigate?: jest.Mock;
     signedIn?: string | null;
   } = {}
 ): Harness {
@@ -110,7 +76,9 @@ function harness(
   const get = options.get ?? jest.fn(() => of(options.activeOnServer ?? null));
   const businessReset = jest.fn();
   const accessRefresh = jest.fn(() => of({ status: 'unread' } as MemberAccessState));
-  const navigate = jest.fn();
+  // The real `Router.navigate` answers a promise, and the transition releases the withheld page
+  // when it settles (issue #670), so the double has to answer one too.
+  const navigate = options.navigate ?? jest.fn(() => Promise.resolve(true));
   const isGranted = jest.fn(() => of(options.granted ?? true));
   const identity = signedInIdentity({ signedIn: options.signedIn });
 
@@ -142,15 +110,21 @@ function harness(
   };
 }
 
-describe('SupportSessionService (issue #553)', () => {
-  beforeEach(() => {
-    (globalThis as unknown as { BroadcastChannel: unknown }).BroadcastChannel = FakeBroadcastChannel;
-    FakeBroadcastChannel.reset();
-  });
+/**
+ * Another open tab of this origin, which can reach the service only the way a real one does. It is
+ * what lets a test post a message no legitimate sibling would send, and see what one is sent.
+ */
+function otherTab(): { post(message: unknown): void; readonly received: unknown[] } {
+  const channel = new FakeBroadcastChannel(SUPPORT_SESSION_BROADCAST_CHANNEL);
+  const received: unknown[] = [];
+  channel.addEventListener('message', (event: MessageEvent) => received.push(event.data));
+  return { post: (message) => channel.postMessage(message), received };
+}
 
-  afterEach(() => {
-    delete (globalThis as { BroadcastChannel?: unknown }).BroadcastChannel;
-  });
+describe('SupportSessionService (issue #553)', () => {
+  beforeEach(() => installBroadcastChannel());
+
+  afterEach(() => removeBroadcastChannel());
 
   describe('starting a session', () => {
     it('posts the reason to the business, publishes the banner state and the id for the interceptor', async () => {
@@ -174,7 +148,7 @@ describe('SupportSessionService (issue #553)', () => {
 
       expect(businessReset).toHaveBeenCalledTimes(1);
       expect(accessRefresh).toHaveBeenCalledTimes(1);
-      expect(navigate).toHaveBeenCalledWith(['/']);
+      expect(navigate).toHaveBeenCalledWith(['/'], DASHBOARD_NAVIGATION);
     });
 
     it('never writes the session id to localStorage, sessionStorage or the URL', async () => {
@@ -248,7 +222,7 @@ describe('SupportSessionService (issue #553)', () => {
       expect(observed[observed.length - 1]).toEqual({ kind: 'inactive' });
       expect(businessReset).toHaveBeenCalledTimes(1);
       expect(accessRefresh).toHaveBeenCalledTimes(1);
-      expect(navigate).toHaveBeenCalledWith(['/']);
+      expect(navigate).toHaveBeenCalledWith(['/'], DASHBOARD_NAVIGATION);
     });
 
     it('ends the session in every other open tab (multi-tab end)', async () => {
@@ -256,13 +230,18 @@ describe('SupportSessionService (issue #553)', () => {
       const tabB = harness({ granted: false });
       await firstValueFrom(tabA.service.start(9, 'Investigating a reported bug'));
       tabB.states();
+      // The shared start is a context transition in this tab too (issue #670), so what the end
+      // does here is counted from after it.
+      tabB.businessReset.mockClear();
+      tabB.accessRefresh.mockClear();
+      tabB.navigate.mockClear();
 
       await firstValueFrom(tabA.service.end());
 
       expect(tabB.service.currentSessionId()).toBeNull();
       expect(tabB.businessReset).toHaveBeenCalledTimes(1);
       expect(tabB.accessRefresh).toHaveBeenCalledTimes(1);
-      expect(tabB.navigate).toHaveBeenCalledWith(['/']);
+      expect(tabB.navigate).toHaveBeenCalledWith(['/'], DASHBOARD_NAVIGATION);
     });
   });
 
@@ -439,7 +418,7 @@ describe('SupportSessionService (issue #553)', () => {
       expect(observed[observed.length - 1]).toEqual({ kind: 'inactive' });
       expect(businessReset).toHaveBeenCalledTimes(1);
       expect(accessRefresh).toHaveBeenCalledTimes(1);
-      expect(navigate).toHaveBeenCalledWith(['/']);
+      expect(navigate).toHaveBeenCalledWith(['/'], DASHBOARD_NAVIGATION);
     });
 
     it('stays unresolved when ending fails, rather than falling back to ordinary context', async () => {
@@ -620,6 +599,281 @@ describe('SupportSessionService (issue #553)', () => {
       identity.switchAccount('member-1');
 
       expect(service.isCurrentContext(captured)).toBe(true);
+    });
+  });
+
+  /**
+   * One transition path for every effective context change, and the window it reports around itself
+   * (issue #670). The shell withholds the routed page for that window, which is what takes the
+   * previous business's data off screen and brings a page back that reads the new context from
+   * scratch; `support-session-context-transition.spec.ts` proves that over real rendering.
+   */
+  describe('the business-context transition (issue #670)', () => {
+    it('reports the transition window around the dashboard navigation', async () => {
+      const navigated = new Subject<boolean>();
+      const navigate = jest.fn(() => firstValueFrom(navigated));
+      const { service } = harness({ navigate });
+      const observed: boolean[] = [];
+      service.contextChanging$.subscribe((changing) => observed.push(changing));
+
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+
+      // Still changing: the page stays withheld until the navigation for the new context settles.
+      expect(observed).toEqual([false, true]);
+
+      navigated.next(true);
+      navigated.complete();
+      await Promise.resolve();
+
+      expect(observed).toEqual([false, true, false]);
+      expect(navigate).toHaveBeenCalledWith(['/'], DASHBOARD_NAVIGATION);
+    });
+
+    it('releases the page even when the navigation is refused', async () => {
+      const navigate = jest.fn(() => Promise.reject(new Error('a guard threw')));
+      const { service } = harness({ navigate });
+      const observed: boolean[] = [];
+      service.contextChanging$.subscribe((changing) => observed.push(changing));
+
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      await Promise.resolve();
+
+      expect(observed).toEqual([false, true, false]);
+    });
+
+    it('keeps the page withheld until the last of two overlapping transitions settles', async () => {
+      const first = new Subject<boolean>();
+      const second = new Subject<boolean>();
+      const pending = [first, second];
+      const navigate = jest.fn(() => firstValueFrom(pending.shift() ?? first));
+      const { service } = harness({ navigate });
+      const observed: boolean[] = [];
+      service.contextChanging$.subscribe((changing) => observed.push(changing));
+
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      service.handleSessionEndedSignal();
+      first.next(true);
+      first.complete();
+      await Promise.resolve();
+
+      expect(observed).toEqual([false, true]);
+
+      second.next(true);
+      second.complete();
+      await Promise.resolve();
+
+      expect(observed).toEqual([false, true, false]);
+    });
+  });
+
+  /**
+   * A session's own expiry, which every tab that knows the session reaches on its own (issue #670).
+   * Before this, the expiry only became visible when the server refused the next call, so a tab
+   * nobody touched kept a finished session's banner and its business's figures on screen.
+   */
+  describe('the session expiring (issue #670)', () => {
+    beforeEach(() => jest.useFakeTimers().setSystemTime(Date.parse('2026-02-01T00:00:00Z')));
+
+    afterEach(() => jest.useRealTimers());
+
+    it('ends the local view at the expiry, through the same transition', async () => {
+      const { service, businessReset, accessRefresh, navigate, states } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      const observed = states();
+      businessReset.mockClear();
+      accessRefresh.mockClear();
+      navigate.mockClear();
+
+      jest.advanceTimersByTime(60 * 60 * 1000);
+
+      expect(service.currentSessionId()).toBeNull();
+      expect(observed[observed.length - 1]).toEqual({ kind: 'inactive' });
+      expect(businessReset).toHaveBeenCalledTimes(1);
+      expect(accessRefresh).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledWith(['/'], DASHBOARD_NAVIGATION);
+    });
+
+    it('leaves the view alone until the expiry is actually reached', async () => {
+      const { service, navigate } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      navigate.mockClear();
+
+      jest.advanceTimersByTime(59 * 60 * 1000);
+
+      expect(service.currentSessionId()).toBe('session-abc');
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    /** A tab that holds no id still knows when the session it was told about is over. */
+    it('releases a tab that could not present the session', () => {
+      const { states } = harness({ activeOnServer: ACTIVE_ON_SERVER });
+      const observed = states();
+
+      jest.advanceTimersByTime(60 * 60 * 1000);
+
+      expect(observed[observed.length - 1]).toEqual({ kind: 'inactive' });
+    });
+
+    /** Every tab schedules the same instant from the same state, so none has to be told. */
+    it('tells no other tab, because each of them ends at the same instant on its own', async () => {
+      const sibling = otherTab();
+      const { service } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      expect(sibling.received).toHaveLength(1);
+
+      jest.advanceTimersByTime(60 * 60 * 1000);
+
+      expect(sibling.received).toHaveLength(1);
+    });
+
+    it('schedules nothing from an expiry this browser’s clock says has already passed', async () => {
+      jest.setSystemTime(Date.parse('2026-02-01T02:00:00Z'));
+      const { service, navigate } = harness();
+
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      navigate.mockClear();
+      jest.advanceTimersByTime(24 * 60 * 60 * 1000);
+
+      // The browser's clock is not the authority on a session's lifetime: the server's
+      // `support_session_ended` refusal is, and a clock hours fast must not end a fresh session.
+      expect(service.currentSessionId()).toBe('session-abc');
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('schedules nothing from an unreadable expiry', async () => {
+      const { service, navigate } = harness({
+        post: jest.fn(() => of({ ...STARTED_RESPONSE, expiresAtUtc: 'not an instant' }))
+      });
+
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      navigate.mockClear();
+      jest.advanceTimersByTime(24 * 60 * 60 * 1000);
+
+      expect(service.currentSessionId()).toBe('session-abc');
+      expect(navigate).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * What arrives over `BroadcastChannel` is a message from another tab of this origin carrying a
+   * session **id** - the one credential this application holds - so nothing about it is assumed
+   * (issue #670). A legitimate sibling never sends a malformed or another identity's message, which
+   * is why these tests post the messages themselves rather than driving a second service instance.
+   */
+  describe('a message from another tab (issue #670)', () => {
+    it('names the identity the broadcast session belongs to', async () => {
+      const sibling = otherTab();
+      const { service } = harness();
+
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+
+      expect(sibling.received).toEqual([
+        {
+          type: 'started',
+          accountKey: ACCOUNT_KEY,
+          sessionId: 'session-abc',
+          businessName: 'Snack Co',
+          expiresAtUtc: '2026-02-01T01:00:00Z'
+        }
+      ]);
+    });
+
+    it('applies the same transition a local start does', () => {
+      const sibling = otherTab();
+      const { service, businessReset, accessRefresh, navigate, states } = harness({ granted: false });
+      const observed = states();
+
+      sibling.post({
+        type: 'started',
+        accountKey: ACCOUNT_KEY,
+        sessionId: 'session-abc',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      });
+
+      expect(service.currentSessionId()).toBe('session-abc');
+      expect(observed[observed.length - 1]).toEqual({
+        kind: 'viewing',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      });
+      // Issue #553 moved only the id and the banner here, which left the previous business's
+      // cached business, capabilities and page in place in every tab but the one that started it.
+      expect(businessReset).toHaveBeenCalledTimes(1);
+      expect(accessRefresh).toHaveBeenCalledTimes(1);
+      expect(navigate).toHaveBeenCalledWith(['/'], DASHBOARD_NAVIGATION);
+    });
+
+    it('never adopts a session another signed-in identity started', () => {
+      const sibling = otherTab();
+      const { service, businessReset, navigate, states } = harness({ granted: false });
+      const observed = states();
+
+      sibling.post({
+        type: 'started',
+        accountKey: 'another-administrator',
+        sessionId: 'session-abc',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      });
+
+      expect(service.currentSessionId()).toBeNull();
+      expect(observed).toEqual([{ kind: 'inactive' }]);
+      expect(businessReset).not.toHaveBeenCalled();
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['no identity at all', { type: 'started', sessionId: 'session-abc', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }],
+      ['an empty session id', { type: 'started', accountKey: ACCOUNT_KEY, sessionId: '', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }],
+      ['a session id that is not a string', { type: 'started', accountKey: ACCOUNT_KEY, sessionId: 7, businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }],
+      ['no expiry', { type: 'started', accountKey: ACCOUNT_KEY, sessionId: 'session-abc', businessName: 'Snack Co' }],
+      ['no business name', { type: 'started', accountKey: ACCOUNT_KEY, sessionId: 'session-abc', expiresAtUtc: '2026-02-01T01:00:00Z' }],
+      ['an unknown kind', { type: 'resumed', accountKey: ACCOUNT_KEY, sessionId: 'session-abc', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' }],
+      ['nothing of the shape at all', 'session-abc'],
+      ['null', null]
+    ])('never adopts a session from a message with %s', (_case, message) => {
+      const sibling = otherTab();
+      const { service, navigate, states } = harness({ granted: false });
+      const observed = states();
+
+      sibling.post(message);
+
+      expect(service.currentSessionId()).toBeNull();
+      expect(observed).toEqual([{ kind: 'inactive' }]);
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('applies a same-identity end', async () => {
+      const sibling = otherTab();
+      const { service, states } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      const observed = states();
+
+      sibling.post({ type: 'ended', accountKey: ACCOUNT_KEY });
+
+      expect(service.currentSessionId()).toBeNull();
+      expect(observed[observed.length - 1]).toEqual({ kind: 'inactive' });
+    });
+
+    it.each([
+      ['another identity', { type: 'ended', accountKey: 'another-administrator' }],
+      ['no identity', { type: 'ended' }],
+      ['an unknown kind', { type: 'finished', accountKey: ACCOUNT_KEY }]
+    ])('leaves this tab’s session alone for an end from %s', async (_case, message) => {
+      const sibling = otherTab();
+      const { service, states } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      const observed = states();
+
+      sibling.post(message);
+
+      expect(service.currentSessionId()).toBe('session-abc');
+      expect(observed[observed.length - 1]).toEqual({
+        kind: 'viewing',
+        businessName: 'Snack Co',
+        expiresAtUtc: '2026-02-01T01:00:00Z'
+      });
     });
   });
 });

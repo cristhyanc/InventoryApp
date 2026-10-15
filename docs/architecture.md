@@ -3625,11 +3625,16 @@ with it (`SuperAdminStartedSupportSessionResponse` above) - a value that is neve
 cannot leak through a saved page, a shared link, a browser history entry or a crash dump.
 
 **Every open tab shares the id over `BroadcastChannel`, not through anything persisted.** Starting a
-session broadcasts `{ type: 'started', sessionId, businessName, expiresAtUtc }` to every other open
-tab of the same origin, so each of them can both show the banner and present the header on its own
-requests; ending one - from the banner's own **End session**, from another tab, or because the
+session broadcasts `{ type: 'started', accountKey, sessionId, businessName, expiresAtUtc }` to every
+other open tab of the same origin, so each of them can both show the banner and present the header on
+its own requests; ending one - from the banner's own **End session**, from another tab, or because the
 server answered `support_session_ended` on some unrelated call (below) - broadcasts (or, for the
-tab that merely received the broadcast, locally applies) `{ type: 'ended' }` everywhere at once. The
+tab that merely received the broadcast, locally applies) `{ type: 'ended', accountKey }` everywhere at
+once. The `accountKey` and the field-by-field check of every received message are issue #670's
+([Refreshing the visible business data on a support-context transition](#refreshing-the-visible-business-data-on-a-support-context-transition-issue-670)):
+the channel is shared by every tab of the origin and these messages carry the one credential this
+application holds, so a malformed message, or one naming another signed-in identity, is ignored
+entirely rather than adopting a session or ending the one a tab is in. The
 listener is attached once, in the constructor, so it is live for every open tab regardless of
 whether anything has subscribed to the banner's state yet. `BroadcastChannel` does not exist in this
 build's Jest environment (`jest-environment-jsdom`'s bundled jsdom predates it), so it is used only
@@ -3693,7 +3698,10 @@ does two things with one rule:
 one place (`SupportSessionService`) rather than three: forget the cached business the shell reads
 for every member, re-read the capabilities - the support set inside a session, the administrator's
 own (none) outside one - and navigate to the dashboard, because neither the page that was on screen
-before nor the one a stale capability set rendered belongs to the business now in view.
+before nor the one a stale capability set rendered belongs to the business now in view. Issue #670
+made that one path **every** transition's path, and made reaching the dashboard actually replace
+what is on it; see
+[Refreshing the visible business data on a support-context transition](#refreshing-the-visible-business-data-on-a-support-context-transition-issue-670).
 
 **What proves it.** `support-session.service.spec.ts` covers starting a session, ending it, the
 `support_session_ended` signal (idempotent, and inert for a tab that was never active), the id never
@@ -4113,10 +4121,13 @@ session on the administrator's behalf.
 
 **Recovery is the two paths that already existed.** A `started` broadcast from a sibling tab turns
 `unresolved` into `viewing` with the id in hand, and the page renders; an end - from this tab,
-another tab, an expiry's `support_session_ended` on some other call, or the business being
-deactivated - returns every tab to `inactive`, which is ordinary context again, with the cached
-business dropped, the capabilities re-read and the dashboard navigated to, exactly as issue #553
-left it. A delayed probe cannot undo either: the boot check publishes `unresolved` only while this
+another tab, the session's own expiry, a `support_session_ended` refusal on some other call, or the
+business being deactivated - returns every tab to `inactive`, which is ordinary context again, with
+the cached business dropped, the capabilities re-read and the dashboard reached afresh. Both of them
+are now the one transition path of issue #670
+([Refreshing the visible business data on a support-context transition](#refreshing-the-visible-business-data-on-a-support-context-transition-issue-670)),
+which is what makes the page the tab lands on a new one rather than the previous business's.
+A delayed probe cannot undo either: the boot check publishes `unresolved` only while this
 tab still holds no id and is still `inactive`, so an answer arriving after a sibling tab's broadcast
 leaves the effective support view alone.
 
@@ -4211,6 +4222,107 @@ for a request that began with no id at all), and an identity switch, with and wi
 the unresolved-probe case, a superseded failure reaching neither the global notice nor either member
 cache, a superseded `support_session_ended` not ending the current session, the current session's own
 refusal still ending it, and the unchanged-context answer still being delivered.
+
+### Refreshing the visible business data on a support-context transition (issue #670)
+
+Discarding an answer from a context the page has left (issue #669) is only half of "the page shows
+the business it says it does". The other half is the page itself, and two things were wrong with it.
+
+- **Reaching the dashboard is not the same as replacing what is on it.** Every transition ended with
+  `router.navigate(['/'])`, and the dashboard is where starting a session lands - so the common case
+  was a tab *already* on `/`, where the router has nothing to do: the navigation was ignored, the
+  page component was reused, and the previous business's machines, sites and headline figures stayed
+  on screen after the banner above them had changed or disappeared. `onSameUrlNavigation: 'reload'`
+  alone does not fix it either: it re-runs that route's guards and resolvers, and the default
+  `RouteReuseStrategy` still reuses the component - the figures are held by the component, not by
+  the route.
+- **A cross-tab start was not a transition at all.** The `started` message handler stored the id,
+  moved the request-context generation and published the banner, and stopped there - so every tab
+  but the one the session was started in kept the administrator's own cached business, their own
+  capability set and whatever page was on screen, now labelled "Viewing as &lt;other business&gt;".
+
+**One transition path, reached five ways.** `SupportSessionService.applyBusinessContextChange()` is
+what every effective business-context change does, and nothing does part of it:
+
+| What happened | Where it reaches the path |
+| --- | --- |
+| A session was started here | `start()`, after the id is stored and the banner published |
+| It was ended here | `end()` → `applyEnded()` |
+| It expired | the expiry scheduled from the state's own `expiresAtUtc` → `applyEnded()` |
+| A call made **in the context that is still current** was refused `support_session_ended` | `handleSessionEndedSignal()` → `applyEnded()`, gated by issue #669's comparison |
+| A valid same-identity `started`/`ended` message arrived from another tab | the `BroadcastChannel` handler |
+
+The path drops the cached business (`BusinessService.reset()`), re-reads the capabilities
+(`AccessService.refresh()`), and then takes the tab to the dashboard of the business now in view -
+publishing `contextChanging$` as `true` before the navigation and `false` when it settles. Two
+overlapping transitions keep it `true` until the last of them settles, and a refused or redirected
+navigation still releases it, because the alternative is a shell that withholds every page for the
+rest of the browser session.
+
+**The shell is what clears the page, and it clears it immediately.** `AppComponent` withholds
+`<router-outlet />` while `contextChanging$` is `true` - the same gate it already applies while the
+business lookup settles (issue #499) and while a tab cannot present the session (issue #668) - and
+**flushes that removal synchronously** (`ChangeDetectorRef.detectChanges()`) instead of waiting for
+Angular to look again. Both halves matter:
+
+- the flush is what makes the clearing immediate and, on `/`, what makes it happen at all: a
+  transition is reported from a response callback or a `BroadcastChannel` message and its navigation
+  can settle in the same turn, so a flag set and cleared before the next change detection would
+  never take the page off screen;
+- withholding the outlet is also what *replaces* the page. Destroying a `RouterOutlet` keeps the
+  activated route in `ChildrenOutletContexts` but clears its `attachRef`, so the next outlet
+  `activateWith`s that route into a **new** component instance - which is why this works regardless
+  of what the router decided about reusing the route. The new page runs its own `ngOnInit` and reads
+  the effective context from scratch, under the new capability set and, inside a session, presenting
+  `X-Support-Session` on every request it makes.
+
+The navigation is still made, with `onSameUrlNavigation: 'reload'`, for the two things it is the
+only thing that can do: taking a tab that was on some other page to the dashboard, and
+re-validating the destination's guards under the capabilities the new context reports.
+
+**An expiry is now observed rather than waited for.** Each state carries the expiry the server set
+(`publish()` is the one place a state and its expiry are published together), and the service
+schedules the local end from it, so the tab a session was started in, a tab it was shared with and a
+tab that only learned of it from `GET .../active` all end at the same instant without telling each
+other - which is why an expiry is deliberately not broadcast. **The browser's clock is never the
+authority**: an unreadable instant, or one this clock says has already passed, schedules nothing at
+all, because the server decides when a session is over and refuses the next call with
+`support_session_ended`, and a clock that is hours fast must not be able to end a session that has
+just been granted. The server-side lifetime, the refusal code and the memory-only id are untouched.
+
+**A message from another tab is checked before it is believed.** `BroadcastChannel` is shared by
+every tab of the origin, and a `started` message carries a session id - the one credential this
+application holds - so `readBroadcast` accepts a message only when it names the identity signed in
+*here* (`activeAccountKey`, the same identity the member caches key their answers on), is one of the
+two kinds by exact name, and - for a `started` - carries a non-empty id, a business name and an
+expiry. Anything else is ignored entirely: it cannot adopt a session (that handler is the only place
+in the application that ever learns an id it was not answered directly), and it cannot end one
+either. A tab that does not yet know who is signed in therefore adopts nothing, which is the
+fail-closed answer: its requests resolve the administrator's own membership and it labels nothing as
+anybody else's.
+
+Nothing here changes what the server enforces, the read-only rule, the capability sets, the session's
+server-side lifetime, or where a business comes from. It is the frontend's own answer to "what is on
+screen now", and `BusinessService.reset()` still leaves the shell's cached business unread inside a
+session - the banner names the business from the session itself - which is unchanged from issue #553.
+
+**What proves it.** `support-session-context-transition.spec.ts` renders the **real**
+`AppComponent`, the real router and the real `DashboardComponent` over the production interceptor
+chain and the real `SupportSessionService`, with `HttpTestingController` answering each business's
+figures, and asserts what is actually on screen: a local start and a local end on `/` each replace
+the previous business's machine and site figures and issue the new context's reads with (or without)
+the session header; a tab on another page is still taken to the dashboard; the session expiring and
+a `support_session_ended` refusal of the current session each do the same with no further call
+needed; another tab's `started` applies the whole transition and presents the id it shared;
+another tab's `ended` returns the page to ordinary context; a message from another identity, with no
+identity, or of an unknown kind changes nothing at all; and an answer the previous context asked for
+never reaches the new page. `support-session.service.spec.ts` covers the transition window around
+the navigation (including two overlapping transitions and a refused navigation), the expiry
+scheduling and the two cases it deliberately refuses to schedule, the identity the outgoing message
+carries, and the received-message rules case by case. `app.component.spec.ts` covers the shell's own
+part: the page leaving the screen as soon as a transition starts, a new outlet - and so a new page -
+when a transition starts and settles before Angular would look again, and a tab that cannot present
+the session still rendering no page at all.
 `support-session.interceptor.spec.ts` adds the interceptor's own superseded-generation and
 reordered-reaction cases, and `support-session.service.spec.ts` covers each invalidation trigger
 above, including the two identity notifications that are deliberately not changes.
