@@ -18,10 +18,11 @@ const LEGACY_NO_GST: BusinessSettings = { ...COMPLETE, gstRegistered: null };
 
 interface SettingsStub {
   get: jest.Mock<Observable<BusinessSettings>, []>;
+  saved$: Subject<BusinessSettings>;
 }
 
 async function render(canManage: boolean, settingsSource: Observable<BusinessSettings>) {
-  const settings: SettingsStub = { get: jest.fn(() => settingsSource) };
+  const settings: SettingsStub = { get: jest.fn(() => settingsSource), saved$: new Subject<BusinessSettings>() };
 
   await TestBed.configureTestingModule({
     imports: [LegacyBusinessSettingsPromptComponent],
@@ -91,6 +92,37 @@ describe('LegacyBusinessSettingsPromptComponent (issue #549)', () => {
 
     const link = host.querySelector<HTMLAnchorElement>('[data-testid="legacy-business-settings-prompt-link"]');
     expect(link?.getAttribute('href')).toBe('/admin/business-settings');
+  });
+
+  it('hides the prompt once a save records the missing fields, without reading the settings again (issue #681)', async () => {
+    const { fixture, host, settings } = await render(true, of(LEGACY_NO_CONTACT));
+    expect(prompt(host)).not.toBeNull();
+
+    settings.saved$.next(COMPLETE);
+    fixture.detectChanges();
+
+    expect(prompt(host)).toBeNull();
+    expect(settings.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the prompt when a save still leaves a field missing', async () => {
+    const { fixture, host, settings } = await render(true, of(LEGACY_NO_CONTACT));
+
+    settings.saved$.next(LEGACY_NO_GST);
+    fixture.detectChanges();
+
+    expect(prompt(host)).not.toBeNull();
+  });
+
+  it('does not bring a dismissed prompt back after a save', async () => {
+    const { fixture, host, settings } = await render(true, of(LEGACY_NO_CONTACT));
+    host.querySelector<HTMLButtonElement>('[data-testid="legacy-business-settings-prompt-dismiss"]')?.click();
+    fixture.detectChanges();
+
+    settings.saved$.next(LEGACY_NO_GST);
+    fixture.detectChanges();
+
+    expect(prompt(host)).toBeNull();
   });
 
   it('is dismissible, and stays dismissed', async () => {

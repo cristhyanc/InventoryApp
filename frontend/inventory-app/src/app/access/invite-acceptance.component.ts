@@ -5,6 +5,7 @@ import { Subject, filter, switchMap, take, takeUntil } from 'rxjs';
 import { AccessService } from './access.service';
 import { AccountStateService } from './account-state.service';
 import { REDEEMABLE_ACCOUNT_STATES, nonRedeemableAccountStateDestination } from './account-state.guard';
+import { INVITE_ADDRESS_BAR_ROUTE } from './invite-address-bar.guard';
 import { InviteRedemptionService } from './invite-redemption.service';
 
 const GENERIC_ERROR_MESSAGE = "This invite link couldn't be accepted. Try again.";
@@ -31,16 +32,21 @@ function errorMessageFrom(error: unknown): string {
  * cookie, a log line or an error report. The very first thing `ngOnInit` does, before anything else
  * runs, is strip it back out of the address bar with `history.replaceState`: the browser's own
  * history entry no longer shows it, independently of whatever Angular's router still thinks the
- * current URL is. MSAL's own transient copy of the full address, kept only for the length of a
- * sign-in redirect round trip and cleared when it completes (`auth-config.ts`'s
+ * current URL is. For a visitor who opened the link from the address bar, the route's `canMatch`
+ * guard (`inviteTokenAddressBarGuard`, issue #681) has already done the same before `MsalGuard` ran,
+ * so a signed-out visitor's sign-in redirect does not leave it in history either; this component's
+ * own rewrite covers the router putting the matched URL back when it commits the navigation, and an
+ * in-app navigation here. MSAL's own transient copy of the full address, kept only for the length
+ * of a sign-in redirect round trip and cleared when it completes (`auth-config.ts`'s
  * `BrowserCacheLocation.LocalStorage`), is the one accepted residual - it is third-party bookkeeping
  * this application neither writes nor reads, not a second copy this code keeps.
  *
  * **Reaching this component at all already proves authentication**, because the route still
  * carries `MsalGuard` (`app.routes.ts`); a signed-out visitor is sent through the login redirect
- * first, with this same URL (token included) as `MsalGuard`'s own default redirect start page, and
- * lands back here once that round trip completes. Nothing here starts or configures that redirect
- * - it is the ordinary, already-wired behaviour every other bypass route on this guard relies on.
+ * first, with this same URL (token included) as `MsalGuard`'s own default redirect start page -
+ * taken from the router's state, not the already-rewritten address bar - and lands back here once
+ * that round trip completes. Nothing here starts or configures that redirect - it is the ordinary,
+ * already-wired behaviour every other bypass route on this guard relies on.
  *
  * **Eligibility is read, never assumed.** `REDEEMABLE_ACCOUNT_STATES` mirrors the backend's
  * `MembershipEligibility.AllowsActiveMembership`: a caller in `NoMembership`, `MembershipRevoked`
@@ -112,7 +118,7 @@ export class InviteAcceptanceComponent implements OnInit, OnDestroy {
     // The very first thing this page does: capture the token into memory, then remove it from the
     // address bar before any analytics, logging or navigation can see it there.
     this.token = this.route.snapshot.paramMap.get('token') ?? '';
-    history.replaceState(history.state, '', '/invite');
+    history.replaceState(history.state, '', `/${INVITE_ADDRESS_BAR_ROUTE}`);
 
     this.accountState.state$
       .pipe(

@@ -132,13 +132,12 @@ public static class TenantOwnershipReadiness
                     + "Bootstrapped requires no unassigned rows, at least one active business, and at "
                     + "least one active membership belonging to an active business. Until then "
                     + "signed-in callers see an empty dataset - the safe state, not a corruption. Run "
-                    + "the reviewed `{Command} --dry-run` and then `{Command} --apply` as described "
+                    + "the reviewed `{Command}` with --dry-run and then with --apply, as described "
                     + "in docs/tenant-rollout.md. The API will not assign ownership on its own.",
                 state.UnassignedRows,
                 state.BusinessCount,
                 state.ActiveBusinessCount,
                 state.UsableMembershipCount,
-                BusinessBootstrapArguments.CommandName,
                 BusinessBootstrapArguments.CommandName);
             return;
         }

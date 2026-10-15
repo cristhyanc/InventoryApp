@@ -109,6 +109,36 @@ public class SaveNayaxConnectionTests
     }
 
     /// <summary>
+    /// Machine lines left unchecked because the machine list itself was refused are not "no machines
+    /// yet" (issue #681): the business may have plenty, and the refusal is what needs fixing. The
+    /// save records the permission gap, not pending machine checks, so the wizard does not tell the
+    /// Owner to set up machines.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_machine_list_is_saved_pending_permissions_without_pending_machine_checks()
+    {
+        var fixture = new Fixture();
+        var draftId = fixture.StoreDraft(Report(
+            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.SignIn),
+            NayaxConnectionCheckLine.Failed(
+                NayaxConnectionCheck.Machines,
+                NayaxConnectionCheckFailure.PermissionNotGranted),
+            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.ProductCatalogue),
+            NayaxConnectionCheckLine.Passed(NayaxConnectionCheck.ProductGroups),
+            NayaxConnectionCheckLine.NotChecked(NayaxConnectionCheck.Machine),
+            NayaxConnectionCheckLine.NotChecked(NayaxConnectionCheck.MachineProducts),
+            NayaxConnectionCheckLine.NotChecked(NayaxConnectionCheck.MachineLastSales),
+            NayaxConnectionCheckLine.NotChecked(NayaxConnectionCheck.MachineLastAlerts)));
+
+        var summary = await fixture.Save.Handle(draftId);
+
+        Assert.Equal(
+            new NayaxConnectionStatusSummary(NayaxConnectionStatus.PendingPermissions, false),
+            summary);
+        Assert.False(fixture.Connections.Connection!.MachineChecksPending);
+    }
+
+    /// <summary>
     /// A token that did not sign in has never been shown to work at all, so it is not stored - and
     /// the transaction is not committed, which is what leaves the draft in place.
     /// </summary>

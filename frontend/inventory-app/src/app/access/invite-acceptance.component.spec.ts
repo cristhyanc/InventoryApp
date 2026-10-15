@@ -104,17 +104,16 @@ describe('InviteAcceptanceComponent (issue #535)', () => {
     cookie.mockRestore();
   });
 
-  it('keeps the token held only in memory, from the route read through to redemption, surviving a simulated sign-in redirect', async () => {
-    // A signed-out visitor is sent through MsalGuard's login redirect and back to this exact URL
-    // (issue #505's contract); this component is constructed fresh either way, which is what this
-    // asserts: the token read from the route survives to the redeem call with nothing in between.
+  it('redeems the token it read from the route, after stripping it from the address bar', async () => {
+    // The signed-out sign-in redirect round trip itself is driven, through the real route table,
+    // by invite-address-bar.guard.spec.ts (issue #681); this asserts only the component's own half.
     const redeem = jest.fn(() => of({ role: 'Manager' }));
-    const { fixture } = await createHarness({ token: 'post-redirect-token', redeem });
+    const { fixture } = await createHarness({ token: 'route-token', redeem });
 
     fixture.detectChanges();
     fixture.componentInstance.accept();
 
-    expect(redeem).toHaveBeenCalledWith('post-redirect-token');
+    expect(redeem).toHaveBeenCalledWith('route-token');
   });
 
   it.each<AccountStateName>(['NoMembership', 'MembershipRevoked', 'ApplicationRejected'])(

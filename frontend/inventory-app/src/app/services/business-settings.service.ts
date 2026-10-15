@@ -1,6 +1,6 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
-import { Observable } from 'rxjs';
+import { Observable, Subject, tap } from 'rxjs';
 import { ConfigService } from './config.service';
 import { BusinessApplicationRequest } from '../access/business-application-rules';
 
@@ -34,9 +34,20 @@ export function isLegacyBusinessProfile(settings: BusinessSettings): boolean {
  * `BusinessApplicationRequest` because it is the exact same five settings `BusinessSettingsPolicy`
  * validates for an application - this service sends the whole set together, exactly as the API
  * requires, and interprets no refusal itself.
+ *
+ * **{@link saved$} announces every successful save** (issue #681) to anything else on screen that
+ * shows a conclusion drawn from the settings - the legacy-profile prompt composed beside the form
+ * reads the settings only once, so without it the prompt would keep asking for fields the Owner
+ * has just recorded. It emits the `PUT`'s own response body as soon as the `PUT` succeeds, and
+ * never for a refused save.
  */
 @Injectable({ providedIn: 'root' })
 export class BusinessSettingsService {
+  private readonly savedSubject = new Subject<BusinessSettings>();
+
+  /** The settings each successful {@link save} returned, in the order the saves answered. */
+  readonly saved$: Observable<BusinessSettings> = this.savedSubject.asObservable();
+
   constructor(
     private readonly http: HttpClient,
     private readonly config: ConfigService
@@ -47,6 +58,8 @@ export class BusinessSettingsService {
   }
 
   save(request: BusinessApplicationRequest): Observable<BusinessSettings> {
-    return this.http.put<BusinessSettings>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/business/settings`, request);
+    return this.http
+      .put<BusinessSettings>(`${this.config.apiBaseUrl.replace(/\/$/, '')}/business/settings`, request)
+      .pipe(tap((settings) => this.savedSubject.next(settings)));
   }
 }

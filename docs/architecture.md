@@ -2043,11 +2043,11 @@ The two slices above are the API; this one, one slice of [#510](https://github.c
 
 **The table shows exactly the directory's ten fields, minus the one instant the page has no use for.** Name, status, applied date, contact email, ABN, active member count and whether Nayax is configured — `decidedAtUtc` is read by the API but not rendered, because the acceptance criteria name only the first seven. Pending applications sort first because the directory read already returns them that way; the status filter narrows the same ordered list rather than requesting a different one, since the list endpoint takes no server-side filter at all (see [Super Admin businesses API](#super-admin-businesses-api-issue-544) above). Approve and Reject are offered only for a `Pending` business, Deactivate and **View as this business** only for `Active`, and Reactivate and Members only for `Deactivated` — the same `BusinessDecisionPolicy`/`BusinessLifecyclePolicy` gates the API itself enforces, mirrored here only to decide which buttons to show, never to decide whether an action succeeds.
 
-**The pending-count badge (on the sidebar's `Super Admin` group and its `Businesses` link) is re-read after every action, not cached state the page pushes to it.** `SuperAdminBusinessesService.notifyChanged()` is a plain `Subject<void>` notification with no payload, called once a mutating call — approve, reject, deactivate, reactivate or release — has itself completed; `SidebarNavComponent` is the one subscriber, and on each notification (while platform-admin access is granted) it re-reads `GET .../pending-count` itself rather than trusting a number the mutating caller computed. The badge is `null` — rendered as no badge at all — until access is granted and a first read returns, and it is cleared the moment access is lost, the same rule issue #605 already gives the group itself. **A refused read reaches that same stable `null` and asks for nothing further** (issue #673): `GET .../pending-count` is classified `platform-admin`, so its `403` refreshes neither member cache, and it was the capability refresh — not the badge — that used to bring the read straight back round. See [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) for the classification and the loop.
+**The pending-count badge (on the sidebar's `Super Admin` group and its `Businesses` link) is re-read after every action, not cached state the page pushes to it.** `SuperAdminBusinessesService.notifyChanged()` is a plain `Subject<void>` notification with no payload, called once a mutating call — approve, reject, deactivate, reactivate or release — has itself completed, and also when approve, deactivate or reactivate is refused with `409` or `404` (issue #681), because that refusal means the business changed or disappeared elsewhere and the page reloads its table for the same reason; `SidebarNavComponent` is the one subscriber, and on each notification (while platform-admin access is granted) it re-reads `GET .../pending-count` itself rather than trusting a number the mutating caller computed. The badge is `null` — rendered as no badge at all — until access is granted and a first read returns, and it is cleared the moment access is lost, the same rule issue #605 already gives the group itself. **A refused read reaches that same stable `null` and asks for nothing further** (issue #673): `GET .../pending-count` is classified `platform-admin`, so its `403` refreshes neither member cache, and it was the capability refresh — not the badge — that used to bring the read straight back round. See [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) for the classification and the loop.
 
 **"View as this business" (issue #553, one slice of #513) is the one action here that does not stay on this page.** `ViewAsBusinessDialogComponent`, composed the same way Reject and Members already are, starts a support session through `SupportSessionService`; see [Support session banner and the in-memory session id](#support-session-banner-and-the-in-memory-session-id-issue-553) for what that does next. No backend change came with it: the dialog calls the one endpoint #550 already shipped (`POST /api/super-admin/support-sessions/{businessId}`), unchanged. Hiding write controls and support-view messages once inside the session is issue #554's separate follow-up.
 
-**What proves it.** `super-admin-businesses.service.spec.ts` covers the eight HTTP calls, including the trimmed/blank/absent reason on reject and the `changed$` notification. `business-reject-dialog.component.spec.ts` and `business-members-dialog.component.spec.ts` cover each dedicated workflow's own load, confirmation, success and API-refusal-shown-verbatim paths; `view-as-business-dialog.component.spec.ts` is the same shape for the required-reason dialog issue #553 added. `super-admin-businesses.component.spec.ts` covers the status filter, which actions each status offers (including **View as this business** for `Active` alone), each confirmation, the reactivate no-active-Owner refusal shown verbatim, and that a reload (and a badge notification) follows every completed action. `sidebar-nav.component.spec.ts` covers the badge itself: hidden until access is granted, hidden again at zero, shown on both the group and the `Businesses` link once a count is read, re-read on a `changed$` notification, cleared the moment access is lost, and — composed with the real `AccessService`, the real `SuperAdminBusinessesService` and the production `403` chain (issue #673) — settling on a persistent refusal instead of looping, with the badge `null`, the group still offered and no toast. `navigation.spec.ts` and `app.routes.spec.ts` cover the real `Businesses` `NavLink` replacing issue #546's placeholder and the route's guards.
+**What proves it.** `super-admin-businesses.service.spec.ts` covers the eight HTTP calls, including the trimmed/blank/absent reason on reject and the `changed$` notification. `business-reject-dialog.component.spec.ts` and `business-members-dialog.component.spec.ts` cover each dedicated workflow's own load, confirmation, success and API-refusal-shown-verbatim paths; `view-as-business-dialog.component.spec.ts` is the same shape for the required-reason dialog issue #553 added. `super-admin-businesses.component.spec.ts` covers the status filter, which actions each status offers (including **View as this business** for `Active` alone), each confirmation, the reactivate no-active-Owner refusal shown verbatim, and that a reload (and a badge notification) follows every completed action and every `409`/`404` refusal, but not any other failure. `sidebar-nav.component.spec.ts` covers the badge itself: hidden until access is granted, hidden again at zero, shown on both the group and the `Businesses` link once a count is read, re-read on a `changed$` notification, cleared the moment access is lost, and — composed with the real `AccessService`, the real `SuperAdminBusinessesService` and the production `403` chain (issue #673) — settling on a persistent refusal instead of looping, with the badge `null`, the group still offered and no toast. `navigation.spec.ts` and `app.routes.spec.ts` cover the real `Businesses` `NavLink` replacing issue #546's placeholder and the route's guards.
 
 #### Support sessions: the store and the control endpoints (issue #550)
 
@@ -3012,9 +3012,13 @@ shown to authenticate must not replace what the business is using today.
 **"Not checked" machine lines do not block `Ready`, and the saved connection records them.** A
 business connecting Nayax before its first machine exists has nothing to run `GET machines/{id}`
 against, which is a fact about the account and not a fault of the credentials. The save stores
-`Ready` and sets `MachineChecksPending`, computed from the report as "any machine-scoped line was
-never checked" — which checks need a machine stays `NayaxConnectionCheckPolicy.RequiresMachine`'s
-answer. A later re-test that reaches them clears it. `false` is therefore both "the machine checks
+`Ready` and sets `MachineChecksPending`, computed from the report as "the machine list was read,
+and a machine-scoped line was still never checked" — which checks need a machine stays
+`NayaxConnectionCheckPolicy.RequiresMachine`'s answer. A machine list that was itself refused or
+never checked leaves the flag unset (issue #681): those lines are unchecked for want of the list,
+not of a machine, the refused line already records `PendingPermissions` (or the sign-in's own
+verdict), and "re-test once your machines are set up" would send an Owner who has machines to the
+wrong fix. A later re-test that reaches them clears it. `false` is therefore both "the machine checks
 passed" and "no check has ever run", deliberately: the flag exists to ask an Owner to re-test once
 their machines are set up, so the additive migration backfills nothing and the connection the
 human-run `migrate-nayax-connection` command stored — which has been authenticating in production —
@@ -3134,10 +3138,16 @@ never tested and is checked on first real use, because a connection test must no
 operator's Nayax data.
 
 **Step 5 exists because the fix is usually Nayax's to make.** When any line failed, the wizard
-composes a ready-to-copy request naming the operator id and every refused area with its cause, links
-the Nayax support portal (`https://nayax.service-now.com/csm`) and offers
-`integration-support@nayax.com` as the secondary contact. The request names no token. Step 5 is
-skipped entirely when the server reported nothing failed.
+composes a ready-to-copy request naming the operator id that was tested — captured with the result,
+not read from the field an Owner may have edited since — and every area refused for lack of a
+permission (`PermissionNotGranted`) with its cause, links the Nayax support portal
+(`https://nayax.service-now.com/csm`) and offers `integration-support@nayax.com` as the secondary
+contact. The request names no token. A line refused for any other cause is not a permission Nayax
+could grant, so it is left out of the request and gets its own advice instead (issue #681): an
+invalid or expired token asks for a new token, an operator id mismatch asks the Owner to check the
+operator id, an unavailable Nayax asks for another try, and an answer nobody interpreted asks for a
+re-test before anyone is asked about it. Step 5 is skipped entirely when the server reported nothing
+failed.
 
 **Save and re-test say what the server said.** Save is not offered for a run whose sign-in did not
 pass, or whose draft has expired — the server refuses both, and this only avoids spending a request
@@ -3743,6 +3753,25 @@ before nor the one a stale capability set rendered belongs to the business now i
 made that one path **every** transition's path, and made reaching the dashboard actually replace
 what is on it; see
 [Refreshing the visible business data on a support-context transition](#refreshing-the-visible-business-data-on-a-support-context-transition-issue-670).
+
+**Signing out, switching account, and an end nobody asked for (issue #681).** A session belongs to
+the administrator it was granted to, so the shell's sign-out asks
+`SupportSessionService.endBeforeSignOut()` first: it ends the caller's session on the server, forgets
+it in this tab and broadcasts the end, and only then does `AppComponent.logout()` start MSAL's
+sign-out redirect. It always completes and never errors, so a failed end cannot block a sign-out; a
+failed end still forgets the session here - the id must not outlive the identity it was granted
+to - but is not broadcast, because a sibling dropping a session the server still holds would be told
+something false. It navigates nowhere, because the redirect replaces the page. A **change of
+signed-in identity** in a tab that knows of a session forgets it the same way, without an end call
+and without a broadcast: the identity signed in now can neither end another administrator's session
+(the end is answered for the caller's own session only) nor send a message any tab still holding it
+would accept, and the shell discards the previous identity's business context itself (issue #604).
+An end the administrator did not make - the session's own expiry, or the server refusing a call
+with `support_session_ended` - shows one `ToastService.warning` notice
+(`SUPPORT_SESSION_ENDED_MESSAGE`) on top of the transition, so the return to their own dashboard is
+explained; the banner's own **End session**, and an end received from another tab, show none. The
+banner itself uses the design system's danger colours (`md-danger` at 15% behind `md-danger-text`),
+because issue #513 asks for a prominent red banner and it had shipped amber.
 
 **What proves it.** `support-session.service.spec.ts` covers starting a session, ending it, the
 `support_session_ended` signal (idempotent, and inert for a tab that was never active), the id never
@@ -5012,6 +5041,8 @@ this slice is the one caller `frontend/inventory-app/src` has for it.
 | File | Responsibility |
 | --- | --- |
 | `access/invite-acceptance.component.ts` | `InviteAcceptanceComponent`: reads the token, strips it from the address bar, decides Accept-button vs. redirect from the cached account state, calls the redemption endpoint, and refreshes both caches before landing on the dashboard |
+| `access/invite-address-bar.guard.ts` | `inviteTokenAddressBarGuard` (issue #681): the route's `canMatch` guard, which strips the token from the address bar before `MsalGuard` runs; also names `INVITE_ADDRESS_BAR_ROUTE`, the tokenless `/invite` |
+| `access/invite-link-reopen.component.ts` | `InviteLinkReopenComponent` (issue #681): the tokenless `/invite` page, telling a person who reloads or returns to it to open their invite link again |
 | `access/invite-redemption.service.ts` | `InviteRedemptionService`: the one `POST /api/invites/redeem` call, with the token in the request body and nothing else |
 | `access/account-state.guard.ts` | Gained `REDEEMABLE_ACCOUNT_STATES` and `nonRedeemableAccountStateDestination`, alongside `ACCOUNT_STATE_ROUTE` |
 
@@ -5020,7 +5051,17 @@ this slice is the one caller `frontend/inventory-app/src` has for it.
 matched and holds it only in a component field; its very next statement, before any analytics,
 logging or navigation, is `history.replaceState(history.state, '', '/invite')`. That rewrites the
 browser's own history entry — independently of what Angular's router still thinks the current URL
-is — so the token is gone from the address bar an instant after the page loads. Application code
+is. A link opened from the address bar has already lost its token one step earlier: the route's
+`canMatch` guard, `inviteTokenAddressBarGuard` (issue #681), makes the same `replaceState` call
+during route recognition, before any `canActivate` guard — `MsalGuard` included — is even called.
+Without it a signed-out visitor never reached `ngOnInit`: `MsalGuard` sent them to sign in with
+`/invite/<token>` still in the address bar, and that history entry, which Back returns to, kept
+the token. The guard stores nothing and decides nothing (it always matches); it rewrites the
+address bar only when the browser actually shows an invite link, so an in-app navigation from the
+welcome page's invite field leaves that page's own history entry alone, and the token stays where
+the router already had it — the URL tree of the navigation in progress, which `replaceState` does
+not touch. So no session history entry is left holding the token on either path, signed in or
+signed out: it is in the address bar only while the application itself starts. Application code
 never writes it to `localStorage`, `sessionStorage`, a cookie, a log line or an error report, and
 `InviteRedemptionService` sends it only in this one request's JSON body, never in a URL path or
 query string, so no HTTP or router logging of a request or route *URL* can ever carry it either —
@@ -5028,10 +5069,11 @@ there is no app-level logging of either kind in this build today, and this is wh
 be one carrying it later.
 
 **MSAL's own transient copy is the one accepted residual.** A signed-out visitor reaches this
-component at all only after `MsalGuard` (still the route's only guard — see [Account-state
+component at all only after `MsalGuard` (still the route's only `canActivate` guard — see [Account-state
 routing](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529))
-has sent them through the login redirect, with this exact URL — token included — as its own
-default redirect start page, and brought them back to it once the round trip completes. Nothing in
+has sent them through the login redirect, with this exact URL — token included, taken from the
+router's state rather than the already-rewritten address bar — as its own default redirect start
+page, and brought them back to it once the round trip completes. Nothing in
 this slice starts, configures or reads that bookkeeping: it is MSAL's existing
 `BrowserCacheLocation.LocalStorage` (`auth-config.ts`), already relied on by every other bypass
 route on this guard, holding the address for exactly the length of one redirect and clearing it
@@ -5039,6 +5081,20 @@ once it lands. The token is single-use, expires after seven days, and is stored 
 the server (`MemberInviteToken.Hash`, [Invite redemption](#invite-redemption-issue-532)) — so this
 one transient, third-party copy is the full extent of what survives a sign-in round trip, and it is
 accepted rather than worked around.
+
+**The tokenless `/invite` explains itself (issue #681).** Because the token is held only in memory,
+the `/invite` address left behind cannot bring it back: a reload, a Back into that entry, or a
+sign-in redirect started from it (`MsalInterceptor` uses the current address as its start page)
+arrives with no token. `/invite` is therefore a route of its own, `InviteLinkReopenComponent`, which
+says to open the invite link again and offers the home page, instead of falling through to the
+`'**'` wildcard and landing on the dashboard or the welcome page with no explanation. It carries no
+guard, like the public `auth` route, because it makes no request at all, and
+`memberForbiddenNoticeInterceptor` treats it as one of its bypass routes, like `/invite/:token`.
+`invite-address-bar.guard.spec.ts` drives a signed-out visitor through the application's real
+route table, with `MsalGuard` replaced by a stand-in that starts the login redirect from the
+router state's URL: the address bar already reads `/invite` when the redirect starts, the redirect
+start page still carries the token, and the invite page reached from it after sign-in redeems that
+token. `invite-link-reopen.component.spec.ts` pins the tokenless route and its text.
 
 **Eligibility is read from the cached account state, never assumed.**
 `REDEEMABLE_ACCOUNT_STATES` — `NoMembership`, `MembershipRevoked` and `ApplicationRejected` —

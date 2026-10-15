@@ -68,18 +68,28 @@ public sealed record NayaxConnectionCheckReport(
     public bool NothingFailed => Lines.All(line => line.Status != NayaxConnectionCheckStatus.Failed);
 
     /// <summary>
-    /// Whether this run left the machine-scoped checks unverified (issue #537) - the business had no
-    /// machine in Nayax to run them against, or the machine list itself could not be read.
+    /// Whether this run left the machine-scoped checks unverified because the business had no
+    /// machine in Nayax to run them against (issue #537): the machine list was read, and a
+    /// machine-scoped line was still never checked.
     ///
     /// It is what a saved or re-tested connection records so the wizard can ask for a re-test once
     /// machines exist, and it is deliberately not a failure: the credentials did nothing wrong, and
     /// <see cref="NothingFailed"/> stays <see langword="true"/>. Which checks need a machine is the
     /// Domain's answer, not a list repeated here.
+    ///
+    /// A machine list that was itself refused or never checked does not set it (issue #681): those
+    /// machine lines are unchecked for want of the list, not of a machine, and "set up your machines"
+    /// would send an Owner who has them to the wrong fix. That run's own failed line is what the
+    /// stored status and the checklist report instead.
     /// </summary>
     [JsonIgnore]
-    public bool MachineChecksPending => Lines.Any(line =>
-        NayaxConnectionCheckPolicy.RequiresMachine(line.Check)
-        && line.Status == NayaxConnectionCheckStatus.NotChecked);
+    public bool MachineChecksPending =>
+        Lines.Any(line =>
+            line.Check == NayaxConnectionCheck.Machines
+            && line.Status == NayaxConnectionCheckStatus.Passed)
+        && Lines.Any(line =>
+            NayaxConnectionCheckPolicy.RequiresMachine(line.Check)
+            && line.Status == NayaxConnectionCheckStatus.NotChecked);
 
     /// <summary>
     /// What this run concluded about the credentials it tested (issue #537), through the one Domain

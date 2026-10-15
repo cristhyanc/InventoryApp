@@ -161,6 +161,11 @@ describe('isAccountStateBypassRoute', () => {
     expect(isAccountStateBypassRoute('/invite/abc123?x=1')).toBe(true);
   });
 
+  it('matches the tokenless /invite page the invite route leaves behind (issue #681)', () => {
+    expect(isAccountStateBypassRoute('/invite')).toBe(true);
+    expect(isAccountStateBypassRoute('/invitex')).toBe(false);
+  });
+
   it('does not match an ordinary business route', () => {
     expect(isAccountStateBypassRoute('/')).toBe(false);
     expect(isAccountStateBypassRoute('/reports/bookkeeping')).toBe(false);

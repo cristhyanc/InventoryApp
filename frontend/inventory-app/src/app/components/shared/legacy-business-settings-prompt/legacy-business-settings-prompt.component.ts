@@ -3,7 +3,7 @@ import { Component, OnDestroy } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
-import { BusinessSettingsService, isLegacyBusinessProfile } from '../../../services/business-settings.service';
+import { BusinessSettings, BusinessSettingsService, isLegacyBusinessProfile } from '../../../services/business-settings.service';
 
 /**
  * The dismissible "complete your business profile" prompt (issue #549), composed into the
@@ -20,6 +20,11 @@ import { BusinessSettingsService, isLegacyBusinessProfile } from '../../../servi
  * has not answered yet - or answers `false` - fetches nothing and shows nothing. A page an Owner
  * already composes this into (the Business Settings page itself) gets no second, redundant
  * network effect from the capability settling late, because the fetch only ever starts once.
+ *
+ * **A successful save re-evaluates it** (issue #681): alongside that one read it follows
+ * `BusinessSettingsService.saved$`, so once the Owner records the missing fields on the Business
+ * Settings page the prompt above the form disappears with the save rather than on the next
+ * navigation - judged from the saved settings themselves, with no second read.
  *
  * **"Dismissible" is this component instance's own session**, not a stored preference: dismissing
  * it on the Dashboard does not hide it on the Business Settings page, and reloading either page
@@ -91,10 +96,16 @@ export class LegacyBusinessSettingsPromptComponent implements OnDestroy {
     }
 
     this.settingsSubscription = this.businessSettings.get().subscribe({
-      next: (settings) => (this.visible = !this.dismissed && isLegacyBusinessProfile(settings)),
+      next: (settings) => this.evaluate(settings),
       // Not known is never "incomplete": guessing it from a failed read risks telling an Owner
       // whose profile is actually complete to go finish something.
       error: () => (this.visible = false)
     });
+    // Torn down together with the read above, so losing the capability stops both.
+    this.settingsSubscription.add(this.businessSettings.saved$.subscribe((settings) => this.evaluate(settings)));
+  }
+
+  private evaluate(settings: BusinessSettings): void {
+    this.visible = !this.dismissed && isLegacyBusinessProfile(settings);
   }
 }

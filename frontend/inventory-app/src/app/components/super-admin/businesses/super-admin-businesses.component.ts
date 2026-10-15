@@ -227,7 +227,18 @@ export class SuperAdminBusinessesComponent implements OnInit, OnDestroy {
 
   private onActionFailed(err: unknown, fallback: string): void {
     this.toast.error(extractErrorMessage(err, fallback));
+    // A 409 or 404 means the business changed or disappeared elsewhere (another tab, another
+    // Super Admin), so the row and the pending badge this page shows are stale: re-read both.
+    if (isStaleStateStatus(err)) {
+      this.businessesService.notifyChanged();
+      this.load();
+    }
   }
+}
+
+function isStaleStateStatus(err: unknown): boolean {
+  const status = (err as { status?: unknown } | undefined)?.status;
+  return status === 409 || status === 404;
 }
 
 function extractErrorMessage(err: unknown, fallback: string): string {
