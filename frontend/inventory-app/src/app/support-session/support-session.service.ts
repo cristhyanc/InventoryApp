@@ -450,7 +450,7 @@ export class SupportSessionService implements OnDestroy {
     }
 
     const remainingMs = Date.parse(expiresAtUtc) - Date.now();
-    if (!(remainingMs > 0)) {
+    if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
       return;
     }
 
