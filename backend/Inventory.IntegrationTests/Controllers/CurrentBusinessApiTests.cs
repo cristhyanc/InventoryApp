@@ -187,6 +187,8 @@ public sealed class CurrentBusinessApiTests : IClassFixture<CurrentBusinessApiTe
                     BusinessId = SydneyBusinessId,
                     DirectoryTenantId = DirectoryTenantId,
                     ObjectId = SydneyObjectId,
+                    Role = BusinessRole.Owner,
+                    IsActive = true,
                     CreatedAtUtc = CreatedAt,
                 },
                 new BusinessMembership
@@ -194,6 +196,8 @@ public sealed class CurrentBusinessApiTests : IClassFixture<CurrentBusinessApiTe
                     BusinessId = NewYorkBusinessId,
                     DirectoryTenantId = DirectoryTenantId,
                     ObjectId = NewYorkObjectId,
+                    Role = BusinessRole.Owner,
+                    IsActive = true,
                     CreatedAtUtc = CreatedAt,
                 });
             await db.SaveChangesAsync();

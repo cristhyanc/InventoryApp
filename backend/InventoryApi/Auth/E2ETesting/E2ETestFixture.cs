@@ -168,6 +168,11 @@ public static class E2ETestFixture
                 BusinessId = business.Id,
                 DirectoryTenantId = owner.DirectoryTenantId,
                 ObjectId = owner.ObjectId,
+                // The synthetic actor each fixture business is named for is its Owner, which is
+                // what the E2E suites sign in as. Stated rather than inherited from the entity
+                // (issue #679 removed that default): this fixture used to be the one creation path
+                // that said nothing and got the most privileged role anyway.
+                Role = BusinessRole.Owner,
                 IsActive = true,
                 CreatedAtUtc = SeededAtUtc,
                 StatusChangedAtUtc = SeededAtUtc,

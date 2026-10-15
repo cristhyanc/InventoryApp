@@ -708,6 +708,7 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
                 DirectoryTenantId = DirectoryTenantId,
                 ObjectId = objectId,
                 Role = role,
+                IsActive = true,
                 CreatedAtUtc = CreatedAt,
             };
 

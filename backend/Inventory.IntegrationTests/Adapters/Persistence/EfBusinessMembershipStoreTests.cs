@@ -121,34 +121,12 @@ public class EfBusinessMembershipStoreTests
         }
     }
 
-    /// <summary>
-    /// A membership created without stating a role - the shape the existing bootstrap and the
-    /// migration both produce - is an Owner, so nobody's access changes with this slice.
-    /// </summary>
-    [Fact]
-    public async Task A_membership_created_without_a_stated_role_is_an_Owner()
-    {
-        var (connection, options) = await CreateSqliteAsync();
-        await using (connection)
-        {
-            await using var db = TestAppDbContext.Unrestricted(options);
-            var business = await AddBusinessAsync(db, "Vending Co");
-
-            db.BusinessMemberships.Add(new BusinessMembership
-            {
-                BusinessId = business.Id,
-                DirectoryTenantId = Tid,
-                ObjectId = Oid,
-                CreatedAtUtc = DateTime.UtcNow,
-            });
-            await db.SaveChangesAsync();
-
-            var memberships = await new EfBusinessMembershipStore(db)
-                .FindMembershipsAsync(Actor(), CancellationToken.None);
-
-            Assert.Equal(BusinessRole.Owner, Assert.Single(memberships).Role);
-        }
-    }
+    // A membership created without stating a role used to be an Owner, and this is where that was
+    // asserted. Issue #679 removed the rule rather than the assertion: the entity's Role is
+    // `required`, so the creation this test performed no longer compiles, and a row that reaches
+    // the column without one gets the undeclared 0 the theory below already covers. What replaced
+    // it lives in BusinessMembershipRolePersistenceTests and
+    // BusinessMembershipRoleDatabaseDefaultMigrationTests.
 
     /// <summary>
     /// A stored role this code does not declare - written here by raw SQL, which is the only way
