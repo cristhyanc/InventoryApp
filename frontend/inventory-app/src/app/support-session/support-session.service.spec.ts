@@ -667,6 +667,95 @@ describe('SupportSessionService (issue #553)', () => {
   });
 
   /**
+   * That the effective business itself changed, once per transition (issue #671). The shell reads
+   * the business and publishes its time zone from this, which the settling window above cannot say:
+   * two overlapping transitions share one window and are two different businesses.
+   */
+  describe('reporting the effective business change (issue #671)', () => {
+    const SHARED_SESSION = {
+      type: 'started',
+      accountKey: ACCOUNT_KEY,
+      sessionId: 'session-from-the-other-tab',
+      businessName: 'Snack Co',
+      expiresAtUtc: '2026-02-01T01:00:00Z'
+    };
+
+    /** Every effective change, with whatever has to be in place first and then what does it. */
+    const effectiveChanges: readonly [
+      string,
+      (harness: Harness) => Promise<void>,
+      (harness: Harness) => Promise<void> | void
+    ][] = [
+      ['a session started here', () => Promise.resolve(), ({ service }) => firstValueFrom(service.start(9, 'A reason'))],
+      [
+        'the session ended here',
+        ({ service }) => firstValueFrom(service.start(9, 'A reason')).then(() => undefined),
+        ({ service }) => firstValueFrom(service.end())
+      ],
+      [
+        'a call in the current session refused as ended',
+        ({ service }) => firstValueFrom(service.start(9, 'A reason')).then(() => undefined),
+        ({ service }) => service.handleSessionEndedSignal()
+      ],
+      ['another tab sharing its session', () => Promise.resolve(), () => otherTab().post(SHARED_SESSION)],
+      [
+        'another tab ending it',
+        ({ service }) => firstValueFrom(service.start(9, 'A reason')).then(() => undefined),
+        () => otherTab().post({ type: 'ended', accountKey: ACCOUNT_KEY })
+      ]
+    ];
+
+    it.each(effectiveChanges)('reports %s', async (_case, arrange, transition) => {
+      const subject = harness();
+      subject.states();
+      await arrange(subject);
+      let changes = 0;
+      subject.service.contextChanged$.subscribe(() => changes++);
+
+      await transition(subject);
+
+      expect(changes).toBe(1);
+    });
+
+    it('reports nothing while no effective context has changed', () => {
+      const { service } = harness();
+      let changes = 0;
+      service.contextChanged$.subscribe(() => changes++);
+
+      // Neither an idle tab nor a message it must ignore is a business-context change.
+      otherTab().post({ type: 'started', accountKey: 'somebody-else', sessionId: 'x', businessName: 'Snack Co' });
+      service.handleSessionEndedSignal();
+
+      expect(changes).toBe(0);
+    });
+
+    it('reports each of two overlapping transitions, which share one settling window', async () => {
+      const navigate = jest.fn(() => new Promise<boolean>(() => undefined));
+      const { service } = harness({ navigate });
+      const changing: boolean[] = [];
+      let changes = 0;
+      service.contextChanging$.subscribe((value) => changing.push(value));
+      service.contextChanged$.subscribe(() => changes++);
+
+      await firstValueFrom(service.start(9, 'A reason'));
+      service.handleSessionEndedSignal();
+
+      expect(changing).toEqual([false, true]);
+      expect(changes).toBe(2);
+    });
+
+    it('reports the change after the cached business is dropped, so the read that follows is the new one', async () => {
+      const { service, businessReset } = harness();
+      const resetsWhenReported: number[] = [];
+      service.contextChanged$.subscribe(() => resetsWhenReported.push(businessReset.mock.calls.length));
+
+      await firstValueFrom(service.start(9, 'A reason'));
+
+      expect(resetsWhenReported).toEqual([1]);
+    });
+  });
+
+  /**
    * A session's own expiry, which every tab that knows the session reaches on its own (issue #670).
    * Before this, the expiry only became visible when the server refused the next call, so a tab
    * nobody touched kept a finished session's banner and its business's figures on screen.
