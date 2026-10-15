@@ -3616,7 +3616,8 @@ inside the session is issue #554's separate follow-up and is not part of this sl
 
 **The session id lives in this service's memory and nowhere else.** `SupportSessionService` is a
 root singleton holding a private `sessionId: string | null` field, read back only by
-`currentSessionId()` - `supportSessionInterceptor`'s own accessor, documented below - and never
+`currentSessionId()` and by the request-context capture issue #669 added - both of them
+`supportSessionInterceptor`'s own accessors, documented below - and never
 written to `localStorage`, `sessionStorage`, a query parameter or any other part of the URL. A page
 reload therefore forgets it, which is what the next two paragraphs exist to handle; this is the
 same trade-off issue #550 made in choosing to answer the start call with the id and no other read
@@ -3672,22 +3673,21 @@ session control surface itself, never a static asset - it attaches `X-Support-Se
 <currentSessionId()>` while a session is active, and nothing while one is not. On the way back it
 does two things with one rule:
 
-1. **Reacts to `support_session_ended` from any call.** A `403` carrying that code - the one
-   `SupportSessionAuthorizationResultHandler` and `SupportSessionExceptionHandler` both use - calls
+1. **Reacts to `support_session_ended` from any call made in the context that is still current.** A
+   `403` carrying that code - the one `SupportSessionAuthorizationResultHandler` and
+   `SupportSessionExceptionHandler` both use - calls
    `SupportSessionService.handleSessionEndedSignal()`, which clears the id, publishes the banner's
    inactive state, broadcasts the end to other tabs, and does the same three things start and end
    both do: forgets the cached business (`BusinessService.reset()`), re-reads the capabilities
    (`AccessService.refresh()`) and navigates to the dashboard. It is idempotent, so a second
    signal - or one for a tab that was never active - does nothing further.
-2. **Discards a response sent under an id that is no longer current.** Once the response (or
-   refusal) has been fully processed - after the reaction above has had its chance to clear the id -
-   the interceptor compares the id this request carried against `currentSessionId()` again. A
-   mismatch means the session moved on while this request was in flight, for any reason, and the
-   caller is left with neither a value nor an error: exactly `EMPTY` would. A request made with no
-   session active is untouched by this rule, because there was never an id for it to become stale
-   against. This is one rule rather than two: it is what makes "this very response answered
-   `support_session_ended`" and "something else ended or replaced the session first" the same
-   check, read after the first reaction has run.
+2. **Discards a response sent in a business context that is no longer current.** Issue #553
+   compared only the id the request carried, and ran the reaction above first;
+   [Discarding answers from a superseded business context](#discarding-answers-from-a-superseded-business-context-issue-669)
+   below is the current rule: every request captures a context generation as well as the id, the
+   comparison happens **before** anything reacts to the answer, and a superseded answer leaves the
+   caller with neither a value nor an error - exactly `EMPTY` would. A request made with no session
+   active is covered by it too, which the id comparison alone could not be.
 
 **Start, end and the `support_session_ended` signal all do the same three things**, and do them from
 one place (`SupportSessionService`) rather than three: forget the cached business the shell reads
@@ -3703,7 +3703,9 @@ cases: a session shared to another open tab and an end applied in every other op
 `support-session.interceptor.spec.ts` covers the header being attached and withheld, every one of the
 control surface, the diagnostics probe and (since issue #673) the Super Admin businesses surface
 never receiving it, the `support_session_ended` reaction, and a stale response - successful or
-refused - being discarded while an unchanged id is left alone. `member-endpoint.spec.ts` covers the
+refused - being discarded while an unchanged context is left alone (issue #669 added the superseded
+-generation cases there, and `support-session-request-context.spec.ts` for the composed rule).
+`member-endpoint.spec.ts` covers the
 `platform-admin` classification of the support-session control surface and of the Super Admin
 businesses surface. `view-as-business-dialog.component.spec.ts` and
 `support-session-banner.component.spec.ts` are the two components' own behaviour, and
@@ -4132,6 +4134,86 @@ the explanation. `support-session-banner.component.spec.ts` covers the banner sh
 with their own membership and for one with none (whose business is never looked up), **End session**
 being reachable from the main region, the page rendering again once the session is over, and an
 effective support view still rendering its page.
+
+### Discarding answers from a superseded business context (issue #669)
+
+Issue #553 decided whether an answer still belonged to the context that asked for it by comparing
+the session id the request presented against `currentSessionId()`. That left two holes, both of them
+about an answer arriving into a context it was never asked in:
+
+- **A request sent with no id had nothing to become stale against.** Every ordinary-context request
+  is one, and so is every request of a tab that holds no usable id
+  ([Failing closed in a tab that cannot present the session](#failing-closed-in-a-tab-that-cannot-present-the-session-issue-668)).
+  An administrator who issued a dashboard read, then started a support session for another business
+  while it was in flight, had their **own** business's figures delivered into the support view -
+  nothing crossed a tenant boundary on the server, which resolved exactly the membership it should
+  have, but the page then showed one business's data under another business's banner. The reverse -
+  an ordinary-context answer arriving after a session was started **and ended** again, where the id
+  is `null` at both ends - was invisible to the comparison for the same reason.
+- **The `support_session_ended` reaction ran before the comparison.** A delayed refusal of session A
+  therefore called `handleSessionEndedSignal()` whatever was current when it landed, so one
+  session's expiry ended the session started after it, dropped the cached business and navigated the
+  administrator away from a session that was perfectly alive.
+
+**Every business-scoped request captures a context, and the context has a generation.**
+`SupportSessionService.captureRequestContext()` returns `{ sessionId, generation }` - the id the
+request will present (`null` in ordinary context) and a counter - and `isCurrentContext(context)`
+answers whether both are still current. `supportSessionInterceptor` captures one for every request
+it lets through (so not for the `platform-admin` control surfaces or a `non-api` asset, which never
+carried the header either) and asks the question again when the answer arrives. The generation is a
+counter rather than a comparison of states on purpose: two contexts that *look* alike - ordinary
+context before and after a whole session, the same business viewed under a replacement session - are
+still two contexts, and an answer from the first belongs to neither the page nor the session the
+second is in.
+
+**The service invalidates the generation on every effective context change**, from the one place
+that knows what a request would resolve:
+
+| What changed | Where |
+| --- | --- |
+| A session started here | `start()`, as the id is stored |
+| A session ended here, in another tab, by expiry, or on a `support_session_ended` refusal | `applyEnded()`, which all four reach |
+| Another tab shared a session over `BroadcastChannel` | the `started` message handler |
+| This tab learned from `GET .../active` that it cannot present the running session | the boot check, with the `unresolved` publish - the id does not change there, and the context does, because this tab renders no business page from that moment |
+| The signed-in identity changed | `signedInAccountMayHaveChanged`/`activeAccountKey` (`access/signed-in-account.ts`), the same pair `AccessService` and `AccountStateService` observe |
+
+An identity notification that resolves to the same account key changes nothing - one sign-in reports
+itself twice, as an MSAL account event and as `inProgress$` settling - and neither does *learning* an
+identity where there was none: a request issued before anybody is signed in waits for MSAL's token
+before it is even sent, so invalidating there would discard the first answer of every page loaded
+straight into a sign-in redirect. Losing an identity (a sign-out) and swapping one for another both
+do invalidate. The invalidation also happens **before** the new context issues anything of its own,
+so the capability re-read that start, end and expiry all trigger belongs to the new context instead
+of being discarded as an answer from the one it replaced.
+
+**The comparison happens before anything reacts to the answer, and the interceptor is innermost.**
+`supportSessionInterceptor` is installed last in `app.config.ts`, so it is the first to see a raw
+response on the way back: a superseded answer reaches neither the page, nor the session state, nor
+the capability and account-state caches (`accessForbiddenInterceptor`,
+`accountStateForbiddenInterceptor`), nor the global `403` notice
+(`memberForbiddenNoticeInterceptor`), nor the support-session message interceptor beside them. The
+one reaction this interceptor performs itself is gated on the same comparison, which is what makes a
+delayed `support_session_ended` from session A unable to end session B. A refusal of the context that
+**is** still current does end it, and fails closed exactly as before: the session is cleared, the
+business dropped, the capabilities re-read, the dashboard navigated to - and the caller is told
+nothing either way, because the context it asked in is over. `loadingInterceptor`'s `finalize` still
+ends its spinner, because completion - which a discarded answer still is - is enough.
+
+Nothing here retries a request, caches anything across businesses, or changes what the server
+enforces: a superseded answer is dropped, never reissued, and the API's own refusal codes and the
+memory-only session id are untouched.
+
+**What proves it.** `support-session-request-context.spec.ts` composes the production chain over the
+**real** `SupportSessionService` with `HttpTestingController` holding each response until the test
+chooses, and covers the five transitions the issue names - ordinary-to-support, support-to-ordinary,
+session A to session B, a session ended and restarted for the same business (and the same sequence
+for a request that began with no id at all), and an identity switch, with and without a session - plus
+the unresolved-probe case, a superseded failure reaching neither the global notice nor either member
+cache, a superseded `support_session_ended` not ending the current session, the current session's own
+refusal still ending it, and the unchanged-context answer still being delivered.
+`support-session.interceptor.spec.ts` adds the interceptor's own superseded-generation and
+reordered-reaction cases, and `support-session.service.spec.ts` covers each invalidation trigger
+above, including the two identity notifications that are deliberately not changes.
 
 ### Member access: capability-built navigation, guards and hidden actions (issue #528)
 

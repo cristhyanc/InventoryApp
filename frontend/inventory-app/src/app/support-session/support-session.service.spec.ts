@@ -1,7 +1,9 @@
 import { HttpClient } from '@angular/common/http';
 import { Router } from '@angular/router';
+import { EventType, InteractionStatus } from '@azure/msal-browser';
 import { Subject, firstValueFrom, of, throwError } from 'rxjs';
 import { AccessService, MemberAccessState } from '../access/access.service';
+import { SignedInIdentityDoubles, signedInIdentity } from '../access/identity-cache.spec-helpers';
 import { ConfigService } from '../services/config.service';
 import { BusinessService } from '../services/business.service';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
@@ -86,6 +88,7 @@ interface Harness {
   accessRefresh: jest.Mock;
   navigate: jest.Mock;
   isGranted: jest.Mock;
+  identity: SignedInIdentityDoubles;
   states(): SupportSessionState[];
 }
 
@@ -100,6 +103,7 @@ function harness(
     activeOnServer?: unknown;
     post?: jest.Mock;
     get?: jest.Mock;
+    signedIn?: string | null;
   } = {}
 ): Harness {
   const post = options.post ?? jest.fn(() => of(STARTED_RESPONSE));
@@ -108,6 +112,7 @@ function harness(
   const accessRefresh = jest.fn(() => of({ status: 'unread' } as MemberAccessState));
   const navigate = jest.fn();
   const isGranted = jest.fn(() => of(options.granted ?? true));
+  const identity = signedInIdentity({ signedIn: options.signedIn });
 
   const service = new SupportSessionService(
     { post, get } as unknown as HttpClient,
@@ -115,7 +120,9 @@ function harness(
     { reset: businessReset } as unknown as BusinessService,
     { refresh: accessRefresh } as unknown as AccessService,
     { isGranted } as unknown as PlatformDiagnosticsAccessService,
-    { navigate } as unknown as Router
+    { navigate } as unknown as Router,
+    identity.msal,
+    identity.broadcast
   );
 
   return {
@@ -126,6 +133,7 @@ function harness(
     accessRefresh,
     navigate,
     isGranted,
+    identity,
     states: () => {
       const observed: SupportSessionState[] = [];
       service.state$.subscribe((state) => observed.push(state));
@@ -462,6 +470,156 @@ describe('SupportSessionService (issue #553)', () => {
 
       expect(observedB[observedB.length - 1]).toEqual({ kind: 'inactive' });
       expect(tabB.service.currentSessionId()).toBeNull();
+    });
+  });
+
+  /**
+   * The request context `supportSessionInterceptor` captures per request (issue #669). What makes it
+   * more than `currentSessionId()` is the generation: two contexts whose id is the same - ordinary
+   * context before and after a whole session, the same business under a replacement session - are
+   * still two contexts, and an answer from the first belongs to neither.
+   */
+  describe('the request context generation (issue #669)', () => {
+    it('reports the current id, and stays current while nothing changes', async () => {
+      const { service } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+
+      const captured = service.captureRequestContext();
+
+      expect(captured.sessionId).toBe('session-abc');
+      expect(service.isCurrentContext(captured)).toBe(true);
+      expect(service.isCurrentContext(service.captureRequestContext())).toBe(true);
+    });
+
+    it('supersedes an ordinary context when a session starts', async () => {
+      const { service } = harness();
+      const captured = service.captureRequestContext();
+
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+
+      expect(captured.sessionId).toBeNull();
+      expect(service.isCurrentContext(captured)).toBe(false);
+    });
+
+    it('supersedes a support context when the session ends', async () => {
+      const { service } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      const captured = service.captureRequestContext();
+
+      await firstValueFrom(service.end());
+
+      expect(service.isCurrentContext(captured)).toBe(false);
+    });
+
+    it('supersedes an ordinary context a whole session has been started and ended since', async () => {
+      const { service } = harness();
+      const captured = service.captureRequestContext();
+
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      await firstValueFrom(service.end());
+
+      // The id is `null` at both ends, which is why the generation has to be the thing compared.
+      expect(service.currentSessionId()).toBe(captured.sessionId);
+      expect(service.isCurrentContext(captured)).toBe(false);
+    });
+
+    it('supersedes the context on the `support_session_ended` signal', async () => {
+      const { service } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      const captured = service.captureRequestContext();
+
+      service.handleSessionEndedSignal();
+
+      expect(service.isCurrentContext(captured)).toBe(false);
+    });
+
+    it('supersedes the context when another tab shares a session', async () => {
+      const tabA = harness();
+      const tabB = harness({ granted: false });
+      const captured = tabB.service.captureRequestContext();
+
+      await firstValueFrom(tabA.service.start(9, 'Investigating a reported bug'));
+
+      expect(tabB.service.isCurrentContext(captured)).toBe(false);
+    });
+
+    it('supersedes the context when another tab ends the session', async () => {
+      const tabA = harness();
+      const tabB = harness({ granted: false });
+      await firstValueFrom(tabA.service.start(9, 'Investigating a reported bug'));
+      const captured = tabB.service.captureRequestContext();
+
+      await firstValueFrom(tabA.service.end());
+
+      expect(tabB.service.isCurrentContext(captured)).toBe(false);
+    });
+
+    /** A tab that learns it cannot present the session renders no business page (issue #668). */
+    it('supersedes the context when the boot probe reports an unresolved session', () => {
+      const answer = new Subject<unknown>();
+      const { service, states } = harness({ get: jest.fn(() => answer) });
+      states();
+      const captured = service.captureRequestContext();
+
+      answer.next(ACTIVE_ON_SERVER);
+
+      expect(service.isCurrentContext(captured)).toBe(false);
+    });
+
+    it('leaves the context alone when the probe reports no session at all', () => {
+      const answer = new Subject<unknown>();
+      const { service, states } = harness({ get: jest.fn(() => answer) });
+      states();
+      const captured = service.captureRequestContext();
+
+      answer.next(null);
+
+      expect(service.isCurrentContext(captured)).toBe(true);
+    });
+
+    it('supersedes the context when the signed-in identity changes', () => {
+      const { service, identity } = harness();
+      const captured = service.captureRequestContext();
+
+      identity.switchAccount('member-2');
+
+      expect(service.isCurrentContext(captured)).toBe(false);
+    });
+
+    it('supersedes the context on a sign-out', () => {
+      const { service, identity } = harness();
+      const captured = service.captureRequestContext();
+
+      identity.signIn(null);
+      identity.raise(EventType.LOGOUT_SUCCESS);
+
+      expect(service.isCurrentContext(captured)).toBe(false);
+    });
+
+    /** One sign-in reports itself twice, and neither report is a change of identity. */
+    it('leaves the context alone when a notification reports the same identity', () => {
+      const { service, identity } = harness();
+      const captured = service.captureRequestContext();
+
+      identity.raise(EventType.LOGIN_SUCCESS);
+      identity.inProgress$.next(InteractionStatus.HandleRedirect);
+      identity.inProgress$.next(InteractionStatus.None);
+
+      expect(service.isCurrentContext(captured)).toBe(true);
+    });
+
+    /**
+     * Learning an identity where there was none is not a change: a request issued before anybody is
+     * signed in waits for MSAL's token before it is sent, so invalidating here would discard the
+     * first answer of every page loaded straight into a sign-in redirect.
+     */
+    it('leaves the context alone when the first identity signs in', () => {
+      const { service, identity } = harness({ signedIn: null });
+      const captured = service.captureRequestContext();
+
+      identity.switchAccount('member-1');
+
+      expect(service.isCurrentContext(captured)).toBe(true);
     });
   });
 });

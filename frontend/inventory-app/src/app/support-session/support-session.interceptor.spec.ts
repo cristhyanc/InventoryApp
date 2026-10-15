@@ -11,11 +11,24 @@ interface Harness {
   http: HttpClient;
   httpMock: HttpTestingController;
   handleSessionEndedSignal: jest.Mock;
+  /** Moves the effective support context to `id`, as starting, ending or replacing a session does. */
   setSessionId(id: string | null): void;
+  /**
+   * Moves the context on without changing the id, as a changed signed-in identity and a tab
+   * learning it cannot present the session both do (issue #669).
+   */
+  invalidateContext(): void;
 }
 
+/**
+ * The context double answers `captureRequestContext`/`isCurrentContext` exactly as
+ * `SupportSessionService` does - the id the request presented, plus a generation every effective
+ * context change moves on. The service's own invalidation triggers are its spec's subject;
+ * `support-session-request-context.spec.ts` is where the two meet over the real service.
+ */
 function configure(): Harness {
   let sessionId: string | null = null;
+  let generation = 0;
   const handleSessionEndedSignal = jest.fn();
 
   TestBed.configureTestingModule({
@@ -27,6 +40,9 @@ function configure(): Harness {
         provide: SupportSessionService,
         useValue: {
           currentSessionId: () => sessionId,
+          captureRequestContext: () => ({ sessionId, generation }),
+          isCurrentContext: (context: { sessionId: string | null; generation: number }) =>
+            context.generation === generation && context.sessionId === sessionId,
           handleSessionEndedSignal
         }
       }
@@ -39,17 +55,22 @@ function configure(): Harness {
     handleSessionEndedSignal,
     setSessionId: (id) => {
       sessionId = id;
+      generation++;
+    },
+    invalidateContext: () => {
+      generation++;
     }
   };
 }
 
 /**
- * `supportSessionInterceptor` (issue #553): attaches `X-Support-Session` while a session is
- * active, never to the control surface it is read from, and discards a response sent under an id
- * that is no longer current by the time it arrives - whether that is this very response answering
- * `support_session_ended`, or something else having moved the session on while it was in flight.
+ * `supportSessionInterceptor` (issues #553 and #669): attaches `X-Support-Session` while a session
+ * is active, never to the control surface it is read from, and discards a response sent in a
+ * business context that is no longer current by the time it arrives - whether that is this very
+ * response answering `support_session_ended`, or something else having moved the context on while
+ * it was in flight, including for a request that presented no id at all.
  */
-describe('supportSessionInterceptor (issue #553)', () => {
+describe('supportSessionInterceptor (issues #553 and #669)', () => {
   afterEach(() => {
     TestBed.inject(HttpTestingController).verify();
     TestBed.resetTestingModule();
@@ -199,6 +220,91 @@ describe('supportSessionInterceptor (issue #553)', () => {
       harness.httpMock.expectOne('/api/dashboard/summary').flush({ week: 1 });
 
       expect(next).toHaveBeenCalledWith({ week: 1 });
+    });
+  });
+
+  /**
+   * The captured generation (issue #669). The id alone cannot see a context change that leaves it
+   * as it was - an identity switch, a tab learning it holds no usable id - and cannot see anything
+   * at all about a request sent in ordinary context.
+   */
+  describe('a response from a superseded context generation', () => {
+    it('discards a successful response whose id never changed', () => {
+      const harness = configure();
+      harness.setSessionId('session-abc');
+      const next = jest.fn();
+      const complete = jest.fn();
+
+      harness.http.get('/api/dashboard/summary').subscribe({ next, complete });
+      harness.invalidateContext();
+      harness.httpMock.expectOne('/api/dashboard/summary').flush({ week: 1 });
+
+      expect(next).not.toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledTimes(1);
+    });
+
+    it('discards a response to a request that was sent with no session at all', () => {
+      const harness = configure();
+      const next = jest.fn();
+      const error = jest.fn();
+      const complete = jest.fn();
+
+      harness.http.get('/api/dashboard/summary').subscribe({ next, error, complete });
+      harness.invalidateContext();
+      harness.httpMock.expectOne('/api/dashboard/summary').flush({ week: 1 });
+
+      expect(next).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledTimes(1);
+    });
+
+    it('discards a failure of a request that was sent with no session at all', () => {
+      const harness = configure();
+      const error = jest.fn();
+      const complete = jest.fn();
+
+      harness.http.get('/api/dashboard/summary').subscribe({ error, complete });
+      harness.setSessionId('session-abc');
+      harness.httpMock.expectOne('/api/dashboard/summary').flush('refused', { status: 403, statusText: 'Forbidden' });
+
+      expect(error).not.toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * The reaction is gated on the same comparison, and gated **before** it runs: a delayed refusal
+   * of session A must not end session B, which is the defect issue #669 fixed by reordering the two.
+   */
+  describe('a delayed `support_session_ended` from a superseded session', () => {
+    it('never ends the session that is current now', () => {
+      const harness = configure();
+      harness.setSessionId('session-abc');
+      const error = jest.fn();
+      const complete = jest.fn();
+
+      harness.http.get('/api/dashboard/summary').subscribe({ error, complete });
+      harness.setSessionId('session-def');
+      harness.httpMock
+        .expectOne('/api/dashboard/summary')
+        .flush({ code: 'support_session_ended' }, { status: 403, statusText: 'Forbidden' });
+
+      expect(harness.handleSessionEndedSignal).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledTimes(1);
+    });
+
+    it('never ends the session when only the generation moved on', () => {
+      const harness = configure();
+      harness.setSessionId('session-abc');
+
+      harness.http.get('/api/dashboard/summary').subscribe({ error: () => undefined });
+      harness.invalidateContext();
+      harness.httpMock
+        .expectOne('/api/dashboard/summary')
+        .flush({ code: 'support_session_ended' }, { status: 403, statusText: 'Forbidden' });
+
+      expect(harness.handleSessionEndedSignal).not.toHaveBeenCalled();
     });
   });
 });
