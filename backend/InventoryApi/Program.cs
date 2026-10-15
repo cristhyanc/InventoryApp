@@ -393,6 +393,16 @@ await E2ETestFixture.SeedAsync(
     app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("InventoryApi.E2ETestFixture"),
     CancellationToken.None);
 
+// The support-session audit trail (issue #551, corrected by issue #672), ahead of everything else
+// so that one event records what a request from outside the business asked for and what it was
+// actually answered. Both halves of that need this position: a request the authorization middleware
+// refuses - a capability the session does not hold, or a write - is refused below here and would
+// otherwise never be recorded at all, and a request whose endpoint throws has its status decided by
+// the exception handler below here, so anything inside it can only see the 200 the response still
+// held. It emits nothing for every other request, and it cannot change a response: see
+// SupportSessionAuditMiddleware.
+app.UseMiddleware<SupportSessionAuditMiddleware>();
+
 // First in the pipeline so exceptions from controllers, services, and the Nayax
 // client are all caught.
 app.UseExceptionHandler();

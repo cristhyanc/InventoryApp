@@ -841,7 +841,7 @@ InventoryApp/
 │   │   ├── Adapters/PlatformAdmin/  The ILogger audit adapters for the Super Admin's business decisions and lifecycle actions (issues #544, #545) and for support sessions (issue #550), here for the same reason
 │   │   ├── Adapters/PlatformDiagnostics/  The ILogger audit adapter, here because the event carries the request correlation id (issue #336)
 │   │   ├── App_Data/jobs/           The App Service WebJob that triggers the backup command (issue #333)
-│   │   ├── Auth/                    Authentication, the capability policies (issue #525), BusinessScopeMiddleware, the E2E test host's scheme and fixture
+│   │   ├── Auth/                    Authentication, the capability policies (issue #525), BusinessScopeMiddleware, SupportSessionAuditMiddleware (issues #551, #672), the E2E test host's scheme and fixture
 │   │   ├── Bootstrap/               DatabaseSchemaStartup and the human-invoked commands (host-owned, calling Infrastructure services)
 │   │   ├── Controllers/
 │   │   ├── DTOs/                    API-owned transport contracts
@@ -1450,7 +1450,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Layering.** Claims parsing stays at the API boundary (`EntraActorIdentityAccessor`, the only implementation of the Application's `IAuthenticatedActorAccessor` port). `ICurrentBusinessProvider` is the Application-facing abstraction; `Inventory.Domain` and `Inventory.Application` never reference ASP.NET claims or principals. EF query filters and `SaveChanges` enforcement are persistence concerns and live with the `AppDbContext` adapter.
 
-**Per-request resolution.** `BusinessScopeMiddleware` runs after authentication and authorization and before the endpoint, resolves membership once, and publishes the answer into the request-scoped `BusinessScope`. The resolution is memoised in the request's own scope, so the capability policies that run earlier in the pipeline (see [Capability authorization](#capability-authorization-issue-525)) and this middleware read one membership lookup between them and cannot disagree about the caller's role. An authenticated caller with no usable membership gets `403` and never reaches an action; the response carries no detail about why, because telling an unrecognised caller whether a business exists is information they have not earned. `IBusinessScope` exists as a separate synchronous port because query filters and `SaveChanges` cannot await a membership lookup. Two endpoint markers, and only two, are eligible to proceed without a membership — the platform diagnostics surface of issue #336 and the account-state family of issue #523 — and a request that does carries the same *denied* scope, so neither reads business data; see [Platform diagnostics](#platform-diagnostics-issue-336) and [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523).
+**Per-request resolution.** `BusinessScopeMiddleware` runs after authentication and authorization and before the endpoint, resolves membership once, and publishes the answer into the request-scoped `BusinessScope`. The resolution is memoised in the request's own scope, so the capability policies that run earlier in the pipeline (see [Capability authorization](#capability-authorization-issue-525)) and this middleware read one membership lookup between them and cannot disagree about the caller's role. An authenticated caller with no usable membership gets `403` and never reaches an action; the response carries no detail about why, because telling an unrecognised caller whether a business exists is information they have not earned. `IBusinessScope` exists as a separate synchronous port because query filters and `SaveChanges` cannot await a membership lookup. Two endpoint markers, and only two, are eligible to proceed without a membership — the platform diagnostics surface of issue #336 and the account-state family of issue #523 — and a request that does carries the same *denied* scope, so neither reads business data; see [Platform diagnostics](#platform-diagnostics-issue-336) and [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523). One other middleware takes part in a request that presents a support session, and it is deliberately the **outermost** one rather than another step beside this one: `SupportSessionAuditMiddleware` (issue #672) runs ahead of `UseExceptionHandler`, because the trail of what somebody from outside the business asked for has to include the attempts authorization refused above this middleware and has to record the status the exception handler finally mapped — see [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
 
 **One other way a business is resolved, and it is not a membership.** Since issue #551 a platform administrator who presents an active support session's id in the `X-Support-Session` header has that session's business published as `BusinessScopeState.SupportReadOnly` — the same business key the filters compare against, and nothing writable. It is the third documented exception to "the business comes only from the caller's membership", and it is not an exception to "never from request input": the header carries a session id, which is a credential, and the business is the one the server stored when the session started. Everything about it — how a request joins one, the read-only enforcement in three layers, the fixed capability set and the Nayax block — is in [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
 
@@ -2216,16 +2216,48 @@ implied so a client never has to infer that a support session means a read-only 
 carries no session id, no business id and no actor. For an ordinary member the field is an explicit
 `null`, so the shape is stable.
 
-**One audit event per request.** `BusinessScopeMiddleware` emits a structured `ILogger` event for
-every request made in a session, carrying the route **template**, the method, the status it was
-answered with, the business id and the session row's own key — so a trail of requests reads as one
-session, tied to the start event #550 recorded under that same key, which is where the
-administrator's identity and their stated reason are. The template rather than the path is the point:
+**One audit event per request, including the refused ones (issue #672).**
+`InventoryApi.Auth.SupportSessionAuditMiddleware` emits a structured `ILogger` event for every
+request made in a session, carrying the route **template**, the method, the status it was answered
+with, the business id and the session row's own key — so a trail of requests reads as one session,
+tied to the start event #550 recorded under that same key, which is where the administrator's
+identity and their stated reason are. The template rather than the path is the point:
 `api/Products/{id}` says which endpoint was reached without recording which record. It carries no
-response body, no count, no query string and never the session id in either form, and it is written
-in a `finally`, so a request that failed is recorded with the status it actually got rather than
-quietly left out. As for the three platform trails beside it, **the log destination and retention
-period are platform configuration a human must verify**.
+response body, no count, no query string and never the session id in either form. As for the three
+platform trails beside it, **the log destination and retention period are platform configuration a
+human must verify**.
+
+**Coverage and final-outcome timing are both decided by where that middleware sits**, and it is the
+outermost one in `Program.cs`: `SupportSessionAuditMiddleware` → `UseExceptionHandler` → `UseCors` →
+`UseAuthentication` → `UseAuthorization` → `BusinessScopeMiddleware` → the endpoint. #551 emitted the
+event from `BusinessScopeMiddleware`, and that position could answer neither half of what the trail
+is for. A request the authorization middleware refuses — a capability the session's set does not
+hold, or any method that is not a read — is refused *above* that middleware and never reached it, so
+the attempts a support trail most needs to show were precisely the ones missing from it. And a
+request whose endpoint throws unwinds *past* it before `UseExceptionHandler` maps the exception, so
+the event recorded the `200` the response still held rather than the `403` or `500` the caller got —
+a Nayax-backed read in a support view, which is a refusal by construction, was recorded as a success.
+From the outermost position both are the same fact read once: every refusal is downstream, and by the
+time `_next` returns the status is the one that was written. The event is still written in a
+`finally`, so a request that failed outright is recorded rather than quietly left out, and there is
+exactly one emitter, so exactly one event per request. A handled exception clears the endpoint before
+the exception handlers run, so the route template is taken from the exception-handler feature on that
+path rather than lost.
+
+**Attribution is the resolved session and never the header.** The header's *presence* decides only
+whether the question is worth asking — every ordinary request leaves this middleware on one
+dictionary lookup — and the business id and session key come from `ISupportSessionAccessor`'s
+verified answer: the presented id hashed and matched against an active, unexpired session of that
+same caller's, for a business that is still `Active`. It is the same memoised answer the capability
+handler and the published scope acted on, so what was authorised, what was read and what is recorded
+cannot disagree. A presented session that is no longer usable and an ordinary member who sets the
+header therefore record **nothing at all**: there is nothing verified to attribute the request to,
+naming the business the caller *presented* would be trusting the header as evidence of itself, and
+neither falls back to anybody's ordinary membership. Why such a session was refused is logged by the
+accessor, for an operator, and the caller's own answer is the `403` above. Recording happens after
+the caller has been answered and so can never change a response: a failure to record is logged as the
+operational problem it is — a request missing from the trail — and is not turned into a second
+failure for a caller who was already served.
 
 **What proves it.** `Inventory.UnitTests/Application/Access/SupportSessionAccessPolicyTests` pins the
 thirteen capabilities literally from the agreed list, the two exclusions as exclusions, that the two
@@ -2272,7 +2304,18 @@ business's Owner, an expired/ended/unknown/another
 administrator's id refused, a deactivation mid-session closing the next request, the no-header request
 falling to the administrator's own (absent) membership, a member unaffected with and without the
 header, no membership written, the `/api/me/access` contract, and the audit event's fields and
-absences. `DocumentStorageProviderSelectionTests` pins that both providers are reached through the
+absences — including, for issue #672, the refused attempts the trail has to carry and the status
+each of them was actually answered with: a read outside the capability set and a refused write each
+recorded once with their `403`, a Nayax-backed read recorded with the `403` its mapped exception
+produced rather than a `200`, a read that found nothing recorded with its `404`, and an expired
+session and a member who merely set the header each recorded as no session at all.
+`Inventory.IntegrationTests/Auth/SupportSessionAuditMiddlewareTests` is that middleware's own
+decision, which only it can be asked directly: the status read after the rest of the pipeline has
+finished with the response, the route template taken from the exception-handler feature once a
+handled exception has cleared the endpoint, a request that threw recorded without the exception being
+swallowed, an unusable session and a `NotRequested` one recording nothing, a request with no header
+not asking the accessor at all, and a failure to record leaving the request untouched.
+`DocumentStorageProviderSelectionTests` pins that both providers are reached through the
 guard.
 
 ### Per-business Nayax connection (issue #518)

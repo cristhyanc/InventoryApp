@@ -581,9 +581,7 @@ public class SupportSessionRequestApiTests
 
         _ = await client.GetAsync("/api/products");
 
-        var audit = Assert.Single(_factory.LoggedEntries()
-            .Where(entry => entry.Contains("Support session request.", StringComparison.Ordinal))
-            .ToList());
+        var audit = SingleAuditEvent();
         // The route template, not the path: no id, name or query value a request carried.
         Assert.Contains("Route=api/products", audit, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Method=GET", audit, StringComparison.Ordinal);
@@ -595,7 +593,159 @@ public class SupportSessionRequestApiTests
         Assert.DoesNotContain(SupportSessionId.Hash(ApiFactory.SessionId), audit, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// The criterion (issue #672): a read the session's capability set does not grant is refused by
+    /// the authorization middleware - which runs <em>before</em> <c>BusinessScopeMiddleware</c> - and
+    /// is still recorded, with the <c>403</c> the caller actually got. An attempt that was refused is
+    /// exactly the attempt a support trail has to show.
+    /// </summary>
+    [Fact]
+    public async Task A_read_refused_as_a_missing_capability_is_audited_with_its_403()
+    {
+        var client = await _factory.InSupportSessionAsync();
+        _factory.ClearLog();
+
+        var response = await client.GetAsync("/api/members");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var audit = SingleAuditEvent();
+        Assert.Contains("Route=api/members", audit, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Method=GET", audit, StringComparison.Ordinal);
+        Assert.Contains("Status=403", audit, StringComparison.Ordinal);
+        Assert.Contains($"BusinessId={_factory.TradingBusinessId}", audit, StringComparison.Ordinal);
+        Assert.Contains($"SupportSessionKey={await SessionKeyAsync()}", audit, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The same criterion for the other refusal the authorization middleware makes: a disallowed
+    /// write. It is recorded as the write it was - the method is in the event - with the <c>403</c>
+    /// the read-only rule answered.
+    /// </summary>
+    [Theory]
+    [InlineData("POST", "/api/operating-expenses", "api/operating-expenses")]
+    [InlineData("PUT", "/api/business/settings", "api/business/settings")]
+    public async Task A_write_refused_as_read_only_is_audited_with_its_403(
+        string method,
+        string route,
+        string template)
+    {
+        var client = await _factory.InSupportSessionAsync();
+        _factory.ClearLog();
+
+        var response = await client.SendAsync(Request(method, route));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(SupportSessionErrorCodes.ReadOnly, await CodeAsync(response));
+        var audit = SingleAuditEvent();
+        Assert.Contains($"Route={template}", audit, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains($"Method={method}", audit, StringComparison.Ordinal);
+        Assert.Contains("Status=403", audit, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The criterion that the recorded status is the <em>final mapped</em> one (issue #672): a Nayax
+    /// read in a session throws, the exception handler maps it to <c>403</c>
+    /// <c>unavailable_in_support_view</c>, and that is what the trail says. Recording the status
+    /// before the mapping would write <c>Status=200</c> for a request the caller was refused.
+    /// </summary>
+    [Fact]
+    public async Task A_refusal_raised_as_an_exception_is_audited_with_the_mapped_status()
+    {
+        await _factory.SeedNayaxConnectionAsync();
+        var client = await _factory.InSupportSessionAsync();
+        _factory.ClearLog();
+
+        var response = await client.GetAsync("/api/machines");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(SupportSessionErrorCodes.NayaxUnavailable, await CodeAsync(response));
+        var audit = SingleAuditEvent();
+        Assert.Contains("Status=403", audit, StringComparison.Ordinal);
+        Assert.DoesNotContain("Status=200", audit, StringComparison.Ordinal);
+        Assert.Contains("Route=api/machines", audit, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// And a plain unsuccessful read, for the same reason: the status recorded is the one the
+    /// endpoint answered, never the <c>200</c> the response started out holding.
+    /// </summary>
+    [Fact]
+    public async Task A_read_that_found_nothing_is_audited_with_its_own_status()
+    {
+        var client = await _factory.InSupportSessionAsync();
+        _factory.ClearLog();
+
+        var response = await client.GetAsync("/api/products/999999");
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var audit = SingleAuditEvent();
+        Assert.Contains("Status=404", audit, StringComparison.Ordinal);
+        // The template carries the parameter's name, never the id the request asked for.
+        Assert.Contains("Route=api/products/{id", audit, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("999999", audit, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The attribution criterion (issue #672): an unusable session is refused and recorded as no
+    /// session at all. There is nothing verified to attribute the request to - the presented header
+    /// matched no active session of this caller's - and attributing it to the business or the row the
+    /// caller <em>named</em> would be trusting the header itself.
+    /// </summary>
+    [Fact]
+    public async Task An_unusable_session_is_audited_as_no_session_at_all()
+    {
+        const string sessionId = "an-id-whose-session-has-run-out";
+        await _factory.SeedSupportSessionAsync(
+            _factory.TradingBusinessId,
+            SuperAdminBusinessesApiFactory.AdministratorObjectId,
+            sessionId,
+            startedAtUtc: DateTime.UtcNow.AddHours(-3),
+            expiresAtUtc: DateTime.UtcNow.AddHours(-2));
+        var client = _factory.WithSupportSession(sessionId);
+        _factory.ClearLog();
+
+        var response = await client.GetAsync("/api/products");
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(SupportSessionErrorCodes.SessionEnded, await CodeAsync(response));
+        Assert.Empty(AuditEvents());
+    }
+
+    /// <summary>
+    /// The other half of the same criterion: the header is not attribution. A member who sets it is
+    /// an ordinary member, and their request is recorded as nobody's support session - the trail
+    /// would otherwise say a business was read from outside when it was read by its own Owner.
+    /// </summary>
+    [Fact]
+    public async Task A_member_who_sets_the_header_is_audited_as_no_session_at_all()
+    {
+        const string sessionId = "a-session-id-a-member-got-hold-of";
+        await _factory.SeedSupportSessionAsync(
+            _factory.TradingBusinessId, SuperAdminBusinessesApiFactory.AdministratorObjectId, sessionId);
+        var client = _factory.Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
+        client.DefaultRequestHeaders.Add(SupportSessionHeader.Name, sessionId);
+        _factory.ClearLog();
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/products")).StatusCode);
+
+        Assert.Empty(AuditEvents());
+    }
+
     #endregion
+
+    /// <summary>
+    /// Every per-request support audit event the host has logged since the last <c>ClearLog</c>.
+    /// Asserting over the whole list rather than "at least one" is what makes "exactly once per
+    /// request" assertable - a second emitter would double every entry.
+    /// </summary>
+    private IReadOnlyList<string> AuditEvents() => _factory.LoggedEntries()
+        .Where(entry => entry.Contains("Support session request.", StringComparison.Ordinal))
+        .ToList();
+
+    private string SingleAuditEvent() => Assert.Single(AuditEvents());
+
+    /// <summary>The one seeded session's own row key - what the audit event ties a request to.</summary>
+    private async Task<int> SessionKeyAsync() => (await _factory.SupportSessionsAsync()).Single().Id;
 
     private static async Task<JsonDocument> ReadJsonAsync(HttpResponseMessage response) =>
         JsonDocument.Parse(await response.Content.ReadAsStringAsync());
