@@ -75,7 +75,9 @@ function configure(options: { granted?: boolean } = {}): Harness {
   const accountStateRefreshUnlessReading = jest.fn();
   const accessRefresh = jest.fn(() => of({ status: 'unread' } as MemberAccessState));
   const businessReset = jest.fn();
-  const navigate = jest.fn();
+  // The transition releases the page it withheld when the navigation settles (issue #670), so the
+  // double answers a promise exactly as `Router.navigate` does.
+  const navigate = jest.fn(() => Promise.resolve(true));
 
   TestBed.configureTestingModule({
     providers: [
@@ -381,7 +383,7 @@ describe('superseded business contexts (issue #669)', () => {
       expect(harness.session.currentSessionId()).toBeNull();
       expect(observed[observed.length - 1]).toEqual({ kind: 'inactive' });
       expect(harness.businessReset).toHaveBeenCalledTimes(1);
-      expect(harness.navigate).toHaveBeenCalledWith(['/']);
+      expect(harness.navigate).toHaveBeenCalledWith(['/'], { onSameUrlNavigation: 'reload' });
       expect(harness.toastError).not.toHaveBeenCalled();
       expectDiscarded(answer);
     });
