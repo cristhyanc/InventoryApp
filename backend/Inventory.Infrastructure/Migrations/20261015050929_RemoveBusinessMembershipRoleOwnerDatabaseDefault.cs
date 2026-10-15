@@ -17,8 +17,10 @@ namespace Inventory.Infrastructure.Migrations
     /// default outliving it was not. EF never removes a default the model does not declare, so it
     /// stayed in the schema permanently, and the column deciding what a member may do became one a
     /// write could leave to the database. The application half of that gap is closed in code (the
-    /// entity's <c>Role</c> is now <c>required</c>, and <c>BusinessMembershipRoleEnforcer</c>
-    /// refuses an undeclared role on <c>SaveChanges</c>); this closes the half that lives in the
+    /// entity's <c>Role</c> is now <c>required</c>, so a creation path that states no role is a
+    /// compile error; a cast undeclared role is instead denied on every read by
+    /// <c>BusinessMembershipResolutionPolicy</c>, with a <c>SaveChanges</c>-level enforcer for that
+    /// case deliberately left to its own reviewed change); this closes the half that lives in the
     /// database, for an <c>INSERT</c> that never goes through EF at all.</para>
     ///
     /// <para><strong>The new default is not a role.</strong> The column keeps a default, and it is
