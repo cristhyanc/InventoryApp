@@ -61,6 +61,30 @@ function link(label: string, route: string, capability: Capability): NavLink {
   return { kind: 'link', label, route, capability };
 }
 
+/**
+ * The business `Admin` group's declared destinations, exported on their own so the Admin hub page
+ * (`AdminComponent`) can filter its own cards from the same capability-to-route data the sidebar
+ * renders, rather than a second, hand-kept copy that could drift from it (issue #674).
+ */
+export const adminNavGroup: NavGroup = {
+  kind: 'group',
+  label: 'Admin',
+  icon: 'settings',
+  children: [
+    link('Nayax Settings', '/admin/nayax-settings', 'Integration.Manage'),
+    link('Site Commission Agreements', '/admin/site-commission-agreements', 'SiteCommissions.Manage'),
+    link('Imports', '/admin/imports', 'Imports.Run'),
+    link('Historical Cost Recovery', '/admin/historical-cost-recovery', 'Data.Repair'),
+    link('AVCO Transition', '/admin/avco-transition', 'Data.Repair'),
+    link('Costing Repair', '/admin/costing-repair', 'Data.Repair'),
+    link('Historical GST Classification', '/admin/historical-gst-classification', 'Data.Repair'),
+    link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair'),
+    link('Users', '/admin/users', 'Members.Manage'),
+    link('Roles', '/admin/roles', 'Roles.View'),
+    link('Business Settings', '/admin/business-settings', 'Business.Manage')
+  ]
+};
+
 export const primaryNavigation: readonly NavItem[] = [
   { kind: 'link', label: 'Dashboard', route: '/', icon: 'home', capability: 'Dashboard.View' },
   { kind: 'link', label: 'Pick List', route: '/pick-list', icon: 'assignment', capability: 'PickList.View' },
@@ -106,24 +130,7 @@ export const primaryNavigation: readonly NavItem[] = [
       link('Site Commissions', '/reports/site-commissions', 'SiteCommissions.Manage')
     ]
   },
-  {
-    kind: 'group',
-    label: 'Admin',
-    icon: 'settings',
-    children: [
-      link('Nayax Settings', '/admin/nayax-settings', 'Integration.Manage'),
-      link('Site Commission Agreements', '/admin/site-commission-agreements', 'SiteCommissions.Manage'),
-      link('Imports', '/admin/imports', 'Imports.Run'),
-      link('Historical Cost Recovery', '/admin/historical-cost-recovery', 'Data.Repair'),
-      link('AVCO Transition', '/admin/avco-transition', 'Data.Repair'),
-      link('Costing Repair', '/admin/costing-repair', 'Data.Repair'),
-      link('Historical GST Classification', '/admin/historical-gst-classification', 'Data.Repair'),
-      link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair'),
-      link('Users', '/admin/users', 'Members.Manage'),
-      link('Roles', '/admin/roles', 'Roles.View'),
-      link('Business Settings', '/admin/business-settings', 'Business.Manage')
-    ]
-  }
+  adminNavGroup
 ];
 
 /**
