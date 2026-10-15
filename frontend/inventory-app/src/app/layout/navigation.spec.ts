@@ -54,7 +54,7 @@ const OWNER = capabilitySet([
 
 /** The navigation an Owner is offered, which is every declared destination. */
 function ownerNavigation(hasPlatformDiagnosticsAccess = false): readonly NavItem[] {
-  return navigationFor(OWNER, hasPlatformDiagnosticsAccess);
+  return navigationFor(OWNER, hasPlatformDiagnosticsAccess, 'offered');
 }
 
 function item(label: string, items: readonly NavItem[] = primaryNavigation): NavLink | NavGroup {
@@ -223,7 +223,7 @@ describe('navigationFor (issue #546)', () => {
 
   it('leaves primaryNavigation itself untouched, so one granted navigation cannot leak into another', () => {
     ownerNavigation(true);
-    navigationFor(OPERATOR, true);
+    navigationFor(OPERATOR, true, 'offered');
 
     expect(childRoutes('Admin')).toEqual(adminChildRoutes);
     expect(primaryNavigation.map((entry) => entry.label)).toEqual([
@@ -242,9 +242,9 @@ describe('navigationFor (issue #546)', () => {
   it('points only at routes declared in app.routes.ts, with or without access', () => {
     expect(undeclaredRoutes(ownerNavigation())).toEqual([]);
     expect(undeclaredRoutes(ownerNavigation(true))).toEqual([]);
-    expect(undeclaredRoutes(navigationFor(OPERATOR, false))).toEqual([]);
-    expect(undeclaredRoutes(navigationFor(MANAGER, false))).toEqual([]);
-    expect(undeclaredRoutes(navigationFor(undefined, true))).toEqual([]);
+    expect(undeclaredRoutes(navigationFor(OPERATOR, false, 'offered'))).toEqual([]);
+    expect(undeclaredRoutes(navigationFor(MANAGER, false, 'offered'))).toEqual([]);
+    expect(undeclaredRoutes(navigationFor(undefined, true, 'offered'))).toEqual([]);
   });
 
   it('resolves the diagnostics page as the active entry inside the Super Admin group', () => {
@@ -269,10 +269,10 @@ describe('navigationFor (issue #546)', () => {
    * and only `GET /api/admin/diagnostics/access` can say yes.
    */
   it('keeps the group independent of the member capabilities', () => {
-    const operator = navigationFor(OPERATOR, true);
+    const operator = navigationFor(OPERATOR, true, 'offered');
 
     expect(group('Super Admin', operator).children).toEqual([platformDiagnosticsNavLink, businessesNavLink]);
-    expect(navLinks(navigationFor(OPERATOR, false)).map((link) => link.route)).not.toContain(
+    expect(navLinks(navigationFor(OPERATOR, false, 'offered')).map((link) => link.route)).not.toContain(
       platformDiagnosticsNavLink.route
     );
   });
@@ -303,7 +303,7 @@ describe('navigationFor capabilities (issue #528)', () => {
   });
 
   it('offers an Operator no Expenses, no Reports group and no Admin group', () => {
-    const operator = navigationFor(OPERATOR, false);
+    const operator = navigationFor(OPERATOR, false, 'offered');
 
     expect(labels(operator)).toEqual(['Dashboard', 'Pick List', 'Products', 'Machines', 'Sites', 'Purchases']);
     expect(navLinks(operator).map((entry) => entry.route)).toEqual([
@@ -322,7 +322,7 @@ describe('navigationFor capabilities (issue #528)', () => {
   });
 
   it('offers a Manager the reports and expenses, but no Nayax Settings and no data repair', () => {
-    const manager = navigationFor(MANAGER, false);
+    const manager = navigationFor(MANAGER, false, 'offered');
 
     expect(labels(manager)).toEqual([
       'Dashboard',
@@ -353,10 +353,10 @@ describe('navigationFor capabilities (issue #528)', () => {
   /** The Admin → Roles page (issue #530): visible only to the role that holds `Roles.View`. */
   it('offers Roles to an Owner and hides it from a Manager and an Operator', () => {
     expect(childRoutes('Admin', ownerNavigation())).toContainEqual({ label: 'Roles', route: '/admin/roles' });
-    expect(childRoutes('Admin', navigationFor(MANAGER, false))).not.toContainEqual(
+    expect(childRoutes('Admin', navigationFor(MANAGER, false, 'offered'))).not.toContainEqual(
       expect.objectContaining({ route: '/admin/roles' })
     );
-    expect(navLinks(navigationFor(OPERATOR, false)).map((link) => link.route)).not.toContain('/admin/roles');
+    expect(navLinks(navigationFor(OPERATOR, false, 'offered')).map((link) => link.route)).not.toContain('/admin/roles');
   });
 
   /** The Admin → Business Settings page (issue #549): visible only to the role that holds `Business.Manage`. */
@@ -365,10 +365,10 @@ describe('navigationFor capabilities (issue #528)', () => {
       label: 'Business Settings',
       route: '/admin/business-settings'
     });
-    expect(childRoutes('Admin', navigationFor(MANAGER, false))).not.toContainEqual(
+    expect(childRoutes('Admin', navigationFor(MANAGER, false, 'offered'))).not.toContainEqual(
       expect.objectContaining({ route: '/admin/business-settings' })
     );
-    expect(navLinks(navigationFor(OPERATOR, false)).map((link) => link.route)).not.toContain(
+    expect(navLinks(navigationFor(OPERATOR, false, 'offered')).map((link) => link.route)).not.toContain(
       '/admin/business-settings'
     );
   });
@@ -380,14 +380,14 @@ describe('navigationFor capabilities (issue #528)', () => {
   it('keeps a group whose children are only partly allowed, with only those children', () => {
     const reportsOnly = capabilitySet(['SiteCommissions.Manage']);
 
-    expect(childRoutes('Reports', navigationFor(reportsOnly, false))).toEqual([
+    expect(childRoutes('Reports', navigationFor(reportsOnly, false, 'offered'))).toEqual([
       { label: 'Site Commissions', route: '/reports/site-commissions' }
     ]);
   });
 
   it('offers nothing at all for an empty capability set, which is what an unread one renders as', () => {
-    expect(navigationFor(capabilitySet([]), false)).toEqual([]);
-    expect(navLinks(navigationFor(capabilitySet([]), false))).toEqual([]);
+    expect(navigationFor(capabilitySet([]), false, 'offered')).toEqual([]);
+    expect(navLinks(navigationFor(capabilitySet([]), false, 'offered'))).toEqual([]);
   });
 
   /**
@@ -395,20 +395,52 @@ describe('navigationFor capabilities (issue #528)', () => {
    * not do regardless, and an empty menu would strand a member whose capability read failed.
    */
   it('offers every destination when the capability set is not known', () => {
-    expect(navigationFor(undefined, false)).toEqual(primaryNavigation);
-    expect(childRoutes('Admin', navigationFor(undefined, true))).toEqual(adminChildRoutes);
-    expect(group('Super Admin', navigationFor(undefined, true)).children).toEqual([
+    expect(navigationFor(undefined, false, 'offered')).toEqual(primaryNavigation);
+    expect(childRoutes('Admin', navigationFor(undefined, true, 'offered'))).toEqual(adminChildRoutes);
+    expect(group('Super Admin', navigationFor(undefined, true, 'offered')).children).toEqual([
       platformDiagnosticsNavLink,
       businessesNavLink
     ]);
   });
 
   it('resolves the active entry only among the destinations the member was offered', () => {
-    const operator = navigationFor(OPERATOR, false);
+    const operator = navigationFor(OPERATOR, false, 'offered');
 
     expect(activeNavRoute(operator, '/products/12/edit')).toBe('/products');
     expect(activeNavRoute(operator, '/reports/gst')).toBeUndefined();
     expect(activeNavGroup(operator, '/admin/costing-repair')).toBeUndefined();
+  });
+});
+
+/**
+ * Withholding the business navigation altogether (issue #676), which no capability answer could
+ * decide: a signed-out visitor's and a known nonmember's capability read both answer `unavailable`,
+ * the one answer that offers every destination.
+ */
+describe('navigationFor with the business navigation withheld (issue #676)', () => {
+  it('offers no business destination at all, whatever the capability set says', () => {
+    expect(navigationFor(OWNER, false, 'withheld')).toEqual([]);
+    expect(navigationFor(OPERATOR, false, 'withheld')).toEqual([]);
+    expect(navLinks(navigationFor(OWNER, false, 'withheld'))).toEqual([]);
+  });
+
+  /** The fail-open capability answer is exactly the case this withholding exists for. */
+  it('offers none when the capability set could not be read either', () => {
+    expect(navigationFor(undefined, false, 'withheld')).toEqual([]);
+  });
+
+  it('keeps the separately authorized Super Admin group, and only it', () => {
+    expect(navigationFor(undefined, true, 'withheld')).toEqual([superAdminNavGroup]);
+    expect(navLinks(navigationFor(OWNER, true, 'withheld'))).toEqual([
+      platformDiagnosticsNavLink,
+      businessesNavLink
+    ]);
+  });
+
+  it('leaves the declared navigation untouched for the next member it is composed for', () => {
+    navigationFor(OWNER, true, 'withheld');
+
+    expect(navigationFor(OWNER, false, 'offered')).toEqual(primaryNavigation);
   });
 });
 

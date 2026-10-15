@@ -1,7 +1,18 @@
 import { Component, EventEmitter, Input, OnDestroy, OnInit, Output } from '@angular/core';
 import { NavigationEnd, Router, RouterLink } from '@angular/router';
-import { Subject, catchError, combineLatest, filter, of, startWith, takeUntil } from 'rxjs';
+import {
+  BehaviorSubject,
+  Subject,
+  catchError,
+  combineLatest,
+  distinctUntilChanged,
+  filter,
+  of,
+  startWith,
+  takeUntil
+} from 'rxjs';
 import { AccessService, MemberAccessState } from '../access/access.service';
+import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { CapabilitySet } from '../access/capabilities';
 import { IconComponent } from '../components/shared/icon.component';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
@@ -28,12 +39,14 @@ export const PRIMARY_NAVIGATION_ID = 'primary-navigation';
  * only reports the intent: the shell keeps the one `isSidebarOpen` flag that decides what
  * `expanded` means on each layout.
  *
- * It owns no access decision (issues #335 and #528). The destinations it renders come from
+ * It owns no access decision (issues #335, #528 and #676). The destinations it renders come from
  * `navigationFor`, which is given the capability set `GET /api/me/access` reported for the
- * signed-in member and the diagnostics API's separate answer about platform-admin access; this
- * component decides neither and conditions nothing in its template. Until the capability set has
- * been read it renders no destination at all, because a menu that offered everything and then
- * removed what the role cannot use would show entries that were never this member's.
+ * signed-in member, the diagnostics API's separate answer about platform-admin access, and the
+ * shell's own `businessNavigation` answer about whether this account state has a business menu at
+ * all; this component decides none of the three and conditions nothing in its template. Until the
+ * capability set has been read it renders no destination at all, because a menu that offered
+ * everything and then removed what the role cannot use would show entries that were never this
+ * member's.
  *
  * The host renders as `display: contents` (issue #455) so it contributes no box of its own: the
  * shell's `items-stretch` row needs to stretch the actual white `<nav>` panel to the row's full
@@ -56,6 +69,20 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
 
   /** The id the shell's `aria-controls` points at; it is set on the `<nav>` landmark itself. */
   @Input() navId = PRIMARY_NAVIGATION_ID;
+
+  private readonly businessNavigation$ = new BehaviorSubject<BusinessNavigationVisibility>('withheld');
+
+  /**
+   * Whether the ordinary business destinations are on offer at all (issue #676), which the shell
+   * decides from the authenticated account state and this component only renders - the same
+   * division of labour the layout inputs above follow. It defaults to `withheld`, so a host that
+   * does not say leaves the business menu out rather than offering it to somebody the account
+   * state was never consulted about; the separately authorized `Super Admin` group is unaffected.
+   */
+  @Input()
+  set businessNavigation(visibility: BusinessNavigationVisibility) {
+    this.businessNavigation$.next(visibility);
+  }
 
   /** A destination was chosen, so a narrow drawer can be dismissed. */
   @Output() readonly navigated = new EventEmitter<void>();
@@ -114,10 +141,14 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
       startWith(false)
     );
 
-    combineLatest([this.access.access$, hasDiagnosticsAccess])
+    combineLatest([
+      this.access.access$,
+      hasDiagnosticsAccess,
+      this.businessNavigation$.pipe(distinctUntilChanged())
+    ])
       .pipe(takeUntil(this.destroying$))
-      .subscribe(([access, diagnosticsGranted]) => {
-        this.navigation = navigationFor(renderedCapabilities(access), diagnosticsGranted);
+      .subscribe(([access, diagnosticsGranted, businessNavigation]) => {
+        this.navigation = navigationFor(renderedCapabilities(access), diagnosticsGranted, businessNavigation);
         // A page opened by URL before the answers arrived becomes the active entry once its link
         // exists, so the owning group reflects where the operator actually is.
         this.applyActiveRoute(this.router.url);
