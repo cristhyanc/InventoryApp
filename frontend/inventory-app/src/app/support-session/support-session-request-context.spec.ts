@@ -42,6 +42,7 @@ interface Harness {
   readonly session: SupportSessionService;
   readonly identity: SignedInIdentityDoubles;
   readonly toastError: jest.Mock;
+  readonly toastWarning: jest.Mock;
   readonly accessRefreshUnlessReading: jest.Mock;
   readonly accountStateRefreshUnlessReading: jest.Mock;
   readonly businessReset: jest.Mock;
@@ -71,6 +72,7 @@ interface Harness {
 function configure(options: { granted?: boolean } = {}): Harness {
   const identity = signedInIdentity();
   const toastError = jest.fn();
+  const toastWarning = jest.fn();
   const accessRefreshUnlessReading = jest.fn();
   const accountStateRefreshUnlessReading = jest.fn();
   const accessRefresh = jest.fn(() => of({ status: 'unread' } as MemberAccessState));
@@ -86,7 +88,7 @@ function configure(options: { granted?: boolean } = {}): Harness {
       ),
       provideHttpClientTesting(),
       { provide: ConfigService, useValue: { apiBaseUrl: API_BASE_URL } },
-      { provide: ToastService, useValue: { error: toastError } },
+      { provide: ToastService, useValue: { error: toastError, warning: toastWarning } },
       { provide: Router, useValue: { url: '/dashboard', navigate } },
       { provide: BusinessService, useValue: { reset: businessReset } },
       {
@@ -111,6 +113,7 @@ function configure(options: { granted?: boolean } = {}): Harness {
     session,
     identity,
     toastError,
+    toastWarning,
     accessRefreshUnlessReading,
     accountStateRefreshUnlessReading,
     businessReset,
@@ -385,6 +388,8 @@ describe('superseded business contexts (issue #669)', () => {
       expect(harness.businessReset).toHaveBeenCalledTimes(1);
       expect(harness.navigate).toHaveBeenCalledWith(['/'], { onSameUrlNavigation: 'reload' });
       expect(harness.toastError).not.toHaveBeenCalled();
+      // The one notice is the session's own (issue #681), not an error about the request.
+      expect(harness.toastWarning).toHaveBeenCalledTimes(1);
       expectDiscarded(answer);
     });
 

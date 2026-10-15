@@ -41,8 +41,10 @@ import { SupportSessionService, SupportSessionState } from '../support-session/s
         justify-content: center;
         gap: 0.75rem;
         padding: 0.5rem 1rem;
-        background-color: rgb(251 140 0 / 0.15);
-        color: rgb(138 75 0);
+        /* Red, as issue #513 asks (issue #681): the design system's danger tokens (md-danger,
+           md-danger-text in tailwind.config.js), the same pair the danger badge and alert use. */
+        background-color: rgba(244, 67, 53, 0.15);
+        color: #b71c1c;
         font-size: 0.875rem;
         font-weight: 500;
         text-align: center;

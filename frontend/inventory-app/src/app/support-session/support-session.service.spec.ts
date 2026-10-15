@@ -7,6 +7,7 @@ import { SignedInIdentityDoubles, signedInIdentity } from '../access/identity-ca
 import { ConfigService } from '../services/config.service';
 import { BusinessService } from '../services/business.service';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
+import { ToastService } from '../services/toast.service';
 import {
   FakeBroadcastChannel,
   installBroadcastChannel,
@@ -53,6 +54,7 @@ interface Harness {
   accessRefresh: jest.Mock;
   navigate: jest.Mock;
   isGranted: jest.Mock;
+  toastWarning: jest.Mock;
   identity: SignedInIdentityDoubles;
   states(): SupportSessionState[];
 }
@@ -81,6 +83,7 @@ function harness(
   const navigate = options.navigate ?? jest.fn(() => Promise.resolve(true));
   const isGranted = jest.fn(() => of(options.granted ?? true));
   const identity = signedInIdentity({ signedIn: options.signedIn });
+  const toastWarning = jest.fn();
 
   const service = new SupportSessionService(
     { post, get } as unknown as HttpClient,
@@ -90,7 +93,8 @@ function harness(
     { isGranted } as unknown as PlatformDiagnosticsAccessService,
     { navigate } as unknown as Router,
     identity.msal,
-    identity.broadcast
+    identity.broadcast,
+    { warning: toastWarning } as unknown as ToastService
   );
 
   return {
@@ -101,6 +105,7 @@ function harness(
     accessRefresh,
     navigate,
     isGranted,
+    toastWarning,
     identity,
     states: () => {
       const observed: SupportSessionState[] = [];
@@ -208,7 +213,7 @@ describe('SupportSessionService (issue #553)', () => {
 
   describe('ending a session', () => {
     it('ends the caller’s own session, clears the id and the banner, and applies the business context change', async () => {
-      const { service, post, businessReset, accessRefresh, navigate, states } = harness();
+      const { service, post, businessReset, accessRefresh, navigate, toastWarning, states } = harness();
       await firstValueFrom(service.start(9, 'Investigating a reported bug'));
       const observed = states();
       businessReset.mockClear();
@@ -219,6 +224,7 @@ describe('SupportSessionService (issue #553)', () => {
 
       expect(post).toHaveBeenCalledWith('/api/super-admin/support-sessions/active/end', {});
       expect(service.currentSessionId()).toBeNull();
+      expect(toastWarning).not.toHaveBeenCalled();
       expect(observed[observed.length - 1]).toEqual({ kind: 'inactive' });
       expect(businessReset).toHaveBeenCalledTimes(1);
       expect(accessRefresh).toHaveBeenCalledTimes(1);
@@ -260,6 +266,21 @@ describe('SupportSessionService (issue #553)', () => {
       expect(businessReset).toHaveBeenCalledTimes(1);
       expect(accessRefresh).toHaveBeenCalledTimes(1);
       expect(navigate).toHaveBeenCalledTimes(1);
+    });
+
+    /** The administrator did not end it, so the return to their own dashboard is explained (issue #681). */
+    it('tells the administrator once that the session has ended', async () => {
+      const { service, toastWarning } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+
+      service.handleSessionEndedSignal();
+      service.handleSessionEndedSignal();
+
+      expect(toastWarning).toHaveBeenCalledTimes(1);
+      expect(toastWarning).toHaveBeenCalledWith(
+        'Your support session has ended. You are back in your own account.',
+        'Support session ended'
+      );
     });
 
     it('does nothing for a tab that was never active', () => {
@@ -783,7 +804,7 @@ describe('SupportSessionService (issue #553)', () => {
     });
 
     it('leaves the view alone until the expiry is actually reached', async () => {
-      const { service, navigate } = harness();
+      const { service, navigate, toastWarning } = harness();
       await firstValueFrom(service.start(9, 'Investigating a reported bug'));
       navigate.mockClear();
 
@@ -791,6 +812,21 @@ describe('SupportSessionService (issue #553)', () => {
 
       expect(service.currentSessionId()).toBe('session-abc');
       expect(navigate).not.toHaveBeenCalled();
+      expect(toastWarning).not.toHaveBeenCalled();
+    });
+
+    /** Before issue #681 the expiry took the administrator home with no word of why. */
+    it('tells the administrator the session has ended when it expires', async () => {
+      const { service, toastWarning } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+
+      jest.advanceTimersByTime(60 * 60 * 1000);
+
+      expect(toastWarning).toHaveBeenCalledTimes(1);
+      expect(toastWarning).toHaveBeenCalledWith(
+        'Your support session has ended. You are back in your own account.',
+        'Support session ended'
+      );
     });
 
     /** A tab that holds no id still knows when the session it was told about is over. */
@@ -963,6 +999,90 @@ describe('SupportSessionService (issue #553)', () => {
         businessName: 'Snack Co',
         expiresAtUtc: '2026-02-01T01:00:00Z'
       });
+    });
+  });
+
+  /**
+   * A session belongs to the administrator it was granted to, and signing out or switching account
+   * is that administrator leaving (issue #681). Before this, sign-out left the session running on the
+   * server for the rest of its hour, and an account switch kept attaching the old id - and the
+   * banner hiding every write control - to the next account's requests.
+   */
+  describe('signing out and switching account (issue #681)', () => {
+    it('ends the session on the server before signing out, and tells the other tabs', async () => {
+      const sibling = otherTab();
+      const { service, post, navigate, states } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      const observed = states();
+      post.mockClear();
+      navigate.mockClear();
+
+      await firstValueFrom(service.endBeforeSignOut(), { defaultValue: undefined });
+
+      expect(post).toHaveBeenCalledWith('/api/super-admin/support-sessions/active/end', {});
+      expect(service.currentSessionId()).toBeNull();
+      expect(observed[observed.length - 1]).toEqual({ kind: 'inactive' });
+      expect(sibling.received[sibling.received.length - 1]).toEqual({ type: 'ended', accountKey: ACCOUNT_KEY });
+      // The sign-out redirect replaces the page; there is no dashboard to take this tab to.
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('still forgets the session when the end cannot be confirmed, without telling the other tabs', async () => {
+      const sibling = otherTab();
+      const post = jest.fn(() => of(STARTED_RESPONSE));
+      const { service } = harness({ post });
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      const broadcastsBefore = sibling.received.length;
+      post.mockImplementation(() => throwError(() => new Error('offline')));
+      const outcome = { completed: false, failed: false };
+
+      service.endBeforeSignOut().subscribe({
+        complete: () => {
+          outcome.completed = true;
+        },
+        error: () => {
+          outcome.failed = true;
+        }
+      });
+
+      expect(outcome).toEqual({ completed: true, failed: false });
+      expect(service.currentSessionId()).toBeNull();
+      expect(sibling.received).toHaveLength(broadcastsBefore);
+    });
+
+    it('calls nothing when this tab knows of no session', async () => {
+      const { service, post } = harness({ granted: false });
+
+      await firstValueFrom(service.endBeforeSignOut(), { defaultValue: undefined });
+
+      expect(post).not.toHaveBeenCalled();
+    });
+
+    it('forgets the session when a different account becomes the signed-in one', async () => {
+      const sibling = otherTab();
+      const { service, identity, navigate, states } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+      const observed = states();
+      const broadcastsBefore = sibling.received.length;
+      navigate.mockClear();
+
+      identity.switchAccount('member-2');
+
+      expect(service.currentSessionId()).toBeNull();
+      expect(observed[observed.length - 1]).toEqual({ kind: 'inactive' });
+      // The next account cannot end a session it was never granted, and no tab would accept a
+      // message sent under its identity about one.
+      expect(sibling.received).toHaveLength(broadcastsBefore);
+      expect(navigate).not.toHaveBeenCalled();
+    });
+
+    it('keeps the session when the same account reports itself again', async () => {
+      const { service, identity } = harness();
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+
+      identity.raise(EventType.LOGIN_SUCCESS);
+
+      expect(service.currentSessionId()).toBe('session-abc');
     });
   });
 });

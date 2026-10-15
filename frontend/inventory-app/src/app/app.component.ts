@@ -358,10 +358,15 @@ export class AppComponent implements OnInit, OnDestroy {
 
   logout(): void {
     const account = this.authService.instance.getActiveAccount();
-    this.authService.logoutRedirect({
-      account: account ?? undefined,
-      postLogoutRedirectUri: window.location.origin
-    });
+    // A support session is the signed-in administrator's, so signing out ends it first (issue #681)
+    // rather than leaving it running on the server, and presented by other open tabs, for the rest
+    // of its lifetime. It always completes, so a failed end never blocks the sign-out.
+    this.supportSession.endBeforeSignOut().subscribe(() =>
+      this.authService.logoutRedirect({
+        account: account ?? undefined,
+        postLogoutRedirectUri: window.location.origin
+      })
+    );
   }
 
   /**

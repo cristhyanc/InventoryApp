@@ -58,6 +58,19 @@ describe('SupportSessionBannerComponent (issue #553)', () => {
     expect(buttonWithText(host, 'End session')).toBeDefined();
   });
 
+  /** Issue #513 asks for a prominent red banner; it was amber until issue #681. */
+  it('is red, in the design system danger colours', async () => {
+    const { host } = await render({
+      state$: of<SupportSessionState>({ kind: 'viewing', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' })
+    });
+
+    const banner = host.querySelector('.support-session-banner');
+    expect(banner).not.toBeNull();
+    const computed = getComputedStyle(banner!);
+    expect(computed.color).toBe('rgb(183, 28, 28)');
+    expect(computed.backgroundColor).toBe('rgba(244, 67, 53, 0.15)');
+  });
+
   it('ends the session from the banner', async () => {
     const end = jest.fn(() => of(undefined));
     const { fixture, host } = await render({

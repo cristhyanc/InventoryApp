@@ -80,6 +80,8 @@ interface Rendered {
   accountStateReads: readonly string[];
   /** Every `End session` the blocked explanation asked for (issue #668). */
   supportSessionEnd: jest.Mock;
+  /** Every end the shell asked for before signing out (issue #681). */
+  supportSessionEndBeforeSignOut: jest.Mock;
   /**
    * Reports a business-context transition starting or settling, the way `SupportSessionService`
    * does around its own dashboard navigation (issue #670). It deliberately does **not** run change
@@ -204,6 +206,7 @@ async function render(
   const loginRedirect = jest.fn();
   const logoutRedirect = jest.fn();
   const supportSessionEnd = jest.fn(() => of(undefined));
+  const supportSessionEndBeforeSignOut = jest.fn(() => of(undefined));
   const contextChanging = new BehaviorSubject(false);
   const contextChanged = new Subject<void>();
   const msalService = {
@@ -285,7 +288,8 @@ async function render(
           state$: options.supportSession ?? of<SupportSessionState>({ kind: 'inactive' }),
           contextChanging$: contextChanging,
           contextChanged$: contextChanged,
-          end: supportSessionEnd
+          end: supportSessionEnd,
+          endBeforeSignOut: supportSessionEndBeforeSignOut
         }
       }
     ]
@@ -310,6 +314,7 @@ async function render(
     answerAccountState: (answer: AccountStateAnswer) => accountState.answer(answer),
     accountStateReads: accountState.reads,
     supportSessionEnd,
+    supportSessionEndBeforeSignOut,
     changeBusinessContext: (changing: boolean) => contextChanging.next(changing),
     changeEffectiveBusiness: () => contextChanged.next()
   };
@@ -603,6 +608,28 @@ describe('AppComponent authenticated user control (issue #391)', () => {
     expect(msal.logoutRedirect).toHaveBeenCalledWith(
       expect.objectContaining({ account, postLogoutRedirectUri: window.location.origin })
     );
+  });
+
+  /** A support session belongs to the administrator signing out, so it ends first (issue #681). */
+  it('ends the support session before redirecting to sign out, and only then redirects', async () => {
+    const { fixture, host, msal, supportSessionEndBeforeSignOut } = await render({ signedIn: true });
+    const ended = new Subject<undefined>();
+    supportSessionEndBeforeSignOut.mockReturnValue(ended);
+
+    const menu = host.querySelector('header')?.querySelector<HTMLElement>('app-user-menu');
+    menu?.querySelector<HTMLButtonElement>('button[aria-haspopup]')?.click();
+    fixture.detectChanges();
+    Array.from(menu?.querySelectorAll('button') ?? [])
+      .find((button) => (button.textContent ?? '').includes('Sign out'))
+      ?.click();
+
+    expect(supportSessionEndBeforeSignOut).toHaveBeenCalledTimes(1);
+    expect(msal.logoutRedirect).not.toHaveBeenCalled();
+
+    ended.next(undefined);
+    ended.complete();
+
+    expect(msal.logoutRedirect).toHaveBeenCalledTimes(1);
   });
 
   it('offers sign-in in the same place when no account is active', async () => {
