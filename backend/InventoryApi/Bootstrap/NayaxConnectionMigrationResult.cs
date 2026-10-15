@@ -96,23 +96,20 @@ public enum NayaxConnectionMigrationDatabaseState
 public enum NayaxConnectionMigrationChange
 {
     /// <summary>
-    /// Nothing. The business already holds exactly this operator id and token, already marked
-    /// <see cref="NayaxConnectionStatus.Ready"/>, which is what makes a re-run idempotent.
+    /// Nothing, which is what makes a re-run idempotent. The business already holds exactly this
+    /// operator id and token, so the row is not touched at all - whatever its status says (issue
+    /// #675). The connection status, the credential revision, the last-tested instant and the
+    /// machine-check state are facts this command has nothing to add to once the credential it
+    /// moves is the stored one.
     /// </summary>
     None = 0,
 
     /// <summary>
-    /// The configured operator id and token are stored for the business, encrypted, and the
-    /// connection is marked <see cref="NayaxConnectionStatus.Ready"/>.
+    /// The business held no credential, so the configured operator id and token are stored for it,
+    /// encrypted, and the connection is marked <see cref="NayaxConnectionStatus.Ready"/>. This is
+    /// the only change the command makes.
     /// </summary>
     CredentialsStored = 1,
-
-    /// <summary>
-    /// The same operator id and token are already stored, but not yet marked
-    /// <see cref="NayaxConnectionStatus.Ready"/>, so only the status is written. The credential is
-    /// not re-saved, so the revision does not move and the stored ciphertext is left alone.
-    /// </summary>
-    StatusMarkedReady = 2,
 }
 
 /// <summary>

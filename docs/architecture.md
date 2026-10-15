@@ -2392,13 +2392,16 @@ owned table. Here the whole change is two values and a status, so it can be repo
 writing: a dry run opens no transaction on the credential table and the status it reports for
 "after" is declared as a prediction.
 
-**`Ready`, not `PendingPermissions`, and the command never calls Nayax.** Every save through the
-store lands on `PendingPermissions` — a freshly stored token is never assumed to work — so the
-command applies a status result for the exact revision it just wrote, through the same conditional
-`TryApplyStatusResultAsync` path a real permission test uses. The evidence is production use rather
-than a live test, which is also why the instant recorded is when that was adopted. A revision that
-moved in between discards the result rather than describing credentials it was not produced for, and
-the command reports that rather than claiming success.
+**`Ready`, not `PendingPermissions`, on the credential it stores — and the command never calls
+Nayax.** Every save through the store lands on `PendingPermissions` — a freshly stored token is
+never assumed to work — so the command applies a status result for the exact revision it just
+wrote, through the same conditional `TryApplyStatusResultAsync` path a real permission test uses.
+The evidence is production use rather than a live test, which is also why the instant recorded is
+when that was adopted. A revision that moved in between discards the result rather than describing
+credentials it was not produced for, and the command reports that rather than claiming success.
+**That reasoning reaches exactly as far as the credential this run stored** (issue #675): over a
+credential that was already there it writes no status at all, because "the configured token is the
+one in production use" says nothing about a verdict something else already reached on it.
 
 **An apply is one transaction, so a partial state is not something it can leave.** Storing the
 credential and marking the connection `Ready` are two statements, and a command that committed the
@@ -2406,8 +2409,9 @@ first and then failed the second would leave a credential whose status was never
 reporting a failure — the database changed by a run that says it refused. `NayaxConnectionMigrator`
 therefore opens one transaction on the business-scoped context and does everything inside it: the
 authoritative read of what the business holds, the comparison against the configured credential, the
-save, the `Ready` status write and the read-back. It commits only once the connection is actually
-`Ready`. A refusal, a status result the revision guard discarded, and a failed read or write all
+save, the `Ready` status write and the read-back. It commits only once a credential it stored is
+actually `Ready` — a run that stores nothing has nothing to commit either. A refusal, a status
+result the revision guard discarded, and a failed read or write all
 roll it back, so a run that reports anything other than success has written nothing at all, and
 recovering from one is simply running the command again rather than repairing a half-finished
 change. Putting the read inside that transaction is also what makes the "never replace a credential
@@ -2427,10 +2431,16 @@ requires exactly one active business with a usable membership and no unassigned 
 `bootstrap-business` adopted; when a *different* operator id or token is already stored, because
 replacing a credential something else stored is a human decision; and when the token cannot be
 encrypted or the stored ciphertext cannot be decrypted, which fails closed rather than overwriting
-a credential nothing could read. A business already holding exactly the configured pair, marked
-`Ready`, is left completely untouched — the row is not rewritten, so not even the ciphertext changes
-and the revision does not move. The same pair stored but not yet `Ready` has only its status
-written.
+a credential nothing could read. **A business already holding exactly the configured pair is left
+completely untouched, whatever its status says** (issue #675) — the row is not rewritten, so not
+even the ciphertext changes, and the revision, the status, the last-tested instant and the
+machine-check flag all stay exactly as they were. The dry run and the apply agree on that: the dry
+run predicts the stored status rather than `Ready`, and the apply attempts no write at all, not
+even the conditional status write. This is what keeps a re-run from reviving a connection a Nayax
+`401` moved to `NeedsAttention`: that verdict came from Nayax, this command never calls Nayax, and
+only a connection test — the Owner's re-test on Admin → Nayax Settings — can conclude a new status.
+A matching pair stored but not yet `Ready` is therefore left on `PendingPermissions` as well, and
+is also a re-test rather than a re-run.
 
 **The token never leaves the ciphertext column.** It is in no result member, no message, no
 exception and no printed line — not as a length, a prefix or a hash. The operator id is printed,
@@ -2444,11 +2454,14 @@ means that command's outcome — a migrated-but-unbootstrapped database is not m
 migration seeds a `NayaxProcessingFeeRate` with no owner.
 
 The same tests pin the atomicity, with the credential replaced between the save and the `Ready`
-write: on the first-save path the apply leaves no row at all, on the status-only path the row that
-was committed before it comes out byte-for-byte unchanged, a status write that fails outright takes
-the save back with it, the apply that follows a rolled-back one stores the credential at revision 1
-as a first apply would, and every ending reports its database state — only a failed commit is
-allowed to report `Unknown`, and no refusal may claim a write it did not make.
+write: the apply leaves no row at all, a status write that fails outright takes the save back with
+it, the apply that follows a rolled-back one stores the credential at revision 1 as a first apply
+would, and every ending reports its database state — only a failed commit is allowed to report
+`Unknown`, and no refusal may claim a write it did not make. They pin the re-run contract the same
+way: a matching credential in `Ready`, `PendingPermissions` and `NeedsAttention` alike comes out of
+both a dry run and an apply with its status, revision, ciphertext, last-tested instant and
+machine-check flag unchanged, and a store double that throws on either write proves the apply
+attempts none rather than merely leaving the row looking the same.
 
 ### Per-business Nayax credentials (issue #520)
 

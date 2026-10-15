@@ -534,6 +534,10 @@ configured operator id and token into the existing business's record, encrypted,
 connection `Ready`, because that token is the one already authenticating to Nayax in production —
 the command never calls Nayax and performs no permission test.
 
+It does that **once**, into an empty record. If the same operator id and token are already stored,
+the command writes nothing at all, whatever the connection's status says — see
+[Re-running it](#re-running-it).
+
 ### Before you run it
 
 1. **The token encryption key must be provisioned** for the environment:
@@ -563,7 +567,8 @@ Read the output and confirm:
 
 - `Business id` is the business you expect;
 - `Configured operator` is the Nayax operator account this business trades under;
-- `Change` is `CredentialsStored` (nothing stored yet) or `None` (already migrated).
+- `Change` is `CredentialsStored` (nothing stored yet) or `None` (this credential is already
+  stored, whatever status the `Status` column reports).
 
 Then apply:
 
@@ -572,13 +577,30 @@ migrate-nayax-connection --apply
 ```
 
 `--apply` must be typed explicitly; an invocation with neither flag is a dry run, and passing both
-is refused rather than resolved by precedence. Re-running an applied migration changes nothing at
-all — the row is not rewritten, so the stored ciphertext and the credential revision do not move.
-Exit code `0` means the run succeeded, including an idempotent re-run; `1` means it did not.
+is refused rather than resolved by precedence. Exit code `0` means the run succeeded, including an
+idempotent re-run; `1` means it did not.
 
 The apply is **one transaction**: the credential and the `Ready` status are committed together, or
 neither is. The report says which in as many words — a `Database` line reading `unchanged - nothing
 was written` or `changed, as reported below` — so you never have to infer it from the outcome name.
+
+### Re-running it
+
+Re-running an applied migration changes nothing at all. The row is not rewritten, so the stored
+ciphertext, the credential revision, the last-tested instant and the machine-check state do not
+move — and **neither does the status**, whatever it is. `Change` is `None`, the `Database` line
+reads `unchanged - nothing was written`, and the `Status` column shows the same value before and
+after.
+
+That matters most when the status is **not** `Ready`:
+
+- `NeedsAttention` means a Nayax `401` rejected the stored token (an invalid, expired or revoked
+  one). Re-running this command does not revive it and must not: the verdict came from Nayax, and
+  this command never calls Nayax. Recover it with the Owner's **Re-test** on Admin → Nayax
+  Settings, or by saving a new token there — a real connection test is the only thing that can
+  conclude a new status.
+- `PendingPermissions` means a token was saved but has not been tested since. Re-run or not, it
+  stays there; **Re-test** is what resolves it.
 
 ### If an apply fails
 
@@ -596,12 +618,14 @@ Read the `Database` line, and then act on it:
 - **`UNKNOWN - the commit failed`** — the only state the command cannot report, and the only one
   that needs you to look: the database holds either the whole change (credential stored, connection
   `Ready`) or none of it, never a part of it. Run the dry run: `Change: None` means it committed and
-  there is nothing left to do; `Change: CredentialsStored` or `Change: StatusMarkedReady` means it
-  did not, and you should apply again.
+  there is nothing left to do; `Change: CredentialsStored` means it did not, and you should apply
+  again.
 
-There is no state in which the credential is stored but its status was never written, so "stored
-but not Ready" never needs repairing by hand — and the credential table must not be edited by hand
-in any case.
+This command never leaves a credential it stored without its status, because the two are one
+transaction. A connection that is stored but *not* `Ready` therefore did not come from here, and
+re-running this command does not repair it: use **Re-test** on Admin → Nayax Settings, as
+[Re-running it](#re-running-it) describes. The credential table must not be edited by hand in any
+case.
 
 ### The cutover window
 
@@ -637,8 +661,11 @@ deployed and this command has been applied, verify through the application:
   stopped working some time after a successful cutover.
 
 If Nayax fails after the cutover, the credential is the first thing to check — re-run
-`migrate-nayax-connection --dry-run` and read what it reports is stored. Do not edit the
-credential table by hand; the token is encrypted and its key id is stored with it.
+`migrate-nayax-connection --dry-run` and read what it reports is stored. It is a diagnostic here
+and nothing more: it reports the stored status and will not change it, so a `NeedsAttention`
+connection is recovered through **Re-test** on Admin → Nayax Settings rather than by applying this
+command again. Do not edit the credential table by hand; the token is encrypted and its key id is
+stored with it.
 
 ### When to remove the global settings
 
