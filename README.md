@@ -181,7 +181,8 @@ or included in a message. An apply stores the credential encrypted and marks the
 `Ready`, because that token is the one already in production use — the command never calls Nayax.
 It is one transaction, committed only once both land, and every run reports a `Database` line
 stating whether anything changed, so a failed apply leaves nothing behind and says so.
-Re-running changes nothing. It refuses, writing nothing, unless the ownership bootstrap is complete
+Re-running changes nothing — including the connection's status, which a re-run leaves exactly as it
+is even when it is not `Ready`. It refuses, writing nothing, unless the ownership bootstrap is complete
 for exactly one business, that business is the one `bootstrap-business` adopted, no *different*
 credential is already stored, and a `NayaxTokenProtection` key is provisioned.
 
