@@ -95,14 +95,20 @@ export class LegacyBusinessSettingsPromptComponent implements OnDestroy {
       return;
     }
 
-    this.settingsSubscription = this.businessSettings.get().subscribe({
-      next: (settings) => this.evaluate(settings),
-      // Not known is never "incomplete": guessing it from a failed read risks telling an Owner
-      // whose profile is actually complete to go finish something.
-      error: () => (this.visible = false)
-    });
-    // Torn down together with the read above, so losing the capability stops both.
-    this.settingsSubscription.add(this.businessSettings.saved$.subscribe((settings) => this.evaluate(settings)));
+    // One container for the read and the saved-settings stream, so losing the capability stops
+    // both. It is a fresh Subscription rather than the read's own: the read completes as soon as
+    // the settings arrive, and anything added to a closed subscription is torn down at once.
+    const subscription = new Subscription();
+    this.settingsSubscription = subscription;
+    subscription.add(this.businessSettings.saved$.subscribe((settings) => this.evaluate(settings)));
+    subscription.add(
+      this.businessSettings.get().subscribe({
+        next: (settings) => this.evaluate(settings),
+        // Not known is never "incomplete": guessing it from a failed read risks telling an Owner
+        // whose profile is actually complete to go finish something.
+        error: () => (this.visible = false)
+      })
+    );
   }
 
   private evaluate(settings: BusinessSettings): void {

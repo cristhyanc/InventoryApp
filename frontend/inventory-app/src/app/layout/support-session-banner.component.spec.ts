@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { TestBed } from '@angular/core/testing';
 import { Subject, of, throwError } from 'rxjs';
 import { SupportSessionBannerComponent } from './support-session-banner.component';
@@ -58,17 +60,32 @@ describe('SupportSessionBannerComponent (issue #553)', () => {
     expect(buttonWithText(host, 'End session')).toBeDefined();
   });
 
-  /** Issue #513 asks for a prominent red banner; it was amber until issue #681. */
+  /**
+   * Issue #513 asks for a prominent red banner; it was amber until issue #681. jest-preset-angular
+   * strips a component's `styles` at compile time, so this reads the component's own source, loads
+   * its banner rule into jsdom, and checks the cascade the rendered banner actually gets.
+   */
   it('is red, in the design system danger colours', async () => {
-    const { host } = await render({
-      state$: of<SupportSessionState>({ kind: 'viewing', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' })
-    });
+    const source = readFileSync(join(__dirname, 'support-session-banner.component.ts'), 'utf8');
+    const rule = /\.support-session-banner\s*\{[^}]*\}/.exec(source);
+    expect(rule).not.toBeNull();
+    const style = document.createElement('style');
+    style.textContent = rule![0];
+    document.head.appendChild(style);
 
-    const banner = host.querySelector('.support-session-banner');
-    expect(banner).not.toBeNull();
-    const computed = getComputedStyle(banner!);
-    expect(computed.color).toBe('rgb(183, 28, 28)');
-    expect(computed.backgroundColor).toBe('rgba(244, 67, 53, 0.15)');
+    try {
+      const { host } = await render({
+        state$: of<SupportSessionState>({ kind: 'viewing', businessName: 'Snack Co', expiresAtUtc: '2026-02-01T01:00:00Z' })
+      });
+
+      const banner = host.querySelector('.support-session-banner');
+      expect(banner).not.toBeNull();
+      const computed = getComputedStyle(banner!);
+      expect(computed.color).toBe('rgb(183, 28, 28)');
+      expect(computed.backgroundColor).toBe('rgba(244, 67, 53, 0.15)');
+    } finally {
+      style.remove();
+    }
   });
 
   it('ends the session from the banner', async () => {
