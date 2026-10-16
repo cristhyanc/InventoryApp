@@ -81,8 +81,12 @@
       <table class="table">
         <thead>
           <tr>
-            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Product</th>
-            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">MDB Code</th>
+            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('name')">
+              <button type="button" class="hover:underline" (click)="sortBy('name')">{{ sortLabel('Product', 'name') }}</button>
+            </th>
+            <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide" [attr.aria-sort]="ariaSort('mdbCode')">
+              <button type="button" class="hover:underline" (click)="sortBy('mdbCode')">{{ sortLabel('MDB Code', 'mdbCode') }}</button>
+            </th>
             <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">Total to Pick</th>
             @for (machineId of appliedMachineIds; track machineId) {
               <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 text-md-table-head font-bold uppercase tracking-wide">{{ machineLabel(machineId) }}</th>
