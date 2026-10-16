@@ -16,6 +16,15 @@ namespace InventoryApi.Controllers;
 /// purchasing work, so every action requires <c>Purchasing.Operate</c> (issue #525), including the
 /// document read: the receipt belongs to the purchase it was recorded with, and whoever may record
 /// the purchase may see it.
+///
+/// <para><b>A line's nested catalogue product carries no <c>inventoryValue</c> for a caller without
+/// <c>Dashboard.ViewFinancials</c></b> (issue #700). That nested object is the same catalogue
+/// snapshot <c>api/products</c> serves, so until this slice the valuation issue #698 withheld there
+/// was readable by listing purchases instead. <b>The purchase's own figures are untouched</b> - the
+/// invoice total, the delivery and package charges, each line's unit cost and extended total, and
+/// the input-GST block - because they are purchasing data the Operator recording the purchase
+/// entered. The decision is made once per request from <see cref="CurrentCapabilities"/> and never
+/// from a role name.</para>
 /// </summary>
 [ApiController]
 [Route("api/purchases")]
@@ -40,6 +49,7 @@ public class PurchasesController : ControllerBase
     private readonly DeletePurchase _deletePurchase;
     private readonly ComputePurchaseTotalValidation _computeValidation;
     private readonly ComputePurchaseGstSummary _computeGstSummary;
+    private readonly CurrentCapabilities _capabilities;
 
     public PurchasesController(
         ListPurchases listPurchases,
@@ -49,8 +59,10 @@ public class PurchasesController : ControllerBase
         UpdatePurchase updatePurchase,
         DeletePurchase deletePurchase,
         ComputePurchaseTotalValidation computeValidation,
-        ComputePurchaseGstSummary computeGstSummary)
+        ComputePurchaseGstSummary computeGstSummary,
+        CurrentCapabilities capabilities)
     {
+        _capabilities = capabilities;
         _listPurchases = listPurchases;
         _getPurchase = getPurchase;
         _getPurchaseFile = getPurchaseFile;
@@ -64,16 +76,18 @@ public class PurchasesController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<IEnumerable<PurchaseResponseDto>>> GetAll([FromQuery] int? supplierId)
     {
+        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
         var purchases = await _listPurchases.Handle(supplierId, CancellationToken.None);
-        return Ok(purchases.Select(ToResponseDto).ToList());
+        return Ok(purchases.Select(purchase => ToResponseDto(purchase, visibility)).ToList());
     }
 
     [HttpGet("{id:int}")]
     public async Task<ActionResult<PurchaseResponseDto>> Get(int id)
     {
+        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
         var purchase = await _getPurchase.Handle(id, CancellationToken.None);
         if (purchase is null) return NotFound();
-        return Ok(ToResponseDto(purchase));
+        return Ok(ToResponseDto(purchase, visibility));
     }
 
     [HttpGet("{id:int}/file")]
@@ -106,6 +120,8 @@ public class PurchasesController : ControllerBase
         // IFormFile and adapts it to the Application layer's PurchaseFileInput port.
         if (file is null) return BadRequest(InvalidFileOrSupplierMessage);
 
+        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
+
         PurchaseRecord? purchase;
         try
         {
@@ -122,7 +138,7 @@ public class PurchasesController : ControllerBase
             return BadRequest(ex.Message);
         }
         if (purchase is null) return BadRequest(InvalidFileOrSupplierMessage);
-        return CreatedAtAction(nameof(Get), new { id = purchase.Id }, ToResponseDto(purchase));
+        return CreatedAtAction(nameof(Get), new { id = purchase.Id }, ToResponseDto(purchase, visibility));
     }
 
     [HttpPut("{id:int}")]
@@ -139,6 +155,8 @@ public class PurchasesController : ControllerBase
         [FromForm] int? supplierId,
         [FromForm] string? items)
     {
+        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
+
         PurchaseRecord? purchase;
         try
         {
@@ -155,7 +173,7 @@ public class PurchasesController : ControllerBase
             return BadRequest(ex.Message);
         }
         if (purchase is null) return NotFound();
-        return Ok(ToResponseDto(purchase));
+        return Ok(ToResponseDto(purchase, visibility));
     }
 
     [HttpDelete("{id:int}")]
@@ -180,7 +198,8 @@ public class PurchasesController : ControllerBase
     /// <see cref="ComputePurchaseGstSummary"/> over
     /// <c>Inventory.Domain.Purchases.PurchaseGstPolicy</c> (issue #431).
     /// </summary>
-    private PurchaseResponseDto ToResponseDto(PurchaseRecord purchase)
+    private PurchaseResponseDto ToResponseDto(
+        PurchaseRecord purchase, FinancialFigureVisibility visibility)
     {
         var result = _computeValidation.Handle(
             purchase.TotalAmount,
@@ -190,7 +209,7 @@ public class PurchasesController : ControllerBase
         var gst = _computeGstSummary.Handle(purchase);
 
         return new PurchaseResponseDto(
-            PurchaseResponseMapper.ToResponse(purchase),
+            PurchaseResponseMapper.ToResponse(purchase, visibility),
             new PurchaseValidationDto(
                 result.HasMismatch,
                 result.ItemSubtotal,

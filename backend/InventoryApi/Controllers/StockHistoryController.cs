@@ -23,6 +23,11 @@ namespace InventoryApi.Controllers;
 /// It requires the same <c>Inventory.Operate</c> capability as the per-product write endpoint
 /// (issue #525): the history it reports is the same movement data, read in one page instead of one
 /// product at a time.
+///
+/// <para>For the same reason it withholds the same figure: a movement's <c>inventoryValueAfter</c>
+/// is <c>null</c> for a caller without <c>Dashboard.ViewFinancials</c> (issue #700). Reading every
+/// product's movements in one page must not be a way around the redaction
+/// <see cref="StockController"/> applies one product at a time.</para>
 /// </summary>
 [ApiController]
 [Route("api/stock-history")]
@@ -32,8 +37,13 @@ namespace InventoryApi.Controllers;
 public sealed class StockHistoryController : ControllerBase
 {
     private readonly ListStockHistory _listStockHistory;
+    private readonly CurrentCapabilities _capabilities;
 
-    public StockHistoryController(ListStockHistory listStockHistory) => _listStockHistory = listStockHistory;
+    public StockHistoryController(ListStockHistory listStockHistory, CurrentCapabilities capabilities)
+    {
+        _listStockHistory = listStockHistory;
+        _capabilities = capabilities;
+    }
 
     /// <summary>
     /// One page of stock movements, most recent first.
@@ -51,6 +61,7 @@ public sealed class StockHistoryController : ControllerBase
         [FromQuery] StockHistoryRequest request,
         CancellationToken cancellationToken = default)
     {
+        var visibility = await _capabilities.ForCurrentRequestAsync(cancellationToken);
         var query = new StockHistoryQuery(
             request.ProductId,
             request.From,
@@ -62,6 +73,6 @@ public sealed class StockHistoryController : ControllerBase
             request.PageSize);
 
         var result = await _listStockHistory.Handle(query, cancellationToken);
-        return Ok(StockHistoryResponseMapper.ToResponse(result));
+        return Ok(StockHistoryResponseMapper.ToResponse(result, visibility));
     }
 }

@@ -19,9 +19,17 @@ namespace InventoryApi.Tests.DTOs;
 /// a key that is renamed, reordered, added, dropped, or given a different value fails here rather
 /// than in a client. The explicit key list is asserted as well, so a future change to <em>both</em>
 /// sides at once still has to be a conscious one.
+///
+/// Every byte-for-byte comparison here is of the <see cref="FinancialFigureVisibility.Visible"/>
+/// projection, stated explicitly since issue #700, which is what asserts that a Manager's and an
+/// Owner's movement response is unchanged by that slice. The redacted projection withholds exactly
+/// one key's value and is pinned by
+/// <see cref="Response_withholds_only_the_inventory_value_after_when_redacted"/>.
 /// </summary>
 public class StockAdjustmentResponseJsonContractTests
 {
+    private const FinancialFigureVisibility Visible = FinancialFigureVisibility.Visible;
+
     private static readonly JsonSerializerOptions WebDefaults = new(JsonSerializerDefaults.Web);
 
     private static StockAdjustmentRecord FullyPopulatedRecord() => new(
@@ -76,7 +84,7 @@ public class StockAdjustmentResponseJsonContractTests
     {
         var record = FullyPopulatedRecord();
 
-        var response = JsonSerializer.Serialize(StockAdjustmentResponseMapper.ToResponse(record), WebDefaults);
+        var response = JsonSerializer.Serialize(StockAdjustmentResponseMapper.ToResponse(record, Visible), WebDefaults);
 
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), response);
     }
@@ -105,7 +113,7 @@ public class StockAdjustmentResponseJsonContractTests
             EatBefore = null,
         };
 
-        var response = JsonSerializer.Serialize(StockAdjustmentResponseMapper.ToResponse(record), WebDefaults);
+        var response = JsonSerializer.Serialize(StockAdjustmentResponseMapper.ToResponse(record, Visible), WebDefaults);
 
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), response);
         Assert.Contains("\"unitCost\":null", response, StringComparison.Ordinal);
@@ -117,7 +125,7 @@ public class StockAdjustmentResponseJsonContractTests
     public void Response_exposes_the_same_keys_in_the_same_order_the_entity_did()
     {
         var json = JsonSerializer.Serialize(
-            StockAdjustmentResponseMapper.ToResponse(FullyPopulatedRecord()), WebDefaults);
+            StockAdjustmentResponseMapper.ToResponse(FullyPopulatedRecord(), Visible), WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(
@@ -148,7 +156,7 @@ public class StockAdjustmentResponseJsonContractTests
     {
         var record = FullyPopulatedRecord() with { Reason = reason };
 
-        var json = JsonSerializer.Serialize(StockAdjustmentResponseMapper.ToResponse(record), WebDefaults);
+        var json = JsonSerializer.Serialize(StockAdjustmentResponseMapper.ToResponse(record, Visible), WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(expected, document.RootElement.GetProperty("reason").GetInt32());
@@ -162,7 +170,7 @@ public class StockAdjustmentResponseJsonContractTests
     {
         var record = FullyPopulatedRecord() with { Source = source };
 
-        var json = JsonSerializer.Serialize(StockAdjustmentResponseMapper.ToResponse(record), WebDefaults);
+        var json = JsonSerializer.Serialize(StockAdjustmentResponseMapper.ToResponse(record, Visible), WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(expected, document.RootElement.GetProperty("source").GetInt32());
@@ -177,10 +185,42 @@ public class StockAdjustmentResponseJsonContractTests
     public void Response_omits_the_owning_business_and_the_entity_navigations()
     {
         var json = JsonSerializer.Serialize(
-            StockAdjustmentResponseMapper.ToResponse(FullyPopulatedRecord()), WebDefaults);
+            StockAdjustmentResponseMapper.ToResponse(FullyPopulatedRecord(), Visible), WebDefaults);
 
         Assert.DoesNotContain("businessId", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("\"product\"", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("receiptItem\"", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The redacted projection (issue #700) withholds <c>inventoryValueAfter</c> alone. The
+    /// movement's own costs stay: <c>unitCost</c> and <c>totalCost</c> are what the restock cost
+    /// and <c>averageUnitCostAfter</c> is a unit cost, and the recorded decision keeps all three
+    /// visible to the role that records the movement. Every key keeps its name and position, so a
+    /// client binding to the shape is unaffected.
+    /// </summary>
+    [Fact]
+    public void Response_withholds_only_the_inventory_value_after_when_redacted()
+    {
+        var record = FullyPopulatedRecord();
+
+        var redacted = JsonSerializer.Serialize(
+            StockAdjustmentResponseMapper.ToResponse(record, FinancialFigureVisibility.Redacted), WebDefaults);
+
+        var visible = JsonSerializer.Serialize(
+            StockAdjustmentResponseMapper.ToResponse(record, Visible), WebDefaults);
+        Assert.Contains("\"inventoryValueAfter\":36.40", visible, StringComparison.Ordinal);
+        Assert.Equal(
+            visible.Replace(
+                "\"inventoryValueAfter\":36.40", "\"inventoryValueAfter\":null", StringComparison.Ordinal),
+            redacted);
+
+        using var document = JsonDocument.Parse(redacted);
+        var root = document.RootElement;
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("inventoryValueAfter").ValueKind);
+        Assert.Equal(1.25m, root.GetProperty("unitCost").GetDecimal());
+        Assert.Equal(15m, root.GetProperty("totalCost").GetDecimal());
+        Assert.Equal(1.30m, root.GetProperty("averageUnitCostAfter").GetDecimal());
+        Assert.Equal(28, root.GetProperty("costingQuantityAfter").GetInt32());
     }
 }

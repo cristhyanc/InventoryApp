@@ -7,6 +7,7 @@ using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -687,7 +688,10 @@ public sealed class PurchaseGstClassificationTests : IDisposable
             new UpdatePurchase(store),
             new DeletePurchase(store, documents),
             new ComputePurchaseTotalValidation(),
-            new ComputePurchaseGstSummary());
+            new ComputePurchaseGstSummary(),
+            // An Owner: this file is about GST classification, not about who may see an inventory
+            // value, which StockAndPurchasingFinancialRedactionApiTests covers (issue #700).
+            TestCurrentCapabilities.Owner);
     }
 
     private static InventoryCostTransitionBaseline Baseline(long productId) => new()

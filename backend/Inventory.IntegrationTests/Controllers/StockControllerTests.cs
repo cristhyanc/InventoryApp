@@ -3,6 +3,7 @@ using Inventory.Domain.Exceptions;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Stock;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
@@ -27,7 +28,13 @@ public class StockControllerTests
         new(1, StockAdjustmentReason.Restock, "note", null, null, 1m);
 
     private static StockController CreateController(FakeStockAdjustmentStore store) =>
-        new(new GetStockHistory(store), new GetRestockCostSuggestion(store), new AdjustStock(store));
+        new(
+            new GetStockHistory(store),
+            new GetRestockCostSuggestion(store),
+            new AdjustStock(store),
+            // An Owner, so each movement carries its inventory value; the role-dependent shape
+            // itself is StockAndPurchasingFinancialRedactionApiTests (issue #700).
+            TestCurrentCapabilities.Owner);
 
     [Fact]
     public async Task Adjust_lets_insufficient_stock_exception_propagate()

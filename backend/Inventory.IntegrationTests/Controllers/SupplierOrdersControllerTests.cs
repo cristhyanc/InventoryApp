@@ -2,6 +2,7 @@ using Inventory.Application.SupplierOrders;
 using Inventory.Domain.Exceptions;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
+using InventoryApi.Tests.Application.Access;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
 using Xunit;
@@ -30,7 +31,11 @@ public class SupplierOrdersControllerTests
             new ListActiveSupplierOrders(store),
             new GetSupplierOrder(store),
             new CreateSupplierOrder(store),
-            new CancelSupplierOrder(store));
+            new CancelSupplierOrder(store),
+            // An Owner, so the lines carry their product's inventory value; the role-dependent
+            // shape itself is StockAndPurchasingFinancialRedactionApiTests, through the real
+            // pipeline (issue #700).
+            TestCurrentCapabilities.Owner);
 
     /// <summary>
     /// A store that accepts the supplier and the products, so only the behaviour under test
