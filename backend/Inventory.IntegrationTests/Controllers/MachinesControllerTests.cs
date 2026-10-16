@@ -1,3 +1,4 @@
+using Inventory.Application.Access;
 using Inventory.Application.Machines;
 using Inventory.Application.MachineStock;
 using Inventory.Application.MachineStockSync;
@@ -9,6 +10,8 @@ using Inventory.Domain.Machines;
 using Inventory.Domain.Nayax;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
+using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
@@ -59,7 +62,11 @@ public class MachinesControllerTests
             new ResolveMachineStockDuplicate(store),
             new ResolveMachineStockEventsAsAlreadyRecorded(store),
             new GetMachineStockReconciliation(ledgerStore, observationSource, Time.Clock),
-            new RecordMachineStockCount(ledgerStore, Time.Clock));
+            new RecordMachineStockCount(ledgerStore, Time.Clock),
+            // An Owner, so the dashboard actions answer the full response; the role-dependent shape
+            // itself is MachineAndProductFinancialRedactionApiTests, through the real pipeline.
+            new CurrentCapabilities(
+                new FakeSupportSessionAccessor(), new FakeCurrentBusinessProvider(businessId: 1)));
     }
 
     /// <summary>A ledger with no refill, sale, count or baseline for the machine (issue #56).</summary>

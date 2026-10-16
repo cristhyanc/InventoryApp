@@ -1,6 +1,7 @@
 using InventoryApi.Controllers;
 using Inventory.Infrastructure.Data;
 using InventoryApi.DTOs;
+using Inventory.Application.Access;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
@@ -10,6 +11,8 @@ using Inventory.Domain.Gst;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.SupportSessions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -54,7 +57,11 @@ public class ProductsControllerTests
             getInventoryValuationSummary,
             getProductPriceComparison,
             new GetProductGstRule(store),
-            new SetProductGstRule(store));
+            new SetProductGstRule(store),
+            // An Owner, so the catalogue actions answer the full response; the role-dependent shape
+            // itself is MachineAndProductFinancialRedactionApiTests, through the real pipeline.
+            new CurrentCapabilities(
+                new FakeSupportSessionAccessor(), new FakeCurrentBusinessProvider(businessId: 1)));
     }
 
     private static ProductResponse SingleProduct(ActionResult<IEnumerable<ProductResponse>> result) =>

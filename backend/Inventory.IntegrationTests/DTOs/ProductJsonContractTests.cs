@@ -141,7 +141,8 @@ public class ProductJsonContractTests
     {
         var record = FullyPopulatedRecord();
 
-        var response = JsonSerializer.Serialize(ProductRecordResponseMapper.ToResponse(record), WebDefaults);
+        var response = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(record, FinancialFigureVisibility.Visible), WebDefaults);
 
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), response);
     }
@@ -168,7 +169,8 @@ public class ProductJsonContractTests
             UpdatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
         };
 
-        var response = JsonSerializer.Serialize(ProductRecordResponseMapper.ToResponse(record), WebDefaults);
+        var response = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(record, FinancialFigureVisibility.Visible), WebDefaults);
 
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), response);
         Assert.Contains("\"category\":null", response, StringComparison.Ordinal);
@@ -180,7 +182,8 @@ public class ProductJsonContractTests
     public void Response_exposes_the_same_keys_in_the_same_order_the_entity_did()
     {
         var json = JsonSerializer.Serialize(
-            ProductRecordResponseMapper.ToResponse(FullyPopulatedRecord()), WebDefaults);
+            ProductRecordResponseMapper.ToResponse(FullyPopulatedRecord(), FinancialFigureVisibility.Visible),
+            WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(
@@ -227,7 +230,8 @@ public class ProductJsonContractTests
     public void Response_derives_the_reorder_values_from_the_resolved_reorder_inputs()
     {
         var json = JsonSerializer.Serialize(
-            ProductRecordResponseMapper.ToResponse(FullyPopulatedRecord()), WebDefaults);
+            ProductRecordResponseMapper.ToResponse(FullyPopulatedRecord(), FinancialFigureVisibility.Visible),
+            WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(3m, document.RootElement.GetProperty("projectedStockForReorder").GetDecimal());
@@ -240,7 +244,8 @@ public class ProductJsonContractTests
     public void Response_omits_the_owning_business()
     {
         var json = JsonSerializer.Serialize(
-            ProductRecordResponseMapper.ToResponse(FullyPopulatedRecord()), WebDefaults);
+            ProductRecordResponseMapper.ToResponse(FullyPopulatedRecord(), FinancialFigureVisibility.Visible),
+            WebDefaults);
 
         Assert.DoesNotContain("businessId", json, StringComparison.OrdinalIgnoreCase);
     }

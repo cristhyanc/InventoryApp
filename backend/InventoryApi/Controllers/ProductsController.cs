@@ -17,6 +17,14 @@ namespace InventoryApi.Controllers;
 /// inventory work, so every action requires <c>Inventory.Operate</c> (issue #525) - the catalogue is
 /// what an Operator refills machines from, and the product GST rule is configuration an Operator
 /// maintains alongside it rather than a separate capability in the agreed table.
+///
+/// <para><b>The catalogue read actions withhold <c>inventoryValue</c> from a caller without
+/// <c>Dashboard.ViewFinancials</c></b> (issue #698). Summing that field over the catalogue gives the
+/// valuation issue #527 withholds from the Dashboard and <see cref="InventoryValueSummary"/> refuses
+/// outright, so leaving it on these responses left the figure readable by anyone who could list
+/// products. The endpoints stay open to every role that may operate inventory - unit cost, selling
+/// price and every stock figure are unchanged - and only the response shape differs, decided once
+/// per request from <see cref="CurrentCapabilities"/> and never from a role name.</para>
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -42,6 +50,7 @@ public class ProductsController : ControllerBase
     private readonly GetProductPriceComparison _getProductPriceComparison;
     private readonly GetProductGstRule _getProductGstRule;
     private readonly SetProductGstRule _setProductGstRule;
+    private readonly CurrentCapabilities _capabilities;
 
     public ProductsController(
         ListProducts listProducts,
@@ -53,8 +62,10 @@ public class ProductsController : ControllerBase
         GetInventoryValuationSummary getInventoryValuationSummary,
         GetProductPriceComparison getProductPriceComparison,
         GetProductGstRule getProductGstRule,
-        SetProductGstRule setProductGstRule)
+        SetProductGstRule setProductGstRule,
+        CurrentCapabilities capabilities)
     {
+        _capabilities = capabilities;
         _getProductGstRule = getProductGstRule;
         _setProductGstRule = setProductGstRule;
         _listProducts = listProducts;
@@ -75,16 +86,18 @@ public class ProductsController : ControllerBase
         [FromQuery] bool? lowStockOnly,
         CancellationToken ct)
     {
+        var visibility = await _capabilities.ForCurrentRequestAsync(ct);
         var products = await _listProducts.Handle(
             new ProductCatalogFilter(search, categoryId, supplierId), lowStockOnly, ct);
-        return Ok(products.Select(ProductRecordResponseMapper.ToResponse).ToList());
+        return Ok(products.Select(product => ProductRecordResponseMapper.ToResponse(product, visibility)).ToList());
     }
 
     [HttpGet("{id:long}")]
     public async Task<ActionResult<ProductResponse>> Get(long id)
     {
+        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
         var product = await _getProduct.Handle(id, CancellationToken.None);
-        return product is null ? NotFound() : Ok(ProductRecordResponseMapper.ToResponse(product));
+        return product is null ? NotFound() : Ok(ProductRecordResponseMapper.ToResponse(product, visibility));
     }
 
     /// <summary>
@@ -130,9 +143,10 @@ public class ProductsController : ControllerBase
         [FromQuery] int? supplierId,
         CancellationToken ct)
     {
+        var visibility = await _capabilities.ForCurrentRequestAsync(ct);
         var items = await _listLowStockProducts.Handle(
             new ProductCatalogFilter(search, categoryId, supplierId), ct);
-        return Ok(items.Select(ProductRecordResponseMapper.ToResponse).ToList());
+        return Ok(items.Select(item => ProductRecordResponseMapper.ToResponse(item, visibility)).ToList());
     }
 
     /// <summary>
