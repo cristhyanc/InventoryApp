@@ -135,7 +135,7 @@ public class ProductUseCaseTests
         var record = await CreateUseCases(db).Get.Handle(1, CancellationToken.None);
 
         Assert.NotNull(record);
-        var product = ProductRecordResponseMapper.ToResponse(record);
+        var product = ProductRecordResponseMapper.ToResponse(record, FinancialFigureVisibility.Visible);
         Assert.Equal("Coke", product.Name);
         Assert.Equal("SKU-1", product.Sku);
         Assert.Equal("A can", product.Description);
