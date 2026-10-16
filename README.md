@@ -855,6 +855,18 @@ returns to the Purchases list, and **Cancel** returns without saving. Leaving th
 browser's Back button or by any other link discards unsaved edits without asking first, which is how every
 other form page in the application behaves.
 
+**Entering a line's price.** Stock often arrives in boxes priced per box, so each purchased item line lets you
+choose how you enter its price: **Total purchase price** — the amount paid for that whole line — or **Unit
+price**. The figure you do not type is calculated from that line's purchased unit quantity and shown beside
+it (the unit cost to four decimals, or the line total), so you can check both before saving. A line is still
+saved as its quantity and unit cost: $32.50 entered for 20 units saves 20 units at $1.6250 each, and a total
+that does not divide evenly — $100.00 over 300 units, for example — is saved so the line still comes to
+exactly the $100.00 you entered. Add Purchase starts each line on the total paid; a line already on a
+purchase you are editing starts on its recorded unit price, and neither receiving a supplier order nor
+opening the edit page changes a line's unit cost until you change a quantity or a price yourself. The
+purchase's own **Total Amount**, **Delivery Cost** and **Package Cost** are unaffected and are still entered
+as plain amounts.
+
 - Everything starts as **Not classified**, including lines prefilled while receiving a supplier order.
   Nothing is guessed from the product, the supplier or the amount, so a line is classified only when a
   person chooses. **Not classified** contributes no GST and keeps the purchase visibly unresolved for

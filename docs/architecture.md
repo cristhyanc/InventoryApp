@@ -7320,6 +7320,11 @@ client-side filter/paging.
 3. Delivery/package amounts remain identifiable for whole-business reporting.
 4. Supplier-order allocations are reconciled without fabricating purchase quantities.
 
+A purchase line is recorded as a quantity and a unit cost, and that contract is unchanged. How the
+operator *arrives* at that unit cost is a choice the Add and Edit purchase forms offer per line: the
+amount paid for the whole line divided over its units, or the unit price itself. See [Per-line price
+entry](#per-line-price-entry-total-paid-or-unit-price-issue-707).
+
 Manual stock adjustments (`EfStockAdjustmentStore`), Take Inventory
 (`EfInventoryCountAdjustmentStore`) and machine Sync Restock (`EfMachineStockEventStore`) record
 their movement through `Inventory.Application.Costing.IRecordInventoryMovement`. Purchase
@@ -7557,7 +7562,10 @@ boundary](#page-composition-boundary-issue-191):
   lines (product for a new line, quantity, unit cost, per-line GST classification, add and remove),
   delivery cost with its GST picker, package cost with its GST picker, and notes are exactly the
   fields and operations the inline editor offered, with the same `name`s, the same `data-testid`s and
-  the same validation. Every issue #431 rule still holds and its tests moved with the code: only a
+  the same validation. Issue #707 then added one control per line, the price-entry selector described
+  in [Per-line price entry](#per-line-price-entry-total-paid-or-unit-price-issue-707), and with it
+  the line-price validation this form now performs before it emits a payload; every other field is
+  still the one listed here. Every issue #431 rule still holds and its tests moved with the code: only a
   changed classification is submitted, a stored line travels with its own `id` and keeps its product,
   an absent charge submits no classification, and an unchanged purchase date is resubmitted as the
   stored instant. The GST figures are still the API's alone and are still displayed on the list; this
@@ -7571,6 +7579,57 @@ boundary](#page-composition-boundary-issue-191):
   page behaves like every other form page: leaving it, by Cancel, by Back or by any other link,
   discards unsaved edits without a prompt. Introducing a prompt here would be a new cross-cutting
   pattern and is deliberately not part of issue #475.
+
+#### Per-line price entry: total paid or unit price (issue #707)
+
+Stock usually arrives in boxes priced per box, so each purchase line on **both** purchase forms -
+`components/purchases/purchase-upload.component.{ts,html}` (Add) and
+`components/purchases/purchase-edit/purchase-edit-form.component.{ts,html}` (Edit) - carries a
+price-entry selector beside its quantity. The operator types one of the line's two prices and the
+form calculates the other from that line's purchased **unit** quantity:
+
+| Mode | Editable input | Calculated, read-only figure |
+| --- | --- | --- |
+| `Total purchase price` | the GST-inclusive amount paid for the whole line (a box price) | the unit cost, displayed to four decimals |
+| `Unit price` | the price of one unit | the line total, `round(quantity x unitCost, 2)` |
+
+- **One shared calculation.** `components/purchases/purchase-line-price.ts` holds the entry-mode
+  vocabulary, both directions of the arithmetic, the cent rounding and the per-line validation, and
+  both forms delegate to it, so Add and Edit cannot drift apart (AGENTS.md § Architecture rules).
+  It is an entry convenience over the existing contract: no pack size, units-per-box or carton is
+  modelled, the chosen mode is not part of any request or any stored row, and a line is still
+  persisted and submitted as the quantity and unit cost `PurchaseItemDto` already carried. Purchase
+  GST remains the API's alone - these forms still perform no GST arithmetic.
+- **The unit cost is submitted as the unrounded quotient.** In `Total purchase price` mode the
+  request carries `lineTotal / quantity` exactly as computed, never rounded to the four decimals the
+  form displays, because that is what makes the saved line's amount reproduce the amount entered:
+  $100.00 over 300 units is $0.3333... per unit and `round(300 x 0.3333..., 2)` is $100.00, while a
+  unit cost stored as `0.3333` would save $99.99. `PurchaseGstPolicy.LineAmount` is unchanged and
+  stays the authority on that figure; `PurchaseGstPolicyTests` pins both halves of the comparison,
+  and `EfPurchaseStoreTests` pins that the stored `decimal(18,4)` column keeps enough precision for
+  the round trip on a real SQLite database.
+- **Which mode a line opens in.** Every Add Purchase line defaults to `Total purchase price`,
+  including a line prefilled from a supplier order, which opens on the line total its recorded unit
+  price implies. A line **already stored** on a purchase opens in `Unit price` on the edit form,
+  because the unit cost is the figure the purchase actually holds: entering the quantity over a
+  rounded total would make a quantity correction re-cost the line, and a stored cost no cent amount
+  divides evenly into could not be reproduced from that total at all. A line added during an edit has
+  no stored cost and starts like an Add Purchase line.
+- **Nothing is derived until the operator changes something.** Opening a form, or switching the
+  selector, never changes the unit cost a line would submit: a prefilled or stored line keeps the
+  unit cost it was read with, and a mode change only fills in the figures the new mode shows. A
+  change of quantity or of the entered amount then recalculates the complementary figure
+  immediately, so neither figure is ever shown stale.
+- **Validation happens before anything is submitted.** A line needs a whole number of units above
+  zero and a finite, non-negative amount in the field its mode asks for, and its unit cost must
+  itself be finite and non-negative. An unusable quantity clears the derived unit cost rather than
+  dividing by zero, each line shows what it is missing, and both forms refuse to send the purchase
+  at all - so `NaN`, an infinity and a blank price never reach `POST`/`PUT /api/purchases`. The
+  server's own `PurchaseItemFormatPolicy` check is unchanged and still has the final say.
+- **Out of scope by design.** The purchase-level Total Amount (the invoice total, which also covers
+  delivery and package charges), the delivery cost and the package cost are untouched and are still
+  entered as plain amounts; the purchases list's own unit-cost display is unchanged; and no existing
+  purchase is repriced, backfilled or recosted by this change.
 
 #### Supplier product price history and comparison (issue #63)
 
