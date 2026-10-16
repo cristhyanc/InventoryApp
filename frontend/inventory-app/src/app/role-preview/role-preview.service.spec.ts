@@ -265,8 +265,8 @@ describe('RolePreviewService (issue #721)', () => {
     const harness = configure();
     harness.service.start('Operator');
 
-    expect(window.localStorage.length).toBe(0);
-    expect(window.sessionStorage.length).toBe(0);
+    expect(window.localStorage).toHaveLength(0);
+    expect(window.sessionStorage).toHaveLength(0);
     expect(window.location.search).not.toContain('Operator');
 
     TestBed.resetTestingModule();
