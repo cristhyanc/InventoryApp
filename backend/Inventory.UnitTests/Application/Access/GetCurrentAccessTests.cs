@@ -33,7 +33,7 @@ public class GetCurrentAccessTests
 
         return new(
             currentBusiness,
-            new CurrentCapabilities(session, currentBusiness),
+            new CurrentCapabilities(session, currentBusiness, new FakeRolePreviewAccessor()),
             session,
             new GetCurrentBusiness(currentBusiness, store ?? new FakeBusinessProfileStore()));
     }

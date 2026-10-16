@@ -7,6 +7,7 @@ using Inventory.Application.Reorder;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Reporting.Dashboard;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Products;
 using InventoryApi.Tests.Application.SupportSessions;
@@ -68,7 +69,8 @@ public class GetDashboardSummaryTests
             // Dashboard.ViewFinancials is given is GetDashboardSummaryRedactionTests.
             new CurrentCapabilities(
                 new FakeSupportSessionAccessor(),
-                new FakeCurrentBusinessProvider(businessId: 1)),
+                new FakeCurrentBusinessProvider(businessId: 1),
+                new FakeRolePreviewAccessor()),
             // A member's own request, so the whole summary is computed; the support view's degraded
             // shape (issue #552) is GetDashboardSummarySupportViewTests.
             MemberScope(),

@@ -11,6 +11,7 @@ using Inventory.Domain.Gst;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.SupportSessions;
 using Microsoft.AspNetCore.Mvc;
@@ -61,7 +62,9 @@ public class ProductsControllerTests
             // An Owner, so the catalogue actions answer the full response; the role-dependent shape
             // itself is MachineAndProductFinancialRedactionApiTests, through the real pipeline.
             new CurrentCapabilities(
-                new FakeSupportSessionAccessor(), new FakeCurrentBusinessProvider(businessId: 1)));
+                new FakeSupportSessionAccessor(),
+                new FakeCurrentBusinessProvider(businessId: 1),
+                new FakeRolePreviewAccessor()));
     }
 
     private static ProductResponse SingleProduct(ActionResult<IEnumerable<ProductResponse>> result) =>

@@ -8,6 +8,7 @@ using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
@@ -139,7 +140,8 @@ public class GetDashboardSummaryTenancyTests : IDisposable
         return new GetDashboardSummary(
             Time.Clock,
             Time.Calendar,
-            new CurrentCapabilities(new FakeSupportSessionAccessor(), currentBusiness),
+            new CurrentCapabilities(
+                new FakeSupportSessionAccessor(), currentBusiness, new FakeRolePreviewAccessor()),
             // A member's own resolved scope, matching the context's: these tests are about which
             // business's rows the figures come from, and none of them is a support view.
             TestAppDbContext.ScopeFor(scopedBusinessId),
