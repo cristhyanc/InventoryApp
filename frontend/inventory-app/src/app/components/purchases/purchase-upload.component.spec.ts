@@ -1,4 +1,4 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute, provideRouter, Router } from '@angular/router';
 import { Observable, of } from 'rxjs';
 import { PurchaseUploadComponent } from './purchase-upload.component';
@@ -73,13 +73,20 @@ function uploadedItems(upload: jest.Mock): PurchaseItemPayload[] {
   return JSON.parse(JSON.stringify(uploadedPayload(upload).items ?? [])) as PurchaseItemPayload[];
 }
 
-/** A ready-to-submit manual purchase form with one line. */
+/**
+ * A ready-to-submit manual purchase form with one line: 3 units for the $6.00 paid for the line,
+ * which is the $2.00 unit cost the request carries. The line is filled through the component's own
+ * change handlers, the way the template does it (issue #707).
+ */
 function readyToUpload(supplierOrderId: string | null = null, sessionActive: Observable<boolean> = of(false)) {
   const harness = createHarness(supplierOrderId, sessionActive);
   harness.component.selectedFile = new File(['content'], 'invoice.pdf', { type: 'application/pdf' });
   harness.component.form.title = 'Weekly restock';
   harness.component.addItem();
-  harness.component.items[0] = { ...harness.component.items[0], productId: 5, quantity: 3, unitCost: 2 };
+  const item = harness.component.items[0];
+  item.productId = 5;
+  harness.component.onLineQuantityChange(item, 3);
+  harness.component.onLineAmountChange(item, 6);
   return harness;
 }
 
@@ -168,6 +175,211 @@ describe('PurchaseUploadComponent GST classification mapping (issue #431)', () =
 
     expect(component.items).toHaveLength(1);
     expect(component.items[0].gstClassification).toBe(GstClassification.Unknown);
+  });
+});
+
+describe('PurchaseUploadComponent per-line price entry (issue #707)', () => {
+  it('starts every new line on the total paid for the line, with nothing entered yet', () => {
+    const { component } = createHarness(null);
+
+    component.addItem();
+
+    expect(component.items[0].priceEntryMode).toBe('total');
+    expect(component.items[0].lineTotal).toBeNull();
+    expect(component.items[0].unitCost).toBeNull();
+  });
+
+  it('derives the unit cost of a box price and saves the line at exactly the entered total', () => {
+    const { component, upload } = readyToUpload();
+    const item = component.items[0];
+
+    component.onLineQuantityChange(item, 20);
+    component.onLineAmountChange(item, 32.5);
+
+    expect(item.unitCost).toBe(1.625);
+    expect(component.savedLineAmount(item)).toBe(32.5);
+
+    component.upload();
+
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 20, unitCost: 1.625 }]);
+  });
+
+  it('derives the line total from an entered unit price', () => {
+    const { component, upload } = readyToUpload();
+    const item = component.items[0];
+
+    component.onLineQuantityChange(item, 24);
+    component.onLinePriceEntryModeChange(item, 'unit');
+    component.onLineAmountChange(item, 1.6625);
+
+    expect(item.lineTotal).toBe(39.9);
+    expect(component.derivedLineTotal(item)).toBe(39.9);
+
+    component.upload();
+
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 24, unitCost: 1.6625 }]);
+  });
+
+  it('submits the unrounded quotient when a line total does not divide evenly', () => {
+    const { component, upload } = readyToUpload();
+    const item = component.items[0];
+
+    component.onLineQuantityChange(item, 300);
+    component.onLineAmountChange(item, 100);
+    component.upload();
+
+    const submitted = uploadedItems(upload)[0];
+    expect(submitted.unitCost).toBe(100 / 300);
+    expect(submitted.unitCost).not.toBe(0.3333);
+    // The saved line amount - the server's round(quantity * unitCost, 2) - is the entered $100.00.
+    expect(Math.round(submitted.quantity * submitted.unitCost * 100) / 100).toBe(100);
+  });
+
+  it('recalculates when the quantity changes, so no figure is left stale', () => {
+    const { component } = readyToUpload();
+    const item = component.items[0];
+
+    component.onLineQuantityChange(item, 20);
+    component.onLineAmountChange(item, 32.5);
+    component.onLineQuantityChange(item, 10);
+
+    expect(item.lineTotal).toBe(32.5);
+    expect(item.unitCost).toBe(3.25);
+    expect(component.derivedUnitCost(item)).toBe(3.25);
+  });
+
+  it('keeps the unit cost a supplier order prefilled and shows its matching line total', () => {
+    const { component, upload } = createHarness('9');
+    component.selectedFile = new File(['content'], 'invoice.pdf', { type: 'application/pdf' });
+    component.form.title = 'Receiving order';
+
+    expect(component.items[0].priceEntryMode).toBe('total');
+    expect(component.items[0].quantity).toBe(10);
+    expect(component.items[0].lineTotal).toBe(20);
+    expect(component.items[0].unitCost).toBe(2);
+
+    component.upload();
+
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 10, unitCost: 2 }]);
+  });
+
+  it('refuses a line with no amount entered, in either mode', () => {
+    const { component, upload } = readyToUpload();
+    const item = component.items[0];
+
+    component.onLineAmountChange(item, null);
+    component.upload();
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(component.error).toContain('1 item(s)');
+
+    component.onLinePriceEntryModeChange(item, 'unit');
+    component.onLineAmountChange(item, null);
+    component.upload();
+
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('refuses a quantity that is not a whole number above zero, and never divides by it', () => {
+    const { component, upload } = readyToUpload();
+    const item = component.items[0];
+
+    component.onLineAmountChange(item, 32.5);
+    component.onLineQuantityChange(item, 0);
+
+    expect(item.unitCost).toBeNull();
+    expect(component.lineProblem(item)).toBe('Enter a whole number of units above zero.');
+
+    component.upload();
+    expect(upload).not.toHaveBeenCalled();
+
+    component.onLineQuantityChange(item, 2.5);
+    component.upload();
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('never submits a non-finite price', () => {
+    const { component, upload } = readyToUpload();
+
+    component.onLineAmountChange(component.items[0], Number.NaN);
+    component.upload();
+
+    expect(upload).not.toHaveBeenCalled();
+  });
+});
+
+describe('PurchaseUploadComponent price entry controls (issue #707)', () => {
+  async function render() {
+    const route = { queryParamMap: of(convertToParamMap({})) } as unknown as ActivatedRoute;
+    const upload = jest.fn(() => of({} as Purchase));
+
+    await TestBed.configureTestingModule({
+      imports: [PurchaseUploadComponent],
+      providers: [
+        { provide: PurchaseService, useValue: { upload } },
+        { provide: SupplierService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierOrderService, useValue: { getById: jest.fn() } },
+        { provide: ProductService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        { provide: ActivatedRoute, useValue: route },
+        provideRouter([])
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(PurchaseUploadComponent);
+    fixture.detectChanges();
+    fixture.componentInstance.addItem();
+    fixture.componentInstance.onLineQuantityChange(fixture.componentInstance.items[0], 20);
+    fixture.detectChanges();
+
+    return { fixture, host: fixture.nativeElement as HTMLElement, component: fixture.componentInstance };
+  }
+
+  /**
+   * Types into one of the line's amount inputs the way the operator does. The pending `ngModel`
+   * write of the freshly rendered input is awaited first, so the value under test is not overwritten
+   * by it mid-event.
+   */
+  async function typeInto(
+    fixture: ComponentFixture<PurchaseUploadComponent>, testId: string, value: string): Promise<void> {
+    await fixture.whenStable();
+    const input = (fixture.nativeElement as HTMLElement)
+      .querySelector(`[data-testid="${testId}"]`) as HTMLInputElement;
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  }
+
+  it('shows the total paid as the editable amount and the unit cost as a calculated figure', async () => {
+    const { fixture, host, component } = await render();
+
+    expect(host.querySelector('[data-testid="purchase-item-price-mode"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="purchase-item-line-total"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="purchase-item-cost"]')).toBeNull();
+
+    await typeInto(fixture, 'purchase-item-line-total', '32.50');
+
+    expect(component.items[0].unitCost).toBe(1.625);
+    expect(host.querySelector('[data-testid="purchase-item-derived-unit-cost"]')!.textContent)
+      .toContain('$1.6250');
+  });
+
+  it('swaps which amount is editable when the operator picks Unit price', async () => {
+    const { fixture, host, component } = await render();
+
+    component.onLineQuantityChange(component.items[0], 24);
+    component.onLinePriceEntryModeChange(component.items[0], 'unit');
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="purchase-item-line-total"]')).toBeNull();
+    expect(host.querySelector('[data-testid="purchase-item-cost"]')).not.toBeNull();
+
+    await typeInto(fixture, 'purchase-item-cost', '1.6625');
+
+    expect(component.items[0].unitCost).toBe(1.6625);
+    expect(host.querySelector('[data-testid="purchase-item-derived-line-total"]')!.textContent)
+      .toContain('$39.90');
   });
 });
 
