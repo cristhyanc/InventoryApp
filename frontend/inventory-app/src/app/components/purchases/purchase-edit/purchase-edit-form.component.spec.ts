@@ -125,6 +125,8 @@ describe('PurchaseEditFormComponent field inventory (issue #475)', () => {
         id: 11,
         productId: 10,
         quantity: 4,
+        priceEntryMode: 'unit',
+        lineTotal: 9,
         unitCost: 2.25,
         gstClassification: GstClassification.Unknown,
         storedGstClassification: GstClassification.Unknown
@@ -139,7 +141,7 @@ describe('PurchaseEditFormComponent field inventory (issue #475)', () => {
     component.editItems[1].quantity = 2;
     component.editItems[1].unitCost = 1.5;
 
-    expect(component.editLineTotal(component.editItems[0])).toBe(6);
+    expect(component.savedLineAmount(component.editItems[0])).toBe(6);
     expect(component.editItemsSubtotal).toBe(9);
   });
 
@@ -375,6 +377,129 @@ describe('PurchaseEditFormComponent GST edit mapping (issue #431, moved by #475)
   });
 });
 
+describe('PurchaseEditFormComponent per-line price entry (issue #707)', () => {
+  it('opens a stored line on the unit cost the purchase holds, with its line total calculated', () => {
+    const stored = purchase({ items: [item({ id: 11, quantity: 20, unitCost: 1.625 })] });
+    const { component } = createForm(stored);
+
+    expect(component.editItems[0].priceEntryMode).toBe('unit');
+    expect(component.editItems[0].unitCost).toBe(1.625);
+    expect(component.editItems[0].lineTotal).toBe(32.5);
+    expect(component.derivedLineTotal(component.editItems[0])).toBe(32.5);
+  });
+
+  it('starts a line added during the edit on the total paid for it, like Add Purchase does', () => {
+    const { component } = createForm(purchase({ items: [item({ id: 11 })] }));
+
+    component.addEditItem();
+
+    expect(component.editItems[1].priceEntryMode).toBe('total');
+  });
+
+  it('keeps a stored line at its recorded unit cost when only the quantity is corrected', () => {
+    const stored = purchase({ items: [item({ id: 11, quantity: 10, unitCost: 2 })] });
+    const { component, saved } = createForm(stored);
+
+    component.onLineQuantityChange(component.editItems[0], 4);
+
+    expect(component.editItems[0].unitCost).toBe(2);
+    expect(component.editItems[0].lineTotal).toBe(8);
+
+    component.submit();
+
+    expect(savedItems(saved)).toEqual([{ id: 11, productId: 10, quantity: 4, unitCost: 2 }]);
+  });
+
+  it('submits the stored quantity, unit cost and purchase total when no price was touched', () => {
+    // A unit cost no total divides evenly into: the stored value has to survive untouched, not be
+    // re-derived from the line total the form displays.
+    const stored = purchase({ totalAmount: 100, items: [item({ id: 11, quantity: 300, unitCost: 100 / 300 })] });
+    const { component, saved } = createForm(stored);
+
+    expect(component.editItems[0].lineTotal).toBe(100);
+
+    component.submit();
+
+    expect(saved[0].totalAmount).toBe(100);
+    expect(savedItems(saved)).toEqual([{ id: 11, productId: 10, quantity: 300, unitCost: 100 / 300 }]);
+  });
+
+  it('keeps the stored unit cost through a change of entry mode, and shows the matching total', () => {
+    const stored = purchase({ items: [item({ id: 11, quantity: 300, unitCost: 100 / 300 })] });
+    const { component, saved } = createForm(stored);
+
+    component.onLinePriceEntryModeChange(component.editItems[0], 'unit');
+    component.onLinePriceEntryModeChange(component.editItems[0], 'total');
+    component.submit();
+
+    expect(savedItems(saved)).toEqual([{ id: 11, productId: 10, quantity: 300, unitCost: 100 / 300 }]);
+  });
+
+  it('derives the unit cost when the operator switches to the total paid and enters it', () => {
+    const stored = purchase({ items: [item({ id: 11, quantity: 2, unitCost: 1.1 })] });
+    const { component, saved } = createForm(stored);
+
+    component.onLineQuantityChange(component.editItems[0], 20);
+    component.onLinePriceEntryModeChange(component.editItems[0], 'total');
+    component.onLineAmountChange(component.editItems[0], 32.5);
+    component.submit();
+
+    expect(savedItems(saved)).toEqual([{ id: 11, productId: 10, quantity: 20, unitCost: 1.625 }]);
+  });
+
+  it('derives the line total when the operator enters a unit price', () => {
+    const stored = purchase({ items: [item({ id: 11, quantity: 2, unitCost: 1.1 })] });
+    const { component, saved } = createForm(stored);
+
+    component.onLineQuantityChange(component.editItems[0], 24);
+    component.onLineAmountChange(component.editItems[0], 1.6625);
+
+    expect(component.derivedLineTotal(component.editItems[0])).toBe(39.9);
+
+    component.submit();
+
+    expect(savedItems(saved)).toEqual([{ id: 11, productId: 10, quantity: 24, unitCost: 1.6625 }]);
+  });
+
+  it('refuses to save a line with no price entered, and says how many lines are wrong', () => {
+    const stored = purchase({ items: [item({ id: 11, quantity: 20, unitCost: 1.625 })] });
+    const { component, saved } = createForm(stored);
+
+    component.onLineAmountChange(component.editItems[0], null);
+    component.submit();
+
+    expect(saved).toHaveLength(0);
+    expect(component.lineError).toContain('1 item(s)');
+  });
+
+  it('refuses a quantity that is not a whole number above zero rather than dividing by it', () => {
+    const stored = purchase({ items: [item({ id: 11, quantity: 20, unitCost: 1.625 })] });
+    const { component, saved } = createForm(stored);
+
+    component.onLineQuantityChange(component.editItems[0], 0);
+
+    expect(component.editItems[0].lineTotal).toBeNull();
+    expect(component.lineProblem(component.editItems[0])).toBe('Enter a whole number of units above zero.');
+
+    component.submit();
+
+    expect(saved).toHaveLength(0);
+  });
+
+  it('clears the refusal once the lines are usable again', () => {
+    const stored = purchase({ items: [item({ id: 11, quantity: 20, unitCost: 1.625 })] });
+    const { component, saved } = createForm(stored);
+
+    component.onLineAmountChange(component.editItems[0], null);
+    component.submit();
+    component.onLineAmountChange(component.editItems[0], 1.625);
+    component.submit();
+
+    expect(component.lineError).toBe('');
+    expect(savedItems(saved)).toEqual([{ id: 11, productId: 10, quantity: 20, unitCost: 1.625 }]);
+  });
+});
+
 describe('PurchaseEditFormComponent template (issue #475)', () => {
   const render = async (stored: Purchase, error = '', saving = false) => {
     await TestBed.configureTestingModule({ imports: [PurchaseEditFormComponent] }).compileComponents();
@@ -409,6 +534,25 @@ describe('PurchaseEditFormComponent template (issue #475)', () => {
 
     expect(host.querySelectorAll('[data-testid="edit-purchase-item-product"]')).toHaveLength(1);
     expect(host.querySelectorAll('[data-testid="edit-purchase-item"]')).toHaveLength(2);
+  });
+
+  it('offers the price entry selector per line and shows the calculated figure read-only (issue #707)', async () => {
+    const { fixture, host } = await render(purchase({ items: [item({ id: 11, quantity: 20, unitCost: 1.625 })] }));
+
+    // A stored line opens on its recorded unit cost, with its line amount calculated beside it.
+    expect(host.querySelector('[data-testid="edit-purchase-item-price-mode"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="edit-purchase-item-cost"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="edit-purchase-item-line-total"]')).toBeNull();
+    expect(host.querySelector('[data-testid="edit-purchase-item-derived-line-total"]')?.textContent)
+      .toContain('$32.50');
+
+    fixture.componentInstance.onLinePriceEntryModeChange(fixture.componentInstance.editItems[0], 'total');
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="edit-purchase-item-cost"]')).toBeNull();
+    expect(host.querySelector('[data-testid="edit-purchase-item-line-total"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="edit-purchase-item-derived-unit-cost"]')?.textContent)
+      .toContain('$1.6250');
   });
 
   it('shows a charge GST picker only while that charge has a value', async () => {
@@ -478,7 +622,8 @@ describe('PurchaseEditFormComponent template (issue #475)', () => {
     expect(host.querySelector('.grid.gap-4.md\\:grid-cols-2')).not.toBeNull();
     const line = host.querySelector('[data-testid="edit-purchase-item"]');
     expect(line?.className).toContain('grid');
-    expect(line?.className).toContain('md:grid-cols-[minmax(0,3fr)_minmax(7rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_auto]');
+    expect(line?.className).toContain(
+      'md:grid-cols-[minmax(0,3fr)_minmax(6rem,1fr)_minmax(10rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_auto]');
   });
 
   it('labels every field it offers', async () => {

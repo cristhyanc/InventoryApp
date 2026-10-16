@@ -13,12 +13,33 @@ import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
 import { IconComponent } from '../shared/icon.component';
 import { GST_CLASSIFICATION_OPTIONS, isChargePresent } from './gst-classification-options';
+import {
+  DEFAULT_PRICE_ENTRY_MODE,
+  PRICE_ENTRY_MODE_OPTIONS,
+  PriceEntryMode,
+  applyPriceEntryMode,
+  isPurchaseLinePriceComplete,
+  isValidLineAmount,
+  lineTotalFromUnitCost,
+  purchaseLinePriceErrorMessage,
+  purchaseLinePriceProblem,
+  savedLineAmount,
+  syncPurchaseLinePrice
+} from './purchase-line-price';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
-// Draft item representation where unitCost may be null
+// Draft item representation where the quantity and either price may be null
 interface DraftPurchaseItem {
   productId: number;
-  quantity: number;
+  quantity: number | null;
+  /**
+   * Which of this line's two prices the operator types; the other is calculated from the line's
+   * purchased unit quantity (issue #707). It is an entry convenience only and is never submitted.
+   */
+  priceEntryMode: PriceEntryMode;
+  /** The amount paid for the whole line: entered in `total` mode, calculated in `unit` mode. */
+  lineTotal: number | null;
+  /** The per-unit cost the request carries: calculated in `total` mode, entered in `unit` mode. */
   unitCost: number | null;
   /**
    * This line's GST classification (issue #431). A new line starts as `Unknown`/Not classified and
@@ -61,6 +82,9 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
   /** The GST picker's options, shared with the purchase edit form. */
   readonly gstOptions = GST_CLASSIFICATION_OPTIONS;
+
+  /** The price-entry options, shared with the purchase edit form (issue #707). */
+  readonly priceEntryModeOptions = PRICE_ENTRY_MODE_OPTIONS;
 
   form = {
     title: '',
@@ -186,9 +210,15 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
     // Use draft items with nullable unitCost - do NOT convert null to 0. The GST classification
     // stays Not classified: a supplier order says nothing about a line's GST status.
+    //
+    // The line opens in the default Total purchase price mode on the total that prefilled unit
+    // price already implies, and the unit cost itself is left exactly as the order recorded it:
+    // receiving an order without changing a price submits the same unit cost as before issue #707.
     this.items = outstandingLines.map((line) => ({
       productId: line.productId,
       quantity: line.outstandingQuantity,
+      priceEntryMode: DEFAULT_PRICE_ENTRY_MODE,
+      lineTotal: lineTotalFromUnitCost(line.unitPrice ?? null, line.outstandingQuantity),
       unitCost: line.unitPrice ?? null,
       gstClassification: GstClassification.Unknown
     }));
@@ -240,10 +270,13 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Validate that all items have a valid unitCost
-    const invalidItems = this.items.filter(item => item.unitCost === null || item.unitCost === undefined || item.unitCost < 0);
+    // Validate every line's quantity and price, in whichever direction it was entered (issue
+    // #707): a whole number of units above zero, a finite non-negative entered amount, and a
+    // finite non-negative unit cost to submit - so a blank price, a zero quantity's division and a
+    // NaN are all refused here rather than sent.
+    const invalidItems = this.items.filter(item => !isPurchaseLinePriceComplete(item));
     if (invalidItems.length > 0) {
-      this.error = `Please enter a unit cost for all items. ${invalidItems.length} item(s) have missing or invalid cost.`;
+      this.error = purchaseLinePriceErrorMessage(invalidItems.length);
       return;
     }
 
@@ -253,7 +286,7 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     // Map draft items to PurchaseItemPayload only after validation
     const validItems: PurchaseItemPayload[] = this.items.map(item => ({
       productId: item.productId,
-      quantity: item.quantity,
+      quantity: item.quantity as number,  // Safe to cast after validation
       unitCost: item.unitCost as number,  // Safe to cast after validation
       gstClassification: PurchaseUploadComponent.submittedClassification(item.gstClassification)
     }));
@@ -295,11 +328,55 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     this.items.push({
       productId: this.products[0]?.id ?? 0,
       quantity: 1,
+      priceEntryMode: DEFAULT_PRICE_ENTRY_MODE,
+      lineTotal: null,
       unitCost: null,
       gstClassification: GstClassification.Unknown
     });
   }
   removeItem(index: number): void { this.items.splice(index, 1); }
+
+  /**
+   * The line's purchased unit quantity changed, so its calculated price follows (issue #707): the
+   * entered total divided over the new unit count, or the entered unit price multiplied by it.
+   */
+  onLineQuantityChange(item: DraftPurchaseItem, quantity: number | null): void {
+    item.quantity = quantity;
+    syncPurchaseLinePrice(item);
+  }
+
+  /** The amount the chosen entry mode asks for changed, so the complementary figure follows. */
+  onLineAmountChange(item: DraftPurchaseItem, amount: number | null): void {
+    if (item.priceEntryMode === 'total') {
+      item.lineTotal = amount;
+    } else {
+      item.unitCost = amount;
+    }
+    syncPurchaseLinePrice(item);
+  }
+
+  /**
+   * The operator chose which price to type. Switching never changes the unit cost the line would
+   * submit; it only fills in the figures the new mode shows.
+   */
+  onLinePriceEntryModeChange(item: DraftPurchaseItem, mode: PriceEntryMode): void {
+    applyPriceEntryMode(item, mode);
+  }
+
+  /** The calculated unit cost to show beside an entered line total, or null while there is none. */
+  derivedUnitCost(item: DraftPurchaseItem): number | null {
+    return isValidLineAmount(item.unitCost) ? item.unitCost : null;
+  }
+
+  /** The calculated line total to show beside an entered unit price, or null while there is none. */
+  derivedLineTotal(item: DraftPurchaseItem): number | null {
+    return isValidLineAmount(item.lineTotal) ? item.lineTotal : null;
+  }
+
+  /** What still has to be entered on this line, or null when it is ready to save. */
+  lineProblem(item: DraftPurchaseItem): string | null {
+    return purchaseLinePriceProblem(item);
+  }
 
   /**
    * Whether a delivery or package charge exists, which is what decides whether its GST picker is
@@ -326,8 +403,10 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     return classification === GstClassification.Unknown ? undefined : classification;
   }
   itemProduct(item: DraftPurchaseItem): Product | undefined { return this.products.find(p => p.id === Number(item.productId)); }
-  lineTotal(item: DraftPurchaseItem): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
-  get itemsSubtotal(): number { return this.items.reduce((sum, item) => sum + this.lineTotal(item), 0); }
+
+  /** The amount this line will save: the server's own round(quantity * unitCost, 2). */
+  savedLineAmount(item: DraftPurchaseItem): number { return savedLineAmount(item); }
+  get itemsSubtotal(): number { return this.items.reduce((sum, item) => sum + this.savedLineAmount(item), 0); }
 
   private purchaseTimestamp(): string | null {
     if (!this.form.purchaseDate) return null;

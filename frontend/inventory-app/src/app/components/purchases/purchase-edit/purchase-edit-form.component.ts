@@ -5,6 +5,20 @@ import { GstClassification, Product, Purchase, Supplier } from '../../../models/
 import { PurchaseItemPayload, PurchaseUpdatePayload } from '../../../services/purchase.service';
 import { IconComponent } from '../../shared/icon.component';
 import { GST_CLASSIFICATION_OPTIONS, isChargePresent } from '../gst-classification-options';
+import {
+  DEFAULT_PRICE_ENTRY_MODE,
+  PRICE_ENTRY_MODE_OPTIONS,
+  PriceEntryMode,
+  STORED_LINE_PRICE_ENTRY_MODE,
+  applyPriceEntryMode,
+  isPurchaseLinePriceComplete,
+  isValidLineAmount,
+  lineTotalFromUnitCost,
+  purchaseLinePriceErrorMessage,
+  purchaseLinePriceProblem,
+  savedLineAmount,
+  syncPurchaseLinePrice
+} from '../purchase-line-price';
 
 /**
  * One line of the purchase edit form (issue #431).
@@ -14,12 +28,20 @@ import { GST_CLASSIFICATION_OPTIONS, isChargePresent } from '../gst-classificati
  * added during the edit. `storedGstClassification` is the classification the purchase was read with,
  * which is how the form knows whether the person actually changed it: an unchanged classification is
  * left out of the request so the server keeps it and its provenance.
+ *
+ * `priceEntryMode` and `lineTotal` are the per-line price entry of issue #707: the mode decides
+ * which of the two amounts the operator types, and neither is submitted - the request still carries
+ * the quantity and the unit cost alone. The quantity and both amounts are nullable because a number
+ * input binds `null` for a blank field, and because a figure that cannot be derived is cleared
+ * rather than left stale.
  */
 export interface EditPurchaseItem {
   id?: number;
   productId: number;
-  quantity: number;
-  unitCost: number;
+  quantity: number | null;
+  priceEntryMode: PriceEntryMode;
+  lineTotal: number | null;
+  unitCost: number | null;
   gstClassification: GstClassification;
   storedGstClassification: GstClassification | null;
 }
@@ -77,6 +99,15 @@ export class PurchaseEditFormComponent {
   /** The GST picker's options, shared with the purchase entry form. */
   readonly gstOptions = GST_CLASSIFICATION_OPTIONS;
 
+  /** The price-entry options, shared with the purchase entry form (issue #707). */
+  readonly priceEntryModeOptions = PRICE_ENTRY_MODE_OPTIONS;
+
+  /**
+   * Why this form refused to submit its own lines (issue #707), as opposed to {@link error}, which
+   * is the API's refusal of a save the page did send. Cleared on the next submission attempt.
+   */
+  lineError = '';
+
   editForm = {
     title: '',
     notes: '',
@@ -133,6 +164,14 @@ export class PurchaseEditFormComponent {
     if (this.saving) return;
     if (!this.editForm.title.trim()) return;
 
+    // Every line's quantity and price, in whichever direction it was entered (issue #707): a whole
+    // number of units above zero, a finite non-negative entered amount, and a finite non-negative
+    // unit cost to submit. A line that fails this is refused here, so a blank price, a zero
+    // quantity's division or a NaN never reaches the update request.
+    const invalidLines = this.editItems.filter((item) => !isPurchaseLinePriceComplete(item));
+    this.lineError = invalidLines.length > 0 ? purchaseLinePriceErrorMessage(invalidLines.length) : '';
+    if (invalidLines.length > 0) return;
+
     this.saveRequested.emit({
       title: this.editForm.title.trim(),
       notes: this.editForm.notes || null,
@@ -157,17 +196,65 @@ export class PurchaseEditFormComponent {
     this.editItems.push({
       productId: this.products[0]?.id ?? 0,
       quantity: 1,
+      priceEntryMode: DEFAULT_PRICE_ENTRY_MODE,
+      lineTotal: 0,
       unitCost: 0,
       gstClassification: GstClassification.Unknown,
       storedGstClassification: null
     });
   }
   removeEditItem(index: number): void { this.editItems.splice(index, 1); }
-  editLineTotal(item: EditPurchaseItem): number { return Number(item.quantity || 0) * Number(item.unitCost || 0); }
-  get editItemsSubtotal(): number { return this.editItems.reduce((sum, item) => sum + this.editLineTotal(item), 0); }
+
+  /**
+   * The line's purchased unit quantity changed, so its calculated price follows (issue #707): the
+   * entered total divided over the new unit count, or the entered unit price multiplied by it.
+   */
+  onLineQuantityChange(item: EditPurchaseItem, quantity: number | null): void {
+    item.quantity = quantity;
+    syncPurchaseLinePrice(item);
+  }
+
+  /** The amount the chosen entry mode asks for changed, so the complementary figure follows. */
+  onLineAmountChange(item: EditPurchaseItem, amount: number | null): void {
+    if (item.priceEntryMode === 'total') {
+      item.lineTotal = amount;
+    } else {
+      item.unitCost = amount;
+    }
+    syncPurchaseLinePrice(item);
+  }
+
+  /**
+   * The operator chose which price to type. Switching never changes the unit cost the line would
+   * submit, so toggling it on a stored line cannot quietly re-cost the purchase; it only fills in
+   * the figures the new mode shows.
+   */
+  onLinePriceEntryModeChange(item: EditPurchaseItem, mode: PriceEntryMode): void {
+    applyPriceEntryMode(item, mode);
+  }
+
+  /** The calculated unit cost to show beside an entered line total, or null while there is none. */
+  derivedUnitCost(item: EditPurchaseItem): number | null {
+    return isValidLineAmount(item.unitCost) ? item.unitCost : null;
+  }
+
+  /** The calculated line total to show beside an entered unit price, or null while there is none. */
+  derivedLineTotal(item: EditPurchaseItem): number | null {
+    return isValidLineAmount(item.lineTotal) ? item.lineTotal : null;
+  }
+
+  /** What still has to be entered on this line, or null when it is ready to save. */
+  lineProblem(item: EditPurchaseItem): string | null {
+    return purchaseLinePriceProblem(item);
+  }
+
+  /** The amount this line will save: the server's own round(quantity * unitCost, 2). */
+  savedLineAmount(item: EditPurchaseItem): number { return savedLineAmount(item); }
+  get editItemsSubtotal(): number { return this.editItems.reduce((sum, item) => sum + this.savedLineAmount(item), 0); }
 
   private open(purchase: Purchase): void {
     this.source = purchase;
+    this.lineError = '';
     const delivery = purchase.deliveryGstClassification ?? GstClassification.Unknown;
     const packageCharge = purchase.packageGstClassification ?? GstClassification.Unknown;
     this.editForm = {
@@ -182,10 +269,22 @@ export class PurchaseEditFormComponent {
       supplierId: purchase.supplierId ?? ''
     };
     this.storedChargeGst = { delivery, package: packageCharge };
+    // A stored line opens on the figure the purchase actually holds - its unit cost - with the
+    // line amount round(quantity * unitCost, 2) shown beside it as the calculated figure, and the
+    // operator may switch it to Total purchase price to re-enter a box price (issue #707).
+    //
+    // Unit price rather than the Add form's default is deliberate: it is what keeps an edit of
+    // something else from re-costing the line. Opening a stored line on its total would mean a
+    // change of quantity divided that total over the new unit count, so correcting "10 received,
+    // not 4" would silently change the unit cost the purchase was recorded at, and a stored cost
+    // no cent amount divides evenly into could not be reproduced from the rounded total at all. A
+    // line added during the edit has no stored cost and starts like a new Add Purchase line.
     this.editItems = (purchase.items ?? []).map(item => ({
       id: item.id,
       productId: item.productId,
       quantity: item.quantity,
+      priceEntryMode: STORED_LINE_PRICE_ENTRY_MODE,
+      lineTotal: lineTotalFromUnitCost(item.unitCost, item.quantity),
       unitCost: item.unitCost,
       gstClassification: item.gstClassification ?? GstClassification.Unknown,
       storedGstClassification: item.gstClassification ?? GstClassification.Unknown
@@ -202,8 +301,8 @@ export class PurchaseEditFormComponent {
     return {
       id: item.id,
       productId: item.productId,
-      quantity: item.quantity,
-      unitCost: item.unitCost,
+      quantity: item.quantity as number,  // Safe to cast: submit() refuses an unusable line
+      unitCost: item.unitCost as number,  // Safe to cast: submit() refuses an unusable line
       gstClassification: PurchaseEditFormComponent.changedClassification(
         item.gstClassification, item.storedGstClassification)
     };
