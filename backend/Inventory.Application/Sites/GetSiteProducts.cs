@@ -1,4 +1,6 @@
+using Inventory.Application.Access;
 using Inventory.Application.Nayax;
+using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Sites;
 
@@ -8,22 +10,58 @@ namespace Inventory.Application.Sites;
 /// The site product preview use case: for every machine at a site, aggregates its Nayax product
 /// mappings into one row per catalogue product with an estimated card-sale profit. Mirrors the former
 /// <c>InventoryApi.Services.SiteService.GetProducts</c> exactly (issue #241).
+///
+/// <para><b>The estimated profit depends on what the request may see (issue #697).</b> The endpoint
+/// requires <c>Inventory.Operate</c> and every role keeps reaching it - the page is how stock and
+/// pricing per site are read - but the estimate additionally needs <c>Dashboard.ViewFinancials</c>.
+/// For a request that does not hold it neither
+/// <see cref="ISiteFactsStore.ResolveCardCommissionAsync"/> nor
+/// <see cref="ISiteFactsStore.ResolveEffectiveFeeExGstAsync"/> is called, because those two reads
+/// exist only to calculate it, and <see cref="SiteProductRecord.EstimatedCardProfit"/> is
+/// <see langword="null"/>. The <b>unit cost and the site price stay visible to every role</b>, which
+/// is the recorded decision this slice implements, so the cost-basis read is made either way. The
+/// decision is made here rather than at the HTTP boundary because it decides what is <em>read</em>,
+/// and it comes from <see cref="CurrentCapabilities"/> - the one place that answers "what may this
+/// request do", for a member's role and for a support session's fixed set alike - so it cannot
+/// disagree with the capability the endpoint enforces or with what <c>GET /api/me/access</c>
+/// reported. No role name appears in it. See <see cref="GetSiteSummaries"/>, which redacts the site
+/// revenue on the same rule.</para>
 /// </summary>
 public sealed class GetSiteProducts
 {
     private readonly INayaxLynxClient _nayax;
     private readonly ISiteFactsStore _facts;
     private readonly IBusinessCalendar _businessCalendar;
+    private readonly CurrentCapabilities _capabilities;
 
-    public GetSiteProducts(INayaxLynxClient nayax, ISiteFactsStore facts, IBusinessCalendar businessCalendar)
+    public GetSiteProducts(
+        INayaxLynxClient nayax,
+        ISiteFactsStore facts,
+        IBusinessCalendar businessCalendar,
+        CurrentCapabilities capabilities)
     {
         _nayax = nayax;
         _facts = facts;
         _businessCalendar = businessCalendar;
+        _capabilities = capabilities;
     }
 
+    /// <exception cref="BusinessAccessDeniedException">
+    /// The caller has neither a usable membership nor a support session, so there is nothing to
+    /// decide the estimate from. Nothing is read: an unresolved membership is a refusal, never a fall
+    /// back to the least-privileged role. A request cannot reach this - the endpoint's
+    /// <c>Inventory.Operate</c> policy refuses such a caller first - and it fails closed if one ever
+    /// could.
+    /// </exception>
     public async Task<IReadOnlyList<SiteProductRecord>> Handle(long siteId, CancellationToken cancellationToken)
     {
+        // Resolved before anything else, and awaited, because the membership this reads resolves
+        // through the request's own scoped AppDbContext - the context every facts-store read below
+        // lands on, and which supports one operation at a time.
+        var mayViewFinancials = await _capabilities
+            .AllowsAsync(Capability.DashboardViewFinancials, cancellationToken)
+            .ConfigureAwait(false);
+
         var machines = (await _nayax.GetMachinesAsync(cancellationToken))
             .Where(machine => machine.CustomerID == siteId)
             .ToList();
@@ -58,14 +96,24 @@ public sealed class GetSiteProducts
         // only after the Nayax fan-out above has completed, because since issue #520 each of those
         // remote reads resolves the business's credentials through that same context (issue #667);
         // the fan-out itself stays concurrent, with its credential reads serialized in the store.
+        //
+        // The cost basis is read for every caller, because the unit cost it carries stays visible to
+        // every role; the commission and the fee are read only for a caller who may be shown the
+        // estimate they exist to calculate (issue #697).
         var costBasis = await _facts.GetProductCostBasisAsync(cancellationToken);
-        var commission = await _facts.ResolveCardCommissionAsync(siteId, today, distinctPrices, cancellationToken);
-        var feeExGst = await _facts.ResolveEffectiveFeeExGstAsync(today, cancellationToken);
+        var commission = mayViewFinancials
+            ? await _facts.ResolveCardCommissionAsync(siteId, today, distinctPrices, cancellationToken)
+            : null;
+        var feeExGst = mayViewFinancials
+            ? await _facts.ResolveEffectiveFeeExGstAsync(today, cancellationToken)
+            : null;
 
         var priceFacts = machineProducts.Select(mp => new SiteProductPriceFact(
             mp.NayaxProductID!.Value,
             mp.RetailPrice,
-            mp.RetailPrice.HasValue ? commission.CommissionAmountByRetailPrice.GetValueOrDefault(mp.RetailPrice.Value) : 0m,
+            mp.RetailPrice.HasValue && commission is not null
+                ? commission.CommissionAmountByRetailPrice.GetValueOrDefault(mp.RetailPrice.Value)
+                : 0m,
             mp.PAR ?? 0,
             mp.MissingStockByMDB ?? 0));
 
@@ -80,8 +128,13 @@ public sealed class GetSiteProducts
                         pair.Machine.MachineID, MachineLabel(pair.Machine), pair.Product.MDBCode))
                     .ToList());
 
+        // No commission configuration was resolved for a redacted request, which is what the policy
+        // is told, so it has nothing to estimate from and every other figure it returns is the one
+        // it returns for any caller. The estimate is then withheld explicitly as well: a figure this
+        // request may not see must not become publishable by a later change to how the policy treats
+        // missing inputs.
         return SiteProductPricingPolicy
-            .Calculate(priceFacts, costBasis, feeExGst, commission.ConfigurationUnavailable)
+            .Calculate(priceFacts, costBasis, feeExGst, commission?.ConfigurationUnavailable ?? true)
             .Select(result =>
             {
                 var machineMdbCodes = machineMdbCodesByProduct.GetValueOrDefault(
@@ -90,8 +143,8 @@ public sealed class GetSiteProducts
 
                 return new SiteProductRecord(
                     result.ProductId, result.Name, result.AverageUnitCost, result.SitePrice,
-                    result.EstimatedCardProfit, result.QuantityInStock, result.MaxStock,
-                    mdbCode, machineMdbCodes);
+                    mayViewFinancials ? result.EstimatedCardProfit : null, result.QuantityInStock,
+                    result.MaxStock, mdbCode, machineMdbCodes);
             })
             .ToList();
     }

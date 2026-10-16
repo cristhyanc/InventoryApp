@@ -16,6 +16,14 @@ public sealed record SiteProductMachineMdbCode(long MachineId, string MachineLab
 /// <see langword="null"/> when none of them has one. A display/sort convenience only, mirroring
 /// <c>PickListProduct.MdbCode</c> (issue #496) - see <see cref="MachineMdbCodes"/> for the
 /// per-machine values this page shows in the MDB Code cell.
+///
+/// <para><see cref="EstimatedCardProfit"/> is <see langword="null"/> in two different cases, neither
+/// of which is a profit of zero: the estimate could not be made - no priced machine mapping, no cost
+/// basis, no effective Nayax fee rate, or ambiguous commission configuration
+/// (<see cref="Inventory.Domain.Sites.SiteProductPricingPolicy"/>) - or the request does not hold
+/// <c>Dashboard.ViewFinancials</c> and it was withheld (issue #697, see
+/// <see cref="GetSiteProducts"/>). <see cref="AverageUnitCost"/> and <see cref="SitePrice"/> are
+/// never withheld: they stay visible to every role.</para>
 /// </summary>
 public sealed record SiteProductRecord(
     long ProductId,
