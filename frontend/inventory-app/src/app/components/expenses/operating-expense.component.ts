@@ -1,12 +1,14 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { OperatingExpense, OperatingExpenseCategory, OperatingExpensePayload, OperatingExpenseService } from '../../services/operating-expense.service';
 import { SupplierService } from '../../services/supplier.service';
 import { MachineService } from '../../services/machine.service';
 import { Supplier, Machine } from '../../models/models';
 import { ObjectUrlCache } from '../shared/object-url-cache';
 import { IconComponent } from '../shared/icon.component';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 @Component({
   selector: 'app-operating-expense',
@@ -20,10 +22,12 @@ import { IconComponent } from '../shared/icon.component';
           <p class="page-subtitle">Manual expenses only. Nayax processing, commissions, delivery and packaging remain separately sourced.</p>
         </div>
         <div class="page-actions">
-          <button type="button" class="btn btn-primary" (click)="startCreate()">
-            <app-icon name="add" [size]="16" />
-            Add Expense
-          </button>
+          @if (!sessionActive) {
+            <button type="button" class="btn btn-primary" (click)="startCreate()">
+              <app-icon name="add" [size]="16" />
+              Add Expense
+            </button>
+          }
         </div>
       </header>
 
@@ -128,7 +132,7 @@ import { IconComponent } from '../shared/icon.component';
               <button type="button" class="btn btn-link btn-sm mt-3" (click)="viewAttachment(editing)">View document</button>
             }
             <div class="page-actions mt-4">
-              <button type="button" class="btn btn-primary" (click)="save()">Save</button>
+              <button type="button" class="btn btn-primary" [disabled]="sessionActive" (click)="save()">Save</button>
               <button type="button" class="btn btn-secondary" (click)="cancel()">Cancel</button>
             </div>
           </div>
@@ -170,16 +174,18 @@ import { IconComponent } from '../shared/icon.component';
                     <td class="table-cell table-num">{{ expense.gstAmount | currency }}</td>
                     <td class="table-cell table-num">{{ expense.totalAmount | currency }}</td>
                     <td class="table-cell">
-                      <div class="flex gap-2">
-                        <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(expense)">
-                          <app-icon name="edit" [size]="16" />
-                          Edit
-                        </button>
-                        <button type="button" class="btn btn-sm btn-danger" (click)="remove(expense)">
-                          <app-icon name="delete" [size]="16" />
-                          Delete
-                        </button>
-                      </div>
+                      @if (!sessionActive) {
+                        <div class="flex gap-2">
+                          <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(expense)">
+                            <app-icon name="edit" [size]="16" />
+                            Edit
+                          </button>
+                          <button type="button" class="btn btn-sm btn-danger" (click)="remove(expense)">
+                            <app-icon name="delete" [size]="16" />
+                            Delete
+                          </button>
+                        </div>
+                      }
                     </td>
                   </tr>
                 }
@@ -208,12 +214,28 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
   selectedAttachment: File | null = null;
   filters: { from?: string; to?: string; category?: OperatingExpenseCategory; supplierId?: number } = {};
   form: OperatingExpensePayload = this.emptyForm();
+  /**
+   * Whether a support session is active (issue #659, extending #554): Add/Edit/Delete hide and
+   * Save disables itself while it is, because a session grants `ExpensesManage` - the capability
+   * this page would otherwise gate those writes on - and the backend refuses the write itself
+   * only by its read-only method rule, never by withholding the capability. See
+   * `SupportSessionService.active$`.
+   */
+  sessionActive = false;
   // Supporting documents are protected by the API, so they are fetched through HttpClient
   // (which attaches the bearer token) and opened from a temporary object URL.
   private readonly objectUrls = new ObjectUrlCache();
-  constructor(public service: OperatingExpenseService, private supplierService: SupplierService, private machineService: MachineService) {}
+  private readonly sessionActiveSubscription: Subscription;
+  constructor(
+    public service: OperatingExpenseService,
+    private supplierService: SupplierService,
+    private machineService: MachineService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
   ngOnInit(): void { this.load(); this.supplierService.getAll().subscribe(x => this.suppliers = x); this.machineService.getAll().subscribe(x => this.machines = x); }
-  ngOnDestroy(): void { this.objectUrls.releaseAll(); }
+  ngOnDestroy(): void { this.objectUrls.releaseAll(); this.sessionActiveSubscription.unsubscribe(); }
   viewAttachment(expense: OperatingExpense): void {
     this.service.getAttachment(expense.id).subscribe({
       next: blob => window.open(this.objectUrls.create(blob), '_blank', 'noopener'),
@@ -221,12 +243,14 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
     });
   }
   load(): void { this.service.getAll(this.filters).subscribe(x => this.expenses = x); }
-  startCreate(): void { this.editing = { id: 0, ...this.emptyForm() }; this.form = this.emptyForm(); this.selectedAttachment = null; }
-  startEdit(expense: OperatingExpense): void { this.editing = expense; this.selectedAttachment = null; this.form = { expenseDate: expense.expenseDate.substring(0, 10), category: expense.category, description: expense.description, amountExGst: expense.amountExGst, gstAmount: expense.gstAmount, totalAmount: expense.totalAmount, supplierId: expense.supplierId, siteId: expense.siteId, machineId: expense.machineId, servicePeriodStart: expense.servicePeriodStart, servicePeriodEnd: expense.servicePeriodEnd, notes: expense.notes }; }
+  // Checked here as well as hidden/disabled in the template, so the write is actually unavailable
+  // rather than merely invisible or inert - the endpoint refuses it either way.
+  startCreate(): void { if (this.sessionActive) { return; } this.editing = { id: 0, ...this.emptyForm() }; this.form = this.emptyForm(); this.selectedAttachment = null; }
+  startEdit(expense: OperatingExpense): void { if (this.sessionActive) { return; } this.editing = expense; this.selectedAttachment = null; this.form = { expenseDate: expense.expenseDate.substring(0, 10), category: expense.category, description: expense.description, amountExGst: expense.amountExGst, gstAmount: expense.gstAmount, totalAmount: expense.totalAmount, supplierId: expense.supplierId, siteId: expense.siteId, machineId: expense.machineId, servicePeriodStart: expense.servicePeriodStart, servicePeriodEnd: expense.servicePeriodEnd, notes: expense.notes }; }
   onAttachmentSelected(event: Event): void { this.selectedAttachment = (event.target as HTMLInputElement).files?.[0] ?? null; }
   cancel(): void { this.editing = null; this.selectedAttachment = null; }
-  save(): void { if (!this.form.description.trim()) return; const request = this.editing?.id ? this.service.update(this.editing.id, this.form, this.selectedAttachment) : this.service.create(this.form, this.selectedAttachment); request.subscribe(() => { this.editing = null; this.selectedAttachment = null; this.load(); }); }
-  remove(expense: OperatingExpense): void { if (confirm(`Delete expense "${expense.description}"?`)) this.service.delete(expense.id).subscribe(() => this.load()); }
+  save(): void { if (this.sessionActive || !this.form.description.trim()) { return; } const request = this.editing?.id ? this.service.update(this.editing.id, this.form, this.selectedAttachment) : this.service.create(this.form, this.selectedAttachment); request.subscribe(() => { this.editing = null; this.selectedAttachment = null; this.load(); }); }
+  remove(expense: OperatingExpense): void { if (!this.sessionActive && confirm(`Delete expense "${expense.description}"?`)) this.service.delete(expense.id).subscribe(() => this.load()); }
   categoryLabel(category: OperatingExpenseCategory): string { return this.categoryNames[Number(category)]?.replace(/([a-z])([A-Z])/g, '$1 $2') ?? 'Other'; }
   total(field: 'amountExGst' | 'gstAmount' | 'totalAmount'): number { return this.expenses.reduce((sum, item) => sum + Number(item[field] || 0), 0); }
   private emptyForm(): OperatingExpensePayload { return { expenseDate: new Date().toISOString().substring(0, 10), category: OperatingExpenseCategory.Other, description: '', amountExGst: 0, gstAmount: 0, totalAmount: 0, supplierId: null, siteId: null, machineId: null, notes: null }; }

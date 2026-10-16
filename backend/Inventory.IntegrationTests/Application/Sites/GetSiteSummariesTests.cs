@@ -1,6 +1,7 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.Sites;
 using Inventory.Infrastructure.Sites;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
 
@@ -94,10 +95,12 @@ public class GetSiteSummariesTests
     }
 
     /// <summary>
-    /// Nayax machine-product requests are independent remote reads that touch no scoped EF context, so
-    /// serializing the database reads must not serialize them: both machines' requests are expected to be
-    /// in flight at once. The gated client waits (bounded) until both have started, so a serialized
-    /// implementation fails this assertion instead of hanging.
+    /// The bound on the Nayax machine-product requests is the remote system's, so serializing the
+    /// database reads must not serialize them: both machines' requests are expected to be in flight at
+    /// once. That still holds now a real Nayax call resolves credentials through the same scoped
+    /// context (issue #667) - the store serializes its own statements, not the remote calls. The gated
+    /// client waits (bounded) until both have started, so a serialized implementation fails this
+    /// assertion instead of hanging.
     /// </summary>
     [Fact]
     public async Task Handle_KeepsTheNayaxMachineProductFanOutConcurrent()
@@ -183,7 +186,7 @@ public class GetSiteSummariesTests
     }
 
     private static GetSiteSummaries UseCase(INayaxLynxClient nayax, ISiteFactsStore facts) =>
-        new(nayax, facts, new SiteNameResolver(), Time.Clock, Time.Calendar);
+        new(nayax, facts, new SiteNameResolver(), Time.Clock, Time.Calendar, TestCurrentCapabilities.Owner);
 
     private static DateTime Utc(int year, int month, int day, int hour, int minute) =>
         new(year, month, day, hour, minute, 0, DateTimeKind.Utc);

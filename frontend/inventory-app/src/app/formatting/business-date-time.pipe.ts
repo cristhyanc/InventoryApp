@@ -9,9 +9,11 @@ import { BusinessTimeZoneService } from './business-time-zone.service';
  * local zone - or in a fixed Australian one for a business that is not in Australia - would show a
  * confident timestamp that is simply wrong. The ordinary loading state is handled before any
  * timestamp reaches this pipe: the shell renders no routed page until the business lookup has
- * settled (`AppComponent`), so a page that is on screen has the zone. Rendering nothing is
- * therefore the failure state - the lookup could not be made at all - and not a flicker a pure
- * pipe would get stuck on.
+ * settled, and none while the business it resolves is being read again after a support-context
+ * transition (`AppComponent`, issues #499 and #671), so a page that displays instants is one whose
+ * zone is known. Rendering nothing is therefore the failure state - the lookup could not be made at
+ * all, which the shell says so and offers a retry for - and not a flicker a pure pipe would get
+ * stuck on.
  */
 @Pipe({
   name: 'businessDateTime',

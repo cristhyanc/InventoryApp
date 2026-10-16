@@ -1,11 +1,13 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { ListLoadState } from '../shared/list-load-state';
 import { ToastService } from '../../services/toast.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { SupplierOrder } from '../../models/models';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 /** '' means "every open status"; 0/1 match `SupplierOrderStatus.Ordered`/`PartiallyReceived`. */
 export type SupplierOrderStatusFilter = '' | 0 | 1;
@@ -16,21 +18,39 @@ export type SupplierOrderStatusFilter = '' | 0 | 1;
   imports: [CommonModule, FormsModule],
   templateUrl: './supplier-orders.component.html'
 })
-export class SupplierOrdersComponent implements OnInit {
+export class SupplierOrdersComponent implements OnInit, OnDestroy {
   orders: SupplierOrder[] = [];
   readonly loadState = new ListLoadState();
 
   search = '';
   statusFilter: SupplierOrderStatusFilter = '';
 
+  /**
+   * Whether a support session is active (issue #657, extending #554): Receive / Create Purchase
+   * and Cancel are hidden while it is, because a session grants `PurchasingOperate` - the
+   * capability this page would otherwise gate those on - and the backend refuses the write itself
+   * only by its read-only method rule, never by withholding the capability. See
+   * `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
+
   constructor(
     private readonly supplierOrderService: SupplierOrderService,
     private readonly router: Router,
-    private readonly toastService: ToastService
-  ) {}
+    private readonly toastService: ToastService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
 
   ngOnInit(): void {
     this.loadOrders();
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
   }
 
   loadOrders(): void {
@@ -76,6 +96,11 @@ export class SupplierOrdersComponent implements OnInit {
   }
 
   cancelOrder(order: SupplierOrder): void {
+    // Checked here as well as hidden in the template, so the write is actually unavailable rather
+    // than merely invisible - the endpoint refuses it either way.
+    if (this.sessionActive) {
+      return;
+    }
     this.supplierOrderService.cancel(order.id).subscribe({
       next: () => {
         this.toastService.success('Supplier order cancelled.');

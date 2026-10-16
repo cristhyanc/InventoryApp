@@ -2,6 +2,7 @@ using System.Text.Json;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Nayax;
 using Inventory.Domain.Tenancy;
 
 namespace Inventory.Application.Nayax;
@@ -131,6 +132,17 @@ public sealed class TestNayaxConnection
             throw new DomainValidationException("Enter the Nayax operator id to test.");
         }
 
+        if (!NayaxOperatorId.IsValid(trimmedOperatorId))
+        {
+            // Refused before any Nayax call and before a rate-limit allowance is spent (issue #681).
+            // Nayax's own contract declares the operator path parameter as an int64, and an id that
+            // is not digits would be interpolated into a request path: the two operator-scoped
+            // checks conclude "that operator is not yours" from a 404, so an id that could address
+            // another endpoint could make that conclusion wrong. The message names no part of the
+            // submitted value.
+            throw new DomainValidationException(NayaxOperatorId.InvalidMessage);
+        }
+
         // Only the outer whitespace of a pasted token is removed. Nothing else about it is
         // normalized, inspected or validated here: its shape is Nayax's contract, and the test is
         // how we find out whether it is a usable one.
@@ -149,6 +161,13 @@ public sealed class TestNayaxConnection
             // Refused before the runner is reached, so a refused request makes no Nayax call at all.
             return NayaxConnectionTestOutcome.RateLimited(retryAfter);
         }
+
+        // Before the Nayax calls, and outside any transaction (issue #681): a draft this business
+        // abandoned, or one a refused save rolled its claim back onto, is unusable the moment it
+        // expires and must not keep a decryptable credential ciphertext in the database while this
+        // request runs. The replacement below would discard it too, but only once this test has
+        // succeeded - a test that Nayax never answers would leave the old one exactly where it was.
+        await _drafts.DiscardExpiredAsync(cancellationToken);
 
         // Revision 0: these credentials have never been stored, so there is no revision to attribute
         // an answer to. Nothing in this use case writes a status result, which is what makes that

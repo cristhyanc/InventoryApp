@@ -70,8 +70,11 @@ public class EfNayaxConnectionTestDraftStoreTests
         Assert.Equal(ActiveKeyId, row.EncryptionKeyId);
         Assert.NotEqual(Token, row.AccessTokenCiphertext);
         Assert.DoesNotContain(Token, row.AccessTokenCiphertext, StringComparison.Ordinal);
+        // Decrypted for the business the row belongs to, which is what the ciphertext is bound to
+        // since issue #681.
         Assert.Equal(Token, Protector(ActiveKeyId).Unprotect(
-            new ProtectedNayaxToken(row.EncryptionKeyId, row.AccessTokenCiphertext)));
+            new ProtectedNayaxToken(row.EncryptionKeyId, row.AccessTokenCiphertext),
+            BusinessId.From(fixture.BusinessA)));
     }
 
     /// <summary>
@@ -471,12 +474,13 @@ public class EfNayaxConnectionTestDraftStoreTests
             _whileDecrypting = whileDecrypting;
         }
 
-        public ProtectedNayaxToken Protect(string accessToken) => _inner.Protect(accessToken);
+        public ProtectedNayaxToken Protect(string accessToken, BusinessId businessId) =>
+            _inner.Protect(accessToken, businessId);
 
-        public string Unprotect(ProtectedNayaxToken protectedToken)
+        public string Unprotect(ProtectedNayaxToken protectedToken, BusinessId businessId)
         {
             _whileDecrypting();
-            return _inner.Unprotect(protectedToken);
+            return _inner.Unprotect(protectedToken, businessId);
         }
     }
 

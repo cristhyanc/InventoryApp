@@ -10,7 +10,7 @@
         #syncTrigger
         type="button"
         (click)="syncRestock()"
-        [disabled]="(syncing$ | async) ?? false"
+        [disabled]="((syncing$ | async) ?? false) || sessionActive"
         aria-haspopup="dialog"
         class="btn btn-secondary"
       >
@@ -152,13 +152,13 @@
                       <button
                         type="button"
                         (click)="resolveDuplicate(event, DuplicateResolutionChoice.AlreadyRecordedManually)"
-                        [disabled]="(resolvingEventId$ | async) === event.id"
+                        [disabled]="(resolvingEventId$ | async) === event.id || sessionActive"
                         class="btn btn-sm btn-secondary"
                       >Already recorded manually</button>
                       <button
                         type="button"
                         (click)="resolveDuplicate(event, DuplicateResolutionChoice.ApplyAsSeparateRestock)"
-                        [disabled]="(resolvingEventId$ | async) === event.id"
+                        [disabled]="(resolvingEventId$ | async) === event.id || sessionActive"
                         class="btn btn-sm btn-secondary"
                       >Apply as separate restock</button>
                     </div>
@@ -193,7 +193,7 @@
         *ngIf="((syncPreview$ | async)?.events?.length ?? 0) > 0"
         type="button"
         (click)="resolveSelectedAsAlreadyRecorded()"
-        [disabled]="((applying$ | async) ?? false) || ((syncing$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false) || selectedEventIds.size === 0"
+        [disabled]="((applying$ | async) ?? false) || ((syncing$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false) || selectedEventIds.size === 0 || sessionActive"
         class="btn btn-secondary"
       >
         {{ (resolvingManyEvents$ | async) ? 'Resolving…' : 'Already recorded manually (' + selectedEventIds.size + ')' }}
@@ -202,7 +202,7 @@
         *ngIf="((syncPreview$ | async)?.events?.length ?? 0) > 0"
         type="button"
         (click)="applySelectedEvents()"
-        [disabled]="((applying$ | async) ?? false) || ((syncing$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false) || selectedEventIds.size === 0"
+        [disabled]="((applying$ | async) ?? false) || ((syncing$ | async) ?? false) || ((resolvingManyEvents$ | async) ?? false) || selectedEventIds.size === 0 || sessionActive"
         class="btn btn-primary"
       >
         {{ (applying$ | async) ? 'Applying…' : 'Apply selected (' + selectedEventIds.size + ')' }}

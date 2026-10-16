@@ -37,6 +37,11 @@ function refuse(harness: Harness, url: string, status: number): void {
   harness.httpMock.expectOne(url).flush('refused', { status, statusText: 'Forbidden' });
 }
 
+function refuseWithCode(harness: Harness, url: string, code: string): void {
+  harness.http.get(url).subscribe({ error: () => undefined });
+  harness.httpMock.expectOne(url).flush({ code, message: 'refused' }, { status: 403, statusText: 'Forbidden' });
+}
+
 /**
  * The global `403` handler (issue #529): a member endpoint refusing a request shows "you don't
  * have access to this", except on a route a person without a usable membership may legitimately
@@ -113,6 +118,22 @@ describe('memberForbiddenNoticeInterceptor (issue #529)', () => {
     expect(harness.error).not.toHaveBeenCalled();
   });
 
+  /**
+   * AC (issue #554): "a support-session refusal is reported by `supportSessionMessageInterceptor`
+   * alone". Both support-session codes are member-endpoint `403`s and would otherwise read as
+   * "you don't have access to this" here too.
+   */
+  it.each(['read_only_support_session', 'unavailable_in_support_view'])(
+    'never shows the generic member message for a support-session refusal coded %s',
+    (code) => {
+      const harness = configure('/reports/bookkeeping');
+
+      refuseWithCode(harness, '/api/reports/bookkeeping', code);
+
+      expect(harness.error).not.toHaveBeenCalled();
+    }
+  );
+
   it('re-raises the refusal unchanged', () => {
     const harness = configure('/reports/bookkeeping');
     let status: number | undefined;
@@ -138,6 +159,11 @@ describe('isAccountStateBypassRoute', () => {
   it('matches any invite token by prefix', () => {
     expect(isAccountStateBypassRoute('/invite/abc123')).toBe(true);
     expect(isAccountStateBypassRoute('/invite/abc123?x=1')).toBe(true);
+  });
+
+  it('matches the tokenless /invite page the invite route leaves behind (issue #681)', () => {
+    expect(isAccountStateBypassRoute('/invite')).toBe(true);
+    expect(isAccountStateBypassRoute('/invitex')).toBe(false);
   });
 
   it('does not match an ordinary business route', () => {

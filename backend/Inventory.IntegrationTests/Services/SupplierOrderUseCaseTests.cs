@@ -56,11 +56,15 @@ public class SupplierOrderUseCaseTests
 
     /// <summary>
     /// The response a client receives for one order, through the same mapper the controller uses.
+    /// As a caller who may see the figures, so these tests stay about the use case; who may see an
+    /// inventory value is StockAndPurchasingFinancialRedactionApiTests (issue #700).
     /// </summary>
     private static async Task<SupplierOrderResponse?> GetByIdResponse(SupplierOrderUseCases useCases, int id)
     {
         var record = await useCases.Get.Handle(id, CancellationToken.None);
-        return record is null ? null : SupplierOrderResponseMapper.ToResponse(record);
+        return record is null
+            ? null
+            : SupplierOrderResponseMapper.ToResponse(record, FinancialFigureVisibility.Visible);
     }
 
     [Fact]

@@ -5,8 +5,12 @@ namespace InventoryApi.Tests.Application.Sites;
 /// <summary>
 /// Fake <see cref="INayaxLynxClient"/> for the Sites use cases (issue #313), serving a fixed machine
 /// fleet and per-machine product list and recording how many machine-product requests were in flight
-/// at once. Nayax requests are independent remote reads that share no scoped <c>AppDbContext</c>, so
-/// their bounded fan-out must stay concurrent even though the facts-store reads are serialized.
+/// at once. The bound on a Nayax fan-out belongs to the remote system, so it must stay concurrent
+/// even though the facts-store reads are serialized - and even though the real client resolves the
+/// business's credentials through the same scoped <c>AppDbContext</c> since issue #520, which
+/// <c>EfNayaxConnectionStore</c> serializes for itself rather than by holding the remote requests
+/// apart (issue #667). This double makes no such read; the relational proof that the real one stays
+/// concurrent is <c>NayaxParallelCredentialAccessTests</c>.
 /// When <c>expectedConcurrentMachineProductCalls</c> is set, each machine-product call waits until that
 /// many calls have started (bounded by a timeout, so a serialized caller fails the assertion instead of
 /// hanging the suite).

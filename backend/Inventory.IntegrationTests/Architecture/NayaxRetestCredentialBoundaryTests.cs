@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Inventory.Application.Nayax;
 using NetArchTest.Rules;
 using Xunit;
@@ -19,6 +20,16 @@ namespace InventoryApi.Tests.Architecture;
 /// registers them, and - since issue #537 - the Owner-only re-test use case this boundary was
 /// always for, added as the conscious, reviewed edit this comment anticipated. Nothing else may
 /// join it.
+///
+/// <para><strong>Since issue #681 the gate-free <em>read</em> is covered too.</strong> The type-level
+/// rules above guard the gate-free credential <em>provider</em>, but the read that actually skips the
+/// status gate is <see cref="INayaxConnectionStore.FindCredentialAsync"/> - a method on the ordinary
+/// connection store, which every Nayax consumer legitimately depends on. A type-level dependency
+/// rule cannot see a method call, so the boundary that mattered most was the one nothing asserted:
+/// any use case could have called that method directly and used a credential the gate refuses. The
+/// rule below is checked against the source text instead, using the same precedent
+/// <see cref="TimeAcquisitionTests"/> established for a property read a dependency rule cannot
+/// distinguish.</para>
 /// </summary>
 public class NayaxRetestCredentialBoundaryTests
 {
@@ -115,6 +126,139 @@ public class NayaxRetestCredentialBoundaryTests
             },
             members);
     }
+
+    #region The gate-free read itself (issue #681)
+
+    /// <summary>
+    /// The production source files allowed to name <c>FindCredentialAsync</c> at all. Each one is
+    /// here for a stated reason, and adding a line is the reviewed edit:
+    ///
+    /// <list type="bullet">
+    ///   <item><c>INayaxConnectionStore.cs</c> - declares it, and documents why it is separate from
+    ///   the gated <c>FindForOperationAsync</c>.</item>
+    ///   <item><c>EfNayaxConnectionStore.cs</c> - implements it.</item>
+    ///   <item><c>NayaxConnectionRetestCredentialProvider.cs</c> - the gate-free provider, which is
+    ///   exactly this read behind the port the type-level rules above guard.</item>
+    ///   <item><c>NayaxConnectionMigrator.cs</c> - the human-invoked <c>migrate-nayax-connection</c>
+    ///   command, which compares the stored credential with the one it is migrating. It has to read
+    ///   the token whatever the status says, because a connection in <c>NeedsAttention</c> is
+    ///   precisely one an operator may be re-running this command for; it makes no Nayax call with
+    ///   it.</item>
+    ///   <item><c>NayaxConnection.cs</c>, <c>NayaxConnectionSnapshot.cs</c>,
+    ///   <c>NayaxConnectionCredential.cs</c>, <c>INayaxConnectionRetestCredentialProvider.cs</c> -
+    ///   documentation comments that point at it.</item>
+    /// </list>
+    /// </summary>
+    private static readonly string[] FilesAllowedToReadTheGateFreeCredential =
+    [
+        "INayaxConnectionStore.cs",
+        "EfNayaxConnectionStore.cs",
+        "NayaxConnectionRetestCredentialProvider.cs",
+        "INayaxConnectionRetestCredentialProvider.cs",
+        "NayaxConnectionMigrator.cs",
+        "NayaxConnection.cs",
+        "NayaxConnectionSnapshot.cs",
+        "NayaxConnectionCredential.cs",
+    ];
+
+    private static readonly string[] GuardedProjects =
+    [
+        "Inventory.Domain",
+        "Inventory.Application",
+        "Inventory.Infrastructure",
+        "InventoryApi",
+    ];
+
+    /// <summary>
+    /// A call of, or a reference to, the gate-free read. Whitespace around the dot is tolerated so a
+    /// line-wrapped or reformatted call cannot slip past, and the match is deliberately not anchored
+    /// to a receiver name: what is being banned is the member, however the expression reaches it.
+    /// </summary>
+    private static readonly Regex GateFreeCredentialRead = new(
+        @"FindCredentialAsync\s*\(", RegexOptions.Compiled);
+
+    /// <summary>
+    /// No ordinary consumer <em>calls</em> the gate-free credential read, which is the boundary the
+    /// type-level rules above cannot express (issue #681).
+    ///
+    /// <see cref="INayaxConnectionStore.FindCredentialAsync"/> returns a decrypted token without
+    /// consulting <c>NayaxConnectionStatusGate</c>, and every Nayax consumer legitimately depends on
+    /// the store that declares it - so "only the re-test may use it" was a comment rather than a
+    /// rule. A use case that called it directly would authenticate to Nayax with credentials the gate
+    /// refuses, including a connection an operator has been told needs attention, and no test would
+    /// have failed.
+    /// </summary>
+    [Fact]
+    public void No_ordinary_consumer_calls_the_gate_free_credential_read()
+    {
+        var offenders = GuardedProjects
+            .SelectMany(project => SourceFilesOf(project).Select(path => (Project: project, Path: path)))
+            .Where(file => !FilesAllowedToReadTheGateFreeCredential.Contains(
+                Path.GetFileName(file.Path),
+                StringComparer.Ordinal))
+            .SelectMany(file => ReadsIn(file.Path).Select(read => $"{file.Project}: {read}"))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.True(
+            offenders.Length == 0,
+            "INayaxConnectionStore.FindCredentialAsync returns a decrypted Nayax token without "
+                + "applying NayaxConnectionStatusGate, so only the Owner-only re-test provider and "
+                + "the human-invoked migrate-nayax-connection command may call it. An ordinary "
+                + "consumer must resolve credentials through INayaxRequestCredentialProvider, which "
+                + "applies the gate (AGENTS.md § Nayax integration, docs/architecture.md "
+                + "§ Per-business Nayax credentials). Call site(s): "
+                + string.Join("; ", offenders)
+                + ". If a new caller is genuinely a recovery path, add its file to this test's "
+                + "allow-list as a conscious, reviewed edit.");
+    }
+
+    /// <summary>
+    /// Proves the rule above can see a call at all, rather than passing because the scan found
+    /// nothing: the allowed files really do contain one.
+    /// </summary>
+    [Fact]
+    public void The_source_scan_detects_the_calls_that_are_allowed()
+    {
+        var allowed = GuardedProjects
+            .SelectMany(SourceFilesOf)
+            .Where(path => FilesAllowedToReadTheGateFreeCredential.Contains(
+                Path.GetFileName(path),
+                StringComparer.Ordinal))
+            .SelectMany(ReadsIn)
+            .ToArray();
+
+        Assert.Contains(allowed, read => read.StartsWith("NayaxConnectionRetestCredentialProvider.cs", StringComparison.Ordinal));
+        Assert.Contains(allowed, read => read.StartsWith("NayaxConnectionMigrator.cs", StringComparison.Ordinal));
+    }
+
+    private static IEnumerable<string> SourceFilesOf(string project) =>
+        Directory.EnumerateFiles(Path.Combine(BackendRoot, project), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+
+    private static IEnumerable<string> ReadsIn(string path) =>
+        File.ReadAllLines(path)
+            .Select((line, index) => (Line: line, Number: index + 1))
+            .Where(line => GateFreeCredentialRead.IsMatch(line.Line))
+            .Select(line => $"{Path.GetFileName(path)}:{line.Number}");
+
+    private static readonly string BackendRoot = FindBackendRoot();
+
+    private static string FindBackendRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null && !Directory.Exists(Path.Combine(current.FullName, "Inventory.Domain")))
+        {
+            current = current.Parent;
+        }
+
+        return current?.FullName
+            ?? throw new InvalidOperationException(
+                "Could not locate the backend directory containing the Inventory.* projects.");
+    }
+
+    #endregion
 
     private static IReadOnlyCollection<string> Dependents(Assembly assembly, string dependency) =>
         Types.InAssembly(assembly)

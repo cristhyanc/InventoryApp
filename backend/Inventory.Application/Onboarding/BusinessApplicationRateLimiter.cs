@@ -78,16 +78,32 @@ public sealed class BusinessApplicationRateLimiter
     /// incremented yet. An attempt that is then refused - by the eligibility rule, or by the write
     /// transaction - is not refunded: a refused attempt is exactly the one that gets repeated, and
     /// it costs the write lock the same as a successful one.
+    ///
+    /// <para>The one exception is an <em>identical resubmission</em>, which gives its claim back
+    /// through <see cref="Release"/> (issue #681). That case exists precisely so a lost response
+    /// cannot create a second business, and it writes nothing and opens no transaction - so charging
+    /// an allowance for it meant an applicant whose connection dropped five times was locked out of
+    /// an endpoint that had been answering "here is the application you already have" all along.
+    /// </para>
     /// </summary>
+    /// <param name="identity">Whose allowance to claim.</param>
+    /// <param name="retryAfter">
+    /// How long until the oldest attempt leaves the window, when the claim was refused.
+    /// </param>
+    /// <param name="claimedAtUtc">
+    /// The instant this attempt was recorded at, which <see cref="Release"/> needs to give back
+    /// <em>this</em> attempt. Meaningful only when the claim succeeded.
+    /// </param>
     /// <returns>
     /// <see langword="true"/> when the application may proceed; otherwise <see langword="false"/>
     /// and <paramref name="retryAfter"/> is how long until the oldest attempt leaves the window.
     /// </returns>
-    public bool TryClaim(ActorIdentity identity, out TimeSpan retryAfter)
+    public bool TryClaim(ActorIdentity identity, out TimeSpan retryAfter, out DateTime claimedAtUtc)
     {
         ArgumentNullException.ThrowIfNull(identity);
 
         var now = _clock.UtcNow;
+        claimedAtUtc = now;
 
         lock (_gate)
         {
@@ -113,6 +129,79 @@ public sealed class BusinessApplicationRateLimiter
 
         retryAfter = TimeSpan.Zero;
         return true;
+    }
+
+    /// <summary>
+    /// The same claim for a caller that will not give it back, so it has no use for the instant.
+    /// </summary>
+    /// <param name="identity">Whose allowance to claim.</param>
+    /// <param name="retryAfter">
+    /// How long until the oldest attempt leaves the window, when the claim was refused.
+    /// </param>
+    public bool TryClaim(ActorIdentity identity, out TimeSpan retryAfter) =>
+        TryClaim(identity, out retryAfter, out _);
+
+    /// <summary>
+    /// Gives back an attempt that turned out to cost nothing (issue #681).
+    ///
+    /// <para>It removes <strong>one</strong> recorded attempt at <paramref name="claimedAtUtc"/>, and
+    /// only if one is still there: an attempt that has since left the window is already gone, and a
+    /// release can never remove more than it was given. Several attempts recorded at the very same
+    /// instant - the clock is a fake one in tests, and a real one has limited resolution - are
+    /// distinct allowances, so exactly one of them is returned.</para>
+    ///
+    /// <para>The queue is rebuilt rather than dequeued, because the attempt being given back is not
+    /// necessarily the oldest one: another submission may have been recorded while this one was
+    /// reading. Rebuilding keeps the remaining attempts in claim order, which is what
+    /// <see cref="ExpirePassedAttempts"/> and the <c>retryAfter</c> calculation both rely on.</para>
+    /// </summary>
+    /// <param name="identity">Whose allowance to give back.</param>
+    /// <param name="claimedAtUtc">
+    /// The instant <see cref="TryClaim(ActorIdentity, out TimeSpan, out DateTime)"/> reported for the
+    /// attempt being returned.
+    /// </param>
+    /// <returns><c>true</c> when an attempt was found and given back.</returns>
+    public bool Release(ActorIdentity identity, DateTime claimedAtUtc)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+
+        lock (_gate)
+        {
+            if (!_attemptsByIdentity.TryGetValue(identity, out var attempts))
+            {
+                return false;
+            }
+
+            var remaining = new Queue<DateTime>(attempts.Count);
+            var released = false;
+
+            foreach (var attempt in attempts)
+            {
+                if (!released && attempt == claimedAtUtc)
+                {
+                    released = true;
+                    continue;
+                }
+
+                remaining.Enqueue(attempt);
+            }
+
+            if (!released)
+            {
+                return false;
+            }
+
+            if (remaining.Count == 0)
+            {
+                _attemptsByIdentity.Remove(identity);
+            }
+            else
+            {
+                _attemptsByIdentity[identity] = remaining;
+            }
+
+            return true;
+        }
     }
 
     /// <summary>

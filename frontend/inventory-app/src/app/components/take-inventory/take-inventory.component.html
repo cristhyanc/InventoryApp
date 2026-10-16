@@ -68,7 +68,7 @@
                     <button
                       type="button"
                       class="btn btn-sm btn-primary min-h-[44px] min-w-[44px]"
-                      [disabled]="row.applying"
+                      [disabled]="row.applying || sessionActive"
                       (click)="apply(row)">
                       {{ row.applying ? 'Applying…' : 'Apply' }}
                     </button>

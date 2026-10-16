@@ -33,25 +33,35 @@ namespace InventoryApi.Adapters.Mapping;
 /// a duplicate-schema-id error, so the shared wire vocabulary stays where it is until the
 /// persistence models relocate; the persisted numeric values a client switches on are unchanged
 /// either way.
+///
+/// <para>Since issue #700 the projection depends on <see cref="FinancialFigureVisibility"/>:
+/// <see cref="ProductStockAdjustmentResponse.InventoryValueAfter"/> is the business's inventory
+/// value at cost immediately after the movement - on the latest movement, the current valuation
+/// itself, which the Dashboard withholds (issue #527), <c>inventory-value-summary</c> refuses
+/// (issue #681) and the catalogue no longer carries (issue #698). The movement's <em>own</em> cost
+/// figures are not withheld: <c>unitCost</c>, <c>totalCost</c> and <c>averageUnitCostAfter</c> are
+/// the cost of the restock an Operator records and a unit cost, which the recorded decision keeps
+/// visible to every role.</para>
 /// </summary>
 public static class StockAdjustmentResponseMapper
 {
-    public static ProductStockAdjustmentResponse ToResponse(StockAdjustmentRecord record) => new(
-        record.Id,
-        record.ProductId,
-        record.ReceiptItemId,
-        record.QuantityChange,
-        record.QuantityAfter,
-        record.UnitCost,
-        record.TotalCost,
-        record.CostingQuantityAfter,
-        record.AverageUnitCostAfter,
-        record.InventoryValueAfter,
-        (StockAdjustmentReason)record.Reason,
-        (StockAdjustmentSource)record.Source,
-        record.MachineId,
-        record.Notes,
-        record.EatBefore,
-        record.CreatedAt,
-        record.EffectiveAt);
+    public static ProductStockAdjustmentResponse ToResponse(
+        StockAdjustmentRecord record, FinancialFigureVisibility visibility) => new(
+            record.Id,
+            record.ProductId,
+            record.ReceiptItemId,
+            record.QuantityChange,
+            record.QuantityAfter,
+            record.UnitCost,
+            record.TotalCost,
+            record.CostingQuantityAfter,
+            record.AverageUnitCostAfter,
+            visibility.Withhold(record.InventoryValueAfter),
+            (StockAdjustmentReason)record.Reason,
+            (StockAdjustmentSource)record.Source,
+            record.MachineId,
+            record.Notes,
+            record.EatBefore,
+            record.CreatedAt,
+            record.EffectiveAt);
 }

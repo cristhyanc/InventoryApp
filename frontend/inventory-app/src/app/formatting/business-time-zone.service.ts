@@ -42,8 +42,9 @@ export class BusinessTimeZoneService {
 
   /**
    * Forgets the published zone, back to "not known yet". Only `BusinessService.reset()` calls
-   * this, when the signed-in account changes: the zone belongs to the previous account's business,
-   * so keeping it would render the next account's dates in a business it may not belong to.
+   * this, and only when the business this tab resolves changes: a changed signed-in account, and a
+   * support-session start, end or expiry (issue #671). The zone belongs to the previous context's
+   * business, so keeping it would render the next one's dates in a business they do not belong to.
    */
   clear(): void {
     if (this.zone$.value !== null) {

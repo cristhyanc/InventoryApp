@@ -15,12 +15,24 @@ namespace Inventory.Application.Members;
 /// outside the transaction, or audited before the commit, or forgot to say which rules apply, would
 /// be a quiet hole in exactly one of the three.
 ///
+/// <para>Since issue #680 every change also declares the business that must still be
+/// <see cref="BusinessStatus.Active"/>, which the guard re-reads inside the same transaction. The
+/// business id comes from the middleware's resolution when the request arrived, so without that
+/// re-check a reinstatement already in flight could re-activate a membership the Super Admin had
+/// just released from the business they were deactivating.</para>
+///
 /// <para><strong>The authoritative read is inside the transaction.</strong> The mutable facts a
 /// change is decided from - the member's current role and whether their approval is current - are
 /// re-read after <c>BEGIN IMMEDIATE</c> has taken the write lock, so the comparison and the write
 /// are one operation and a concurrent change cannot land between them. The read the use case is
 /// handed before the transaction opens is used for two immutable facts only: the Entra identity the
 /// eligibility rule is re-checked for, and whether that business holds this membership at all.</para>
+///
+/// <para><strong>So is the clock</strong> (issue #681, the pattern issue #608 established for the
+/// invite redemption). The instant a change is stamped with, and audited at, is sampled after
+/// <c>BEGIN IMMEDIATE</c> has taken the write lock, because the only interesting thing that can
+/// happen before that is a wait: an instant read before it would describe when the request arrived
+/// rather than when the business actually changed.</para>
 ///
 /// <para><strong>The audit event is emitted after the commit, and only for a real change.</strong>
 /// A refused change was rolled back and did not happen; a request that asked for the state the
@@ -99,12 +111,17 @@ public sealed class MemberChangeWriter
         }
 
         var intent = IntentFor(change, businessId, existing);
-        var occurredAtUtc = _clock.UtcNow;
 
+        // Deliberately no instant read here (issue #608's pattern, applied to a member change by
+        // issue #681). Everything this change is stamped and audited by is sampled inside the
+        // transaction below, because the only interesting thing that can happen between here and
+        // there is a wait: the caller may be held at BEGIN IMMEDIATE for as long as another writer
+        // holds the write lock, and a row stamped from before that wait records a state it reached
+        // at some other time.
         var applied = await _guard
             .ExecuteAsync(
                 intent,
-                token => WriteAsync(businessId, membershipId, target, occurredAtUtc, token),
+                token => WriteAsync(businessId, membershipId, target, token),
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -131,7 +148,9 @@ public sealed class MemberChangeWriter
                 applied.NewRole,
                 applied.PreviouslyActive,
                 applied.NowActive,
-                occurredAtUtc));
+                // The instant the change was really made at, sampled with the write lock held, so
+                // the trail describes the change rather than the wait that preceded it.
+                applied.OccurredAtUtc));
         }
 
         return applied.Member;
@@ -140,14 +159,22 @@ public sealed class MemberChangeWriter
     /// <summary>
     /// The in-transaction half: the authoritative read, the operation's decision measured against
     /// it, and the write of whichever column differs.
+    ///
+    /// <para><strong>The instant is sampled here, and that is the point</strong> (issue #681,
+    /// applying the pattern issue #608 established for the invite redemption). This method runs with
+    /// the <c>BEGIN IMMEDIATE</c> write lock already held, so it is the first instant at which this
+    /// request could possibly act - however long it waited for the lock. Reading the clock before
+    /// the wait stamps <c>StatusChangedAtUtc</c>, and audits the change, with a time that had
+    /// already passed by the time the row was written.</para>
     /// </summary>
     private async Task<Applied?> WriteAsync(
         BusinessId businessId,
         int membershipId,
         Func<MemberMembership, MemberTargetState> target,
-        DateTime occurredAtUtc,
         CancellationToken cancellationToken)
     {
+        var occurredAtUtc = _clock.UtcNow;
+
         var current = await _store.FindAsync(businessId, membershipId, cancellationToken)
             .ConfigureAwait(false);
         if (current is null)
@@ -184,7 +211,8 @@ public sealed class MemberChangeWriter
             current.StoredRole,
             wanted.Role,
             current.Member.IsActive,
-            wanted.IsActive);
+            wanted.IsActive,
+            occurredAtUtc);
     }
 
     /// <summary>
@@ -196,6 +224,11 @@ public sealed class MemberChangeWriter
     /// eligibility check. A reinstatement is the mirror image: it gives an identity an active
     /// membership, so eligibility is re-checked for that identity with its own row excluded, and it
     /// cannot remove an Owner, so the Owner rule has nothing to judge.
+    ///
+    /// All three additionally declare the business that must still be <see cref="BusinessStatus.Active"/>
+    /// (issue #680). Changing who may do what inside a business is only meaningful while that
+    /// business trades, and a reinstatement in flight when the Super Admin deactivates and releases
+    /// its members would otherwise re-activate a membership that had just been released.
     /// </summary>
     private static MembershipWriteIntent IntentFor(
         MemberChange change,
@@ -209,8 +242,11 @@ public sealed class MemberChangeWriter
                     // such a row can never resolve at sign-in anyway. Reinstating it would mean
                     // skipping the one-active-membership check entirely, so it is refused instead.
                     ?? throw new DomainConflictException(UnusableStoredIdentityMessage),
-                ExcludedMembershipId: existing.Member.MembershipId),
-            _ => new MembershipWriteIntent(BusinessKeepingAnActiveOwner: businessId),
+                ExcludedMembershipId: existing.Member.MembershipId,
+                BusinessThatMustStillBeActive: businessId),
+            _ => new MembershipWriteIntent(
+                BusinessKeepingAnActiveOwner: businessId,
+                BusinessThatMustStillBeActive: businessId),
         };
 
     /// <summary>
@@ -221,12 +257,17 @@ public sealed class MemberChangeWriter
     public const string UnusableStoredIdentityMessage =
         "This membership's stored sign-in identity is not usable, so it cannot be reinstated.";
 
-    /// <summary>What the in-transaction write actually did, so the audit can describe it exactly.</summary>
+    /// <summary>
+    /// What the in-transaction write actually did, so the audit can describe it exactly - including
+    /// the instant it was made at, which is sampled with the write lock held and is the instant the
+    /// row and the audit both record.
+    /// </summary>
     private sealed record Applied(
         BusinessMember Member,
         bool Changed,
         BusinessRole PreviousRole,
         BusinessRole NewRole,
         bool PreviouslyActive,
-        bool NowActive);
+        bool NowActive,
+        DateTime OccurredAtUtc);
 }

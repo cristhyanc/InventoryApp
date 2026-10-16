@@ -16,7 +16,8 @@ only the schema-migration step's "deploy and let startup apply it" alternative i
 | Create the `Business` record, in the `Active` lifecycle status | **Human**, via `bootstrap-business` (see [The business lifecycle status](#the-business-lifecycle-status-issue-540)) |
 | Create the **first** `BusinessMembership` row from the supplied Entra mapping, in the role it names | **Human**, via `bootstrap-business` (see [The member's role](#the-members-role-issue-521)) |
 | Add any **later** member | An **Owner of that business**, by creating an invite link the person redeems — no operator run and no Entra ids needed (issue #532; see [Adding a member after the bootstrap](#adding-a-member-after-the-bootstrap-invite-links-issues-531-and-532)) |
-| Release a member whose own business has been deactivated, so they can join elsewhere | **Human**, by revoking that membership row deliberately — no Owner of a deactivated business can be reached |
+| Release a member whose own business has been deactivated, so they can join elsewhere | A **Super Admin**, through the Businesses page's member list (`POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release`, issues #545 and #547) — no Owner of a deactivated business can be reached, which is why this is a platform-admin action rather than a hand-written row revocation |
+| Approve or reject a self-service business application | A **Super Admin**, through the same Businesses page (`POST /api/super-admin/businesses/{businessId}/approve` and `.../reject`, issues #544 and #547) |
 | Assign existing rows to that business | **Human**, via `bootstrap-business --apply` |
 | Move the global Nayax operator id and token into that business's record | **Human**, via `migrate-nayax-connection --apply` (issue #519; see [Migrating the Nayax connection](#migrating-the-nayax-connection-into-the-business-issue-519)) |
 | Remove the global `NayaxLynx` operator id and token | **Human**, once the per-business record is in use and verified (the client reads it since issue #520; `NayaxLynx__BaseUrl` stays) |
@@ -218,10 +219,13 @@ What this changes for an operator:
   who already belongs to a business cannot redeem an invite into another: they are refused with
   `409` and "This person is already a member of a business.", and the invite is left unused. The
   remedy is the deliberate one — an Owner of their current business revokes their membership first.
-- **One case needs you.** If that person's business has been **deactivated**, no Owner of it can be
-  reached to revoke their membership, so the refusal tells them they "must first be released by the
-  platform administrator". Releasing them means revoking that membership row deliberately; there is
-  no self-service path, and it is a human decision about access to financial data.
+- **One case needs a platform administrator.** If that person's business has been **deactivated**,
+  no Owner of it can be reached to revoke their membership, so the refusal tells them they "must
+  first be released by the platform administrator". Releasing them is a Super Admin action on the
+  Businesses page's member list of a deactivated business
+  (`POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release`, issues #545 and
+  #547), not a hand-written row revocation. There is still no self-service path, and it is still a
+  human decision about access to financial data.
 - **Nothing a redemption is told reveals a business.** An expired, used, withdrawn or unknown token,
   and an invite of a business that is not active, all answer with one `400` and the same sentence,
   and a successful redemption reports only the role. That is deliberate: an invite token is a
@@ -246,7 +250,8 @@ application or decision instant, and leaves every profile column the application
 inventing a value for a business that predates the form. The self-service application that creates a
 `Pending` business is issue #541's, behind the flag described in
 [Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541) below, and
-approving, rejecting or deactivating one is issue #509; neither goes through this command.
+approving, rejecting, deactivating or reactivating one is the Super Admin businesses API of issues
+#544 and #545, driven from the page of issue #547; none of them goes through this command.
 
 Two consequences for this procedure. The bootstrap refuses to assign data to a business in any other
 status and names the status in its message (see
@@ -327,13 +332,15 @@ Switching the flag on is a configuration change in the production App Service
 restart; switching it back off is the same change in reverse and disables the endpoint again without
 touching any business that was already created.
 
-**What the flag does not gate.** Approving and rejecting applications is issue #509's work and does
-not exist yet, so while the flag is on, applications accumulate as `Pending` businesses that nobody
-can yet approve and whose applicants see a waiting screen. Do not switch the flag on before that
-side exists, unless the intent is specifically to collect applications and decide on them by hand.
+**What the flag does not gate.** Deciding an application is a separate, Super Admin surface, and it
+exists: `POST /api/super-admin/businesses/{businessId}/approve` and `.../reject` (issue #544), driven
+from the Super Admin Businesses page (issue #547). The flag therefore controls only whether an
+application can be *submitted* — switching it on does not approve anything, and an application waits
+as a `Pending` business, with its applicant on a waiting screen, until a Super Admin decides it.
 A `Pending` business reaches no data and reports an unfinished rollout to the startup readiness
 check (see [The business lifecycle status](#the-business-lifecycle-status-issue-540) above), so
-expect `TenantOwnershipReadiness` to count it as a business that is not active.
+expect `TenantOwnershipReadiness` to count it as a business that is not active for as long as it
+waits.
 
 ## Rollout sequence
 
@@ -534,6 +541,10 @@ configured operator id and token into the existing business's record, encrypted,
 connection `Ready`, because that token is the one already authenticating to Nayax in production —
 the command never calls Nayax and performs no permission test.
 
+It does that **once**, into an empty record. If the same operator id and token are already stored,
+the command writes nothing at all, whatever the connection's status says — see
+[Re-running it](#re-running-it).
+
 ### Before you run it
 
 1. **The token encryption key must be provisioned** for the environment:
@@ -563,7 +574,8 @@ Read the output and confirm:
 
 - `Business id` is the business you expect;
 - `Configured operator` is the Nayax operator account this business trades under;
-- `Change` is `CredentialsStored` (nothing stored yet) or `None` (already migrated).
+- `Change` is `CredentialsStored` (nothing stored yet) or `None` (this credential is already
+  stored, whatever status the `Status` column reports).
 
 Then apply:
 
@@ -572,13 +584,30 @@ migrate-nayax-connection --apply
 ```
 
 `--apply` must be typed explicitly; an invocation with neither flag is a dry run, and passing both
-is refused rather than resolved by precedence. Re-running an applied migration changes nothing at
-all — the row is not rewritten, so the stored ciphertext and the credential revision do not move.
-Exit code `0` means the run succeeded, including an idempotent re-run; `1` means it did not.
+is refused rather than resolved by precedence. Exit code `0` means the run succeeded, including an
+idempotent re-run; `1` means it did not.
 
 The apply is **one transaction**: the credential and the `Ready` status are committed together, or
 neither is. The report says which in as many words — a `Database` line reading `unchanged - nothing
 was written` or `changed, as reported below` — so you never have to infer it from the outcome name.
+
+### Re-running it
+
+Re-running an applied migration changes nothing at all. The row is not rewritten, so the stored
+ciphertext, the credential revision, the last-tested instant and the machine-check state do not
+move — and **neither does the status**, whatever it is. `Change` is `None`, the `Database` line
+reads `unchanged - nothing was written`, and the `Status` column shows the same value before and
+after.
+
+That matters most when the status is **not** `Ready`:
+
+- `NeedsAttention` means a Nayax `401` rejected the stored token (an invalid, expired or revoked
+  one). Re-running this command does not revive it and must not: the verdict came from Nayax, and
+  this command never calls Nayax. Recover it with the Owner's **Re-test** on Admin → Nayax
+  Settings, or by saving a new token there — a real connection test is the only thing that can
+  conclude a new status.
+- `PendingPermissions` means a token was saved but has not been tested since. Re-run or not, it
+  stays there; **Re-test** is what resolves it.
 
 ### If an apply fails
 
@@ -596,12 +625,14 @@ Read the `Database` line, and then act on it:
 - **`UNKNOWN - the commit failed`** — the only state the command cannot report, and the only one
   that needs you to look: the database holds either the whole change (credential stored, connection
   `Ready`) or none of it, never a part of it. Run the dry run: `Change: None` means it committed and
-  there is nothing left to do; `Change: CredentialsStored` or `Change: StatusMarkedReady` means it
-  did not, and you should apply again.
+  there is nothing left to do; `Change: CredentialsStored` means it did not, and you should apply
+  again.
 
-There is no state in which the credential is stored but its status was never written, so "stored
-but not Ready" never needs repairing by hand — and the credential table must not be edited by hand
-in any case.
+This command never leaves a credential it stored without its status, because the two are one
+transaction. A connection that is stored but *not* `Ready` therefore did not come from here, and
+re-running this command does not repair it: use **Re-test** on Admin → Nayax Settings, as
+[Re-running it](#re-running-it) describes. The credential table must not be edited by hand in any
+case.
 
 ### The cutover window
 
@@ -637,8 +668,11 @@ deployed and this command has been applied, verify through the application:
   stopped working some time after a successful cutover.
 
 If Nayax fails after the cutover, the credential is the first thing to check — re-run
-`migrate-nayax-connection --dry-run` and read what it reports is stored. Do not edit the
-credential table by hand; the token is encrypted and its key id is stored with it.
+`migrate-nayax-connection --dry-run` and read what it reports is stored. It is a diagnostic here
+and nothing more: it reports the stored status and will not change it, so a `NeedsAttention`
+connection is recovered through **Re-test** on Admin → Nayax Settings rather than by applying this
+command again. Do not edit the credential table by hand; the token is encrypted and its key id is
+stored with it.
 
 ### When to remove the global settings
 
@@ -650,6 +684,42 @@ startup validates it. Until the removal, leave them exactly as they are — this
 does not remove them, so a rollback of #520 still has a working client. Keep
 `NayaxTokenProtection__*` forever: removing the key that encrypted a stored token is what makes that
 token undecryptable.
+
+## Using the support view (issues #553 and #668)
+
+The Super Admin can look at one business's data read-only for an hour: Super Admin → Businesses →
+**View as this business**, with a reason, for a business that is `Active`. The session is read-only
+everywhere — every write is refused by the API, not merely hidden by the page — Nayax is unavailable
+inside it, and it ends when you press **End session**, when the hour is up, or when the business is
+deactivated. See
+[docs/architecture.md § Support sessions](architecture.md#support-sessions-the-store-and-the-control-endpoints-issue-550)
+for the design.
+
+**The session's identifier lives in the browser tab's memory and is never stored.** It is answered
+once, by the start call, and never written to `localStorage`, `sessionStorage` or the URL, so a
+saved page, a shared link or a browser history entry cannot carry it. Other tabs that are already
+open are told the identifier directly, so the support view works across all of them.
+
+**Reloading, or opening a new tab, therefore leaves that tab out of the session.** The tab can still
+see *that* a session is running — it asks the server — but it cannot present the identifier, so its
+requests would read **your own** businesses rather than the business under support. Since issue #668
+such a tab shows no business page at all: it explains that it is not part of the session and offers
+**End session**, and the "Viewing as" banner is deliberately absent. That is the fail-closed answer,
+and it is the whole behaviour you should expect — a tab never shows your own data under another
+business's name.
+
+What to do when you see that explanation:
+
+1. **Go back to the tab the session was started in**, if it is still open. Everything continues
+   there, and that tab's own state will also bring the reloaded tab back into the session.
+2. **Otherwise press End session, then start a new one** from Super Admin → Businesses →
+   **View as this business**. Starting a session is always that explicit flow: nothing restarts or
+   re-issues a session for you, and no identifier can be recovered.
+3. **If End session fails** (a network blip, for example), the explanation stays and nothing is
+   shown. Try again; if it keeps failing, the session expires by itself within the hour, and a
+   deactivation of that business also ends it.
+
+Nothing here needs configuration, and no step of the rollout procedure changes.
 
 ## Not part of this rollout
 
@@ -664,10 +734,12 @@ token undecryptable.
   so an Owner can now connect, save and re-test their own account from the application. Since
   issue #541 the *application* side of onboarding exists too, behind a flag that is off by default
   and gated as [Enabling self-service onboarding](#enabling-self-service-onboarding-issue-541)
-  describes. What is still missing is the rest of the journey: approving or rejecting an
-  application is #509's (the application form at `/apply` exists since #543), the approval page is #510's, and the connection
-  banners are #539's; the business that is live today had its credential moved in by that
-  human-run command. Do not add a second live business until the flow is complete.
+  describes. The rest of the journey exists too: the application form at `/apply` since #543,
+  approving and rejecting an application through the Super Admin businesses API of #544 and the
+  Businesses page of #547 (the approval user interface #510 asked for), and the Nayax connection
+  banners of #539 on the screens that depend on Nayax. The business that is live today had its
+  credential moved in by that human-run command; a second live business is a human decision about
+  production data, not a missing feature.
 - **Database foreign keys from `BusinessId` to `Businesses`.** Deliberately deferred, and still
   **required**. This is an outstanding integrity step, not a decision that the constraint is
   unnecessary.

@@ -17,6 +17,7 @@ public sealed class FakeBusinessMembershipWriteStore : IBusinessMembershipWriteS
     public const string Begin = "begin";
     public const string IdentityRead = "identity-read";
     public const string BusinessRead = "business-read";
+    public const string StatusRead = "status-read";
     public const string Commit = "commit";
     public const string Dispose = "dispose";
 
@@ -35,9 +36,21 @@ public sealed class FakeBusinessMembershipWriteStore : IBusinessMembershipWriteS
     /// </summary>
     public List<BusinessMembershipRole> BusinessMembershipRoles { get; } = [];
 
+    /// <summary>
+    /// What <see cref="FindBusinessStatusAsync"/> answers (issue #680). It is
+    /// <see cref="BusinessStatus.Active"/> by default, because a write into a trading business is
+    /// the ordinary case every other test here is about; <see langword="null"/> stands for a
+    /// business row that is not there at all. A test that needs the status to change while a writer
+    /// waits for the lock sets it from <see cref="WhileWaitingForTheWriteLock"/>.
+    /// </summary>
+    public BusinessStatus? Status { get; set; } = BusinessStatus.Active;
+
     public ActorIdentity? LastQueriedIdentity { get; private set; }
 
     public BusinessId? LastQueriedBusiness { get; private set; }
+
+    /// <summary>The business the last status re-check was made for.</summary>
+    public BusinessId? LastQueriedStatusBusiness { get; private set; }
 
     /// <summary>How the fake answers "is this the unique index refusing a second active row?".</summary>
     public Func<Exception, bool> DuplicateActiveMembership { get; set; } = _ => false;
@@ -77,6 +90,15 @@ public sealed class FakeBusinessMembershipWriteStore : IBusinessMembershipWriteS
         _operations.Add(BusinessRead);
         LastQueriedBusiness = businessId;
         return Task.FromResult<IReadOnlyList<BusinessMembershipRole>>(BusinessMembershipRoles.ToList());
+    }
+
+    public Task<BusinessStatus?> FindBusinessStatusAsync(
+        BusinessId businessId,
+        CancellationToken cancellationToken)
+    {
+        _operations.Add(StatusRead);
+        LastQueriedStatusBusiness = businessId;
+        return Task.FromResult(Status);
     }
 
     public bool IsDuplicateActiveMembership(Exception exception) => DuplicateActiveMembership(exception);

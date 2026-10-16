@@ -1,17 +1,22 @@
-import { Component, OnInit } from '@angular/core';
+import { HttpErrorResponse } from '@angular/common/http';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
+import { AccessService } from '../../access/access.service';
 import {
   DashboardInventorySummary,
   DashboardOrderingSummary,
   DashboardRefillSummary,
   DashboardSalesThisWeek,
   DashboardSummary,
+  UnavailableDashboardSection,
+  isDashboardSectionUnavailable,
   Product,
   Machine,
   Site
@@ -20,14 +25,17 @@ import { trendLabel, trendClass } from '../../formatting/revenue-trend';
 import { siteStockClass } from '../../formatting/site-stock-status';
 import { money } from '../reports/report-formatting';
 import { IconComponent } from '../shared/icon.component';
+import { LegacyBusinessSettingsPromptComponent } from '../shared/legacy-business-settings-prompt/legacy-business-settings-prompt.component';
+import { NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE } from '../../support-session/support-session-messages';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, RouterLink, IconComponent],
+  imports: [CommonModule, RouterLink, IconComponent, LegacyBusinessSettingsPromptComponent],
   templateUrl: './dashboard.component.html'
 })
-export class DashboardComponent implements OnInit {
+export class DashboardComponent implements OnInit, OnDestroy {
   lowStock: Product[] = [];
   machines: Machine[] = [];
   sites: Site[] = [];
@@ -35,22 +43,74 @@ export class DashboardComponent implements OnInit {
   isLoadingMachines = false;
   isLoadingLowStock = false;
   isSalesSyncFailed = false;
+
+  /**
+   * Whether the synchronization was refused by the business's run limit (issue #681, review of
+   * PR #696). The allowance is the business's, so this is what a member sees when colleagues have
+   * just opened the Dashboard several times between them. A refusal proves runs started inside the
+   * last two minutes, so it is shown as "refreshed recently", never as {@link isSalesSyncFailed}.
+   */
+  isSalesSyncRecentlyRefreshed = false;
   summary: DashboardSummary | null = null;
   isLoadingSummary = false;
   isSummaryFailed = false;
 
+  /**
+   * Whether the latest-sales synchronization was deliberately not attempted because a support
+   * session is active (issue #661). That is a different thing from {@link isSalesSyncFailed}: a
+   * session resolves no Nayax credentials at all (issue #551), so the call could only have been
+   * refused, and saying it "could not be synchronized" would describe an attempt never made.
+   */
+  isSalesSyncSkippedInSupportView = false;
+
+  /** The one sentence this application shows for anything Nayax a support session cannot reach. */
+  readonly nayaxUnavailableMessage = NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE;
+
+  /**
+   * Whether a support session is active (issue #661). This page offers no write control of its
+   * own, but arriving on it does make one write-shaped call - `POST /api/nayax-sales/sync` - and
+   * the Dashboard is where starting a session lands, so the flag guards that call too. See
+   * `SupportSessionService.active$`.
+   */
+  private sessionActive = false;
+
+  /**
+   * Whether the signed-in member's role grants `Dashboard.ViewFinancials` (issue #699), read from
+   * `AccessService` rather than from the Sites/Machines responses themselves: those endpoints do
+   * not yet redact revenue, profit, margin or trend figures for an Operator (#697/#698 will), so
+   * this is the frontend's own hide until they do. Starts `true` - the fail-open default every
+   * other capability-gated control in this codebase uses - so a figure is never hidden from the
+   * role it belongs to merely because the capability has not been read yet.
+   */
+  canViewFinancials = true;
+
+  private readonly sessionActiveSubscription: Subscription;
+  private readonly financialsAccessSubscription: Subscription;
+
   constructor(
-    private productService: ProductService,
-    private machineService: MachineService,
-    private siteService: SiteService,
-    private nayaxSalesSyncService: NayaxSalesSyncService,
-    private dashboardService: DashboardService
-  ) {}
+    private readonly productService: ProductService,
+    private readonly machineService: MachineService,
+    private readonly siteService: SiteService,
+    private readonly nayaxSalesSyncService: NayaxSalesSyncService,
+    private readonly dashboardService: DashboardService,
+    supportSession: SupportSessionService,
+    access: AccessService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+    this.financialsAccessSubscription = access
+      .allows('Dashboard.ViewFinancials')
+      .subscribe((allowed) => (this.canViewFinancials = allowed));
+  }
 
   ngOnInit(): void {
     this.refreshLowStock();
     this.refreshSalesDashboard();
     this.refreshSummary();
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+    this.financialsAccessSubscription.unsubscribe();
   }
 
   /**
@@ -80,19 +140,37 @@ export class DashboardComponent implements OnInit {
    * boundary (issue #187): the latest Nayax sales are synchronized once, then Sites and Machines
    * are loaded from the resulting persisted `NayaxSales` data. If synchronization fails, existing
    * persisted data is still loaded rather than fabricated as zero, but `isSalesSyncFailed` flags
-   * that the figures may be stale so the UI never presents them as freshly synchronized.
+   * that the figures may be stale so the UI never presents them as freshly synchronized. A `429`
+   * from the business's run limit (issue #681) is not a failure: the business refreshed moments
+   * ago, so it loads the same persisted figures under `isSalesSyncRecentlyRefreshed` instead.
+   *
+   * Inside a support session (issue #661) the synchronization is not attempted at all: it is a
+   * `POST`, and it is a Nayax call, and a session is refused on both counts (issue #551). The
+   * persisted figures are still loaded, flagged as not synchronized rather than as failed.
    */
   refreshSalesDashboard(): void {
     this.isSalesSyncFailed = false;
+    this.isSalesSyncRecentlyRefreshed = false;
+    this.isSalesSyncSkippedInSupportView = false;
     this.isLoadingSites = true;
     this.isLoadingMachines = true;
+    if (this.sessionActive) {
+      this.isSalesSyncSkippedInSupportView = true;
+      this.refreshMachines();
+      this.refreshSites();
+      return;
+    }
     this.nayaxSalesSyncService.syncLatest().subscribe({
       next: () => {
         this.refreshMachines();
         this.refreshSites();
       },
-      error: () => {
-        this.isSalesSyncFailed = true;
+      error: (error: unknown) => {
+        if (error instanceof HttpErrorResponse && error.status === 429) {
+          this.isSalesSyncRecentlyRefreshed = true;
+        } else {
+          this.isSalesSyncFailed = true;
+        }
         this.refreshMachines();
         this.refreshSites();
       }
@@ -220,29 +298,56 @@ export class DashboardComponent implements OnInit {
   }
 
   /**
+   * The "Needs refill" card's primary value: the figure, or - inside a support session (issue
+   * #554) - "Unavailable", matching the sales/inventory cards' own unavailable display rather than
+   * a `0` that would read as a known, adequately stocked fleet.
+   */
+  refillValueDisplay(refill: DashboardRefillSummary | UnavailableDashboardSection): string {
+    return isDashboardSectionUnavailable(refill) ? 'Unavailable' : String(refill.machinesNeedingRefill);
+  }
+
+  refillValueClass(refill: DashboardRefillSummary | UnavailableDashboardSection): string {
+    return isDashboardSectionUnavailable(refill) ? 'value-muted' : '';
+  }
+
+  /**
    * The "Needs refill" supporting detail. `machinesEvaluated` is what makes a zero honest: zero of
    * zero machines is nothing to evaluate yet, zero of many is every evaluated machine adequately
-   * stocked.
+   * stocked. Inside a support session (issue #554) the fleet is never read at all, so this is where
+   * that is explained.
    */
-  refillFooterText(refill: DashboardRefillSummary): string {
+  refillFooterText(refill: DashboardRefillSummary | UnavailableDashboardSection): string {
+    if (isDashboardSectionUnavailable(refill)) return NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE;
     if (refill.machinesEvaluated === 0) return 'No machines to evaluate yet';
     if (refill.machinesNeedingRefill === 0) return `All ${refill.machinesEvaluated} machines adequately stocked`;
     return `${refill.lowSelectionCount} low · ${refill.emptySelectionCount} empty selections across ${refill.machinesEvaluated} machines evaluated`;
   }
 
-  refillFooterClass(refill: DashboardRefillSummary): string {
+  refillFooterClass(refill: DashboardRefillSummary | UnavailableDashboardSection): string {
+    if (isDashboardSectionUnavailable(refill)) return 'value-muted';
     if (refill.machinesEvaluated === 0) return 'value-muted';
     return refill.machinesNeedingRefill === 0 ? 'value-positive' : 'value-muted';
   }
 
+  /** The "Needs ordering" card's primary value, on the same rule as {@link refillValueDisplay}. */
+  orderingValueDisplay(ordering: DashboardOrderingSummary | UnavailableDashboardSection): string {
+    return isDashboardSectionUnavailable(ordering) ? 'Unavailable' : String(ordering.productsNeedingOrdering);
+  }
+
+  orderingValueClass(ordering: DashboardOrderingSummary | UnavailableDashboardSection): string {
+    return isDashboardSectionUnavailable(ordering) ? 'value-muted' : '';
+  }
+
   /** The "Needs ordering" supporting detail, over the same catalogue the count was taken over. */
-  orderingFooterText(ordering: DashboardOrderingSummary): string {
+  orderingFooterText(ordering: DashboardOrderingSummary | UnavailableDashboardSection): string {
+    if (isDashboardSectionUnavailable(ordering)) return NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE;
     if (ordering.productsEvaluated === 0) return 'No products in the catalogue yet';
     if (ordering.productsNeedingOrdering === 0) return `All ${ordering.productsEvaluated} products adequately stocked`;
     return `of ${ordering.productsEvaluated} products in the catalogue`;
   }
 
-  orderingFooterClass(ordering: DashboardOrderingSummary): string {
+  orderingFooterClass(ordering: DashboardOrderingSummary | UnavailableDashboardSection): string {
+    if (isDashboardSectionUnavailable(ordering)) return 'value-muted';
     if (ordering.productsEvaluated === 0) return 'value-muted';
     return ordering.productsNeedingOrdering === 0 ? 'value-positive' : 'value-muted';
   }
@@ -267,11 +372,11 @@ export class DashboardComponent implements OnInit {
     return `${inventory.productCount} products · ${inventory.unitsInStorage} units in storage (excludes machines)`;
   }
 
-  trendLabel(current: number, previous: number): string {
+  trendLabel(current: number | null | undefined, previous: number | null | undefined): string {
     return trendLabel(current, previous);
   }
 
-  trendClass(current: number, previous: number): string {
+  trendClass(current: number | null | undefined, previous: number | null | undefined): string {
     return trendClass(current, previous);
   }
 
@@ -281,6 +386,16 @@ export class DashboardComponent implements OnInit {
 
   get totalTodaySales(): number {
     return this.machines.reduce((sum, m) => sum + (m.todayGrossRevenue ?? 0), 0);
+  }
+
+  /**
+   * Whether every machine's today's gross revenue is known (issue #699): a fleet that includes a
+   * withheld/unknown figure must not have the Totals row read its `?? 0` fallback as a real zero
+   * and report a fabricated `$0.00`, the same rule {@link isTodayProfitComplete} already follows
+   * for direct profit.
+   */
+  get isTodayRevenueComplete(): boolean {
+    return this.machines.every(m => m.todayGrossRevenue != null);
   }
 
   get totalTodayDirectProfit(): number {
@@ -293,6 +408,10 @@ export class DashboardComponent implements OnInit {
 
   get totalCurrentWeekSales(): number {
     return this.machines.reduce((sum, m) => sum + (m.currentWeekGrossRevenue ?? 0), 0);
+  }
+
+  get isCurrentWeekRevenueComplete(): boolean {
+    return this.machines.every(m => m.currentWeekGrossRevenue != null);
   }
 
   get totalCurrentWeekDirectProfit(): number {
@@ -311,6 +430,10 @@ export class DashboardComponent implements OnInit {
     return this.machines.reduce((sum, m) => sum + (m.lastWeekGrossRevenue ?? 0), 0);
   }
 
+  get isLastWeekRevenueComplete(): boolean {
+    return this.machines.every(m => m.lastWeekGrossRevenue != null);
+  }
+
   get totalLastWeekDirectProfit(): number {
     return this.machines.reduce((sum, m) => sum + (m.lastWeekDirectProfit ?? 0), 0);
   }
@@ -321,6 +444,10 @@ export class DashboardComponent implements OnInit {
 
   get totalMonthToDateSales(): number {
     return this.machines.reduce((sum, m) => sum + (m.monthToDateGrossRevenue ?? 0), 0);
+  }
+
+  get isMonthToDateRevenueComplete(): boolean {
+    return this.machines.every(m => m.monthToDateGrossRevenue != null);
   }
 
   get totalMonthToDateDirectProfit(): number {

@@ -1,7 +1,8 @@
 import { TestBed } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
 import { HistoricalCostRecoveryWorkflowComponent } from './historical-cost-recovery-workflow.component';
 import { NayaxCostBackfillResult, ReportingService } from '../../../services/reporting.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 function backfillResult(overrides: Partial<NayaxCostBackfillResult> = {}): NayaxCostBackfillResult {
   return {
@@ -17,10 +18,13 @@ function backfillResult(overrides: Partial<NayaxCostBackfillResult> = {}): Nayax
   };
 }
 
-async function render(backfillNayaxSaleCosts: jest.Mock) {
+async function render(backfillNayaxSaleCosts: jest.Mock, sessionActive: Observable<boolean> = of(false)) {
   await TestBed.configureTestingModule({
     imports: [HistoricalCostRecoveryWorkflowComponent],
-    providers: [{ provide: ReportingService, useValue: { backfillNayaxSaleCosts } }]
+    providers: [
+      { provide: ReportingService, useValue: { backfillNayaxSaleCosts } },
+      { provide: SupportSessionService, useValue: { active$: sessionActive } }
+    ]
   }).compileComponents();
 
   const fixture = TestBed.createComponent(HistoricalCostRecoveryWorkflowComponent);
@@ -141,5 +145,37 @@ describe('HistoricalCostRecoveryWorkflowComponent failures (issue #390)', () => 
 
     expect(component.error).toBe('');
     expect(host.textContent).not.toContain('No eligible pending sales.');
+  });
+});
+
+describe('HistoricalCostRecoveryWorkflowComponent in a support session (issue #661)', () => {
+  it('disables both Dry Run and Apply while a session is active', async () => {
+    const { host } = await render(jest.fn(), of(true));
+
+    expect(button(host, 'Dry Run')?.disabled).toBe(true);
+    expect(button(host, 'Apply Nayax Cost Backfill')?.disabled).toBe(true);
+  });
+
+  it('leaves both enabled while no session is active', async () => {
+    const { host } = await render(jest.fn(), of(false));
+
+    expect(button(host, 'Dry Run')?.disabled).toBe(false);
+    expect(button(host, 'Apply Nayax Cost Backfill')?.disabled).toBe(false);
+  });
+
+  /**
+   * The dry run is a `POST` too, which a support session's read-only method rule refuses the same
+   * as the apply, so the guard covers both rather than only the one that persists costs.
+   */
+  it('calls the backfill endpoint for neither the dry run nor the apply', async () => {
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const backfillNayaxSaleCosts = jest.fn();
+    const { component } = await render(backfillNayaxSaleCosts, of(true));
+
+    component.backfillNayax(true);
+    component.applyNayaxBackfill();
+
+    expect(backfillNayaxSaleCosts).not.toHaveBeenCalled();
+    expect(component.loading).toBe(false);
   });
 });

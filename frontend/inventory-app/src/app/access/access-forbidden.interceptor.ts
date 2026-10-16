@@ -9,7 +9,7 @@ import { classifyMemberRequest } from './member-endpoint';
  * Whether a refused request is one whose refusal says something about the member's role.
  *
  * Only a `member` endpoint of the configured API does (issue #602): the two cache probes, the
- * platform diagnostics surface, static assets and every other origin do not. See
+ * platform-admin surfaces, static assets and every other origin do not. See
  * {@link classifyMemberRequest}, which is the one classification all three `403` interceptors
  * read, so none of them can treat a request as a member refusal that another one excludes.
  */
@@ -33,9 +33,11 @@ export function isMemberAccessRefusal(url: string, apiBaseUrl: string): boolean 
  * refreshed the capabilities whose refused probe refreshed the account state. The remaining
  * refresh between the two is deliberately one-way: see `accountStateForbiddenInterceptor`.
  *
- * The platform diagnostics probe (`/api/admin/diagnostics/*`) is excluded too, because a `403`
- * there is the expected answer for every member and says nothing about a business role, and so are
- * static assets and any other origin, which are not member endpoints at all.
+ * The platform-admin surfaces are excluded too - the diagnostics probe (`/api/admin/diagnostics/*`),
+ * the Super Admin businesses surface (`/api/super-admin/businesses/*`, issue #673) and the
+ * support-session control surface (`/api/super-admin/support-sessions/*`) - because a `403` from
+ * one of them is the expected answer for every member and says nothing about a business role, and
+ * so are static assets and any other origin, which are not member endpoints at all.
  *
  * It reports nothing to the operator and routes nowhere. Showing "you don't have access to this"
  * for a refused member request is issue #529's global `403` handler, which is a separate decision

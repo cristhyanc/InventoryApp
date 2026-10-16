@@ -7,6 +7,7 @@ import { PurchaseService, PurchaseUpdatePayload } from '../../../services/purcha
 import { SupplierService } from '../../../services/supplier.service';
 import { ProductService } from '../../../services/product.service';
 import { PurchaseEditFormComponent } from './purchase-edit-form.component';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
  * The dedicated Edit purchase page (issue #475), reached at `/purchases/:id/edit`. Editing a
@@ -45,6 +46,13 @@ export class PurchaseEditPageComponent implements OnInit, OnDestroy {
   /** Why the last save was refused. The form keeps the person's entered values while it shows. */
   saveError = '';
 
+  /**
+   * Whether a support session is active (issue #657, extending #554), passed down to
+   * `PurchaseEditFormComponent` so it can disable Save and guard its own submit handler. See
+   * `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
   private purchaseId: number | null = null;
   private readonly subscriptions = new Subscription();
 
@@ -53,8 +61,11 @@ export class PurchaseEditPageComponent implements OnInit, OnDestroy {
     private readonly supplierService: SupplierService,
     private readonly productService: ProductService,
     private readonly router: Router,
-    private readonly route: ActivatedRoute
-  ) {}
+    private readonly route: ActivatedRoute,
+    supportSession: SupportSessionService
+  ) {
+    this.subscriptions.add(supportSession.active$.subscribe((active) => (this.sessionActive = active)));
+  }
 
   ngOnInit(): void {
     this.subscriptions.add(this.supplierService.getAll().subscribe((s) => (this.suppliers = s)));
@@ -70,6 +81,9 @@ export class PurchaseEditPageComponent implements OnInit, OnDestroy {
   }
 
   onSave(payload: PurchaseUpdatePayload): void {
+    // Checked here as well as in the form it is passed to, so the write is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) return;
     if (this.saving || this.purchaseId === null) return;
     this.saving = true;
     this.saveError = '';

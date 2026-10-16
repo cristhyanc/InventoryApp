@@ -97,6 +97,28 @@ public interface INayaxConnectionTestDraftStore
     Task ReplaceAsync(NewNayaxConnectionTestDraft draft, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Deletes the current business's draft if it has passed its expiry, and answers whether it
+    /// deleted one (issue #681).
+    ///
+    /// <para>An expired draft is already unusable - every read and the claim all match only a draft
+    /// whose expiry is still ahead - so this changes no decision. What it changes is how long a
+    /// credential ciphertext nobody can use any more stays in the database: without it, a test an
+    /// Owner abandoned and a save that was refused both leave their draft sitting there until the
+    /// <em>next</em> test replaces it, which may be never. Every caller of this port therefore
+    /// discards an expired draft before it does its own work.</para>
+    ///
+    /// <para>It is called outside a transaction on purpose. The save claims its draft inside one, so
+    /// a sweep made there would be rolled back together with the refusal that is exactly the case
+    /// worth sweeping.</para>
+    ///
+    /// <para>It is deliberately only the <em>current</em> business's draft: this port is scoped the
+    /// same way every other one is, and a sweep across businesses would need an unscoped context,
+    /// which no request path may have (AGENTS.md § Tenant ownership and data isolation).</para>
+    /// </summary>
+    /// <param name="cancellationToken">The request's cancellation token.</param>
+    Task<bool> DiscardExpiredAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// The current business's draft with this id, as created by this actor and not yet expired, or
     /// <see langword="null"/>.
     ///

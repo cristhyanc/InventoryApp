@@ -1,11 +1,13 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { PurchaseService } from '../../services/purchase.service';
 import { GstClassification, Purchase, PurchaseGstSummary, PurchaseValidation } from '../../models/models';
 import { ObjectUrlCache } from '../shared/object-url-cache';
 import { IconComponent } from '../shared/icon.component';
 import { gstClassificationLabel, isChargePresent } from './gst-classification-options';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 /**
  * The purchases list (issue #475: display only). Editing a purchase is the dedicated
@@ -22,12 +24,26 @@ import { gstClassificationLabel, isChargePresent } from './gst-classification-op
 export class PurchaseListComponent implements OnInit, OnDestroy {
   purchases: Purchase[] = [];
 
+  /**
+   * Whether a support session is active (issue #657, extending #554): Add Purchase and Delete are
+   * hidden while it is, because a session grants `PurchasingOperate` - the capability this page
+   * would otherwise gate those on - and the backend refuses the write itself only by its read-only
+   * method rule, never by withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
   // Purchase documents are protected by the API, so they are fetched through HttpClient (which
   // attaches the bearer token) and rendered from a temporary object URL.
   private readonly objectUrls = new ObjectUrlCache();
   private thumbnailUrls = new Map<number, string>();
+  private readonly sessionActiveSubscription: Subscription;
 
-  constructor(private purchaseService: PurchaseService) {}
+  constructor(
+    private purchaseService: PurchaseService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
 
   ngOnInit(): void {
     this.load();
@@ -35,6 +51,7 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.objectUrls.releaseAll();
+    this.sessionActiveSubscription.unsubscribe();
   }
 
   load(): void {
@@ -95,6 +112,11 @@ export class PurchaseListComponent implements OnInit, OnDestroy {
   }
 
   remove(purchase: Purchase): void {
+    // Checked here as well as hidden in the template, so the write is actually unavailable rather
+    // than merely invisible - the endpoint refuses it either way.
+    if (this.sessionActive) {
+      return;
+    }
     if (!confirm(`Delete purchase "${purchase.title}"?`)) return;
     this.purchaseService.delete(purchase.id).subscribe(() => this.load());
   }

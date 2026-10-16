@@ -200,15 +200,89 @@ public class BusinessSettingsUseCaseTests
         Assert.Empty(audit.Entries);
     }
 
+    /// <summary>
+    /// The save runs inside the shared write transaction, and the business's lifecycle status is
+    /// re-read in it before anything is written (issue #680): a settings save already in flight when
+    /// the Super Admin deactivates the business is refused with the fixed sentence, writes nothing
+    /// and is audited as nothing.
+    /// </summary>
+    [Fact]
+    public async Task A_save_is_refused_once_the_business_is_no_longer_active()
+    {
+        var store = new FakeBusinessSettingsStore(Stored);
+        var audit = new RecordingAudit();
+        var writeStore = new FakeBusinessMembershipWriteStore { Status = BusinessStatus.Deactivated };
+
+        var refusal = await Assert.ThrowsAsync<DomainConflictException>(
+            () => Create(store, audit, writeStore: writeStore)
+                .Handle(Submission(name: "Renamed Co"), CancellationToken.None));
+
+        Assert.Equal(ActiveBusinessWritePolicy.NotActiveMessage, refusal.Message);
+        Assert.Equal(
+            Inventory.Domain.Tenancy.BusinessId.From(BusinessId),
+            writeStore.LastQueriedStatusBusiness);
+        Assert.Null(store.LastSavedBusinessId);
+        Assert.Empty(audit.Entries);
+        Assert.DoesNotContain(FakeBusinessMembershipWriteStore.Commit, writeStore.Operations);
+    }
+
+    /// <summary>
+    /// The status that decides it is read inside the write lock, not when the request arrived: a
+    /// deactivation that commits while this save waits for the lock refuses it.
+    /// </summary>
+    [Fact]
+    public async Task A_deactivation_that_commits_while_the_write_lock_is_awaited_refuses_the_save()
+    {
+        var store = new FakeBusinessSettingsStore(Stored);
+        var audit = new RecordingAudit();
+        var writeStore = new FakeBusinessMembershipWriteStore();
+        writeStore.WhileWaitingForTheWriteLock = () => writeStore.Status = BusinessStatus.Deactivated;
+
+        var refusal = await Assert.ThrowsAsync<DomainConflictException>(
+            () => Create(store, audit, writeStore: writeStore)
+                .Handle(Submission(name: "Renamed Co"), CancellationToken.None));
+
+        Assert.Equal(ActiveBusinessWritePolicy.NotActiveMessage, refusal.Message);
+        Assert.Null(store.LastSavedBusinessId);
+        Assert.Empty(audit.Entries);
+    }
+
+    /// <summary>
+    /// A permitted save still happens inside that transaction, with the status re-read first and the
+    /// write committed - the other half of the rule above, and what would hide a guard that refused
+    /// every save.
+    /// </summary>
+    [Fact]
+    public async Task A_permitted_save_runs_inside_the_committed_transaction()
+    {
+        var store = new FakeBusinessSettingsStore(Stored);
+        var writeStore = new FakeBusinessMembershipWriteStore();
+
+        await Create(store, new RecordingAudit(), writeStore: writeStore)
+            .Handle(Submission(name: "Renamed Co"), CancellationToken.None);
+
+        Assert.Equal(
+            [
+                FakeBusinessMembershipWriteStore.Begin,
+                FakeBusinessMembershipWriteStore.StatusRead,
+                FakeBusinessMembershipWriteStore.Commit,
+                FakeBusinessMembershipWriteStore.Dispose,
+            ],
+            writeStore.Operations);
+        Assert.Equal(Inventory.Domain.Tenancy.BusinessId.From(BusinessId), store.LastSavedBusinessId);
+    }
+
     private static UpdateBusinessSettings Create(
         FakeBusinessSettingsStore store,
         RecordingAudit audit,
         ICurrentBusinessProvider? currentBusiness = null,
-        IAuthenticatedActorAccessor? actors = null) =>
+        IAuthenticatedActorAccessor? actors = null,
+        FakeBusinessMembershipWriteStore? writeStore = null) =>
         new(
             currentBusiness ?? new FakeCurrentBusinessProvider(BusinessId),
             actors ?? FakeAuthenticatedActorAccessor.Identified(Actor()),
             store,
+            new MembershipWriteGuard(writeStore ?? new FakeBusinessMembershipWriteStore()),
             audit,
             new FakeClock(SavedAt));
 

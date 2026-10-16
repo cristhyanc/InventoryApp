@@ -13,6 +13,7 @@ import {
 } from '../../../services/nayax-sale-timestamp-repair.service';
 import { NayaxSaleTimestampRepairPreviewComponent } from './nayax-sale-timestamp-repair-preview.component';
 import { NayaxSaleTimestampRepairResultComponent } from './nayax-sale-timestamp-repair-result.component';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
  * One outcome of the last action the operator took, with what to do about it.
@@ -219,7 +220,7 @@ const AMBIGUOUS_TRANSPORT_STATUSES = new Set([0, 408, 502, 503, 504]);
     </section>
 
     <div class="page-actions mt-6">
-      <button type="button" class="btn btn-primary" [disabled]="busy" (click)="runPreview()">
+      <button type="button" class="btn btn-primary" [disabled]="busy || sessionActive" (click)="runPreview()">
         Preview repair
       </button>
     </div>
@@ -328,6 +329,16 @@ export class NayaxSaleTimestampRepairWorkflowComponent implements OnDestroy {
   unresolvedAtPreview = 0;
   missingAtPreview = 0;
 
+  /**
+   * Whether a support session is active (issue #661): Preview is disabled and Apply is never
+   * offered while it is, because a session grants `DataRepair` - the capability this page and both
+   * endpoints are gated on - and the backend refuses them only by its read-only method rule, never
+   * by withholding the capability. The *preview* is guarded too: it is a `POST` that writes the
+   * server's own plan draft, so that rule refuses it as surely as the apply.
+   * See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
   readonly supportedExtensions = EVIDENCE_EXPORT_SUPPORTED_EXTENSIONS.join(', ');
   readonly maxExportBytesLabel = NayaxSaleTimestampRepairWorkflowComponent.groupDigits(EVIDENCE_EXPORT_MAX_BYTES);
 
@@ -339,11 +350,15 @@ export class NayaxSaleTimestampRepairWorkflowComponent implements OnDestroy {
   private previewSubscription: Subscription | null = null;
   private applySubscription: Subscription | null = null;
   private expiryTimer: number | null = null;
+  private readonly sessionActiveSubscription: Subscription;
 
   constructor(
     private readonly repairs: NayaxSaleTimestampRepairService,
-    private readonly toast: ToastService
-  ) {}
+    private readonly toast: ToastService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
 
   get busy(): boolean {
     return this.previewLoading || this.applying;
@@ -360,8 +375,8 @@ export class NayaxSaleTimestampRepairWorkflowComponent implements OnDestroy {
 
   /**
    * Apply is offered only for a successful, unexpired plan that has something to repair, with the
-   * acknowledgement given and no request in flight. The server enforces each of these itself; this
-   * is the page refusing to offer an action that would be refused.
+   * acknowledgement given, no request in flight and no support session active. The server enforces
+   * each of these itself; this is the page refusing to offer an action that would be refused.
    */
   get canApply(): boolean {
     return (
@@ -369,7 +384,8 @@ export class NayaxSaleTimestampRepairWorkflowComponent implements OnDestroy {
       this.preview.repairable > 0 &&
       !this.previewExpired &&
       this.acknowledged &&
-      !this.busy
+      !this.busy &&
+      !this.sessionActive
     );
   }
 
@@ -377,6 +393,7 @@ export class NayaxSaleTimestampRepairWorkflowComponent implements OnDestroy {
     this.cancelPreview();
     this.cancelApply();
     this.clearExpiryTimer();
+    this.sessionActiveSubscription.unsubscribe();
   }
 
   /**
@@ -440,7 +457,9 @@ export class NayaxSaleTimestampRepairWorkflowComponent implements OnDestroy {
    * change, or after an apply.
    */
   runPreview(): void {
-    if (this.busy) {
+    // The session check is here as well as in the template, so the request is actually
+    // unavailable rather than merely inert - the endpoint refuses it either way.
+    if (this.busy || this.sessionActive) {
       return;
     }
     const request = this.buildRequest();

@@ -29,15 +29,19 @@ namespace InventoryApi.Bootstrap;
 ///   <item><b>An apply is one transaction, so there is no partial state.</b> The authoritative read,
 ///   the comparison against the configured credential, the credential save, the <c>Ready</c> status
 ///   write and the read-back all happen inside one transaction on the business-scoped context, and
-///   it is committed only once the connection is actually <c>Ready</c>. Every other ending - a
+///   it is committed only once a credential this run stored is actually <c>Ready</c> - a run that
+///   stores nothing has nothing to commit either. Every other ending - a
 ///   refusal, a discarded status result, a failed write - rolls it back, so a run that does not
 ///   report success has written nothing at all. A credential stored with its status never written
 ///   is not a state this command can leave.</item>
 ///   <item><b>Idempotent, and safely restartable.</b> A business already holding exactly this
-///   operator id and token, marked <see cref="NayaxConnectionStatus.Ready"/>, is left completely
-///   untouched - the row is not rewritten, so not even the ciphertext changes and the credential
-///   revision does not move. Because a failed apply rolls back, re-running after one is the same
-///   run again rather than a repair of a half-finished one.</item>
+///   operator id and token is left completely untouched - the row is not rewritten, so not even the
+///   ciphertext changes, the credential revision does not move, and the status, the last-tested
+///   instant and the machine-check state stay as they were. That holds whatever the status is
+///   (issue #675): a re-run must not revive a connection a Nayax <c>401</c> moved to
+///   <see cref="NayaxConnectionStatus.NeedsAttention"/>, because this command never calls Nayax and
+///   so holds no evidence against that verdict. Because a failed apply rolls back, re-running after
+///   one is the same run again rather than a repair of a half-finished one.</item>
 ///   <item><b>It never replaces a credential it did not recognise.</b> A stored operator id or
 ///   token that differs from the configured one, or a ciphertext the configured keys cannot
 ///   decrypt, is a refusal. Whether that row or the configuration is the credential in production
@@ -54,8 +58,9 @@ namespace InventoryApi.Bootstrap;
 /// It defines no Nayax request or response contract. The operator id it moves is the Lynx API's
 /// <c>OperatorID</c> path parameter and the token is its <c>Authorization: Bearer</c> credential,
 /// both confirmed against the Nayax developer documentation, and both already modelled by #518.
-/// Nothing here calls Nayax: the status it writes records that the credential is the one already in
-/// production use, not the result of a live permission test.
+/// Nothing here calls Nayax: the status it writes when it stores a credential records that the
+/// credential is the one already in production use, not the result of a live permission test -
+/// which is also why it writes no status at all over a credential it did not store.
 /// </summary>
 public sealed class NayaxConnectionMigrator
 {
@@ -223,8 +228,10 @@ public sealed class NayaxConnectionMigrator
             StoredTokenMatchesConfigured = plan.StoredTokenMatches,
             StatusBefore = plan.Existing?.Status,
             // Predicted, not measured: a dry run writes nothing, so it cannot read the result
-            // back. The plan is two values and a status, which is why predicting it is exact.
-            StatusAfter = NayaxConnectionStatus.Ready,
+            // back. The plan is two values and a status, which is why predicting it is exact - a
+            // first migration ends Ready at revision 1, and a business that already holds this
+            // credential ends exactly where it started, whatever its status is (issue #675).
+            StatusAfter = plan.Existing?.Status ?? NayaxConnectionStatus.Ready,
             CredentialRevisionBefore = plan.Existing?.CredentialRevision,
             CredentialRevisionAfter = plan.Existing?.CredentialRevision ?? 1,
             Message = DryRunMessage(plan.Change),
@@ -386,20 +393,26 @@ public sealed class NayaxConnectionMigrator
                     dryRun));
         }
 
-        return new MigrationPlan(
-            existing,
-            true,
-            existing.Status == NayaxConnectionStatus.Ready
-                ? NayaxConnectionMigrationChange.None
-                : NayaxConnectionMigrationChange.StatusMarkedReady,
-            null);
+        // Nothing to do, whatever the status says (issue #675). The credential this command exists
+        // to move is already the stored one, and the status is a verdict something else reached:
+        // PendingPermissions from a save, NeedsAttention from a Nayax 401. This command never calls
+        // Nayax, so it holds no evidence that would overturn one - marking the connection Ready
+        // here would revive, on the strength of a re-run, credentials Nayax itself had rejected.
+        // Recovering such a connection is the Owner's re-test, not a migration.
+        return new MigrationPlan(existing, true, NayaxConnectionMigrationChange.None, null);
     }
 
-    // Ready rather than the PendingPermissions a save leaves: the token being stored is the one
-    // the application is authenticating to Nayax with today, so its permissions are evidenced by
-    // production use - this command never calls Nayax. Returns the StatusNotApplied result if the
-    // conditional status update was discarded, which makes the caller roll the save back, or null
-    // when the plan's write succeeded (or there was nothing to write).
+    // The first migration into a business that holds no credential, and the only change this
+    // command makes: the pair is stored and the connection marked Ready rather than left on the
+    // PendingPermissions a save leaves, because the token being stored is the one the application
+    // is authenticating to Nayax with today and its permissions are evidenced by production use -
+    // this command never calls Nayax. That trusted-production-token reasoning covers a credential
+    // this command puts there and nothing else, which is why a credential that is already stored
+    // is left exactly as it is (issue #675).
+    //
+    // Returns the StatusNotApplied result if the conditional status update was discarded, which
+    // makes the caller roll the save back, or null when the plan's write succeeded (or there was
+    // nothing to write).
     private async Task<NayaxConnectionMigrationResult?> ApplyPlanAsync(
         INayaxConnectionStore store,
         MigrationPlan plan,
@@ -408,26 +421,16 @@ public sealed class NayaxConnectionMigrator
         string accessToken,
         CancellationToken cancellationToken)
     {
-        if (plan.Change == NayaxConnectionMigrationChange.CredentialsStored)
+        if (plan.Change != NayaxConnectionMigrationChange.CredentialsStored)
         {
-            var saved = await store.SaveCredentialAsync(operatorId, accessToken, cancellationToken);
-
-            return await ApplyReadyAsync(store, saved.CredentialRevision, cancellationToken)
-                ? null
-                : StatusNotApplied(businessId, operatorId, plan.Existing, saved.CredentialRevision);
+            return null;
         }
 
-        if (plan.Change == NayaxConnectionMigrationChange.StatusMarkedReady
-            && !await ApplyReadyAsync(store, plan.Existing!.CredentialRevision, cancellationToken))
-        {
-            return StatusNotApplied(
-                businessId,
-                operatorId,
-                plan.Existing,
-                plan.Existing.CredentialRevision);
-        }
+        var saved = await store.SaveCredentialAsync(operatorId, accessToken, cancellationToken);
 
-        return null;
+        return await ApplyReadyAsync(store, saved.CredentialRevision, cancellationToken)
+            ? null
+            : StatusNotApplied(businessId, operatorId, plan.Existing, saved.CredentialRevision);
     }
 
     private Task<bool> ApplyReadyAsync(
@@ -546,15 +549,12 @@ public sealed class NayaxConnectionMigrator
                 "Dry run: nothing was written. An apply would store the configured operator id and "
                     + "access token for this business, encrypted, and mark the connection Ready, as "
                     + "one transaction that is committed only if both land.",
-            NayaxConnectionMigrationChange.StatusMarkedReady =>
-                "Dry run: nothing was written. This business already holds exactly the configured "
-                    + "operator id and access token, so an apply would only mark the connection "
-                    + "Ready; the stored credential would not be re-saved and its revision would not "
-                    + "move.",
             _ =>
                 "Dry run: nothing was written, and an apply would write nothing either. This business "
-                    + "already holds exactly the configured operator id and access token, marked "
-                    + "Ready.",
+                    + "already holds exactly the configured operator id and access token, so its "
+                    + "connection status, credential revision, last-tested instant and machine-check "
+                    + "state would all be left exactly as they are - including a status that is not "
+                    + "Ready, which this command has no evidence to overturn.",
         };
 
     private static string AppliedMessage(NayaxConnectionMigrationChange change) =>
@@ -566,13 +566,12 @@ public sealed class NayaxConnectionMigrator
                     + "one transaction. The global NayaxLynx settings are deliberately unchanged - "
                     + "the Nayax client already reads this per-business record (issue #520), so "
                     + "removing them is a separate human step.",
-            NayaxConnectionMigrationChange.StatusMarkedReady =>
-                "Applied: this business already held exactly the configured operator id and access "
-                    + "token, so only the status was written and the connection is now marked Ready. "
-                    + "The stored credential was not re-saved and its revision did not move.",
             _ =>
                 "Nothing to do: this business already holds exactly the configured operator id and "
-                    + "access token, marked Ready. Re-running this command changes nothing.",
+                    + "access token, so nothing at all was written - not the credential, and not the "
+                    + "status, which is reported above exactly as it was found. Re-running this "
+                    + "command changes nothing. A connection that is not Ready is not repaired by "
+                    + "re-running this command: only a connection test can conclude a new status.",
         };
 
     /// <summary>

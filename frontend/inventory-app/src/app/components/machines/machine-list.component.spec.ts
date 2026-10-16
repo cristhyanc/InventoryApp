@@ -8,11 +8,16 @@ import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService } from '../../services/nayax-connection.service';
 
 /** The banner (issue #539) is composed by this page; it is stubbed `Ready` so it stays hidden. */
-function nayaxStatusBannerProviders(status: 'Ready' | 'NotConfigured' = 'Ready') {
+function nayaxStatusBannerProviders(status: 'Ready' | 'NotConfigured' = 'Ready', canViewFinancials = true) {
   return [
     { provide: NayaxConnectionService, useValue: { status: () => of({ status, machineChecksPending: false }) } },
-    { provide: AccessService, useValue: { allows: () => of(true) } }
+    { provide: AccessService, useValue: { allows: () => of(canViewFinancials) } }
   ];
+}
+
+/** A stub `AccessService` for the direct-construction tests below, granted by default. */
+function accessServiceStub(canViewFinancials = true): AccessService {
+  return { allows: () => of(canViewFinancials) } as unknown as AccessService;
 }
 
 function machine(overrides: Partial<Machine>): Machine {
@@ -43,7 +48,7 @@ const MACHINE_B = machine({ machineID: 20, machineName: 'Gym Drinks', machineNum
 describe('MachineListComponent loading', () => {
   it('loads machines from MachineService.getAll on init', () => {
     const getAll = jest.fn(() => of([MACHINE_A, MACHINE_B]));
-    const component = new MachineListComponent({ getAll } as unknown as MachineService);
+    const component = new MachineListComponent({ getAll } as unknown as MachineService, accessServiceStub());
 
     component.ngOnInit();
 
@@ -56,7 +61,7 @@ describe('MachineListComponent loading', () => {
 
   it('flags the load as failed when MachineService.getAll errors, without fabricating data', () => {
     const getAll = jest.fn(() => throwError(() => new Error('network error')));
-    const component = new MachineListComponent({ getAll } as unknown as MachineService);
+    const component = new MachineListComponent({ getAll } as unknown as MachineService, accessServiceStub());
 
     component.ngOnInit();
 
@@ -68,7 +73,7 @@ describe('MachineListComponent loading', () => {
 
 describe('MachineListComponent search/filter', () => {
   it('filters by machine name, case-insensitively', () => {
-    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService);
+    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, accessServiceStub());
     component.ngOnInit();
 
     component.onSearchChange('gym');
@@ -77,7 +82,7 @@ describe('MachineListComponent search/filter', () => {
   });
 
   it('filters by machine number', () => {
-    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService);
+    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, accessServiceStub());
     component.ngOnInit();
 
     component.onSearchChange('a-100');
@@ -86,7 +91,7 @@ describe('MachineListComponent search/filter', () => {
   });
 
   it('shows no matches for an unmatched search term, without discarding the full machine list', () => {
-    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService);
+    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, accessServiceStub());
     component.ngOnInit();
 
     component.onSearchChange('does-not-exist');
@@ -96,7 +101,7 @@ describe('MachineListComponent search/filter', () => {
   });
 
   it('clearing the search restores the full list', () => {
-    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService);
+    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, accessServiceStub());
     component.ngOnInit();
     component.onSearchChange('gym');
 
@@ -206,5 +211,75 @@ describe('MachineListComponent rendering', () => {
     const host = fixture.nativeElement as HTMLElement;
 
     expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
+  });
+});
+
+/**
+ * `Dashboard.ViewFinancials` hides sales, direct profit and profitability status on this page's
+ * cards (issue #699): a role without it - an Operator - sees none of those figures, while a
+ * Manager or an Owner sees them exactly as before.
+ */
+describe('MachineListComponent financial figures gated on Dashboard.ViewFinancials (issue #699)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  const MACHINE_WITH_STATUS = machine({
+    machineID: 30,
+    machineName: 'Loading Dock',
+    todayGrossRevenue: 99,
+    todayDirectProfit: 40,
+    currentWeekGrossRevenue: 500,
+    currentWeekDirectProfit: 120,
+    profitabilityStatus: 'Profitable'
+  });
+
+  async function renderAs(canViewFinancials: boolean, machines: Machine[] = [MACHINE_WITH_STATUS]) {
+    await TestBed.configureTestingModule({
+      imports: [MachineListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: MachineService, useValue: { getAll: () => of(machines) } },
+        ...nayaxStatusBannerProviders('Ready', canViewFinancials)
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(MachineListComponent);
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  it('shows no sales, profit or profitability-status text to an Operator', async () => {
+    const host = await renderAs(false);
+
+    expect(host.textContent).not.toContain('$99.00');
+    expect(host.textContent).not.toContain('$40.00');
+    expect(host.textContent).not.toContain('sales');
+    expect(host.textContent).not.toContain('profit');
+    expect(host.textContent).not.toContain('Profitable');
+    expect(host.textContent).toContain('Loading Dock');
+  });
+
+  it('keeps the figures exactly as today for a Manager or an Owner', async () => {
+    const host = await renderAs(true);
+
+    expect(host.textContent).toContain('$99.00 sales');
+    expect(host.textContent).toContain('$40.00 profit');
+    expect(host.textContent).toContain('Profitable');
+  });
+
+  it('renders without error when a granted role is sent a card with the figures absent', async () => {
+    const withheld = machine({
+      machineID: 40,
+      machineName: 'Unknown figures',
+      todayGrossRevenue: null,
+      currentWeekGrossRevenue: null,
+      profitabilityStatus: null
+    });
+    const host = await renderAs(true, [withheld]);
+
+    expect(host.textContent).toContain('Unknown figures');
+    expect(host.textContent).toContain('Unavailable');
+    expect(host.textContent).toContain('Profit unavailable');
+    expect(host.textContent).not.toContain('NaN');
+    expect(host.textContent).not.toContain('$0.00');
   });
 });

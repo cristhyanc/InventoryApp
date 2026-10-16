@@ -55,8 +55,14 @@ export interface Product {
   inventoryValue?: number | null;
   machinePrice: number | null;
   commissionValue: number | null;
-  suggestedNetValue: number | null;
-  suggestedPriceValue: number | null;
+  /**
+   * The machine product listing's "Estimated Card Profit"/"50% Card Margin Price" - a profit and
+   * a margin-derived price, hidden from a role without `Dashboard.ViewFinancials` by the Machine
+   * Detail page (issue #699); optional and nullable on the same rule as {@link Site}/
+   * {@link Machine}.
+   */
+  suggestedNetValue?: number | null;
+  suggestedPriceValue?: number | null;
   quantityInStock: number;
   maxStockInMachine: number;
   machineReplenishmentNeed: number;
@@ -154,6 +160,29 @@ export interface DashboardOrderingSummary {
 }
 
 /**
+ * A summary section the backend deliberately did not compute for this request, published as
+ * `{ "available": false, "reason": "..." }` (`UnavailableDashboardSectionDto`, issue #552). Since
+ * issue #554 the "Needs refill" and "Needs ordering" cards publish this inside a support session,
+ * with `reason: "SupportView"`: a session never resolves the business's Nayax credentials, so the
+ * live fleet those two cards need is never read at all.
+ *
+ * `reason` is a stable code for branching, never a sentence to display - see
+ * `support-session/support-session-messages.ts` for the one sentence this application shows for
+ * `"SupportView"`.
+ */
+export interface UnavailableDashboardSection {
+  available: false;
+  reason: string;
+}
+
+/** Whether `section` is the withheld shape rather than the card's real figures. */
+export function isDashboardSectionUnavailable(
+  section: DashboardRefillSummary | DashboardOrderingSummary | UnavailableDashboardSection
+): section is UnavailableDashboardSection {
+  return (section as UnavailableDashboardSection).available === false;
+}
+
+/**
  * The "Inventory" card. The three figures have deliberately different scopes and are not
  * interchangeable: `inventoryValueAtCost` is the business-owned perpetual AVCO valuation, `null`
  * whenever `isInventoryValueComplete` is `false` (an unknown cost, never a real `$0.00`);
@@ -188,13 +217,18 @@ export interface DashboardInventorySummary {
  * the two money cards rather than rendering a figure it was not given (issue #528). Neither is
  * ever sent as `null` or `0` to mean "withheld", and the page must not read either absence as a
  * zero week or an incomplete valuation.
+ *
+ * `needsRefill` and `needsOrdering` are each either the card's real figures or an
+ * {@link UnavailableDashboardSection} (issue #554) - a support session's own shape of this
+ * response, which replaces both with `{ available: false, reason: "SupportView" }` rather than
+ * blanking a figure inside either card.
  */
 export interface DashboardSummary {
   asOfUtc: string;
   businessDate: string;
   salesThisWeek?: DashboardSalesThisWeek;
-  needsRefill: DashboardRefillSummary;
-  needsOrdering: DashboardOrderingSummary;
+  needsRefill: DashboardRefillSummary | UnavailableDashboardSection;
+  needsOrdering: DashboardOrderingSummary | UnavailableDashboardSection;
   inventory: DashboardInventorySummary;
 }
 
@@ -229,25 +263,36 @@ export interface ProductPriceComparison {
   historyNewestFirst: ProductPriceHistoryEntry[];
 }
 
+/**
+ * Every revenue, direct-profit and profitability-status figure is optional and nullable: a role
+ * without `Dashboard.ViewFinancials` is not shown them at all, by the frontend-level check this
+ * page and the Machines list/detail apply (issue #699), and the API itself is expected to start
+ * withholding them the same way once #697/#698 land. The frontend must not assume any of these
+ * figures is always present.
+ */
 export interface Machine {
   machineID: number;
   machineName?: string | null;
   machineNumber?: string | null;
-  todayGrossRevenue: number;
-  currentWeekGrossRevenue: number;
-  lastWeekGrossRevenue: number;
-  twoWeeksAgoGrossRevenue: number;
+  todayGrossRevenue?: number | null;
+  currentWeekGrossRevenue?: number | null;
+  lastWeekGrossRevenue?: number | null;
+  twoWeeksAgoGrossRevenue?: number | null;
   todayDirectProfit: number | null;
   twoWeeksAgoDirectProfit: number | null;
   lastWeekDirectProfit: number | null;
   currentWeekDirectProfit: number | null;
-  previousComparableWeekGrossRevenue: number;
+  previousComparableWeekGrossRevenue?: number | null;
   previousComparableWeekDirectProfit: number | null;
-  monthToDateGrossRevenue: number;
+  monthToDateGrossRevenue?: number | null;
   monthToDateDirectProfit: number | null;
   profitabilityStatus?: string | null;
 }
 
+/**
+ * Every revenue figure is optional and nullable, on the same `Dashboard.ViewFinancials` rule as
+ * {@link Machine} (issue #699).
+ */
 export interface Site {
   siteId: number;
   siteName: string;
@@ -255,9 +300,9 @@ export interface Site {
   totalStockPercentage: number;
   lowProductCount: number;
   emptyProductCount: number;
-  todayRevenue: number;
-  currentWeekRevenue: number;
-  previousComparableWeekRevenue: number;
+  todayRevenue?: number | null;
+  currentWeekRevenue?: number | null;
+  previousComparableWeekRevenue?: number | null;
 }
 
 /** One machine's MDB code for a Site Products row (issue #495); null when Nayax has none. */
@@ -272,7 +317,11 @@ export interface SiteProduct {
   name: string;
   averageUnitCost: number | null;
   sitePrice: number;
-  estimatedCardProfit: number | null;
+  /**
+   * Hidden from a role without `Dashboard.ViewFinancials` by the Site Products page (issue #699);
+   * optional and nullable on the same rule as {@link Site}/{@link Machine}.
+   */
+  estimatedCardProfit?: number | null;
   quantityInStock: number;
   maxStock: number;
   /**

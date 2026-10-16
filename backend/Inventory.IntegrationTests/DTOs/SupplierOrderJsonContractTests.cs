@@ -17,9 +17,17 @@ namespace InventoryApi.Tests.DTOs;
 /// bytes, so a key that is renamed, reordered, added, dropped, or given a different value fails
 /// here rather than in a client. The explicit key list is asserted as well, so a future change to
 /// <em>both</em> sides at once still has to be a conscious one.
+///
+/// Every byte-for-byte comparison here is of the <see cref="FinancialFigureVisibility.Visible"/>
+/// projection, stated explicitly since issue #700, which is what asserts that a Manager's and an
+/// Owner's supplier-order response is unchanged by that slice. The redacted projection withholds
+/// exactly one key's value and is pinned by
+/// <see cref="Response_withholds_only_the_nested_products_inventory_value_when_redacted"/>.
 /// </summary>
 public class SupplierOrderJsonContractTests
 {
+    private const FinancialFigureVisibility Visible = FinancialFigureVisibility.Visible;
+
     private static readonly JsonSerializerOptions WebDefaults = new(JsonSerializerDefaults.Web);
 
     private static SupplierOrderProductSummaryRecord ProductRecord() => new(
@@ -138,7 +146,7 @@ public class SupplierOrderJsonContractTests
     {
         var record = RecordWith(status);
 
-        var response = JsonSerializer.Serialize(SupplierOrderResponseMapper.ToResponse(record), WebDefaults);
+        var response = JsonSerializer.Serialize(SupplierOrderResponseMapper.ToResponse(record, Visible), WebDefaults);
 
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), response);
     }
@@ -155,7 +163,7 @@ public class SupplierOrderJsonContractTests
             Notes = null,
         };
 
-        var response = JsonSerializer.Serialize(SupplierOrderResponseMapper.ToResponse(record), WebDefaults);
+        var response = JsonSerializer.Serialize(SupplierOrderResponseMapper.ToResponse(record, Visible), WebDefaults);
 
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), response);
         Assert.Contains("\"supplier\":null", response, StringComparison.Ordinal);
@@ -166,7 +174,7 @@ public class SupplierOrderJsonContractTests
     {
         var json = JsonSerializer.Serialize(
             SupplierOrderResponseMapper.ToResponse(
-                RecordWith(Inventory.Domain.SupplierOrders.SupplierOrderStatus.PartiallyReceived)),
+                RecordWith(Inventory.Domain.SupplierOrders.SupplierOrderStatus.PartiallyReceived), Visible),
             WebDefaults);
 
         using var document = JsonDocument.Parse(json);
@@ -204,7 +212,8 @@ public class SupplierOrderJsonContractTests
     public void Response_serializes_the_status_as_its_persisted_numeric_value(
         Inventory.Domain.SupplierOrders.SupplierOrderStatus status, int expected)
     {
-        var json = JsonSerializer.Serialize(SupplierOrderResponseMapper.ToResponse(RecordWith(status)), WebDefaults);
+        var json = JsonSerializer.Serialize(
+            SupplierOrderResponseMapper.ToResponse(RecordWith(status), Visible), WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(expected, document.RootElement.GetProperty("status").GetInt32());
@@ -229,7 +238,7 @@ public class SupplierOrderJsonContractTests
     {
         var record = RecordWith(status, quantityOrdered, quantityReceived);
 
-        var json = JsonSerializer.Serialize(SupplierOrderResponseMapper.ToResponse(record), WebDefaults);
+        var json = JsonSerializer.Serialize(SupplierOrderResponseMapper.ToResponse(record, Visible), WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(expected, document.RootElement.GetProperty("lines")[0].GetProperty("outstandingQuantity").GetDecimal());
@@ -241,10 +250,40 @@ public class SupplierOrderJsonContractTests
     {
         var json = JsonSerializer.Serialize(
             SupplierOrderResponseMapper.ToResponse(
-                RecordWith(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Ordered)),
+                RecordWith(Inventory.Domain.SupplierOrders.SupplierOrderStatus.Ordered), Visible),
             WebDefaults);
 
         Assert.DoesNotContain("businessId", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("receiptAllocations", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The redacted projection (issue #700) withholds the nested catalogue product's
+    /// <c>inventoryValue</c> and changes nothing else: every key stays, in its position, and what
+    /// was ordered, at what unit price, and how much is still outstanding are value-for-value the
+    /// visible projection's.
+    /// </summary>
+    [Fact]
+    public void Response_withholds_only_the_nested_products_inventory_value_when_redacted()
+    {
+        var record = RecordWith(Inventory.Domain.SupplierOrders.SupplierOrderStatus.PartiallyReceived);
+
+        var redacted = JsonSerializer.Serialize(
+            SupplierOrderResponseMapper.ToResponse(record, FinancialFigureVisibility.Redacted), WebDefaults);
+
+        var visible = JsonSerializer.Serialize(SupplierOrderResponseMapper.ToResponse(record, Visible), WebDefaults);
+        Assert.Contains("\"inventoryValue\":8.75", visible, StringComparison.Ordinal);
+        Assert.Equal(
+            visible.Replace("\"inventoryValue\":8.75", "\"inventoryValue\":null", StringComparison.Ordinal),
+            redacted);
+
+        using var document = JsonDocument.Parse(redacted);
+        var line = document.RootElement.GetProperty("lines")[0];
+        Assert.Equal(JsonValueKind.Null, line.GetProperty("product").GetProperty("inventoryValue").ValueKind);
+
+        // Not zeroed, and the purchasing figures beside it are untouched.
+        Assert.Equal(1.25m, line.GetProperty("product").GetProperty("averageUnitCost").GetDecimal());
+        Assert.Equal(0.50m, line.GetProperty("unitPrice").GetDecimal());
+        Assert.Equal(18m, line.GetProperty("outstandingQuantity").GetDecimal());
     }
 }

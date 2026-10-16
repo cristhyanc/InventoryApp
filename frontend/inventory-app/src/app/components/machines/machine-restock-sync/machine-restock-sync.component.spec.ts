@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { Subject, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { MachineRestockSyncComponent } from './machine-restock-sync.component';
 import { MachineService } from '../../../services/machine.service';
 import { ToastService } from '../../../services/toast.service';
@@ -12,6 +12,11 @@ import {
 import { BusinessTimeZoneService } from '../../../formatting/business-time-zone.service';
 import { AccessService } from '../../../access/access.service';
 import { NayaxConnectionService, NayaxConnectionStatusName } from '../../../services/nayax-connection.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
+
+function supportSessionStub(active: Observable<boolean> = of(false)): SupportSessionService {
+  return { active$: active } as unknown as SupportSessionService;
+}
 import {
   NayaxDuplicateResolution,
   NayaxDuplicateResolutionChoice,
@@ -88,7 +93,8 @@ function createHarness(
   applySyncRestock: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse)),
   resolveSyncRestockDuplicate: jest.Mock = jest.fn(() =>
     of({ eventId: 1, outcome: NayaxStockEventApplyOutcome.Reconciled, message: 'Reconciled', stockAdjustmentId: null } as NayaxStockEventApplyResult)),
-  resolveSyncRestockManually: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse))
+  resolveSyncRestockManually: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse)),
+  sessionActive: Observable<boolean> = of(false)
 ): Harness {
   const machineService = {
     syncRestock, applySyncRestock, resolveSyncRestockDuplicate, resolveSyncRestockManually
@@ -100,7 +106,7 @@ function createHarness(
   const businessTimeZone = new BusinessTimeZoneService();
   businessTimeZone.publish(BUSINESS_TIME_ZONE);
   const component = new MachineRestockSyncComponent(
-    machineService, toast as unknown as ToastService, businessTimeZone);
+    machineService, toast as unknown as ToastService, businessTimeZone, supportSessionStub(sessionActive));
   component.machineId = 7;
 
   const harness: Harness = {
@@ -409,7 +415,7 @@ describe('MachineRestockSyncComponent sync', () => {
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
     // Deliberately unresolved: GET /api/business/current has not answered yet.
     const component = new MachineRestockSyncComponent(
-      machineService, toast as unknown as ToastService, new BusinessTimeZoneService());
+      machineService, toast as unknown as ToastService, new BusinessTimeZoneService(), supportSessionStub());
     component.machineId = 7;
 
     component.syncRestock();
@@ -426,7 +432,7 @@ describe('MachineRestockSyncComponent sync', () => {
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
     const businessTimeZone = new BusinessTimeZoneService();
     const component = new MachineRestockSyncComponent(
-      machineService, toast as unknown as ToastService, businessTimeZone);
+      machineService, toast as unknown as ToastService, businessTimeZone, supportSessionStub());
     component.machineId = 7;
     component.syncRestock();
 
@@ -687,7 +693,8 @@ describe('MachineRestockSyncComponent dialog', () => {
     resolveSyncRestockDuplicate: jest.Mock = jest.fn(() =>
       of({ eventId: 1, outcome: NayaxStockEventApplyOutcome.Reconciled, message: 'Reconciled', stockAdjustmentId: null } as NayaxStockEventApplyResult)),
     resolveSyncRestockManually: jest.Mock = jest.fn(() => of({ results: [] } as NayaxMachineStockApplyResponse)),
-    nayaxStatus: NayaxConnectionStatusName = 'Ready'
+    nayaxStatus: NayaxConnectionStatusName = 'Ready',
+    sessionActive: Observable<boolean> = of(false)
   ) {
     const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn() };
     await TestBed.configureTestingModule({
@@ -700,7 +707,8 @@ describe('MachineRestockSyncComponent dialog', () => {
         },
         { provide: ToastService, useValue: toast },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
-        { provide: AccessService, useValue: { allows: () => of(true) } }
+        { provide: AccessService, useValue: { allows: () => of(true) } },
+        { provide: SupportSessionService, useValue: supportSessionStub(sessionActive) }
       ]
     }).compileComponents();
 
@@ -1190,5 +1198,72 @@ describe('MachineRestockSyncComponent dialog', () => {
     const { host } = await render(undefined, undefined, undefined, undefined, 'Ready');
 
     expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
+  });
+
+  /**
+   * Sync Restock while a support session is active (issue #658). A session grants
+   * `InventoryOperate`, so this write would otherwise still be offered - and even the preview fetch
+   * is refused server-side, since it is a `POST` and a session may only `GET`/`HEAD`.
+   */
+  it('disables Sync Restock while a session is active', async () => {
+    const { requireButton } = await render(undefined, undefined, undefined, undefined, 'Ready', of(true));
+
+    expect(requireButton('Sync Restock').disabled).toBe(true);
+  });
+
+  it('leaves Sync Restock enabled while no session is active', async () => {
+    const { requireButton } = await render(undefined, undefined, undefined, undefined, 'Ready', of(false));
+
+    expect(requireButton('Sync Restock').disabled).toBe(false);
+  });
+});
+
+/**
+ * Every write-triggering handler guarded against issuing a request while a support session is
+ * active (issue #658), invoked directly rather than through the (now-disabled) buttons - the
+ * endpoint refuses every one of these the same way, so the guard must as well.
+ */
+describe('MachineRestockSyncComponent write controls during a support session (issue #658)', () => {
+  it('does not fetch a preview while a session is active, even if syncRestock() is invoked directly', () => {
+    const { component, syncRestock } = createHarness(undefined, undefined, undefined, undefined, of(true));
+
+    component.syncRestock();
+
+    expect(syncRestock).not.toHaveBeenCalled();
+    expect(component.modalOpen$.value).toBe(false);
+  });
+
+  it('does not apply the selected events while a session is active, even if applySelectedEvents() is invoked directly', () => {
+    const { component, applySyncRestock } = createHarness(undefined, undefined, undefined, undefined, of(true));
+    component.toggleEventSelection(1, true);
+
+    component.applySelectedEvents();
+
+    expect(applySyncRestock).not.toHaveBeenCalled();
+  });
+
+  it('does not resolve a duplicate while a session is active, even if resolveDuplicate() is invoked directly', () => {
+    const { component, resolveSyncRestockDuplicate } = createHarness(undefined, undefined, undefined, undefined, of(true));
+
+    component.resolveDuplicate(event({ id: 3 }), NayaxDuplicateResolutionChoice.AlreadyRecordedManually);
+
+    expect(resolveSyncRestockDuplicate).not.toHaveBeenCalled();
+  });
+
+  it('does not bulk-resolve while a session is active, even if resolveSelectedAsAlreadyRecorded() is invoked directly', () => {
+    const { component, resolveSyncRestockManually } = createHarness(undefined, undefined, undefined, undefined, of(true));
+    component.toggleEventSelection(1, true);
+
+    component.resolveSelectedAsAlreadyRecorded();
+
+    expect(resolveSyncRestockManually).not.toHaveBeenCalled();
+  });
+
+  it('leaves every write available while no session is active', () => {
+    const { component, syncRestock } = createHarness(undefined, undefined, undefined, undefined, of(false));
+
+    component.syncRestock();
+
+    expect(syncRestock).toHaveBeenCalled();
   });
 });

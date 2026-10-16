@@ -1,7 +1,8 @@
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { of } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import { ProductNeedsOrderingComponent } from './product-needs-ordering.component';
+import { SupportSessionService } from '../../support-session/support-session.service';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
@@ -50,17 +51,23 @@ function product(overrides: Partial<Product> = {}): Product {
 describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorting (issue #498)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  async function render(products: Product[]) {
+  async function render(
+    products: Product[],
+    options: { sessionActive?: Observable<boolean>; update?: jest.Mock; create?: jest.Mock } = {}
+  ) {
     const navigate = jest.fn();
+    const update = options.update ?? jest.fn(() => of(undefined));
+    const create = options.create ?? jest.fn(() => of(undefined));
     await TestBed.configureTestingModule({
       imports: [ProductNeedsOrderingComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getLowStock: () => of(products), update: () => of(undefined) } },
+        { provide: ProductService, useValue: { getLowStock: () => of(products), update } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: SupplierService, useValue: { getAll: () => of([]) } },
-        { provide: SupplierOrderService, useValue: { create: () => of(undefined) } },
-        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } }
+        { provide: SupplierOrderService, useValue: { create } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } }
       ]
     }).compileComponents();
 
@@ -69,7 +76,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     const fixture = TestBed.createComponent(ProductNeedsOrderingComponent);
     fixture.detectChanges();
     const host = fixture.nativeElement as HTMLElement;
-    return { fixture, host, navigate };
+    return { fixture, host, navigate, update, create };
   }
 
   it('navigates to the product editor when a non-action part of the row is clicked', async () => {
@@ -384,5 +391,59 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     expect(component.selectedProductIds.has(2)).toBe(true);
     expect(component.showOrderForm).toBe(true);
     expect(component.selectedProducts().map((p) => p.name)).toEqual(['Apple']);
+  });
+
+  describe('in a support session (issue #661)', () => {
+    const markAsOrdered = (host: HTMLElement) =>
+      Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
+        button.textContent?.includes('Mark as ordered')
+      );
+    const statusToggle = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('tbody button.badge')!;
+
+    it('hides Mark as ordered and disables the status toggle while a session is active', async () => {
+      const { host } = await render([product({ id: 9, name: 'Widget' })], { sessionActive: of(true) });
+
+      expect(markAsOrdered(host)).toBeUndefined();
+      expect(statusToggle(host).disabled).toBe(true);
+    });
+
+    it('leaves both controls available while no session is active', async () => {
+      const { host } = await render([product({ id: 9, name: 'Widget' })], { sessionActive: of(false) });
+
+      expect(markAsOrdered(host)).toBeDefined();
+      expect(statusToggle(host).disabled).toBe(false);
+    });
+
+    it('creates no supplier order from the guarded handler while a session is active', async () => {
+      const create = jest.fn();
+      const { fixture } = await render([product({ id: 9, name: 'Widget' })], { sessionActive: of(true), create });
+
+      const component = fixture.componentInstance;
+      component.selectedProductIds.add(9);
+      component.orderForm.supplierId = 3;
+      component.orderQuantities[9] = 4;
+      component.saveOrder();
+
+      expect(create).not.toHaveBeenCalled();
+      expect(component.savingOrder).toBe(false);
+    });
+
+    it('does not open the order dialog while a session is active', async () => {
+      const { fixture } = await render([product({ id: 9, name: 'Widget' })], { sessionActive: of(true) });
+
+      fixture.componentInstance.selectedProductIds.add(9);
+      fixture.componentInstance.openOrderForm();
+
+      expect(fixture.componentInstance.showOrderForm).toBe(false);
+    });
+
+    it('updates no product status from the guarded handler while a session is active', async () => {
+      const update = jest.fn();
+      const { fixture } = await render([product({ id: 9, name: 'Widget' })], { sessionActive: of(true), update });
+
+      fixture.componentInstance.toggleActive(product({ id: 9, name: 'Widget' }));
+
+      expect(update).not.toHaveBeenCalled();
+    });
   });
 });

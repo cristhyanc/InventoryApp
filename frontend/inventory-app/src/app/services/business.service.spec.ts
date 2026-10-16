@@ -134,6 +134,54 @@ describe('BusinessService (issue #499)', () => {
     expect(timeZone.timeZoneId).toBeNull();
   });
 
+  it('refresh() re-reads the business and republishes its zone (issue #549)', () => {
+    const responses: Array<() => Observable<unknown>> = [
+      () => of(sydneyBusiness),
+      () => of({ name: 'Vending Co', timeZoneId: 'Australia/Brisbane' })
+    ];
+    const { service, http, timeZone } = createService(() => responses[http.get.mock.calls.length - 1]());
+    service.load().subscribe();
+    expect(timeZone.timeZoneId).toBe('Australia/Sydney');
+
+    const seen: (CurrentBusiness | null)[] = [];
+    service.refresh().subscribe((business) => seen.push(business));
+
+    expect(http.get).toHaveBeenCalledTimes(2);
+    expect(timeZone.timeZoneId).toBe('Australia/Brisbane');
+    expect(seen).toEqual([{ name: 'Vending Co', timeZoneId: 'Australia/Brisbane' }]);
+  });
+
+  /**
+   * The ordinary settings-save refresh is deliberately **not** a context change (issue #671): the
+   * same business is being re-read under the same identity, so the zone it already published stays
+   * published while the read is in flight rather than every date on the page going blank mid-save.
+   * `reset()` is the one that clears it, and only a change of account or of effective business.
+   */
+  it('refresh() keeps the published zone while the re-read is in flight (issue #549)', () => {
+    const saved = new Subject<CurrentBusiness>();
+    let read = 0;
+    const { service, timeZone } = createService(() => (read++ === 0 ? of(sydneyBusiness) : saved.asObservable()));
+    service.load().subscribe();
+    expect(timeZone.timeZoneId).toBe('Australia/Sydney');
+
+    service.refresh().subscribe();
+    expect(timeZone.timeZoneId).toBe('Australia/Sydney');
+
+    saved.next({ name: 'Vending Co', timeZoneId: 'Australia/Brisbane' });
+
+    expect(timeZone.timeZoneId).toBe('Australia/Brisbane');
+  });
+
+  it('refresh() asks the endpoint again even though load() already cached an answer', () => {
+    const { service, http } = createService();
+    service.load().subscribe();
+    service.load().subscribe();
+    expect(http.get).toHaveBeenCalledTimes(1);
+
+    service.refresh().subscribe();
+    expect(http.get).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps the zone unknown after a reset when the new account lookup fails', () => {
     const responses: Array<() => Observable<unknown>> = [
       () => of(sydneyBusiness),

@@ -22,14 +22,21 @@ public sealed class GetNayaxCatalogReconciliation
 
     public async Task<CatalogReconciliationReportDto> Handle(CancellationToken cancellationToken)
     {
+        // The two remote reads stay a concurrent fan-out, and are awaited before the local reads
+        // start (issue #667). Since issue #520 a Nayax call resolves the business's credentials
+        // through the request's own scoped AppDbContext, so a remote read in flight beside a local
+        // one is two operations on one context, which it supports no more than two local reads
+        // would (docs/architecture.md § Concurrency inside one request). The local reads are then
+        // awaited one at a time, as that rule has always required.
         var remoteProductsTask = _remote.GetProductsAsync(cancellationToken);
         var remoteMachinesTask = _remote.GetMachinesAsync(cancellationToken);
-        var localProductsTask = _local.GetProductsAsync(cancellationToken);
-        var localMachinesTask = _local.GetMachinesAsync(cancellationToken);
-        await Task.WhenAll(remoteProductsTask, remoteMachinesTask, localProductsTask, localMachinesTask);
+        await Task.WhenAll(remoteProductsTask, remoteMachinesTask);
 
-        var products = CatalogReconciliationPolicy.Reconcile(await localProductsTask, await remoteProductsTask);
-        var machines = CatalogReconciliationPolicy.Reconcile(await localMachinesTask, await remoteMachinesTask);
+        var localProducts = await _local.GetProductsAsync(cancellationToken);
+        var localMachines = await _local.GetMachinesAsync(cancellationToken);
+
+        var products = CatalogReconciliationPolicy.Reconcile(localProducts, await remoteProductsTask);
+        var machines = CatalogReconciliationPolicy.Reconcile(localMachines, await remoteMachinesTask);
 
         return new CatalogReconciliationReportDto(ToDtos(products), ToDtos(machines));
     }

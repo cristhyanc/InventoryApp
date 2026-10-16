@@ -28,18 +28,27 @@ namespace Inventory.Application.Members;
 /// database row ever sees the plaintext; what crosses the audit port is neither. The Owner either
 /// copies the link out of this one response or creates another invite.</para>
 ///
-/// <para><strong>It creates no membership.</strong> An invite is an offer, and redeeming it is
-/// #532's separate, reviewed step - which is why this use case does not go through
-/// <see cref="MembershipWriteGuard"/>: there is no membership to serialise against, no eligibility
-/// rule to re-check and no Owner to retain. Creating an invite for a person who already belongs to
-/// a business is therefore accepted; it is the redemption that has to refuse, and it has to refuse
-/// on the state at that moment rather than on this one.</para>
+/// <para><strong>It creates no membership</strong>, and asks none of the membership rules. An invite
+/// is an offer, and redeeming it is #532's separate, reviewed step, so there is no eligibility rule
+/// to re-check here and no Owner to retain: creating an invite for a person who already belongs to a
+/// business is accepted, and it is the redemption that has to refuse, on the state at that moment
+/// rather than on this one.</para>
+///
+/// <para><strong>It does run inside <see cref="MembershipWriteGuard"/>'s write transaction, for one
+/// rule</strong> (issue #680): the business it is storing the invite in must still be
+/// <see cref="BusinessStatus.Active"/>, re-read inside the lock. The business id arrives from the
+/// middleware's resolution when the request arrived, and an invite committed after a deactivation
+/// would be a <c>Pending</c> seven-day link on a business that has been switched off - redeemable
+/// again the moment it is reactivated, which is exactly the way back in that cancelling every live
+/// invite on deactivation exists to close. The intent handed to the guard therefore names the
+/// business and nothing else.</para>
 /// </summary>
 public sealed class CreateMemberInvite
 {
     private readonly ICurrentBusinessProvider _currentBusiness;
     private readonly IAuthenticatedActorAccessor _actorAccessor;
     private readonly IMemberInviteStore _store;
+    private readonly MembershipWriteGuard _guard;
     private readonly IMemberInviteAudit _audit;
     private readonly IClock _clock;
 
@@ -47,12 +56,14 @@ public sealed class CreateMemberInvite
         ICurrentBusinessProvider currentBusiness,
         IAuthenticatedActorAccessor actorAccessor,
         IMemberInviteStore store,
+        MembershipWriteGuard guard,
         IMemberInviteAudit audit,
         IClock clock)
     {
         _currentBusiness = currentBusiness;
         _actorAccessor = actorAccessor;
         _store = store;
+        _guard = guard;
         _audit = audit;
         _clock = clock;
     }
@@ -72,6 +83,10 @@ public sealed class CreateMemberInvite
     /// <paramref name="role"/> is not a declared role name, or <paramref name="note"/> is too long.
     /// </exception>
     /// <exception cref="BusinessAccessDeniedException">The caller has no usable membership.</exception>
+    /// <exception cref="DomainConflictException">
+    /// The business stopped being <see cref="BusinessStatus.Active"/> before the write committed.
+    /// Nothing is stored and nothing is audited.
+    /// </exception>
     public async Task<CreatedMemberInvite> Handle(string? role, string? note, CancellationToken cancellationToken)
     {
         // Both checks run before anything is read, resolved or generated, so an invalid request
@@ -95,16 +110,21 @@ public sealed class CreateMemberInvite
         // a way into somebody else's business.
         var token = Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(MemberInviteToken.EntropyBytes));
 
-        var stored = await _store
-            .CreateAsync(
-                businessId,
-                new NewMemberInvite(
-                    requested,
-                    normalizedNote,
-                    MemberInviteToken.Hash(token),
-                    actor,
-                    createdAtUtc,
-                    MemberInvitePolicy.ExpiresAt(createdAtUtc)),
+        var invite = new NewMemberInvite(
+            requested,
+            normalizedNote,
+            MemberInviteToken.Hash(token),
+            actor,
+            createdAtUtc,
+            MemberInvitePolicy.ExpiresAt(createdAtUtc));
+
+        // Inside the shared BEGIN IMMEDIATE transaction, with the business's status re-read in the
+        // lock before the insert: the comparison and the write are one operation, so a deactivation
+        // either cancels this invite (it committed first) or refuses it (the deactivation did).
+        var stored = await _guard
+            .ExecuteAsync(
+                new MembershipWriteIntent(BusinessThatMustStillBeActive: businessId),
+                cancellation => _store.CreateAsync(businessId, invite, cancellation),
                 cancellationToken)
             .ConfigureAwait(false);
 

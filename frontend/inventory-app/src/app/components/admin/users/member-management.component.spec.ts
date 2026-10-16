@@ -52,6 +52,40 @@ function chooseRole(fixture: { detectChanges(): void }, select: HTMLSelectElemen
  * The Members section of the Admin → Users page (issue #534), over issue #533's four endpoints.
  */
 describe('MemberManagementComponent (issue #534)', () => {
+  it('selects the native option matching each member\'s own role right after asynchronous loading (issue #678)', async () => {
+    const owner = member({ membershipId: 1, displayName: 'Owner Row', role: 'Owner' });
+    const manager = member({ membershipId: 2, displayName: 'Manager Row', role: 'Manager' });
+    const operator = member({ membershipId: 3, displayName: 'Operator Row', role: 'Operator' });
+    const { host } = await render({ list: () => of([owner, manager, operator]) });
+
+    const selects = Array.from(host.querySelectorAll('select')) as HTMLSelectElement[];
+    expect(selects).toHaveLength(3);
+    expect(displayedRole(selects[0])).toEqual({ value: 'Owner', label: 'Owner' });
+    expect(displayedRole(selects[1])).toEqual({ value: 'Manager', label: 'Manager' });
+    expect(displayedRole(selects[2])).toEqual({ value: 'Operator', label: 'Operator' });
+  });
+
+  it('selects the disabled "Unknown" option for a member with no role (issue #678)', async () => {
+    const { host } = await render({ list: () => of([member({ role: null })]) });
+
+    const select = host.querySelector('select') as HTMLSelectElement;
+    expect(displayedRole(select)).toEqual({ value: '', label: 'Unknown' });
+  });
+
+  it('selects the native option matching each member\'s own role again after the list refreshes (issue #678)', async () => {
+    const list = jest.fn();
+    list.mockReturnValueOnce(of([member({ membershipId: 1, role: 'Manager' })]));
+    const { fixture, host } = await render({ list });
+
+    list.mockReturnValueOnce(of([member({ membershipId: 1, role: 'Operator' })]));
+    const component = fixture.componentInstance as MemberManagementComponent;
+    component.load();
+    fixture.detectChanges();
+
+    const select = host.querySelector('select') as HTMLSelectElement;
+    expect(displayedRole(select)).toEqual({ value: 'Operator', label: 'Operator' });
+  });
+
   it('loads and displays every member of the business', async () => {
     const list = jest.fn(() => of([member()]));
     const { host } = await render({ list });

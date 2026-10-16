@@ -568,6 +568,40 @@ video {
   display: none;
 }
 
+.container {
+  width: 100%;
+}
+
+@media (min-width: 640px) {
+  .container {
+    max-width: 640px;
+  }
+}
+
+@media (min-width: 768px) {
+  .container {
+    max-width: 768px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .container {
+    max-width: 1024px;
+  }
+}
+
+@media (min-width: 1280px) {
+  .container {
+    max-width: 1280px;
+  }
+}
+
+@media (min-width: 1536px) {
+  .container {
+    max-width: 1536px;
+  }
+}
+
 /* ---- Page layout ------------------------------------------------------------------- */
 
 /*
@@ -1176,14 +1210,32 @@ video {
   color: rgb(21 87 176 / var(--tw-text-opacity, 1));
 }
 
-/* A success toast (#489) floats over page content, so its surface must be opaque: the same
-     15% md-success tint as an inline .alert-success, layered over solid white (#E4F3E5), so
-     nothing underneath shows through. Inline alerts and badges keep their translucent tint. */
+/* Floating toasts appear over page content, so their surfaces must be opaque: the same
+     15% semantic tint as an inline .alert-*, layered over solid white, so nothing underneath
+     shows through. Inline alerts and badges keep their translucent tint. */
 
 .toast.alert-success {
   --tw-bg-opacity: 1;
   background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
   background-image: linear-gradient(rgb(76 175 80 / 15%), rgb(76 175 80 / 15%));
+}
+
+.toast.alert-danger {
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
+  background-image: linear-gradient(rgb(244 67 53 / 15%), rgb(244 67 53 / 15%));
+}
+
+.toast.alert-warning {
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
+  background-image: linear-gradient(rgb(251 140 0 / 15%), rgb(251 140 0 / 15%));
+}
+
+.toast.alert-info {
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1));
+  background-image: linear-gradient(rgb(26 115 232 / 15%), rgb(26 115 232 / 15%));
 }
 
 /* ---- Form fields ------------------------------------------------------------------- */
@@ -2333,6 +2385,11 @@ video {
 
 .outline-md-info {
   outline-color: #1A73E8;
+}
+
+.blur {
+  --tw-blur: blur(8px);
+  filter: var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow);
 }
 
 .filter {

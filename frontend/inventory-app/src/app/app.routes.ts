@@ -8,6 +8,12 @@ import { WelcomeComponent } from './access/welcome.component';
 import { ApplicationPendingComponent } from './access/application-pending.component';
 import { ApplicationRejectedComponent } from './access/application-rejected.component';
 import { BusinessApplicationComponent } from './access/business-application.component';
+import {
+  INVITE_ADDRESS_BAR_ROUTE,
+  inviteTokenAddressBarGuard,
+  pendingInviteTokenGuard
+} from './access/invite-address-bar.guard';
+import { InviteLinkReopenComponent } from './access/invite-link-reopen.component';
 import { AuthCallbackComponent } from './auth/auth-callback.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
 
@@ -22,12 +28,13 @@ import { designSystemRoutes } from './design-system/design-system.routes';
  * `Member` to the route that state calls for before the page's own business calls ever run, and
  * protects nothing either way. The routes that deliberately carry no `accountStateGuard` are the
  * ones it would otherwise send somebody *to* - `/welcome`, `/application-pending`,
- * `/application-rejected`, `/access-unavailable`, `/apply` and `/invite/:token` - because a person already
+ * `/application-rejected`, `/access-unavailable`, `/apply` and the `/invite` acceptance page - because a person already
  * sent to one of them must not be sent away from it; `/access-not-allowed` carries no capability
- * for the reason already documented beside it, and `/super-admin/diagnostics` (issue #546) carries
- * neither guard: its authority is the platform-admin check, not a business role or membership, so
- * it carries `platformAdminGuard` instead and sends a refusal to the dashboard rather than to any
- * membership-handling destination (see `access/platform-admin.guard.ts`).
+ * for the reason already documented beside it, and `/super-admin/diagnostics` and
+ * `/super-admin/businesses` (issues #546, #547) carry neither guard: their authority is the
+ * platform-admin check, not a business role or membership, so each carries `platformAdminGuard`
+ * instead and sends a refusal to the dashboard rather than to any membership-handling destination
+ * (see `access/platform-admin.guard.ts`).
  */
 export const routes: Routes = [
   // Public: the Entra redirect callback must be reachable without authentication.
@@ -75,12 +82,30 @@ export const routes: Routes = [
     component: BusinessApplicationComponent
   },
   {
-    // The invite acceptance page (issue #535): reads the token, strips it from the address bar,
-    // and lets a NoMembership/MembershipRevoked/ApplicationRejected caller redeem it. Carries only
-    // `MsalGuard`, for the reason the comment above gives.
+    // An invite link (issue #535). It never activates: `inviteTokenAddressBarGuard` is a `canMatch`
+    // guard, so it runs before any `canActivate` guard, hands the token to this tab's pending
+    // invite (`access/pending-invite-token.ts`), strips it from the address bar and redirects to
+    // `/invite` (issue #681). `MsalGuard` therefore never sees the token, so a signed-out visitor's
+    // sign-in redirect does not carry it. The component is only there because a route needs one.
     path: 'invite/:token',
+    canMatch: [inviteTokenAddressBarGuard],
+    component: InviteLinkReopenComponent
+  },
+  {
+    // The invite acceptance page (issue #535), matched only while this tab holds a pending invite
+    // token (issue #681): lets a NoMembership/MembershipRevoked/ApplicationRejected caller redeem
+    // it. Carries only `MsalGuard`, for the reason the comment above gives.
+    path: INVITE_ADDRESS_BAR_ROUTE,
+    canMatch: [pendingInviteTokenGuard],
     canActivate: [MsalGuard],
     loadComponent: () => import('./access/invite-acceptance.component').then((m) => m.InviteAcceptanceComponent)
+  },
+  {
+    // `/invite` with no pending invite (issue #681): a reload or a Back into it after the page read
+    // the token explains that the invite link must be opened again, instead of the wildcard
+    // silently landing on the dashboard. Public, like `auth`: it makes no request at all.
+    path: INVITE_ADDRESS_BAR_ROUTE,
+    component: InviteLinkReopenComponent
   },
   {
     path: '',
@@ -317,6 +342,18 @@ export const routes: Routes = [
     redirectTo: '/super-admin/diagnostics'
   },
   {
+    // The Super Admin Businesses page (issue #546's placeholder, built in issue #547): approve,
+    // reject, deactivate and reactivate a business, and release a member of a deactivated one.
+    // Platform-admin authority, not a business role, decides it - the same `platformAdminGuard`
+    // as the diagnostics route above, and for the same reason.
+    path: 'super-admin/businesses',
+    canActivate: [MsalGuard, platformAdminGuard],
+    loadComponent: () =>
+      import('./components/super-admin/businesses/super-admin-businesses.component').then(
+        (m) => m.SuperAdminBusinessesComponent
+      )
+  },
+  {
     path: 'admin/nayax-settings',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Integration.Manage')],
     loadComponent: () =>
@@ -342,6 +379,16 @@ export const routes: Routes = [
     path: 'admin/roles',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Roles.View')],
     loadComponent: () => import('./components/admin/roles/roles.component').then((m) => m.RolesComponent)
+  },
+  {
+    // The Admin → Business Settings page (issue #549): the business's own name, contact email,
+    // ABN, GST registration and time zone, Owner-only.
+    path: 'admin/business-settings',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Business.Manage')],
+    loadComponent: () =>
+      import('./components/admin/business-settings/business-settings.component').then(
+        (m) => m.BusinessSettingsComponent
+      )
   },
   {
     path: 'expenses',

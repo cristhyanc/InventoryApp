@@ -55,6 +55,14 @@ public sealed class FakeMemberInviteRedemptionStore : IMemberInviteRedemptionSto
     /// </summary>
     public Action? OnceAfterLookup { get; set; }
 
+    /// <summary>
+    /// Runs once, immediately after the next <see cref="FindMembershipAsync"/> has answered - how a
+    /// test stages a change landing between the in-transaction read of the caller's own membership
+    /// row and the conditional write that acts on it (issue #681). <see cref="OnceAfterLookup"/>
+    /// fires too early for that: a change made there is still seen by the membership read.
+    /// </summary>
+    public Action? OnceAfterMembershipLookup { get; set; }
+
     /// <summary>The business ids the store was asked to write in, so a test can assert the owner.</summary>
     public List<int> WrittenBusinessIds { get; } = [];
 
@@ -106,6 +114,17 @@ public sealed class FakeMemberInviteRedemptionStore : IMemberInviteRedemptionSto
         _memberships[key] = _memberships[key] with { IsActive = true };
     }
 
+    /// <summary>
+    /// Takes a membership row away without going through this store's own write path - the second
+    /// reason the conditional reactivation can match nothing, which is not "that person is now a
+    /// member" (issue #681). Deliberately unobserved, like the activation above.
+    /// </summary>
+    public void RemoveBehindTheCallersBack(int businessId, ActorIdentity identity)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        _memberships.Remove(Key(businessId, identity));
+    }
+
     public Invite InviteFor(string tokenHash) => _invites[tokenHash];
 
     public Membership MembershipFor(int businessId, ActorIdentity identity) =>
@@ -144,10 +163,15 @@ public sealed class FakeMemberInviteRedemptionStore : IMemberInviteRedemptionSto
     {
         Observe(FindMembership);
 
-        return Task.FromResult(
-            _memberships.TryGetValue(Key(businessId.Value, identity), out var membership)
-                ? new RedeemingMemberMembership(membership.MembershipId, membership.IsActive)
-                : (RedeemingMemberMembership?)null);
+        var answer = _memberships.TryGetValue(Key(businessId.Value, identity), out var membership)
+            ? new RedeemingMemberMembership(membership.MembershipId, membership.IsActive)
+            : (RedeemingMemberMembership?)null;
+
+        var staged = OnceAfterMembershipLookup;
+        OnceAfterMembershipLookup = null;
+        staged?.Invoke();
+
+        return Task.FromResult(answer);
     }
 
     public Task<int> CreateActiveMembershipAsync(

@@ -25,22 +25,47 @@ public readonly record struct TenantOwnershipReadinessState(
     int UsableMembershipCount)
 {
     /// <summary>
-    /// Ready means the rollout is actually usable, not merely that no row is unassigned.
+    /// Bootstrapped means the rollout of issue #64 is done and the data is reachable: nothing is
+    /// owned by nobody, there is a trading business, and somebody can sign in to it.
     ///
-    /// Counting zero unassigned rows on its own is not evidence of anything: a fresh database
-    /// satisfies it trivially while having no business and nobody who can sign in. For this
-    /// first single-business rollout every part must hold - the data has an owner, there is
-    /// exactly one business and it is active, and at least one actor can actually reach it.
+    /// <para>Counting zero unassigned rows on its own is not evidence of anything: a fresh database
+    /// satisfies it trivially while having no business and nobody who can sign in. So all three
+    /// parts have to hold - the data has an owner, at least one business is active, and at least one
+    /// actor can actually reach one.</para>
     ///
-    /// "Exactly one" is deliberate rather than "at least one": this rollout serves a single
-    /// vending business, so a second business appearing is a state a human should look at, not
-    /// something to report as a healthy steady state.
+    /// <para><strong>It deliberately says nothing about how many businesses there are</strong>
+    /// (issue #681). A second business is not a failed bootstrap: since issue #541 a self-service
+    /// application creates a <c>Pending</c> business, and since #544 a Super Admin may deactivate
+    /// one, so a healthy deployment can legitimately hold several. Whether this is still the
+    /// single-business rollout is <see cref="IsSingleBusinessRollout"/>'s separate question, and the
+    /// operations that genuinely need one business ask <see cref="IsReady"/>.</para>
     /// </summary>
-    public bool IsReady =>
+    public bool IsBootstrapped =>
         UnassignedRows == 0
-        && BusinessCount == 1
-        && ActiveBusinessCount == 1
+        && ActiveBusinessCount >= 1
         && UsableMembershipCount > 0;
+
+    /// <summary>
+    /// Whether this database still holds exactly one business, which is the shape the first rollout
+    /// was done in.
+    ///
+    /// It is a fact about the deployment rather than a health verdict: a second business is
+    /// something an operator should know about, and it is what makes the operations below refuse,
+    /// but it is not a defect.
+    /// </summary>
+    public bool IsSingleBusinessRollout => BusinessCount == 1;
+
+    /// <summary>
+    /// Bootstrapped <em>and</em> still a single-business rollout: what the two operations that have
+    /// to pick "the" business require (<c>migrate-database</c>'s report and
+    /// <c>migrate-nayax-connection</c>, which stores a credential for one business and refuses to
+    /// choose between several).
+    ///
+    /// Since issue #681 it is deliberately not what the startup report logs an error about: those
+    /// are different questions, and reporting "NOT bootstrapped" because a second business exists
+    /// told an operator to re-run a backfill that had already completed.
+    /// </summary>
+    public bool IsReady => IsBootstrapped && IsSingleBusinessRollout && ActiveBusinessCount == 1;
 }
 
 /// <summary>
@@ -82,34 +107,63 @@ public static class TenantOwnershipReadiness
             usableMemberships);
     }
 
+    /// <summary>
+    /// Logs what startup found, as two separate facts (issue #681): whether the rollout is done, and
+    /// how many businesses this deployment holds.
+    ///
+    /// <para>They used to be one. "NOT bootstrapped" was logged at <c>Error</c> whenever the
+    /// business count was anything other than one - so the first self-service application, which
+    /// creates a <c>Pending</c> business and is a perfectly ordinary event since issue #541, made
+    /// every restart report a backfill failure and tell the operator to run a command that would
+    /// have refused and changed nothing. An error that is routinely wrong is worse than no error:
+    /// it is the one somebody learns to scroll past.</para>
+    /// </summary>
     public static void Report(AppDbContext db, ILoggerFactory loggerFactory)
     {
         var logger = loggerFactory.CreateLogger(typeof(TenantOwnershipReadiness).FullName!);
         var state = Inspect(db);
 
-        if (state.IsReady)
+        if (!state.IsBootstrapped)
         {
-            logger.LogInformation(
-                "Tenant ownership is bootstrapped: one active business with "
-                    + "{UsableMembershipCount} usable membership(s), and no unassigned rows.",
-                state.UsableMembershipCount);
+            logger.LogError(
+                "Tenant ownership is NOT bootstrapped: {UnassignedRows} unassigned row(s), "
+                    + "{BusinessCount} business(es) of which {ActiveBusinessCount} active, "
+                    + "{UsableMembershipCount} active membership(s) on an active business. "
+                    + "Bootstrapped requires no unassigned rows, at least one active business, and at "
+                    + "least one active membership belonging to an active business. Until then "
+                    + "signed-in callers see an empty dataset - the safe state, not a corruption. Run "
+                    + "the reviewed `{Command}` with --dry-run and then with --apply, as described "
+                    + "in docs/tenant-rollout.md. The API will not assign ownership on its own.",
+                state.UnassignedRows,
+                state.BusinessCount,
+                state.ActiveBusinessCount,
+                state.UsableMembershipCount,
+                BusinessBootstrapArguments.CommandName);
             return;
         }
 
-        logger.LogError(
-            "Tenant ownership is NOT bootstrapped: {UnassignedRows} unassigned row(s), "
-                + "{BusinessCount} business(es) of which {ActiveBusinessCount} active, "
-                + "{UsableMembershipCount} active membership(s) on an active business. Ready requires "
-                + "no unassigned rows, exactly one business which is active, and at least one active "
-                + "membership belonging to it. Until then signed-in callers see an empty dataset - the "
-                + "safe state, not a corruption. Run the reviewed `{Command} --dry-run` and then "
-                + "`{Command} --apply` as described in docs/tenant-rollout.md. The API will not assign "
-                + "ownership on its own.",
-            state.UnassignedRows,
+        logger.LogInformation(
+            "Tenant ownership is bootstrapped: {ActiveBusinessCount} active business(es) with "
+                + "{UsableMembershipCount} usable membership(s), and no unassigned rows.",
+            state.ActiveBusinessCount,
+            state.UsableMembershipCount);
+
+        if (state.IsSingleBusinessRollout)
+        {
+            return;
+        }
+
+        // A fact, not a fault. It is logged because the two human-invoked commands that have to pick
+        // "the" business refuse while it holds, so an operator reaching for one of them should know
+        // beforehand rather than from its refusal.
+        logger.LogWarning(
+            "This database holds {BusinessCount} business(es), of which {ActiveBusinessCount} are "
+                + "active. That is expected once a self-service application has been recorded or a "
+                + "business has been deactivated, and it is not a bootstrap failure. It does mean "
+                + "`{Command}` and `migrate-nayax-connection`, which act on exactly one business, "
+                + "will refuse until a human decides which one they mean. See docs/tenant-rollout.md.",
             state.BusinessCount,
             state.ActiveBusinessCount,
-            state.UsableMembershipCount,
-            BusinessBootstrapArguments.CommandName,
             BusinessBootstrapArguments.CommandName);
     }
 

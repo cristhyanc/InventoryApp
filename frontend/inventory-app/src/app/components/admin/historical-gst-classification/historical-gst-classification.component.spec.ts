@@ -6,6 +6,7 @@ import { HistoricalGstClassificationComponent } from './historical-gst-classific
 import { HistoricalGstClassificationWorkflowComponent } from './historical-gst-classification-workflow.component';
 import { HistoricalGstClassificationService } from '../../../services/historical-gst-classification.service';
 import { ToastService } from '../../../services/toast.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 async function render() {
   const previewFn = jest.fn(() => of({ summary: null, fingerprint: '' }));
@@ -14,7 +15,8 @@ async function render() {
     providers: [
       provideRouter([]),
       { provide: HistoricalGstClassificationService, useValue: { preview: previewFn, apply: jest.fn() } },
-      { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), info: jest.fn() } }
+      { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), info: jest.fn() } },
+      { provide: SupportSessionService, useValue: { active$: of(false) } }
     ]
   }).compileComponents();
 

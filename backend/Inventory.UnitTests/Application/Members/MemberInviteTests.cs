@@ -189,6 +189,73 @@ public class MemberInviteTests
         Assert.Empty(fixture.Audit.Entries);
     }
 
+    /// <summary>
+    /// The insert happens inside the shared write transaction, after the business's lifecycle status
+    /// has been re-read in the write lock (issue #680). An insert before that read, or outside the
+    /// transaction altogether, is the race this slice closes.
+    /// </summary>
+    [Fact]
+    public async Task The_insert_happens_inside_the_transaction_after_the_status_is_re_read()
+    {
+        var fixture = new Fixture();
+
+        await fixture.Create().Handle("Manager", null, CancellationToken.None);
+
+        Assert.Equal(
+            [
+                FakeBusinessMembershipWriteStore.Begin,
+                FakeBusinessMembershipWriteStore.StatusRead,
+                FakeMemberInviteStore.Create,
+                FakeBusinessMembershipWriteStore.Commit,
+                FakeBusinessMembershipWriteStore.Dispose,
+            ],
+            fixture.WriteStore.Operations);
+        Assert.Equal(
+            Inventory.Domain.Tenancy.BusinessId.From(BusinessIdValue),
+            fixture.WriteStore.LastQueriedStatusBusiness);
+    }
+
+    /// <summary>
+    /// The defect of issue #680: an invite must not be stored on a business that has been
+    /// deactivated, because a <c>Pending</c> seven-day invite on one becomes redeemable again the
+    /// moment it is reactivated. The refusal is the fixed sentence, and nothing is stored or audited.
+    /// </summary>
+    [Fact]
+    public async Task An_invite_is_not_created_once_the_business_is_no_longer_active()
+    {
+        var fixture = new Fixture();
+        fixture.WriteStore.Status = BusinessStatus.Deactivated;
+
+        var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
+            fixture.Create().Handle("Manager", null, CancellationToken.None));
+
+        Assert.Equal(ActiveBusinessWritePolicy.NotActiveMessage, refusal.Message);
+        Assert.Empty(fixture.Store.Rows);
+        Assert.Empty(fixture.Operations);
+        Assert.Empty(fixture.Audit.Entries);
+        Assert.DoesNotContain(FakeBusinessMembershipWriteStore.Commit, fixture.WriteStore.Operations);
+    }
+
+    /// <summary>
+    /// And the status that decides it is the one read inside the write lock: a deactivation that
+    /// commits while this creation waits for the lock refuses it, rather than being overtaken by an
+    /// invite decided before it.
+    /// </summary>
+    [Fact]
+    public async Task A_deactivation_that_commits_while_the_write_lock_is_awaited_refuses_the_invite()
+    {
+        var fixture = new Fixture();
+        fixture.WriteStore.WhileWaitingForTheWriteLock =
+            () => fixture.WriteStore.Status = BusinessStatus.Deactivated;
+
+        var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
+            fixture.Create().Handle("Manager", null, CancellationToken.None));
+
+        Assert.Equal(ActiveBusinessWritePolicy.NotActiveMessage, refusal.Message);
+        Assert.Empty(fixture.Store.Rows);
+        Assert.Empty(fixture.Audit.Entries);
+    }
+
     #endregion
 
     #region Listing
@@ -498,10 +565,24 @@ public class MemberInviteTests
         public Fixture(ICurrentBusinessProvider? currentBusiness = null)
         {
             _currentBusiness = currentBusiness ?? new FakeCurrentBusinessProvider(BusinessIdValue);
-            Store = new FakeMemberInviteStore { Observer = _operations.Add };
+
+            // Reported to both: the fixture's own list is what each test asserts the invite store
+            // saw, and the write store's list is the same calls interleaved with the transaction
+            // and the status re-check around them (issue #680).
+            Store = new FakeMemberInviteStore
+            {
+                Observer = operation =>
+                {
+                    _operations.Add(operation);
+                    WriteStore.Record(operation);
+                },
+            };
         }
 
         public FakeMemberInviteStore Store { get; }
+
+        /// <summary>The shared write path's store, so a test can see the transaction it opened.</summary>
+        public FakeBusinessMembershipWriteStore WriteStore { get; } = new();
 
         public FakeMemberInviteAudit Audit { get; } = new();
 
@@ -512,7 +593,8 @@ public class MemberInviteTests
 
         private FakeClock Clock { get; } = new(Now);
 
-        public CreateMemberInvite Create() => new(_currentBusiness, Actor, Store, Audit, Clock);
+        public CreateMemberInvite Create() =>
+            new(_currentBusiness, Actor, Store, new MembershipWriteGuard(WriteStore), Audit, Clock);
 
         public ListMemberInvites List() => new(_currentBusiness, Store, Clock);
 

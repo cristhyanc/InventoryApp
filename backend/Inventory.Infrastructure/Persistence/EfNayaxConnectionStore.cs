@@ -1,6 +1,7 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Nayax;
@@ -28,13 +29,37 @@ namespace Inventory.Infrastructure.Persistence;
 /// Encrypting and decrypting the token is <see cref="INayaxTokenProtector"/>'s job. This adapter
 /// never writes a plaintext token to the database and never logs one: the only values its log event
 /// carries are the business id and the two credential revisions.
+///
+/// <para><strong>It is the one adapter a request reaches from several places at once, so it owns
+/// access to the context it shares (issue #667).</strong> Since issue #520 every ordinary Nayax call
+/// resolves the business's credentials through this store, and a Nayax <c>401</c> writes a status
+/// back through it - so a bounded fan-out of Nayax requests (the reorder and Pick List fan-outs, the
+/// per-site machine reads, the catalogue import) puts several reads, and several conditional writes,
+/// on the one scoped <see cref="AppDbContext"/> of that request, which supports exactly one
+/// operation at a time. <see cref="_contextGate"/> admits one of them at a time. It serializes the
+/// *database* work only: each caller resolves its own snapshot, the HTTP requests the callers go on
+/// to make still overlap, and a cancelled caller stops waiting rather than queuing behind the
+/// others. The gate is per request, because this adapter is registered scoped beside the context it
+/// guards, and it is deliberately not re-entrant: every public member takes it exactly once and the
+/// private cores below it take it never.</para>
+///
+/// <para>It is not a substitute for the rule in docs/architecture.md § Concurrency inside one
+/// request. It makes the Nayax credential path safe against itself; a use case that starts other
+/// scoped persistence work while a Nayax call is in flight still has two operations on one context,
+/// and must await them one at a time as it always had to.</para>
 /// </summary>
-public sealed class EfNayaxConnectionStore : INayaxConnectionStore
+public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
 {
     private readonly AppDbContext _db;
     private readonly INayaxTokenProtector _protector;
     private readonly IClock _clock;
     private readonly ILogger<EfNayaxConnectionStore> _logger;
+
+    /// <summary>
+    /// Admits one operation at a time to the request's shared <see cref="AppDbContext"/>. See the
+    /// type remarks: held only for the database work, never re-entered, and released on every path.
+    /// </summary>
+    private readonly SemaphoreSlim _contextGate = new(1, 1);
 
     public EfNayaxConnectionStore(
         AppDbContext db,
@@ -48,8 +73,27 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
         _logger = logger;
     }
 
+    /// <summary>
+    /// Releases the context gate. The container disposes this adapter with the request scope that
+    /// owns it, beside the <see cref="AppDbContext"/> it guards.
+    /// </summary>
+    public void Dispose() => _contextGate.Dispose();
+
     /// <inheritdoc />
     public async Task<NayaxConnection?> FindAsync(CancellationToken cancellationToken)
+    {
+        await _contextGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await FindCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _contextGate.Release();
+        }
+    }
+
+    private async Task<NayaxConnection?> FindCoreAsync(CancellationToken cancellationToken)
     {
         if (_db.CurrentBusinessId is null)
         {
@@ -77,7 +121,20 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
     /// <inheritdoc />
     public async Task<NayaxConnectionCredential?> FindCredentialAsync(CancellationToken cancellationToken)
     {
-        if (_db.CurrentBusinessId is null)
+        await _contextGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await FindCredentialCoreAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _contextGate.Release();
+        }
+    }
+
+    private async Task<NayaxConnectionCredential?> FindCredentialCoreAsync(CancellationToken cancellationToken)
+    {
+        if (_db.CurrentBusinessId is not { } businessId)
         {
             return null;
         }
@@ -99,11 +156,15 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
             return null;
         }
 
-        // Throws NayaxTokenProtectionException when the ciphertext is corrupt or its key is not
-        // configured. Deliberately not caught: an undecryptable credential must not look like an
-        // absent or empty one.
+        // Throws NayaxTokenProtectionException when the ciphertext is corrupt, its key is not
+        // configured, or - since issue #681 - it was encrypted for a different business than the row
+        // it was read from. Deliberately not caught: an undecryptable credential must not look like
+        // an absent or empty one. The business id comes from the context's own tenancy scope, which
+        // is the same scope whose query filter selected the row, so the value the ciphertext is
+        // authenticated against is never one a request supplied.
         var accessToken = _protector.Unprotect(
-            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext));
+            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext),
+            BusinessId.From(businessId));
 
         return new NayaxConnectionCredential(stored.OperatorId, accessToken, stored.CredentialRevision);
     }
@@ -115,7 +176,26 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
     {
         ArgumentNullException.ThrowIfNull(mayDecryptToken);
 
-        if (_db.CurrentBusinessId is null)
+        // The read every call of a Nayax fan-out makes, which is why the gate matters most here.
+        // Each caller still gets its own snapshot of the row as it stood when its own turn came:
+        // waiting is not caching, and the status a call is gated on is still the status its token
+        // was read beside.
+        await _contextGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await FindForOperationCoreAsync(mayDecryptToken, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _contextGate.Release();
+        }
+    }
+
+    private async Task<NayaxConnectionSnapshot?> FindForOperationCoreAsync(
+        Func<NayaxConnectionStatus, bool> mayDecryptToken,
+        CancellationToken cancellationToken)
+    {
+        if (_db.CurrentBusinessId is not { } businessId)
         {
             return null;
         }
@@ -148,11 +228,12 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
             return new NayaxConnectionSnapshot(stored.Status, credential: null);
         }
 
-        // Throws for a corrupt ciphertext or an unconfigured key, exactly as FindCredentialAsync
-        // does, and for the same reason: an undecryptable credential must not look like an absent
-        // one.
+        // Throws for a corrupt ciphertext, an unconfigured key or a ciphertext encrypted for
+        // another business, exactly as FindCredentialAsync does, and for the same reason: an
+        // undecryptable credential must not look like an absent one.
         var accessToken = _protector.Unprotect(
-            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext));
+            new ProtectedNayaxToken(stored.EncryptionKeyId, stored.AccessTokenCiphertext),
+            BusinessId.From(businessId));
 
         return new NayaxConnectionSnapshot(
             stored.Status,
@@ -168,11 +249,39 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
         ArgumentException.ThrowIfNullOrWhiteSpace(operatorId);
         ArgumentException.ThrowIfNullOrWhiteSpace(accessToken);
 
-        RequireCurrentBusinessId("saved");
+        await _contextGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await SaveCredentialCoreAsync(operatorId, accessToken, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _contextGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// The save itself, running with the context gate already held: its read-back goes to
+    /// <see cref="FindCoreAsync"/> rather than to the public <see cref="FindAsync"/>, because the
+    /// gate is not re-entrant and a save that waited for itself would never finish.
+    /// </summary>
+    private async Task<NayaxConnection> SaveCredentialCoreAsync(
+        string operatorId,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        var businessId = RequireCurrentBusinessId("saved");
+
+        // The read-only support-session rule, for the ExecuteUpdate below that never reaches
+        // BusinessOwnershipEnforcer (issue #681).
+        SetBasedWriteEnforcer.RequireWritableScope(_db);
 
         // Encrypted before anything is written, so a key-configuration failure stores nothing at
-        // all rather than a row with an empty token.
-        var protectedToken = _protector.Protect(accessToken);
+        // all rather than a row with an empty token. The ciphertext is bound to this business
+        // (issue #681), so the value this save writes cannot later be decrypted from another
+        // business's row.
+        var protectedToken = _protector.Protect(accessToken, BusinessId.From(businessId));
         var savedAt = _clock.UtcNow;
 
         // A caller that already opened a transaction on this context owns the commit, and this save
@@ -225,7 +334,30 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
     {
         ArgumentNullException.ThrowIfNull(result);
 
+        // The write a Nayax 401 makes, which in a fan-out arrives several times at once and beside
+        // the other calls' reads. Serializing it changes nothing about which result wins: the
+        // conditional update is still what discards a result produced for superseded credentials,
+        // and it is evaluated against the row as it stands when the statement runs.
+        await _contextGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await TryApplyStatusResultCoreAsync(result, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _contextGate.Release();
+        }
+    }
+
+    private async Task<bool> TryApplyStatusResultCoreAsync(
+        NayaxConnectionStatusResult result,
+        CancellationToken cancellationToken)
+    {
         var businessId = RequireCurrentBusinessId("updated");
+
+        // As above (issue #681): the conditional ExecuteUpdate below bypasses SaveChanges, so the
+        // support session's read-only rule is applied here.
+        SetBasedWriteEnforcer.RequireWritableScope(_db);
 
         // One statement: the expected-revision comparison and the write cannot be separated, so a
         // credential save committed after the test started cannot be overwritten by its result.
@@ -321,10 +453,11 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore
     /// <summary>
     /// Reads back what the conditional update actually wrote, rather than reporting the values this
     /// process intended: the revision is computed in the database, so only the row can say what it
-    /// became.
+    /// became. It reads through <see cref="FindCoreAsync"/> because the caller already holds the
+    /// context gate.
     /// </summary>
     private async Task<NayaxConnection> ReadBackAsync(CancellationToken cancellationToken) =>
-        await FindAsync(cancellationToken).ConfigureAwait(false)
+        await FindCoreAsync(cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException(
                 "The Nayax connection that was just updated for the current business cannot be "
                     + "read back, so the save reports a failure rather than values the database may "

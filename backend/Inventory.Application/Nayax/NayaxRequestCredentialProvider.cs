@@ -30,6 +30,14 @@ namespace Inventory.Application.Nayax;
 /// immediately: the call after a 401 sees <see cref="NayaxConnectionStatus.NeedsAttention"/> and
 /// fails closed rather than reusing a credential snapshot the same request took earlier.
 ///
+/// <para><strong>A fan-out resolves its credentials one call at a time, and still one call per
+/// call</strong> (issue #667). The bounded parallel Nayax fan-outs put several of these reads - and
+/// several of the 401 writes below - on the request's one persistence scope at the same time;
+/// <see cref="INayaxConnectionStore"/> admits one of them at a time, and this provider still caches
+/// nothing for the ones that waited. Each call is gated on the status its own snapshot carried, so a
+/// gate that closes part-way through a fan-out refuses the calls that have not resolved yet instead
+/// of handing them a usable credential the request read earlier.</para>
+///
 /// <para><strong>A support session resolves no credentials at all (issue #551).</strong> The
 /// business's operator id and access token are the business's own, and a platform administrator
 /// reading its data to help with a problem is not a reason to spend them: nobody outside the

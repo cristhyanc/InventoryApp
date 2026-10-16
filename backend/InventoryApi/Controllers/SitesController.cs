@@ -15,6 +15,13 @@ namespace InventoryApi.Controllers;
 /// <c>Inventory.Operate</c> (issue #525). The money side of a site - its commission agreements and
 /// payments - is <c>SiteCommissions.Manage</c> on <c>SiteCommissionsController</c> and is issue
 /// #526's to classify.
+///
+/// <para><c>Dashboard.ViewFinancials</c> is not an endpoint requirement here and deliberately cannot
+/// be: what a role without it may not see is the revenue and estimated-profit figures <em>inside</em>
+/// responses every role may request, which an <c>AuthorizeAttribute</c> cannot express (issue #697,
+/// the same shape as the Dashboard summary's redaction in issue #527). The use cases decide which
+/// figures are read and this controller returns what they built - it strips, recomputes and
+/// re-decides nothing.</para>
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]

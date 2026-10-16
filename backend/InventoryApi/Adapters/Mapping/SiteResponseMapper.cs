@@ -12,6 +12,12 @@ namespace InventoryApi.Adapters.Mapping;
 /// <see cref="GetSiteSummaries"/>/<see cref="GetSiteProducts"/> and their Domain policies, so this
 /// mapping cannot introduce a second copy of a site rule. An unavailable estimated profit stays
 /// <c>null</c> on the way through.
+///
+/// <para>So does a <em>withheld</em> revenue or estimated profit (issue #697). Which figures a
+/// request may be shown is decided by the use cases, through
+/// <see cref="Inventory.Application.Access.CurrentCapabilities"/>, and this mapper neither re-decides
+/// it nor substitutes a value for a <c>null</c> it is handed: the redaction has to stay a single
+/// decision, made where the figures are read.</para>
 /// </summary>
 public static class SiteResponseMapper
 {

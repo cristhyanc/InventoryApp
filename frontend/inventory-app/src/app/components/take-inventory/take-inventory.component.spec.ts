@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
-import { of, throwError } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
 import { TakeInventoryComponent } from './take-inventory.component';
+import { SupportSessionService } from '../../support-session/support-session.service';
 import { ProductService } from '../../services/product.service';
 import { InventoryCountService } from '../../services/inventory-count.service';
 import { ToastService } from '../../services/toast.service';
@@ -39,7 +40,10 @@ interface Harness {
   toast: { success: jest.Mock; error: jest.Mock; warning: jest.Mock; info: jest.Mock };
 }
 
-function createHarness(products: Product[] = [product({ id: 1, name: 'Coke', quantityInStock: 17 })]): Harness {
+function createHarness(
+  products: Product[] = [product({ id: 1, name: 'Coke', quantityInStock: 17 })],
+  sessionActive: Observable<boolean> = of(false)
+): Harness {
   const getAllProducts = jest.fn(() => of(products));
   const getProduct = jest.fn((id: number) => of(products.find((p) => p.id === id)!));
   const apply = jest.fn();
@@ -48,7 +52,12 @@ function createHarness(products: Product[] = [product({ id: 1, name: 'Coke', qua
   const productService = { getAll: getAllProducts, get: getProduct } as unknown as ProductService;
   const inventoryCountService = { apply } as unknown as InventoryCountService;
 
-  const component = new TakeInventoryComponent(productService, inventoryCountService, toast as unknown as ToastService);
+  const component = new TakeInventoryComponent(
+    productService,
+    inventoryCountService,
+    toast as unknown as ToastService,
+    { active$: sessionActive } as unknown as SupportSessionService
+  );
   component.ngOnInit();
 
   return { component, getAllProducts, getProduct, apply, toast };
@@ -204,7 +213,7 @@ describe('TakeInventoryComponent apply failure/refresh', () => {
 });
 
 describe('TakeInventoryComponent current stock control sizing', () => {
-  async function render(products: Product[]) {
+  async function render(products: Product[], sessionActive: Observable<boolean> = of(false)) {
     const apply = jest.fn();
 
     await TestBed.configureTestingModule({
@@ -215,7 +224,8 @@ describe('TakeInventoryComponent current stock control sizing', () => {
           useValue: { getAll: jest.fn(() => of(products)), get: jest.fn((id: number) => of(products.find((p) => p.id === id)!)) }
         },
         { provide: InventoryCountService, useValue: { apply } },
-        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } }
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: sessionActive } }
       ]
     }).compileComponents();
 
@@ -284,5 +294,42 @@ describe('TakeInventoryComponent current stock control sizing', () => {
     expect(fixture.componentInstance.rows[0].complete).toBe(true);
     expect(button.textContent).toContain('\u2713');
     expect(Array.from(button.classList)).toEqual(expect.arrayContaining(['bg-md-success/15', 'min-h-[44px]', 'min-w-[44px]']));
+  });
+
+  describe('in a support session (issue #661)', () => {
+    it('disables Apply on every row while a session is active', async () => {
+      const { applyButtons } = await render(
+        [product({ id: 1, name: 'Coke' }), product({ id: 2, name: 'Water' })],
+        of(true)
+      );
+
+      expect(applyButtons().map((button) => button.disabled)).toEqual([true, true]);
+    });
+
+    it('leaves Apply enabled while no session is active', async () => {
+      const { applyButtons } = await render([product({ id: 1, name: 'Coke' })], of(false));
+
+      expect(applyButtons()[0].disabled).toBe(false);
+    });
+
+    it('calls no count API from the guarded handler while a session is active', () => {
+      const { component, apply } = createHarness([product({ id: 1, name: 'Coke', quantityInStock: 17 })], of(true));
+
+      component.rows[0].countedStock = 12;
+      component.apply(component.rows[0]);
+
+      expect(apply).not.toHaveBeenCalled();
+      expect(component.rows[0].applying).toBe(false);
+      expect(component.rows[0].complete).toBe(false);
+    });
+
+    it('still confirms an unchanged count, which records nothing and calls no API', () => {
+      const { component, apply } = createHarness([product({ id: 1, name: 'Coke', quantityInStock: 17 })], of(true));
+
+      component.confirmCurrentStock(component.rows[0]);
+
+      expect(apply).not.toHaveBeenCalled();
+      expect(component.rows[0].complete).toBe(true);
+    });
   });
 });

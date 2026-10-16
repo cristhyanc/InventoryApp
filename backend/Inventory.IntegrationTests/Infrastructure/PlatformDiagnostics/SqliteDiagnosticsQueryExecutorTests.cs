@@ -77,6 +77,7 @@ public sealed class SqliteDiagnosticsQueryExecutorTests : IDisposable
             BusinessId = BusinessAId,
             DirectoryTenantId = "AAAAAAAA-0000-0000-0000-000000000001",
             ObjectId = "BBBBBBBB-0000-0000-0000-000000000002",
+            Role = BusinessRole.Owner,
             IsActive = true,
         });
 

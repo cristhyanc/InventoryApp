@@ -211,9 +211,10 @@ public class RedeemMemberInviteTests
     }
 
     /// <summary>
-    /// A revoked row reactivated by somebody else between this redemption's decision and its write
-    /// is not reported as granted: the conditional reactivation matches nothing, and the redemption
-    /// refuses rather than claiming a membership it did not create.
+    /// A revoked row reactivated by somebody else before this redemption's in-transaction membership
+    /// read is refused with the standing "already a member" sentence, and rightly so: that read saw
+    /// an <em>active</em> row, so the caller really is a member of this business. This is the one
+    /// race refusal where the cause is established rather than inferred, and it keeps its wording.
     /// </summary>
     [Fact]
     public async Task A_row_reactivated_between_the_decision_and_the_write_refuses_the_redemption()
@@ -228,6 +229,62 @@ public class RedeemMemberInviteTests
             fixture.Redeem().Handle(Token, CancellationToken.None));
 
         Assert.Equal(MembershipEligibility.AlreadyAMemberMessage, refusal.Message);
+        Assert.Equal(MemberInviteStatus.Pending, fixture.Store.InviteFor(MemberInviteToken.Hash(Token)).StoredStatus);
+        Assert.Empty(fixture.Audit.Entries);
+        Assert.DoesNotContain(FakeBusinessMembershipWriteStore.Commit, fixture.Operations);
+    }
+
+    /// <summary>
+    /// Issue #681's regression, and the case the test above is deliberately <em>not</em>: a row that
+    /// stops being the revoked one after the in-transaction read, so the conditional reactivation
+    /// matches nothing and the server never learned why.
+    ///
+    /// <para>Here the row is gone, and this caller is a member of nothing - so refusing them with
+    /// "this person is already a member of a business", which is what this path did before, states
+    /// something that was never established and leaves them nothing to do about it. It gets the
+    /// late-change sentence instead: nothing was recorded, check whether you can already sign in, and
+    /// use the link again if you cannot. It still names no business, role or member.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_row_that_is_gone_between_the_in_transaction_read_and_the_write_is_not_refused_as_already_a_member()
+    {
+        var fixture = new Fixture();
+        fixture.SeedInvite(BusinessRole.Manager);
+        fixture.Store.AddMembership(InvitingBusinessId, fixture.Joiner, membershipId: 77, isActive: false);
+        // After the membership read, not after the invite lookup: a change made earlier is still seen
+        // by that read, and the whole point of this case is that the read saw a revoked row.
+        fixture.Store.OnceAfterMembershipLookup = () =>
+            fixture.Store.RemoveBehindTheCallersBack(InvitingBusinessId, fixture.Joiner);
+
+        var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
+            fixture.Redeem().Handle(Token, CancellationToken.None));
+
+        Assert.Equal(MemberInviteRedemptionPolicy.MembershipChangedMessage, refusal.Message);
+        Assert.NotEqual(MembershipEligibility.AlreadyAMemberMessage, refusal.Message);
+        Assert.Contains(FakeMemberInviteRedemptionStore.ReactivateMembership, fixture.Operations);
+        Assert.Equal(MemberInviteStatus.Pending, fixture.Store.InviteFor(MemberInviteToken.Hash(Token)).StoredStatus);
+        Assert.Empty(fixture.Audit.Entries);
+        Assert.DoesNotContain(FakeBusinessMembershipWriteStore.Commit, fixture.Operations);
+    }
+
+    /// <summary>
+    /// The same late refusal for the other cause, so the sentence is the one answer for all of them:
+    /// a row reactivated <em>after</em> the in-transaction read is equally invisible to this code,
+    /// and is refused the same way rather than being guessed at correctly by accident.
+    /// </summary>
+    [Fact]
+    public async Task A_row_reactivated_after_the_in_transaction_read_gets_the_same_late_change_refusal()
+    {
+        var fixture = new Fixture();
+        fixture.SeedInvite(BusinessRole.Manager);
+        fixture.Store.AddMembership(InvitingBusinessId, fixture.Joiner, membershipId: 77, isActive: false);
+        fixture.Store.OnceAfterMembershipLookup = () =>
+            fixture.Store.ActivateBehindTheCallersBack(InvitingBusinessId, fixture.Joiner);
+
+        var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
+            fixture.Redeem().Handle(Token, CancellationToken.None));
+
+        Assert.Equal(MemberInviteRedemptionPolicy.MembershipChangedMessage, refusal.Message);
         Assert.Equal(MemberInviteStatus.Pending, fixture.Store.InviteFor(MemberInviteToken.Hash(Token)).StoredStatus);
         Assert.Empty(fixture.Audit.Entries);
         Assert.DoesNotContain(FakeBusinessMembershipWriteStore.Commit, fixture.Operations);

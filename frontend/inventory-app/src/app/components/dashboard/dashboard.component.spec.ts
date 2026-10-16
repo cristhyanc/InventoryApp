@@ -1,3 +1,4 @@
+import { HttpErrorResponse, HttpHeaders } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
 import { Observable, Subject, of, throwError } from 'rxjs';
@@ -8,6 +9,9 @@ import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
+import { AccessService } from '../../access/access.service';
+import { BusinessSettingsService } from '../../services/business-settings.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 /**
  * Declared on its own rather than inline, because `DashboardSummary.salesThisWeek` is optional
@@ -60,6 +64,8 @@ function createComponent(
     getAllMachines?: () => Observable<Machine[]>;
     getAllSites?: () => Observable<Site[]>;
     getLowStock?: () => Observable<Product[]>;
+    sessionActive?: Observable<boolean>;
+    canViewFinancials?: boolean;
   } = {}
 ): DashboardComponent {
   const productService = {
@@ -72,7 +78,15 @@ function createComponent(
   } as unknown as NayaxSalesSyncService;
   const dashboardService = { getSummary: () => summary$ } as unknown as DashboardService;
 
-  return new DashboardComponent(productService, machineService, siteService, nayaxSalesSyncService, dashboardService);
+  return new DashboardComponent(
+    productService,
+    machineService,
+    siteService,
+    nayaxSalesSyncService,
+    dashboardService,
+    { active$: overrides.sessionActive ?? of(false) } as unknown as SupportSessionService,
+    { allows: () => of(overrides.canViewFinancials ?? true) } as unknown as AccessService
+  );
 }
 
 const MACHINE: Machine = {
@@ -218,6 +232,49 @@ describe('DashboardComponent needs refill supporting detail', () => {
 
     expect(component.refillFooterText(SUMMARY.needsRefill)).toBe('2 low · 1 empty selections across 5 machines evaluated');
     expect(component.refillFooterClass(SUMMARY.needsRefill)).toBe('value-muted');
+  });
+});
+
+/**
+ * The support-session shape of this response (issue #554): `needsRefill`/`needsOrdering` replaced
+ * with `{ available: false, reason: "SupportView" }` rather than a blanked figure inside either
+ * card.
+ */
+describe('DashboardComponent unavailable Nayax sections (issue #554)', () => {
+  const SUPPORT_VIEW_SUMMARY: DashboardSummary = {
+    ...SUMMARY,
+    needsRefill: { available: false, reason: 'SupportView' },
+    needsOrdering: { available: false, reason: 'SupportView' }
+  };
+
+  it('shows "Unavailable" for the value and the Nayax message for the footer of each withheld card', () => {
+    const component = createComponent(of(SUPPORT_VIEW_SUMMARY));
+    component.ngOnInit();
+
+    expect(component.refillValueDisplay(component.summary!.needsRefill)).toBe('Unavailable');
+    expect(component.refillFooterText(component.summary!.needsRefill)).toBe('Nayax is not available in support view');
+    expect(component.refillFooterClass(component.summary!.needsRefill)).toBe('value-muted');
+    expect(component.orderingValueDisplay(component.summary!.needsOrdering)).toBe('Unavailable');
+    expect(component.orderingFooterText(component.summary!.needsOrdering)).toBe('Nayax is not available in support view');
+    expect(component.orderingFooterClass(component.summary!.needsOrdering)).toBe('value-muted');
+  });
+
+  it('leaves the real figures and footers unchanged when the sections are available', () => {
+    const component = createComponent(of(SUMMARY));
+    component.ngOnInit();
+
+    expect(component.refillValueDisplay(component.summary!.needsRefill)).toBe('2');
+    expect(component.orderingValueDisplay(component.summary!.needsOrdering)).toBe('4');
+  });
+
+  it('renders the Nayax message in the Dashboard template for both withheld cards', async () => {
+    const host = await renderDashboard({ summary$: of(SUPPORT_VIEW_SUMMARY) });
+
+    const values = Array.from(host.querySelectorAll('.stat-card-value')).map((el) => el.textContent?.trim());
+    const footers = Array.from(host.querySelectorAll('.stat-card-footer')).map((el) => el.textContent?.trim());
+
+    expect(values).toContain('Unavailable');
+    expect(footers.filter((text) => text === 'Nayax is not available in support view')).toHaveLength(2);
   });
 });
 
@@ -387,7 +444,14 @@ describe('DashboardComponent reorder alerts - stock after machine need', () => {
 });
 
 async function renderDashboard(
-  overrides: { products?: Product[]; machines?: Machine[]; summary$?: Observable<DashboardSummary> } = {}
+  overrides: {
+    products?: Product[];
+    machines?: Machine[];
+    sites?: Site[];
+    summary$?: Observable<DashboardSummary>;
+    sessionActive?: Observable<boolean>;
+    canViewFinancials?: boolean;
+  } = {}
 ): Promise<HTMLElement> {
   await TestBed.configureTestingModule({
     imports: [DashboardComponent],
@@ -395,9 +459,16 @@ async function renderDashboard(
       provideRouter([]),
       { provide: ProductService, useValue: { getLowStock: () => of(overrides.products ?? []) } },
       { provide: MachineService, useValue: { getAll: () => of(overrides.machines ?? []) } },
-      { provide: SiteService, useValue: { getAll: () => of([]) } },
+      { provide: SiteService, useValue: { getAll: () => of(overrides.sites ?? []) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } },
-      { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } }
+      { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
+      { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } },
+      // The composed legacy-business-settings-prompt (issue #549) is stubbed to stay hidden: it is
+      // its own component with its own tests, and not what this page's own tests are about.
+      // Issue #699's own `Dashboard.ViewFinancials` check reads this same stub, so it defaults
+      // `false` here too - tests about the Sites/Machines financial columns override it.
+      { provide: AccessService, useValue: { allows: () => of(overrides.canViewFinancials ?? false) } },
+      { provide: BusinessSettingsService, useValue: { get: () => of(null) } }
     ]
   }).compileComponents();
 
@@ -656,5 +727,146 @@ describe('DashboardComponent coordinated sales refresh', () => {
     expect(component.isSalesSyncFailed).toBe(true);
     expect(component.machines).toEqual([MACHINE]);
     expect(component.sites).toEqual([SITE]);
+  });
+
+  it("shows the business's run limit as a recent refresh, not a failure, and still loads Sites and Machines (issue #681)", () => {
+    const component = createComponent(of(SUMMARY), {
+      syncLatest: () =>
+        throwError(() => new HttpErrorResponse({ status: 429, headers: new HttpHeaders({ 'Retry-After': '90' }) })),
+      getAllMachines: () => of([MACHINE]),
+      getAllSites: () => of([SITE])
+    });
+
+    component.ngOnInit();
+
+    expect(component.isSalesSyncRecentlyRefreshed).toBe(true);
+    expect(component.isSalesSyncFailed).toBe(false);
+    expect(component.machines).toEqual([MACHINE]);
+    expect(component.sites).toEqual([SITE]);
+  });
+
+  it('still reports any other refused synchronization as a failure', () => {
+    const component = createComponent(of(SUMMARY), {
+      syncLatest: () => throwError(() => new HttpErrorResponse({ status: 503 }))
+    });
+
+    component.ngOnInit();
+
+    expect(component.isSalesSyncFailed).toBe(true);
+    expect(component.isSalesSyncRecentlyRefreshed).toBe(false);
+  });
+});
+
+/**
+ * The Dashboard's own write (issue #661): `POST /api/nayax-sales/sync` runs on arrival rather than
+ * from a control, and the Dashboard is exactly where starting a support session lands. A support
+ * session resolves no Nayax credentials at all, so the call could only ever be refused.
+ */
+describe('DashboardComponent Nayax sales sync in a support session (issue #661)', () => {
+  it('never calls the sync endpoint while a session is active', () => {
+    const syncLatest = jest.fn(() => of(undefined));
+    const component = createComponent(of(SUMMARY), { syncLatest, sessionActive: of(true) });
+
+    component.ngOnInit();
+
+    expect(syncLatest).not.toHaveBeenCalled();
+  });
+
+  it('still loads the persisted machines and sites, and reports no sync failure it did not have', () => {
+    const component = createComponent(of(SUMMARY), {
+      syncLatest: jest.fn(() => of(undefined)),
+      sessionActive: of(true),
+      getAllMachines: () => of([MACHINE]),
+      getAllSites: () => of([SITE])
+    });
+
+    component.ngOnInit();
+
+    expect(component.machines).toEqual([MACHINE]);
+    expect(component.sites).toEqual([SITE]);
+    expect(component.isSalesSyncFailed).toBe(false);
+    expect(component.isSalesSyncSkippedInSupportView).toBe(true);
+  });
+
+  it('explains that the figures were not synchronized, instead of the sync-failed warning', async () => {
+    const host = await renderDashboard({ sessionActive: of(true) });
+
+    expect(host.textContent).toContain('Nayax is not available in support view');
+    expect(host.textContent).not.toContain('Latest Nayax sales could not be synchronized.');
+  });
+
+  it('still synchronizes, and shows neither notice, outside a session', async () => {
+    const syncLatest = jest.fn(() => of(undefined));
+    const component = createComponent(of(SUMMARY), { syncLatest, sessionActive: of(false) });
+
+    component.ngOnInit();
+
+    expect(syncLatest).toHaveBeenCalledTimes(1);
+    expect(component.isSalesSyncSkippedInSupportView).toBe(false);
+    expect(component.isSalesSyncFailed).toBe(false);
+  });
+});
+
+/**
+ * `Dashboard.ViewFinancials` hides the Sites/Machines tables' revenue, direct-profit, margin and
+ * trend columns (issue #699) - not only the two headline cards #527/#528 already redact. A role
+ * without it - an Operator - sees none of those columns, while a Manager or an Owner sees them
+ * exactly as before.
+ */
+describe('DashboardComponent Sites/Machines financial figures gated on Dashboard.ViewFinancials (issue #699)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  function sitesTable(host: HTMLElement): HTMLElement {
+    const section = Array.from(host.querySelectorAll('section.card')).find((el) => el.textContent?.includes('Sites'));
+    return section!.querySelector('table') as HTMLElement;
+  }
+
+  function machinesTableEl(host: HTMLElement): HTMLElement {
+    const section = Array.from(host.querySelectorAll('section.card')).find((el) => el.textContent?.includes('Machines'));
+    return section!.querySelector('table') as HTMLElement;
+  }
+
+  it('shows no revenue, profit, margin or trend column to an Operator', async () => {
+    const host = await renderDashboard({ machines: [MACHINE], sites: [SITE], canViewFinancials: false });
+
+    const sitesHeaders = Array.from(sitesTable(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
+    expect(sitesHeaders).toEqual(['Site', 'Stock', 'Low / Empty', 'Products']);
+    expect(sitesTable(host).textContent).not.toContain('$');
+
+    const machinesHeaders = Array.from(machinesTableEl(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
+    expect(machinesHeaders).toEqual(['Machine']);
+    expect(machinesTableEl(host).textContent).not.toContain('$');
+    expect(machinesTableEl(host).querySelector('tfoot')).toBeNull();
+  });
+
+  it('keeps the Sites/Machines columns and totals exactly as today for a Manager or an Owner', async () => {
+    const host = await renderDashboard({ machines: [MACHINE], sites: [SITE], canViewFinancials: true });
+
+    const sitesHeaders = Array.from(sitesTable(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
+    expect(sitesHeaders).toEqual(['Site', 'Stock', 'Low / Empty', 'Today', 'This Week', 'vs Last Week', 'Products']);
+    expect(sitesTable(host).textContent).toContain('$12.00');
+
+    const machinesHeaders = Array.from(machinesTableEl(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
+    expect(machinesHeaders).toEqual(['Machine', 'Today', 'This Week', 'Last Week', 'vs Last Week', 'Month to Date']);
+    expect(machinesTableEl(host).textContent).toContain('$12.00 sales');
+    expect(machinesTableEl(host).querySelector('tfoot')).not.toBeNull();
+  });
+
+  it('renders without error when a granted role is sent a site and machine with the figures absent', async () => {
+    const withheldSite: Site = { ...SITE, todayRevenue: null, currentWeekRevenue: null, previousComparableWeekRevenue: null };
+    const withheldMachine: Machine = {
+      ...MACHINE,
+      todayGrossRevenue: null,
+      currentWeekGrossRevenue: null,
+      lastWeekGrossRevenue: null,
+      monthToDateGrossRevenue: null,
+      previousComparableWeekGrossRevenue: null
+    };
+    const host = await renderDashboard({ machines: [withheldMachine], sites: [withheldSite], canViewFinancials: true });
+
+    expect(sitesTable(host).textContent).toContain('Unavailable');
+    expect(machinesTableEl(host).textContent).toContain('Unavailable');
+    expect(host.textContent).not.toContain('NaN');
+    expect(host.textContent).not.toContain('$0.00');
   });
 });

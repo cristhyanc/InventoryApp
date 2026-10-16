@@ -3,8 +3,23 @@ using Inventory.Domain.Tenancy;
 
 namespace Inventory.Application.Tenancy;
 
-/// <summary>One pending refresh: whose membership row, and what to put in its two display columns.</summary>
-public sealed record MemberProfileRefreshRequest(ActorIdentity Identity, MemberProfile Profile);
+/// <summary>
+/// One pending refresh: whose membership row, what to put in its display columns, and the instant
+/// the hourly slot was claimed at.
+/// </summary>
+/// <param name="Identity">Whose active membership is written.</param>
+/// <param name="Profile">The display-only values the token reported.</param>
+/// <param name="ClaimedAtUtc">
+/// The instant <c>MemberProfileRefreshThrottle.TryClaim</c> recorded for this refresh (issue #681).
+/// The drain needs it to give the slot back if the refresh fails, and giving back exactly this claim
+/// is what stops a failure from reopening a slot a later request has since taken. It defaults to
+/// <c>default</c> so a test that is about the drain rather than about the slot can leave it out;
+/// <see cref="ScheduleMemberProfileRefresh"/>, the one production caller, always states it.
+/// </param>
+public sealed record MemberProfileRefreshRequest(
+    ActorIdentity Identity,
+    MemberProfile Profile,
+    DateTime ClaimedAtUtc = default);
 
 /// <summary>
 /// The hand-off that keeps the member-profile refresh off the request (issue #524). The request

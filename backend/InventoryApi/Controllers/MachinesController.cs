@@ -16,6 +16,15 @@ namespace InventoryApi.Controllers;
 /// All of it is day-to-day inventory work, so every action requires <c>Inventory.Operate</c>
 /// (issue #525) - Sync Restock included, because reconciling what a machine reported it dispensed
 /// is exactly the refill work an Operator does.
+///
+/// <para><b>The three read actions withhold their financial figures from a caller without
+/// <c>Dashboard.ViewFinancials</c></b> (issue #698). The endpoints themselves stay open to every role
+/// that may operate inventory, because that is what they are for; what changes is the shape of the
+/// response, which an <c>AuthorizeAttribute</c> cannot express. The decision is taken once per
+/// request from <see cref="CurrentCapabilities"/> - the one service that answers "what may this
+/// request do", so it cannot disagree with the capability the Dashboard summary reads, the policies
+/// the authorization middleware enforces or the list <c>GET /api/me/access</c> reports - and is
+/// handed to the response mappers, which own the two projections. No role name appears here.</para>
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -33,6 +42,7 @@ public class MachinesController : ControllerBase
     private readonly ResolveMachineStockEventsAsAlreadyRecorded _resolveMachineStockEventsAsAlreadyRecorded;
     private readonly GetMachineStockReconciliation _getMachineStockReconciliation;
     private readonly RecordMachineStockCount _recordMachineStockCount;
+    private readonly CurrentCapabilities _capabilities;
 
     public MachinesController(
         GetMachineDashboard getMachineDashboard,
@@ -43,7 +53,8 @@ public class MachinesController : ControllerBase
         ResolveMachineStockDuplicate resolveMachineStockDuplicate,
         ResolveMachineStockEventsAsAlreadyRecorded resolveMachineStockEventsAsAlreadyRecorded,
         GetMachineStockReconciliation getMachineStockReconciliation,
-        RecordMachineStockCount recordMachineStockCount)
+        RecordMachineStockCount recordMachineStockCount,
+        CurrentCapabilities capabilities)
     {
         _getMachineDashboard = getMachineDashboard;
         _listMachineDashboard = listMachineDashboard;
@@ -54,27 +65,31 @@ public class MachinesController : ControllerBase
         _resolveMachineStockEventsAsAlreadyRecorded = resolveMachineStockEventsAsAlreadyRecorded;
         _getMachineStockReconciliation = getMachineStockReconciliation;
         _recordMachineStockCount = recordMachineStockCount;
+        _capabilities = capabilities;
     }
 
     [HttpGet("{id:long}")]
     public async Task<ActionResult<MachineResponse>> GetById(long id)
     {
+        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
         var machine = await _getMachineDashboard.Handle(id, CancellationToken.None);
-        return machine is null ? NotFound() : Ok(MachineResponseMapper.ToResponse(machine));
+        return machine is null ? NotFound() : Ok(MachineResponseMapper.ToResponse(machine, visibility));
     }
 
     [HttpGet]
     public async Task<ActionResult<List<MachineResponse>>> GetAll()
     {
+        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
         var machines = await _listMachineDashboard.Handle(CancellationToken.None);
-        return Ok(machines.Select(MachineResponseMapper.ToResponse).ToList());
+        return Ok(machines.Select(machine => MachineResponseMapper.ToResponse(machine, visibility)).ToList());
     }
 
     [HttpGet("{id:long}/products")]
     public async Task<ActionResult<List<ProductResponse>>> GetMachineProducts(long id)
     {
+        var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
         var products = await _listMachineProducts.Handle(id, CancellationToken.None);
-        return Ok(products.Select(ProductRecordResponseMapper.ToResponse).ToList());
+        return Ok(products.Select(product => ProductRecordResponseMapper.ToResponse(product, visibility)).ToList());
     }
 
     // Fetches new Nayax stock-adjustment alerts and returns a reconciliation preview; it never
@@ -82,8 +97,10 @@ public class MachinesController : ControllerBase
     // presentation/workflow filters over the same imported facts: fromDate bounds the canonical
     // EventDateTimeGMT, includeReconciled shows or hides events already reconciled as "already
     // recorded manually". Omitting either preserves the original unfiltered behaviour. fromDate is
-    // bound as DateTimeOffset, not DateTime (issue #218): the frontend always sends the operator's
-    // Australia/Canberra calendar boundary already converted to a UTC instant, and ASP.NET Core's
+    // bound as DateTimeOffset, not DateTime (issue #218): the frontend always sends a calendar
+    // boundary in the current business's own configured IANA time zone - the one
+    // GET /api/business/current reports (issue #499), not a fixed Australian one - already converted
+    // to a UTC instant, and ASP.NET Core's
     // default DateTime query binding reinterprets a UTC instant against the server process's local
     // time zone - DateTimeOffset carries its own offset, so UtcDateTime is the exact instant chosen
     // regardless of the server's local time zone.

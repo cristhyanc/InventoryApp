@@ -1,13 +1,15 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink, ActivatedRoute } from '@angular/router';
-import { BehaviorSubject, catchError, map, Observable, of, switchMap, tap } from 'rxjs';
+import { BehaviorSubject, catchError, map, Observable, of, Subscription, switchMap, tap } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
 import { StockService } from '../../services/stock.service';
 import { ToastService } from '../../services/toast.service';
 import { BreadcrumbService } from '../../layout/breadcrumbs/breadcrumb.service';
 import { MachineRestockSyncComponent } from './machine-restock-sync/machine-restock-sync.component';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
+import { SupportSessionService } from '../../support-session/support-session.service';
+import { AccessService } from '../../access/access.service';
 import {
   Machine,
   Product,
@@ -21,21 +23,53 @@ import {
   imports: [CommonModule, RouterLink, MachineRestockSyncComponent, NayaxStatusBannerComponent],
   templateUrl: './machine-detail.component.html'
 })
-export class MachineDetailComponent implements OnInit {
+export class MachineDetailComponent implements OnInit, OnDestroy {
   machine$!: Observable<Machine | null>;
   products$!: Observable<Product[]>;
   loading$ = new BehaviorSubject(true);
   error$ = new BehaviorSubject('');
 
+  /**
+   * Whether a support session is active (issue #658): Restock is hidden while it is, because a
+   * session grants `InventoryOperate` - the capability this write would otherwise be gated on -
+   * and the backend refuses the write itself only by its read-only method rule, never by
+   * withholding the capability. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  /**
+   * Whether the signed-in member's role grants `Dashboard.ViewFinancials` (issue #699): the
+   * revenue/direct-profit summary cards and the products table's Estimated Card Profit/50% Card
+   * Margin Price columns are hidden without it, on the frontend-level check this page applies
+   * ahead of the machine endpoints redacting those figures themselves (#697/#698). Starts
+   * `true`, the fail-open default every other capability-gated control in this codebase uses
+   * while the capability has not been read yet.
+   */
+  canViewFinancials = true;
+
   private machineId: number | null = null;
+  private readonly sessionActiveSubscription: Subscription;
+  private readonly financialsAccessSubscription: Subscription;
 
   constructor(
-    private route: ActivatedRoute,
-    private machineService: MachineService,
-    private stockService: StockService,
-    private toastService: ToastService,
-    private breadcrumbService: BreadcrumbService
-  ) {}
+    private readonly route: ActivatedRoute,
+    private readonly machineService: MachineService,
+    private readonly stockService: StockService,
+    private readonly toastService: ToastService,
+    private readonly breadcrumbService: BreadcrumbService,
+    supportSession: SupportSessionService,
+    access: AccessService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+    this.financialsAccessSubscription = access
+      .allows('Dashboard.ViewFinancials')
+      .subscribe((allowed) => (this.canViewFinancials = allowed));
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+    this.financialsAccessSubscription.unsubscribe();
+  }
 
   ngOnInit(): void {
     const machineId$ = this.route.paramMap.pipe(
@@ -106,6 +140,11 @@ export class MachineDetailComponent implements OnInit {
   }
 
   restockProduct(product: Product, machine: Machine | null, qty?: string | number, qtyInput?: HTMLInputElement): void {
+    // Checked here as well as hidden in the template, so the write is actually unavailable rather
+    // than merely invisible - the endpoint refuses it either way.
+    if (this.sessionActive) {
+      return;
+    }
     const defaultQty = (product.maxStockInMachine ?? 0) - (product.quantityInStock ?? 0);
     const qtyNum = Math.trunc(Number(qty ?? defaultQty));
     if (!product || qtyNum <= 0) {

@@ -29,7 +29,18 @@ namespace Inventory.Application.Tenancy;
 /// about which operation caused it. <c>null</c> when the write cannot remove an Owner, or when the
 /// business is one no Owner is required for yet (an application being rejected, for example).
 /// </param>
+/// <param name="BusinessThatMustStillBeActive">
+/// The business the write goes <em>into</em>, when the write is only meaningful while that business
+/// is trading (issue #680). <see cref="ActiveBusinessWritePolicy"/> is checked against its stored
+/// status inside the transaction, <em>before</em> the write, so a deactivation that committed while
+/// this request was in flight refuses it rather than being overtaken by it. Set by the Owner's
+/// invite creation, business settings save and member changes. <c>null</c> for a write whose own
+/// subject is a business's lifecycle - a decision, a deactivation or a reactivation, which would
+/// otherwise refuse themselves - and for the redemption and application paths, which resolve no
+/// business from a membership at all.
+/// </param>
 public readonly record struct MembershipWriteIntent(
     ActorIdentity? IdentityGainingAnActiveMembership = null,
     int? ExcludedMembershipId = null,
-    BusinessId? BusinessKeepingAnActiveOwner = null);
+    BusinessId? BusinessKeepingAnActiveOwner = null,
+    BusinessId? BusinessThatMustStillBeActive = null);

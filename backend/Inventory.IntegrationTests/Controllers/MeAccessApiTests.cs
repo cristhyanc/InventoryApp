@@ -350,6 +350,7 @@ public sealed class MeAccessApiTests : IClassFixture<MeAccessApiTests.ApiFactory
                 DirectoryTenantId = DirectoryTenantId,
                 ObjectId = objectId,
                 Role = role,
+                IsActive = true,
                 CreatedAtUtc = CreatedAt,
             };
 

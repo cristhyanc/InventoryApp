@@ -189,6 +189,9 @@ builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<SupportSessionExceptionHandler>();
 builder.Services.AddExceptionHandler<NayaxConnectionExceptionHandler>();
 builder.Services.AddExceptionHandler<NayaxUpstreamExceptionHandler>();
+// A business whose stored time zone cannot be resolved (issue #499): still a 500, but with the
+// stable code that tells it apart from an anonymous server fault (issue #681).
+builder.Services.AddExceptionHandler<BusinessTimeZoneExceptionHandler>();
 builder.Services.AddExceptionHandler<DomainExceptionHandler>();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddInventoryApiSwagger();
@@ -392,6 +395,16 @@ await E2ETestFixture.SeedAsync(
     app.Environment,
     app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("InventoryApi.E2ETestFixture"),
     CancellationToken.None);
+
+// The support-session audit trail (issue #551, corrected by issue #672), ahead of everything else
+// so that one event records what a request from outside the business asked for and what it was
+// actually answered. Both halves of that need this position: a request the authorization middleware
+// refuses - a capability the session does not hold, or a write - is refused below here and would
+// otherwise never be recorded at all, and a request whose endpoint throws has its status decided by
+// the exception handler below here, so anything inside it can only see the 200 the response still
+// held. It emits nothing for every other request, and it cannot change a response: see
+// SupportSessionAuditMiddleware.
+app.UseMiddleware<SupportSessionAuditMiddleware>();
 
 // First in the pipeline so exceptions from controllers, services, and the Nayax
 // client are all caught.

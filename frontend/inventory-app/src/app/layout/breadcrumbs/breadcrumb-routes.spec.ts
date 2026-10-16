@@ -64,6 +64,7 @@ describe('breadcrumbRoutes (issue #457 route inventory)', () => {
       '/admin/historical-gst-classification',
       '/admin/nayax-sale-timestamp-repair',
       '/super-admin/diagnostics',
+      '/super-admin/businesses',
       '/admin/nayax-settings',
       '/admin/site-commission-agreements'
     ]);
@@ -101,6 +102,13 @@ describe('buildBreadcrumbTrail', () => {
     expect(buildBreadcrumbTrail('/super-admin/diagnostics', null)).toEqual([
       { label: 'Super Admin', path: undefined, current: false },
       { label: 'Platform Diagnostics', current: true }
+    ]);
+  });
+
+  it('builds Super Admin > Businesses, with no link for the non-routable parent (issue #547)', () => {
+    expect(buildBreadcrumbTrail('/super-admin/businesses', null)).toEqual([
+      { label: 'Super Admin', path: undefined, current: false },
+      { label: 'Businesses', current: true }
     ]);
   });
 

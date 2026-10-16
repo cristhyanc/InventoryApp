@@ -89,15 +89,18 @@ public enum NayaxConnectionCheckFailure
     /// </summary>
     OperatorIdMismatch = 3,
 
-    /// <summary>Nayax answered <c>5xx</c>, timed out, or could not be reached at all.</summary>
+    /// <summary>
+    /// Nayax answered <c>5xx</c>, answered <c>408</c> or <c>429</c> about itself (issue #681), timed
+    /// out, or could not be reached at all. In every one of those cases nothing was learned about the
+    /// credentials, and the answer is to try again shortly.
+    /// </summary>
     NayaxUnavailable = 4,
 
     /// <summary>
-    /// Nayax answered something this application does not interpret - a <c>400</c>, a <c>429</c>, a
-    /// <c>404</c> on an endpoint that is not operator-scoped, or a body that is not the documented
-    /// shape. Reported as its own cause rather than folded into one of the four above: guessing
-    /// which verdict an unrecognised answer means is exactly how a test tells an operator the wrong
-    /// thing to fix.
+    /// Nayax answered something this application does not interpret - a <c>400</c>, a <c>404</c> on
+    /// an endpoint that is not operator-scoped, or a body that is not the documented shape. Reported
+    /// as its own cause rather than folded into one of the four above: guessing which verdict an
+    /// unrecognised answer means is exactly how a test tells an operator the wrong thing to fix.
     /// </summary>
     UnexpectedResponse = 5,
 }

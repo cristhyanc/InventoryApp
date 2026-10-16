@@ -1,4 +1,5 @@
 <div class="flex min-h-screen flex-col bg-md-gray-100">
+  <app-support-session-banner />
   <header class="sticky top-0 z-30">
     <div class="flex items-center gap-3 px-4 py-3 sm:px-6">
       <!--
@@ -46,6 +47,7 @@
         [navId]="sidebarId"
         [expanded]="isSidebarExpanded"
         [drawer]="isSidebarDrawer"
+        [businessNavigation]="businessNavigation"
         (navigated)="onSidebarNavigated()"
         (dismissed)="closeSidebar()"
         (expandRequested)="expandSidebar()"
@@ -57,12 +59,30 @@
       <div class="w-full p-4 sm:p-6">
         <app-breadcrumbs />
         <!--
-          The page waits for the signed-in operator's business (issue #499): its time zone is what
-          every instant the page displays is rendered in, so showing the page first would show
-          those instants in no time zone at all. A signed-out visitor is not waiting for anything
-          and sees the landing page immediately.
+          No page at all while this tab cannot present the administrator's active support session
+          (issue #668): its requests would resolve the administrator's own membership, so rendering
+          a page here would show their own data for a session that names another business. The
+          explanation carries the only action that applies, End session.
+
+          Otherwise the page waits for the signed-in operator's business (issue #499): its time
+          zone is what every instant the page displays is rendered in, so showing the page first
+          would show those instants in no time zone at all. A signed-out visitor is not waiting for
+          anything and sees the landing page immediately.
+
+          A business the lookup could not read is said so, above the page and with a retry
+          (issue #671): no zone was published, so the page's instants render blank - never in the
+          browser's zone or another business's - and that is an explanation the operator is owed
+          rather than a silence.
         -->
-        @if (isBusinessContextReady) {
+        @if (isSupportViewUnresolved) {
+          <app-support-session-blocked />
+        } @else if (isBusinessContextReady) {
+          @if (isBusinessUnavailable) {
+            <div class="alert alert-danger mb-4" role="alert" data-testid="business-context-unavailable">
+              <p>Your business couldn't be loaded, so dates and times are unavailable on this page.</p>
+              <button type="button" class="btn btn-secondary mt-3" (click)="retryBusinessContext()">Try again</button>
+            </div>
+          }
           <router-outlet />
         } @else {
           <output class="block text-md-body value-muted">Loading your business…</output>
@@ -70,6 +90,10 @@
       </div>
     </main>
   </div>
+
+  <footer class="border-t border-md-gray-200 px-4 py-2 text-center text-md-badge value-muted sm:px-6">
+    Version {{ appVersion }}
+  </footer>
 </div>
 
 <app-toast-container></app-toast-container>

@@ -841,7 +841,7 @@ InventoryApp/
 │   │   ├── Adapters/PlatformAdmin/  The ILogger audit adapters for the Super Admin's business decisions and lifecycle actions (issues #544, #545) and for support sessions (issue #550), here for the same reason
 │   │   ├── Adapters/PlatformDiagnostics/  The ILogger audit adapter, here because the event carries the request correlation id (issue #336)
 │   │   ├── App_Data/jobs/           The App Service WebJob that triggers the backup command (issue #333)
-│   │   ├── Auth/                    Authentication, the capability policies (issue #525), BusinessScopeMiddleware, the E2E test host's scheme and fixture
+│   │   ├── Auth/                    Authentication, the capability policies (issue #525), BusinessScopeMiddleware, SupportSessionAuditMiddleware (issues #551, #672), the E2E test host's scheme and fixture
 │   │   ├── Bootstrap/               DatabaseSchemaStartup and the human-invoked commands (host-owned, calling Infrastructure services)
 │   │   ├── Controllers/
 │   │   ├── DTOs/                    API-owned transport contracts
@@ -994,9 +994,21 @@ usually finishes the first call before the second begins, which hides the defect
 runs while a genuinely asynchronous provider rejects it, so this is a source-level rule rather than
 something a passing test suite demonstrates.
 
-- **Concurrency is correct for independent remote reads.** The bounded per-site/per-machine
-  `INayaxLynxClient.GetMachineProductsAsync` fan-out shares no `DbContext` and stays a `Task.WhenAll`
-  fan-out. Do not serialize remote requests to avoid a database problem they do not cause.
+- **Concurrency is correct for independent remote reads, and the bounded Nayax fan-outs stay
+  concurrent.** The per-site/per-machine `INayaxLynxClient.GetMachineProductsAsync` fan-out is a bound
+  on the *remote* system, and it is kept. Do not serialize remote requests to avoid a database problem
+  they do not cause.
+- **A Nayax call is not free of the context any more, and the credential path owns that (issue
+  #667).** Since [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520) every
+  ordinary Nayax call resolves the business's own operator id and token through the request's scoped
+  `AppDbContext`, and a Nayax `401` writes a status back through it. Several calls of one fan-out
+  therefore reach the context at once. `Inventory.Infrastructure.Persistence.EfNayaxConnectionStore`
+  admits one of them at a time — the database work only, so the HTTP requests still overlap, each
+  caller still reads its own snapshot and a cancelled caller stops waiting. **The use case's own
+  obligation is unchanged and now covers the remote calls too:** do not start other scoped
+  persistence work while a Nayax call is in flight. `GetNayaxCatalogReconciliation` awaits its two
+  remote reads before its local ones, and `GetSiteSummaries` awaits the machine-product fan-out
+  before its batched completed-sales read, for exactly that reason.
 - **Serialize or batch the scoped reads.** Either await the port calls one at a time
   (`ResolveMachineProductPricing`, `GetSiteProducts`), or replace an overlapping per-item read with one
   scoped read whose facts are distributed in memory (`GetSiteSummaries` loads every site's recent
@@ -1012,7 +1024,8 @@ something a passing test suite demonstrates.
   failure propagate: a partial result must never be returned as a complete one.
 
 Call-sequence regression tests are what hold this in place; see
-[Backend tests](#backend-tests) for the yielding-recorder pattern they use.
+[Backend tests](#backend-tests) for the yielding-recorder pattern they use and for the EF command
+interceptor that makes the overlap itself fail deterministically on SQLite.
 
 ### Inventory.Infrastructure
 
@@ -1254,7 +1267,11 @@ projections, issue #302; the entity-shaped `ProductResponseMapper` they replaced
 `StockAdjustmentResponseMapper` (the stock-movement DTO projection, entity-shaped until issue #305)
 and `StockHistoryResponseMapper`. Those feed `Inventory.Application` results onto API-owned
 contracts at the HTTP boundary, which is where they belong - see the
-per-slice detail under [Backend migration track](#backend-migration-track).
+per-slice detail under [Backend migration track](#backend-migration-track). Beside them sits
+`FinancialFigureVisibility`, which is not a projection but the one argument two of them take: whether
+the current request may be shown the business's financial figures, resolved from
+`Inventory.Application.Access.CurrentCapabilities` and nothing else (issue #698, see
+[Machine and product financial redaction](#machine-and-product-financial-redaction-issue-698)).
 
 The `Persistence` half of this exception is closed. `Adapters/Export`
 and `Adapters/Nayax` went with issue #306, which moved the three adapters that needed no
@@ -1437,7 +1454,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Layering.** Claims parsing stays at the API boundary (`EntraActorIdentityAccessor`, the only implementation of the Application's `IAuthenticatedActorAccessor` port). `ICurrentBusinessProvider` is the Application-facing abstraction; `Inventory.Domain` and `Inventory.Application` never reference ASP.NET claims or principals. EF query filters and `SaveChanges` enforcement are persistence concerns and live with the `AppDbContext` adapter.
 
-**Per-request resolution.** `BusinessScopeMiddleware` runs after authentication and authorization and before the endpoint, resolves membership once, and publishes the answer into the request-scoped `BusinessScope`. The resolution is memoised in the request's own scope, so the capability policies that run earlier in the pipeline (see [Capability authorization](#capability-authorization-issue-525)) and this middleware read one membership lookup between them and cannot disagree about the caller's role. An authenticated caller with no usable membership gets `403` and never reaches an action; the response carries no detail about why, because telling an unrecognised caller whether a business exists is information they have not earned. `IBusinessScope` exists as a separate synchronous port because query filters and `SaveChanges` cannot await a membership lookup. Two endpoint markers, and only two, are eligible to proceed without a membership — the platform diagnostics surface of issue #336 and the account-state family of issue #523 — and a request that does carries the same *denied* scope, so neither reads business data; see [Platform diagnostics](#platform-diagnostics-issue-336) and [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523).
+**Per-request resolution.** `BusinessScopeMiddleware` runs after authentication and authorization and before the endpoint, resolves membership once, and publishes the answer into the request-scoped `BusinessScope`. The resolution is memoised in the request's own scope, so the capability policies that run earlier in the pipeline (see [Capability authorization](#capability-authorization-issue-525)) and this middleware read one membership lookup between them and cannot disagree about the caller's role. An authenticated caller with no usable membership gets `403` and never reaches an action; the response carries no detail about why, because telling an unrecognised caller whether a business exists is information they have not earned. `IBusinessScope` exists as a separate synchronous port because query filters and `SaveChanges` cannot await a membership lookup. Two endpoint markers, and only two, are eligible to proceed without a membership — the platform diagnostics surface of issue #336 and the account-state family of issue #523 — and a request that does carries the same *denied* scope, so neither reads business data; see [Platform diagnostics](#platform-diagnostics-issue-336) and [Account state and the membership-not-required marker](#account-state-and-the-membership-not-required-marker-issue-523). One other middleware takes part in a request that presents a support session, and it is deliberately the **outermost** one rather than another step beside this one: `SupportSessionAuditMiddleware` (issue #672) runs ahead of `UseExceptionHandler`, because the trail of what somebody from outside the business asked for has to include the attempts authorization refused above this middleware and has to record the status the exception handler finally mapped — see [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
 
 **One other way a business is resolved, and it is not a membership.** Since issue #551 a platform administrator who presents an active support session's id in the `X-Support-Session` header has that session's business published as `BusinessScopeState.SupportReadOnly` — the same business key the filters compare against, and nothing writable. It is the third documented exception to "the business comes only from the caller's membership", and it is not an exception to "never from request input": the header carries a session id, which is a credential, and the business is the one the server stored when the session started. Everything about it — how a request joins one, the read-only enforcement in three layers, the fixed capability set and the Nayax block — is in [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
 
@@ -1467,7 +1484,9 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 Ownership answers "whose data is this?". A role answers "what may this member do with it?", and that is again a separate question: every member of a business sees the same data, and the role decides which of it they may read and change.
 
-**Three roles, on the membership.** `BusinessMembership.Role` is a required `Inventory.Domain.Tenancy.BusinessRole` — `Operator`, `Manager` or `Owner` — stored as that constrained vocabulary's integer value. The values are spaced (`20`, `30`, `40`) so the read-only Viewer role #328 anticipates can be added below `Operator` without renumbering a value that is already persisted, and `0` is deliberately not a declared role, because `0` is what an unfilled integer column and a default-constructed enum both hold. Nothing compares two roles numerically.
+**Three roles, on the membership.** `BusinessMembership.Role` is a `required` `Inventory.Domain.Tenancy.BusinessRole` — `Operator`, `Manager` or `Owner` — stored as that constrained vocabulary's integer value. The values are spaced (`20`, `30`, `40`) so the read-only Viewer role #328 anticipates can be added below `Operator` without renumbering a value that is already persisted, and `0` is deliberately not a declared role, because `0` is what an unfilled integer column and a default-constructed enum both hold. Nothing compares two roles numerically.
+
+**A role is always explicit, and an omitted role grants nothing** (issue #679). The property has no default: `required` makes a creation path that states no role a compile error, so the invite redemption, the self-service application, `bootstrap-business` and the E2E fixture each say which role they mean. `IsActive` is `required` on the same terms — whether a membership grants anything at all is not a value a write should be able to leave unsaid. It used to default to `Owner`, the most privileged role in the business, which is the fail-open shape issue #584 removed from `Business.Status`: a creation path that said nothing got everything. The database half is `RemoveBusinessMembershipRoleOwnerDatabaseDefault`, which replaces the `DEFAULT 40` that `AddBusinessMembershipRole`'s backfill left behind with `DEFAULT 0` — a value no role is declared at — in four in-place statements (add, copy, drop, rename) that preserve every stored role and rebuild no table, the shape `RemoveBusinessStatusActiveDatabaseDefault` established. So an `INSERT` that never goes through EF and names no role now produces a membership that is denied rather than an Owner. `IsActive` needed no migration: that column has never carried a database default, so a row that states no activation fails its `NOT NULL` constraint outright. What the entity still cannot refuse is a *cast* undeclared role — `(BusinessRole)99` from inside the code — which is stored and then denied on every request by the policy below rather than refused on the way in; a `SaveChanges` enforcer for it, on `BusinessStatusEnforcer`'s pattern, is deliberately left to its own reviewed change.
 
 **An unknown stored role denies access.** `BusinessMembershipResolutionPolicy` checks the role of the membership that would otherwise have resolved, and a value this code does not declare — a hand-written `UPDATE`, or a role a newer deployment wrote — is denied as `RoleUnrecognised`. It is never read as the lowest declared role, which would grant access nobody recorded, and the adapter does not normalise it on read for the same reason. A membership denial still outranks it, so an operator investigating a refusal is shown the cause they can act on. The role is checked in the Domain policy rather than by a database CHECK constraint: SQLite cannot add one to an existing table without rebuilding it, and a value written by a future deployment has to fail closed in the policy anyway.
 
@@ -1479,13 +1498,15 @@ Ownership answers "whose data is this?". A role answers "what may this member do
 
 **`GET /api/me/access`** returns the caller's role, that role's capability names, and their business's name and time zone (issue #499). It takes no parameter of any kind and describes the caller alone: no other member, no other business, and no identifier for either. It carries the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and deliberately no capability requirement of its own — a member must be able to ask what they may do whatever role they hold. `GET /api/business/current` keeps its own contract (and since issue #525 requires `Dashboard.View`, which every role holds).
 
-**A role only ever arrives from a reviewed path.** `bootstrap-business` accepts an optional `Role` name per configured member, validated against the same vocabulary and defaulting to `Owner`; an unrecognised name refuses the whole run and writes nothing. Re-running never changes the role an existing member already holds, for the same reason it never resurrects a revoked approval. The additive migration backfilled every pre-existing membership to `Owner`, so no existing member's access changed. Changing a role afterwards is the Owner-only member management of issue #533, on one endpoint — `PUT /api/members/{membershipId}/role` — which accepts the role's published *name*, checked against this same vocabulary before anything is stored, and never a stored value; see [Member management](#member-management-list-role-revoke-and-reinstate-issue-533). That is still the only request path that writes a role onto a *membership*. One other path accepts a role from client input: creating an invite link (issue #531) records the role its redemption will grant, on the invite row rather than on a membership, and checks the submitted name against this same vocabulary in the same way — see [Invite links](#invite-links-create-list-and-cancel-issue-531). No endpoint anywhere accepts a stored role value.
+**A role only ever arrives from a reviewed path.** `bootstrap-business` accepts an optional `Role` name per configured member, validated against the same vocabulary and defaulting to `Owner` in the command's own options; an unrecognised name refuses the whole run and writes nothing. That default is the configuration's, not the entity's — the membership it writes always states a role (issue #679). Re-running never changes the role an existing member already holds, for the same reason it never resurrects a revoked approval. The additive migration backfilled every pre-existing membership to `Owner`, so no existing member's access changed. Changing a role afterwards is the Owner-only member management of issue #533, on one endpoint — `PUT /api/members/{membershipId}/role` — which accepts the role's published *name*, checked against this same vocabulary before anything is stored, and never a stored value; see [Member management](#member-management-list-role-revoke-and-reinstate-issue-533). That is still the only request path that writes a role onto a *membership*. One other path accepts a role from client input: creating an invite link (issue #531) records the role its redemption will grant, on the invite row rather than on a membership, and checks the submitted name against this same vocabulary in the same way — see [Invite links](#invite-links-create-list-and-cancel-issue-531). No endpoint anywhere accepts a stored role value.
 
 #### Capability authorization (issue #525)
 
-A role that nothing checks is a label. Issue #525 is where the capability table starts deciding requests: the everyday business endpoints declare the capability they need, and an architecture test stops a new endpoint from quietly defaulting to "every active member may call it". It is the first of #502's two enforcement slices; the Manager- and Owner-only controllers it deliberately left open are [issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526) below, and the dashboard's financial redaction — the one capability that decides part of a *response* rather than an endpoint — is [issue #527](#dashboard-financial-redaction-issue-527).
+A role that nothing checks is a label. Issue #525 is where the capability table starts deciding requests: the everyday business endpoints declare the capability they need, and an architecture test stops a new endpoint from quietly defaulting to "every active member may call it". It is the first of #502's two enforcement slices; the Manager- and Owner-only controllers it deliberately left open are [issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526) below, and the dashboard's financial redaction — the one capability that decides part of a *response* rather than an endpoint — is [issue #527](#dashboard-financial-redaction-issue-527), extended to the site endpoints by [issue #697](#site-financial-redaction-issue-697), to the machine and product responses by [issue #698](#machine-and-product-financial-redaction-issue-698), and swept across every remaining Operator-readable endpoint by [issue #700](#operator-readable-financial-disclosure-issue-700), which holds the endpoint-by-endpoint classification table and the standing guard behind all four.
 
-**Where it is enforced: the authorization middleware, from one table.** `InventoryApi.Auth.CapabilityPolicy` names one ASP.NET Core authorization policy per declared `Capability` (`Capability:Inventory.Operate`, and so on for all fifteen), `Program.cs` registers every one of them, and `BusinessCapabilityAuthorizationHandler` answers them all by asking `RoleCapabilities.Allows`. A controller or action declares one with `[RequireCapability(Capability.InventoryOperate)]`, which is an `AuthorizeAttribute` carrying that policy's name, so the decision is made by the authorization middleware before any action runs — not by a filter each controller has to remember, and not inside a use case. Every capability is registered even where no endpoint declares it yet, so #526 added attributes and nothing else, and the member-management issues will do the same. `Dashboard.ViewFinancials` is the one capability that is deliberately **not** an endpoint requirement: what a role without it may not see is two figures inside a response every role may request, which an `AuthorizeAttribute` cannot express — see [Dashboard financial redaction](#dashboard-financial-redaction-issue-527).
+**Where it is enforced: the authorization middleware, from one table.** `InventoryApi.Auth.CapabilityPolicy` names one ASP.NET Core authorization policy per declared `Capability` (`Capability:Inventory.Operate`, and so on for all fifteen), `Program.cs` registers every one of them, and `BusinessCapabilityAuthorizationHandler` answers them all by asking `RoleCapabilities.Allows`. A controller or action declares one with `[RequireCapability(Capability.InventoryOperate)]`, which is an `AuthorizeAttribute` carrying that policy's name, so the decision is made by the authorization middleware before any action runs — not by a filter each controller has to remember, and not inside a use case. Every capability is registered even where no endpoint declares it yet, so #526 added attributes and nothing else, and the member-management issues will do the same. `Dashboard.ViewFinancials` is the one capability that is deliberately **not** an endpoint requirement: what a role without it may not see is a handful of figures inside responses every role may request, which an `AuthorizeAttribute` cannot express — see [Dashboard financial redaction](#dashboard-financial-redaction-issue-527) and [Site financial redaction](#site-financial-redaction-issue-697).
+
+**`Dashboard.ViewFinancials` now also governs every revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699), not only the two figures #527 redacts in the Dashboard summary response. #699 itself is read on the frontend alone, from `AccessService.allows('Dashboard.ViewFinancials')` the same way every other hidden action in [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) is, and a page-level hide is not a boundary on its own. The endpoints behind it have since become a boundary of their own. The **site** endpoints, `GET /api/sites` and `GET /api/sites/{id}/products`, send `null` for the three site revenue figures and the estimated card profit to a caller without the capability ([issue #697](#site-financial-redaction-issue-697)). The **machine and product** endpoints, `GET /api/machines`, `GET /api/machines/{id}`, `GET /api/machines/{id}/products`, `GET /api/products`, `GET /api/products/{id}` and the low-stock list, withhold their figures the same way (issue #698, see [Machine and product financial redaction](#machine-and-product-financial-redaction-issue-698)). The **stock-movement and purchasing** endpoints — `GET`/`POST /api/products/{id}/stock`, `GET /api/stock-history`, the `api/purchases` reads and writes and the `api/supplierorders` reads and create — withhold a movement's `inventoryValueAfter` and a line's nested product `inventoryValue` (issue #700, see [Operator-readable financial disclosure](#operator-readable-financial-disclosure-issue-700), which also classifies every remaining Operator-readable endpoint). Unit cost and site/machine selling price are unaffected throughout and stay visible to every role, as are a purchase's own costs and totals.
 
 **Controllers reference capabilities, never roles.** Which roles hold a capability is `RoleCapabilities`'s single answer, and it is the same answer `GET /api/me/access` reports, so the API and the frontend's rendering decisions cannot disagree. An architecture test fails the build if any controller attribute names a `BusinessRole` at all.
 
@@ -1521,7 +1542,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Page | Endpoints | Capability | Operator | Manager | Owner |
 | --- | --- | --- | --- | --- | --- |
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
-| Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` | ✔ | ✔ | ✔ |
+| Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` **and** `Inventory.Operate` (issue #681) | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
 | Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Purchases, Supplier Orders, Suppliers | `api/purchases`, `api/supplierorders`, `api/suppliers` | `Purchasing.Operate` | ✔ | ✔ | ✔ |
@@ -1544,6 +1565,8 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Users (the page is issue #534, added by issue #533) | `api/members` (list), `api/members/{membershipId}/role`, `.../revoke`, `.../reinstate` | `Members.Manage` | ✘ | ✘ | ✔ |
 | Admin → Users (the page is issue #534, added by issue #531) | `api/members/invites` (create, list), `api/members/invites/{inviteId}/cancel` | `Members.Manage` | ✘ | ✘ | ✔ |
 
+Several of these endpoints additionally withhold a financial figure *inside* their response from a role without `Dashboard.ViewFinancials`, which is a separate decision from the capability above and is not expressible as an attribute. The table of which figure on which endpoint is in [Operator-readable financial disclosure](#operator-readable-financial-disclosure-issue-700) (issue #700), which classifies every Operator-readable endpoint in one place rather than per row here.
+
 The table's `Business.Manage` row was added by issue #548, which is the first endpoint to declare `Business.Manage`: the capability existed in the one role → capability table from issue #521 and nothing required it until an Owner could change the business record. Its read shares its write's capability, as the next paragraph's rule says a read normally does — the settings read reports the business's contact address, ABN and GST registration, which is the business's own tax and contact detail rather than anything a page needs to render. It is nevertheless one of the two rows whose controller holds a second, weaker rule: `GET api/business/current` on the same `BusinessController` keeps `Dashboard.View`, so both are declared per action and neither inherits the other. See [Business settings API](#business-settings-api-issue-548).
 
 The other is `NayaxConnectionController` since issue #537: its test, save and re-test actions declare `Integration.Manage` and its status read declares `Dashboard.View`, each on the action, because the connection banners every member sees have to be able to ask whether Nayax is working (see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537)). Both controllers are the same shape and the same reason: because requirements accumulate, a controller-level capability beside a weaker action-level one would silently require both, so where one controller's actions genuinely differ, every action declares its own.
@@ -1552,9 +1575,15 @@ The other is `NayaxConnectionController` since issue #537: its test, save and re
 
 **A preview is as restricted as its apply.** All five repair controllers put `Data.Repair` on the controller, covering preview, dry run, history read and apply alike. A preview reads exactly the financial history its apply rewrites and returns the fingerprint or plan id the apply is authorised by, and on `api/sale-costing` the only difference between projecting the change and writing it is a `dryRun` flag. Restricting the apply while leaving the preview open would restrict nothing anybody cares about and hand every member the business's costing ledger. `EndpointAuthorizationClassificationTests.Every_action_of_a_repair_controller_requires_only_the_data_repair_capability` pins that none of them drifts onto a weaker capability later.
 
-**The two endpoints no page owns, and the reviewed reasoning for each.** Issue #526 says `NayaxSalesSyncController` and `DataQualityController` follow the page that calls them:
+**The endpoints no page owns, and the reviewed reasoning for each.** Issue #526 says `NayaxSalesSyncController` and `DataQualityController` follow the page that calls them; issue #681 added the third entry, an action whose own page stopped calling it:
 
-- `POST api/nayax-sales-sync` → **`Dashboard.View`**. The home Dashboard calls it on load, before Sites and Machines, so both sections calculate from one freshness boundary (issue #187). `Imports.Run` would leave an Operator's Dashboard refreshing nothing and reporting stale sales on every visit — the page broken for them rather than a decision anybody made. It surfaces no figure the Dashboard does not already show, and redacting those figures by role is [issue #527](#dashboard-financial-redaction-issue-527) below.
+- `POST api/nayax-sales-sync` → **`Dashboard.View`**, and since issue #681 **`Inventory.Operate`** as well. The home Dashboard calls it on load, before Sites and Machines, so both sections calculate from one freshness boundary (issue #187). `Imports.Run` would leave an Operator's Dashboard refreshing nothing and reporting stale sales on every visit — the page broken for them rather than a decision anybody made. It surfaces no figure the Dashboard does not already show, and redacting those figures by role is [issue #527](#dashboard-financial-redaction-issue-527) below.
+
+  The second capability is there because **this endpoint writes**: it persists imported sales and rebuilds inventory costs for the products a completed sale touched. `Dashboard.View` is the read capability every role holds, including any future read-only role #328 anticipates (the Viewer), so an endpoint that writes under it alone is a hole waiting for that role to exist. `Inventory.Operate` is the capability declared because the write is an inventory one — the same capability Sync Restock's write carries — and because every role in the matrix that holds `Dashboard.View` also holds it, so **no current role's sync access changes**. Requirements accumulate, so the declaration narrows and never widens.
+
+  It is also **rate-limited per business** since issue #681: `Inventory.Application.SalesSync.NayaxSalesSyncRateLimiter` allows ten runs per business per two minutes, claimed before the first Nayax call, and a refused run answers `429` with `Retry-After` and reaches neither Nayax nor the database. One run is one Nayax request per machine plus one, and the Dashboard triggers one per load — which a browser repeats on every visit, back-navigation and refresh — so this was the most expensive call in the application and the easiest to repeat, with nothing bounding either the requests against someone else's API or the write amplification in this one. The limit is per business rather than per actor for the reason the connection test's is: what it protects is the business's own Nayax account and its own rows. The window is kept in memory, like every other limiter here (docs § SQLite operating assumptions). Because the allowance is the business's, members opening the Dashboard together share it: ten simultaneous loads all synchronize (`NayaxSalesSyncControllerTests`), and a load past that is refused. A refusal proves the business started runs inside the last two minutes, so the Dashboard loads its persisted figures and says they were refreshed in the last couple of minutes, not that synchronization failed (`isSalesSyncRecentlyRefreshed`); any other error still shows the not-synchronized warning. The `429` body names no wait and points at `Retry-After`, because the wait can be up to the whole window.
+
+- `GET api/products/inventory-value-summary` → **`Inventory.Operate` and `Dashboard.ViewFinancials`** (issue #681). It is an action on `ProductsController`, so it carries the catalogue's own capability; the second one is declared on the action. The endpoint reports the exact value of the business's inventory at cost, broken down — the figure [issue #527](#dashboard-financial-redaction-issue-527) omits from the dashboard response entirely for a role without `Dashboard.ViewFinancials`, today an Operator. On the catalogue's capability alone, that redaction was a presentation detail rather than a boundary: an Operator could read the number directly. No page calls this endpoint (`ProductService.getInventoryValuationSummary` has no caller since the dashboard stopped using it), so it was gated rather than removed — gating preserves the API contract, which AGENTS.md § Architecture rules asks for, while removing it would be a breaking change for a caller nobody has surveyed. A Manager and an Owner hold both capabilities and are unaffected; an Operator gets the ordinary bare `403`. Gating this one action left the figure reachable by summing the catalogue's own `inventoryValue`, which is what [issue #698](#machine-and-product-financial-redaction-issue-698) closed, along with the machine endpoints' revenue, profit and profitability-status figures: those endpoints stay on `Inventory.Operate` for every role, because an Operator restocks from them, and only the figures inside the response are withheld. [Issue #700](#operator-readable-financial-disclosure-issue-700) closed the last two routes to the same figure — a stock movement's `inventoryValueAfter` and the catalogue snapshot nested in a purchase or supplier-order line — and audited every other Operator-readable endpoint for one.
 - `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
 
 **What an Operator and a Manager lose, and when.** An Operator can no longer reach expenses, any report or export, the imports, the site commission surface, the Nayax fee rates, the catalogue reconciliation or any repair. A Manager additionally cannot reach the Nayax fee rates, the catalogue reconciliation or any repair — a Manager may read a report whose underlying fee rate only an Owner may change, which is the agreed table and not a defect. Routes, verbs, request shapes and success responses are unchanged; the only new answer is the bare `403` an under-privileged caller receives. Every member of the one live business is an `Owner`, so nothing anybody reaches changes until non-Owner roles are assigned.
@@ -1567,7 +1596,7 @@ The other is `NayaxConnectionController` since issue #537: its test, save and re
 
 #### Dashboard financial redaction (issue #527)
 
-Everything above decides whether a request is answered at all. `Dashboard.ViewFinancials` is the one capability that decides part of a *response*, and issue #527 is where it starts doing so: `GET /api/dashboard/summary` sent every member the week's sales and the inventory valuation, and the Dashboard is the landing page, so every role holds `Dashboard.View` and must keep reaching it. What an Operator may not see is two figures inside the body, which an endpoint attribute cannot express.
+Everything above decides whether a request is answered at all. `Dashboard.ViewFinancials` is the one capability that decides part of a *response*, and issue #527 is where it starts doing so: `GET /api/dashboard/summary` sent every member the week's sales and the inventory valuation, and the Dashboard is the landing page, so every role holds `Dashboard.View` and must keep reaching it. What an Operator may not see is two figures inside the body, which an endpoint attribute cannot express. [Issue #697](#site-financial-redaction-issue-697) applies the same decision to the site endpoints, [#698](#machine-and-product-financial-redaction-issue-698) to the machine and product ones, and [#700](#operator-readable-financial-disclosure-issue-700) to everything else an Operator can reach; everything below is about the Dashboard summary alone.
 
 **Two published shapes, and the role picks one.** The summary now returns `Inventory.Application.Dashboard.IDashboardSummaryDto`, the union of exactly two types:
 
@@ -1590,6 +1619,86 @@ Nothing else differs: `asOfUtc`, `businessDate`, the refill and ordering cards a
 
 **What proves this slice.** `DashboardSummaryRedactionApiTests` (the exact serialized property sets through the real request pipeline and the real migration history, with three members of one business holding the three roles over one seeded fleet, catalogue and completed sale: an Operator's top-level and `inventory` sets, that neither property name nor either figure appears anywhere in their body, the full sets plus the seeded valuation for a Manager and an Owner, and an Operator's remaining figures matching a Manager's value for value) and `GetDashboardSummaryRedactionTests` (the decision over a fixed clock, with the roles written out literally from #328's table: the redacted shape for an Operator, zero calls to the sales port and no period handed to it, the non-financial figures identical to an Owner's, the incomplete-valuation flag and unknown-cost count surviving redaction, every figure for a Manager and an Owner, and every denial reason refused with nothing read). `GetDashboardSummaryTenancyTests` additionally covers, relationally, that an unresolved membership reads neither the sales, the catalogue nor the fleet.
 
+#### Site financial redaction (issue #697)
+
+Issue #527 above is the pattern; issue #697 is the same decision applied to the second surface that sent every member a financial figure. `SitesController` is gated by `Inventory.Operate`, which an Operator holds — stocking and pricing a site is day-to-day inventory work, and the page is how a person stocking machines reads what is in them — so `GET /api/sites` sent every member each site's `todayRevenue`, `currentWeekRevenue` and `previousComparableWeekRevenue`, and `GET /api/sites/{id}/products` sent them each product's `estimatedCardProfit`. The frontend-only hide of [issue #699](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) kept those figures off the page but left them in the raw response, which is not a boundary; this slice is the boundary.
+
+**What is withheld, and what deliberately is not.** The recorded decision (Cristhyan, 15 October 2026) is that `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure — and that **unit cost and selling price are not among them**. So `averageUnitCost` and `sitePrice` stay visible to every role, together with stock, `maxStock`, the MDB codes, the machine count and the low/empty alert counts, and only the four amounts below change:
+
+| Caller | `GET /api/sites` per row | `GET /api/sites/{id}/products` per row |
+| --- | --- | --- |
+| Role grants `Dashboard.ViewFinancials` (Manager, Owner), or a support session | `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue` as calculated (unchanged) | `estimatedCardProfit` as calculated (unchanged) |
+| Role does not (Operator) | all three `null` | `estimatedCardProfit` `null` |
+
+**A withheld figure is `null`, and never `0`.** `0` would be a financial statement about the business and a false one: a site that took no card payment today genuinely reports `0` to a caller who may see it, so the two had to stay distinguishable and `null` is what means "not yours to see". This is deliberately *not* #527's two-types-per-shape treatment, for a reason that is about the contract rather than taste: both site endpoints return a JSON **array**, and MVC serializes each element by its declared element type, so a union of two record types inside a `List<T>` would either lose the extra properties or need a `$type` discriminator on the wire. The fields are therefore nullable on the one published `SiteSummaryDto`/`SiteProductDto`, which is what the issue's migration note specifies and what the frontend already accepts — #699 made every site revenue and profit field optional and nullable in `models.ts` and made every template show "Unavailable" rather than `$0.00` or `NaN`, which is why #699 had to merge first. `estimatedCardProfit` was already nullable for an estimate that could not be made (no priced mapping, no cost basis, no effective fee rate, ambiguous commission configuration), so for that one field `null` now carries two meanings; the page never shows the difference, because a role that may not see the estimate is shown no column at all.
+
+**The figures are not calculated for a caller who may not see them.** `GetSiteSummaries` does not call `ISiteFactsStore.GetRecentCompletedSalesAsync` for such a request — there is no completed-sales query in it, so nothing is read and then dropped. `GetSiteProducts` does not call `ResolveCardCommissionAsync` or `ResolveEffectiveFeeExGstAsync`, the two reads that exist only to produce the estimate; it still reads the cost basis, because the unit cost that read carries is not withheld. `SiteProductPricingPolicy` is unchanged and is told it has no commission configuration, which is true, and the estimate is *also* withheld explicitly in the projection, so a later change to how the policy treats a missing input cannot turn a withheld figure into a published one.
+
+**The decision is made in the use cases, from the one capability table.** As in #527, this is the deliberate exception to "capabilities are decided by the authorization middleware": what it decides is which facts are *read*, so it belongs where the reading happens. Both use cases resolve it through `Inventory.Application.Access.CurrentCapabilities` — `RoleCapabilities` for a member, from the request's memoised membership resolution, and `SupportSessionAccessPolicy`'s fixed set for a support session — before any Nayax or facts-store call, which is also what keeps it off the scoped `AppDbContext` while another read is in flight (issue #313's one-operation-at-a-time constraint). No role name appears in either decision. It fails closed: a caller whose membership does not resolve is refused with `BusinessAccessDeniedException` before anything is read, rather than being treated as the least-privileged role — unreachable through the endpoints, whose `Inventory.Operate` policy refuses them first.
+
+**A support session sees the figures**, because `SupportSessionAccessPolicy`'s written-out set grants `Dashboard.ViewFinancials` (see [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551)). That is read through the same `CurrentCapabilities` rather than assumed, so a session's access cannot drift from what `GET /api/me/access` reported it.
+
+**Nothing else changed.** `SitesController` keeps `[RequireCapability(Capability.InventoryOperate)]` exactly as #525 left it and returns what the use cases built; `SiteResponseMapper` copies the `null` through and substitutes nothing; no endpoint's authorization class changed and nothing was added to `EndpointAuthorizationClassificationTests`; there is no schema change. The machine and product endpoints are **not** in this slice — they are [issue #698](#machine-and-product-financial-redaction-issue-698), below — and neither is the wider audit, which is [issue #700](#operator-readable-financial-disclosure-issue-700); unit cost and price, renaming the capability and the role/capability matrix are outside all of them.
+
+**What proves this slice.** `SiteFinancialRedactionApiTests` (the raw JSON through the real request pipeline and the real migration history, with three members of one business holding the three roles on a fixed clock over one seeded fleet, catalogue, commission agreement, fee rate and pair of completed sales: an Operator's three site revenue properties and estimated card profit all `JsonValueKind.Null` while unit cost and site price carry their numbers, none of the restricted amounts appearing anywhere in either of their response bodies, every revenue figure and the estimate present for a Manager and an Owner — including a non-zero previous comparable week, which is what makes the Operator's `null` a withheld figure rather than an empty period — and every other property of both responses byte-for-byte a Manager's) and `SiteFinancialRedactionTests` (the decision and the reads it avoids over a fixed clock, with the roles written out literally from #328's table: the withheld figures for an Operator, the recorded port trace showing no completed-sales, commission or fee read for them, the figures and the full trace for a Manager and an Owner, an Operator's remaining figures matching an Owner's, a support session given both figures with no role, and an unresolved membership refused with nothing read at all).
+
+#### Machine and product financial redaction (issue #698)
+
+#527 above redacts the Dashboard summary, and #681 closed `GET /api/products/inventory-value-summary`. The machine and product endpoints were the way back to both figures: `GET /api/machines` and `GET /api/machines/{id}` carry six periods of gross revenue, the six matching direct-profit figures and `profitabilityStatus`, and `GET /api/products`, `GET /api/products/{id}`, `GET /api/products/alerts/low-stock` and `GET /api/machines/{id}/products` carry each product's `inventoryValue`, which sums to the valuation the Dashboard withholds. All of them are gated on `Inventory.Operate`, which an Operator holds — correctly, because restocking machines is exactly what they are for. Issue #698 therefore withholds the figures and keeps the endpoints.
+
+**The recorded decision (Cristhyan, 15 October 2026).** `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure. **Unit cost (`averageUnitCost`, `unitPrice`) and selling price (`machinePrice` and the slot's `suggestedNetValue`/`suggestedPriceValue`) stay visible to an Operator**, who needs them to restock and to price a slot. `costingQuantity` is a quantity, not a value, and stays too.
+
+**Withheld is `null` here, not absent.** This is the deliberate difference from #527, and it is the API contract change the issue approved: `MachineResponse`'s six gross-revenue fields became nullable, and the restricted fields are serialized as explicit `null`. #527 could remove its two properties because one of them was a whole object and the other had no "withheld" meaning to confuse; here the keys are the ones every machine and product client binds to, and thirteen disappearing keys on one response would be a far larger break than a nullable figure. `null` is already how both responses say "unavailable" for profit and for an incomplete inventory valuation, which is why the frontend already renders it (issue #699, merged first). What must never happen is `0`: a withheld revenue arriving as zero is a false financial statement about the business, so the redacted projection writes every withheld figure out rather than letting a default supply one.
+
+**One decision per request, from the one capability service.** `InventoryApi.Adapters.Mapping.FinancialFigureVisibility` is the two-valued answer — `Visible` or `Redacted`, with `Redacted` as the enum's zero so an undecided projection fails closed — and `CurrentCapabilities.ForCurrentRequestAsync` is the only thing that produces it, by asking `Inventory.Application.Access.CurrentCapabilities` for `Dashboard.ViewFinancials`. That is the same service the Dashboard summary, the capability policies and `GET /api/me/access` read, so what these endpoints withhold cannot drift from what the rest of the application says the caller may see, and no role name appears anywhere in the change. A support session needs no rule of its own for the same reason: `SupportSessionAccessPolicy`'s fixed set grants the capability, so a read-only support request is answered the full figures, exactly as its capability set says.
+
+**The mappers own the two projections, and every call site must choose one.** `MachineResponseMapper.ToResponse` and `ProductRecordResponseMapper.ToResponse` take the visibility as a required argument rather than offering a figure-carrying default, so a new call site cannot publish the figures by forgetting to ask. The machine mapper's redacted projection states all thirteen `null`s explicitly, which is what makes a revenue or profit field added later a decision rather than an omission. `MachinesController` and `ProductsController` resolve the visibility once per request and hand it to the mapper; they strip and recompute nothing, no use case changed, and no endpoint's authorization class changed, so nothing was added to `EndpointAuthorizationClassificationTests`.
+
+**Why at the mapping boundary rather than in the use case.** #527 decides in `GetDashboardSummary` because it decides what is *read* — a redacted caller makes no week-to-date query at all. Here the figures are not a separate read: a machine's revenue comes from the same per-machine facts query its dashboard assembly needs, and `inventoryValue` is a column of the catalogue row the restocking figures live on. There is nothing to avoid reading, so the decision belongs where the response is shaped, and the Application layer keeps one answer per machine and product for every caller.
+
+**What this does not cover, and where it was closed.** `ProductResponse.stockAdjustments` still carried each movement's `unitCost`, `totalCost`, `averageUnitCostAfter` and `inventoryValueAfter` after this slice, so the most recent movement still disclosed an inventory value at cost to an Operator who read a single product. That was deliberately out of #698's scope — stock-adjustment, purchase and supplier-order responses are audited together by #700 — and `inventoryValueAfter` is now withheld everywhere it appears by [issue #700](#operator-readable-financial-disclosure-issue-700), below, which also found and closed the nested catalogue snapshot a purchase line and a supplier-order line carry. The movement's own `unitCost`, `totalCost` and `averageUnitCostAfter` stay visible by the recorded decision. The site endpoints are [issue #697](#site-financial-redaction-issue-697), above.
+
+**What proves this slice.** `MachineAndProductFinancialRedactionApiTests` (the raw JSON through the real request pipeline and the real migration history, with three members of one business holding the three roles over one seeded fleet, catalogue, fee rate and pair of sales, and a pinned clock so the business day, week and month the figures are summed over are fixed: every restricted field `null` for an Operator on the machine list, both machine details, the machine product list and the product list and detail; the real revenue, a real direct profit and the real profitability status for a Manager and an Owner, including a genuine `0` on a period with no sale, so a withheld figure is distinguishable from an empty one; no seeded figure appearing anywhere in an Operator's body under any name; and every other key of every response value-for-value a Manager's) and, at the mapper, `MachineJsonContractTests` (the redacted machine projection keeping all seventeen keys in order with the thirteen figures `null` and identity intact, and the redacted product projection withholding `inventoryValue` alone while unit cost, catalogue price and the slot price are untouched). The existing byte-for-byte contract tests now pin the `Visible` projection explicitly, which is what asserts a Manager's and an Owner's response is unchanged.
+
+#### Operator-readable financial disclosure (issue #700)
+
+#527, #697 and #698 each closed one surface. Issue #700 is the sweep that asks whether any surface is left, and it is the last of the four: it audits **every** endpoint a role without `Dashboard.ViewFinancials` can reach — read from the capability policies themselves rather than from a list somebody wrote — classifies each restricted figure on each one, closes what was still open, and leaves a standing guard so the next such figure is a decision rather than an omission.
+
+**The recorded decision (Cristhyan, 15 October 2026), which the whole audit is measured against.** `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure. **Unit cost and selling price stay visible to an Operator**, and so do **a purchase's own line costs and totals** — they are purchasing data an Operator enters, and a role that may record a purchase but not read back what it cost would be unable to check its own work.
+
+**The audit, endpoint by endpoint.** Every row is an endpoint an Operator holds the capability for. "Already safe" means the response carries no restricted figure at all — quantities, identities, outcomes, unit costs and prices only.
+
+| Capability | Endpoints | Restricted figures returned | Outcome |
+| --- | --- | --- | --- |
+| `Dashboard.View` | `GET api/dashboard/summary` | `salesThisWeek` (and its `sales`/`comparisonSales`), `inventory.inventoryValueAtCost` | Withheld by [#527](#dashboard-financial-redaction-issue-527) — the property is **absent** from the redacted shape, and the week's sales are not read |
+| `Dashboard.View` | `GET api/business/current`, `GET api/settings/nayax-connection/status` | none | Already safe |
+| `Dashboard.View` + `Inventory.Operate` | `POST api/nayax-sales-sync` | none — `204`, or `429` with `Retry-After` | Already safe |
+| `PickList.View` | `GET api/pick-list` | none — storage quantity, target, quantity to pick and MDB codes | Already safe |
+| `Inventory.Operate` | `GET api/products`, `GET api/products/{id}`, `GET api/products/alerts/low-stock`, `GET api/machines/{id}/products` | `inventoryValue`; and, nested in `stockAdjustments`, each movement's `inventoryValueAfter` | `inventoryValue` withheld by [#698](#machine-and-product-financial-redaction-issue-698); `inventoryValueAfter` **redacted here** |
+| `Inventory.Operate` | `GET api/machines`, `GET api/machines/{id}` | six periods' gross revenue, six direct-profit figures, `profitabilityStatus` | Withheld by [#698](#machine-and-product-financial-redaction-issue-698) |
+| `Inventory.Operate` | `GET api/sites`, `GET api/sites/{id}/products` | `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`; `estimatedCardProfit` | Withheld by [#697](#site-financial-redaction-issue-697) |
+| `Inventory.Operate` | `GET api/products/{productId}/stock`, `POST api/products/{productId}/stock` | each movement's `inventoryValueAfter` | **Redacted here** |
+| `Inventory.Operate` | `GET api/stock-history` | each movement's `inventoryValueAfter` | **Redacted here** |
+| `Inventory.Operate` | `GET api/products/{id}/price-history`, `GET api/products/{productId}/stock/restock-cost-suggestion` | none — supplier unit costs and the suggested restock unit cost | Already safe (unit cost, kept visible by the decision) |
+| `Inventory.Operate` | `GET api/categories`, `GET api/categories/{id}`, `POST api/products/{productId}/inventory-count/apply`, `GET`/`PUT api/products/{id}/gst-rule`, `PUT`/`DELETE api/products/{id}` | none | Already safe |
+| `Inventory.Operate` | `POST api/machines/{id}/sync-restock` and its `apply`/`resolve-duplicate`/`resolve-manual` actions, `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts` | none — machine-stock quantities, discrepancies and per-event outcomes | Already safe |
+| `Purchasing.Operate` | `GET api/purchases`, `GET api/purchases/{id}`, `POST api/purchases`, `PUT api/purchases/{id}` | each line's nested product `inventoryValue` | **Redacted here**. The purchase's own `totalAmount`, `deliveryCost`, `packageCost`, line `unitCost`, `lineTotal` and the input-GST block stay visible by the decision |
+| `Purchasing.Operate` | `GET api/supplierorders`, `GET api/supplierorders/{id}`, `POST api/supplierorders` | each line's nested product `inventoryValue` | **Redacted here**. `quantityOrdered`, `quantityReceived`, `unitPrice` and `outstandingQuantity` stay visible |
+| `Purchasing.Operate` | `GET api/purchases/{id}/file`, `DELETE api/purchases/{id}`, `POST api/supplierorders/{id}/cancel`, the whole of `api/suppliers` including `GET .../gst-defaults` | none — a stored document stream, status codes, supplier contact detail and GST classifications | Already safe |
+| *(none — reachable by any signed-in caller)* | `GET api/me/access`, `GET api/me/account-state`, `POST api/invites/redeem`, `POST api/onboarding/business-applications` | none | Already safe |
+
+Nothing was deferred: the audit found no leak that needed a frontend change or a contract decision, so no follow-up issue was filed under #328 for one. The two figures it closes were already nullable on every one of these responses and already optional in the frontend's `models.ts` (`StockAdjustment.inventoryValueAfter`, `StockHistoryEntry.inventoryValueAfter`, `Product.inventoryValue`), and no component renders a movement's inventory value at all, so there was no `$0.00`/`NaN` rendering to fix first the way #699 had to precede #697.
+
+**What is withheld here, and why these two figures and not their neighbours.** `inventoryValueAfter` is the business's inventory value at cost immediately *after* a movement — so the latest movement's value **is** the current valuation, the figure #527 omits from the Dashboard, #681 refuses on `inventory-value-summary` and #698 removed from the catalogue column. Publishing the movement history beside a withheld column withheld nothing. The nested product on a purchase line and a supplier-order line is the same `ProductResponse` the catalogue serves, so it carried the same `inventoryValue` #698 withheld there — the valuation was readable by listing purchases or outstanding orders instead. The movement's own `unitCost`, `totalCost` and `averageUnitCostAfter` are deliberately **not** withheld: the first two are what the restock cost and the third is a unit cost, all three are what the recorded decision keeps, and an Operator who records a restock has to be able to read back what they recorded.
+
+**`null`, never `0`, and never a dropped key.** Both figures were already nullable, and `null` is already how both responses say "this movement bore no cost" or "this product has no valuation yet". `0` would be a financial statement about the business and a false one. One expression owns that rule for every mapper that withholds an amount — `FinancialFigureVisibilityResolution.Withhold` — so the never-zero decision is written once rather than per response type.
+
+**One decision per request, from the one capability service, at the mapping boundary.** This follows #698 rather than #527: `InventoryApi.Adapters.Mapping.FinancialFigureVisibility` is the two-valued answer with `Redacted` as the enum's zero, and `CurrentCapabilities.ForCurrentRequestAsync` is the only thing that produces it, by asking `Inventory.Application.Access.CurrentCapabilities` for `Dashboard.ViewFinancials`. `StockController`, `StockHistoryController`, `PurchasesController` and `SupplierOrdersController` resolve it once per request and hand it to the mapper; they strip and recompute nothing, no use case changed, no endpoint's authorization class changed, and nothing was added to `EndpointAuthorizationClassificationTests`. The mapping boundary is right here for #698's reason: neither figure is a separate read — `inventoryValueAfter` is a column of the movement row the history is, and the nested product is a navigation the purchase read already loaded — so there is nothing to avoid reading, and the Application layer keeps one answer for every caller. `StockAdjustmentResponseMapper.ToResponse`, `StockHistoryResponseMapper.ToResponse`, `PurchaseResponseMapper.ToResponse` and `SupplierOrderResponseMapper.ToResponse` all take the visibility as a **required** argument, so a new call site cannot publish a figure by forgetting to ask, and a support session needs no rule of its own: its fixed capability set grants `Dashboard.ViewFinancials`, read through the same service.
+
+**The standing guard, which is the part that outlives the sweep.** `OperatorReadableFinancialFigureTests` (`backend/Inventory.IntegrationTests/Architecture/`) walks the response type of every Operator-readable endpoint — resolved by comparing each endpoint's declared `[RequireCapability]` attributes against `RoleCapabilities.For(Operator)`, plus the two endpoint classes that declare no capability — collects every property whose name contains `revenue`, `profit`, `margin`, `inventoryvalue`, `valuation` or `sales`, and asserts the result equals a maintained list in which each entry records its outcome and the reason for it. A new revenue, profit, margin, sales or inventory-value property anywhere in that type graph fails the build until the same pull request decides what happens to it; an entry for a property that no longer exists fails too, so the list stays an audit rather than accumulating. Three further facts keep the guard honest about its own reach: the Operator-readable endpoints whose payload reflection cannot inspect (an `IActionResult` returning a status code, a `ProblemDetails` or the purchase's stored document) are a separately reviewed list rather than a silent skip; the scan is asserted to be taken over exactly the four capabilities #328's table gives an Operator, so narrowing that table cannot quietly narrow the scan; and the walk is asserted to reach the endpoints at all, so a reflection change that matched nothing would fail rather than pass. It is an allow-list of **names**: it cannot prove a figure is withheld at runtime, which is what the four per-surface API tests do.
+
+**What proves this slice.** `StockAndPurchasingFinancialRedactionApiTests` (the raw JSON through the real request pipeline and the real migration history, with three members of one business holding the three roles over one seeded catalogue, movement, purchase and supplier order: `inventoryValueAfter` `null` for an Operator on the product detail's nested history, both stock endpoints — the `POST` included, because recording a restock answers the movement that was created — and the global history page; the nested product's `inventoryValue` `null` on the purchase list and detail and the supplier-order list and detail; the real figures for a Manager and an Owner on all five, which is what makes the Operator's `null` a withheld figure rather than an empty one; the movement's own unit cost, total cost and resulting average unit cost, and the purchase's own line cost, extended total and invoice total, carrying their values throughout; whole-body comparison of each read response against a Manager's with the withheld figures replaced by `null`, which asserts every key, its order and every nested value at once; and neither seeded value appearing anywhere in any of seven Operator bodies under any name), `OperatorReadableFinancialFigureTests` as described above, and at the mapper the three byte-for-byte contract suites — `StockAdjustmentResponseJsonContractTests`, `PurchaseResponseJsonContractTests` and `SupplierOrderJsonContractTests` — which now pin the `Visible` projection explicitly, so a Manager's and an Owner's response is asserted unchanged, and each add one test for the redacted projection withholding its single figure with every other key and value intact.
+
 #### One active membership per identity (issue #522)
 
 A person belongs to one business at a time. That was always the resolution rule — `BusinessMembershipResolutionPolicy` denies an actor holding two active memberships *every* business rather than choosing one — but until this slice it was only the resolution rule: the schema allowed the state, and the person found out at their next sign-in, locked out of both businesses at once. Issue #522 moves the rule to where the membership is granted, so the write is refused instead.
@@ -1604,9 +1713,11 @@ A person belongs to one business at a time. That was always the resolution rule 
 
 **`Inventory.Application.Tenancy.MembershipWriteGuard` is the one write path**, and every operation that creates, reactivates or deactivates a membership or changes a role goes through it — the invite redemption, reinstatement, revocation and role change of #504, the self-service business application of #507/#541, and the approval and rejection of #509. It opens a SQLite `BEGIN IMMEDIATE` transaction, re-checks eligibility *inside* it, runs the operation's own write, re-reads the business and checks the Owner rule on the state that write left behind, and commits only then; a refusal rolls the write back with the transaction. The authoritative read, the rule and the mutation are deliberately one operation, because a check-then-write rule that is not serialised is not a rule: two simultaneous requests otherwise both read "no active membership", or both read "there is another Owner", and both write. `BEGIN IMMEDIATE` rather than the default deferred transaction is the whole point — a deferred transaction takes its write lock at the first write, which is after the check it is supposed to protect. The guard writes no row itself: what belongs in a membership row is the calling operation's business, what must be true around it is the guard's, and an operation declares which rules apply through `MembershipWriteIntent` rather than having them inferred from the rows it changed.
 
-**One refusal, one status code.** Both rules refuse with `DomainConflictException` carrying a fixed Domain message, which the API boundary's `DomainExceptionHandler` publishes verbatim as `409 Conflict` (see [Domain and application error mapping](#domain-and-application-error-mapping)): "This person is already a member of a business." and "A business must keep at least one active Owner. Give another member the Owner role first." Neither names another business, member or role — a person told they may not join is not thereby entitled to know which business they already belong to. The filtered index refusing a write becomes the same first message rather than an unexplained `500`: `EfBusinessMembershipWriteStore` recognises that one constraint violation (told apart from the per-`(actor, business)` index by the `BusinessId` that index also names) and nothing else, so every other database failure keeps propagating untranslated, and the SQLite exception type never crosses into the Application layer.
+**The guard also re-checks that the business is still trading, and that is why three non-membership writes run through it (issue #680).** An intent may name a `BusinessThatMustStillBeActive`; when it does, the guard re-reads that business's stored lifecycle status **inside** the same `BEGIN IMMEDIATE` transaction, *before* the write, and `Inventory.Domain.Tenancy.ActiveBusinessWritePolicy` refuses anything but `Active` — a deactivated business, a pending or rejected one, an unfilled column reading `0`, a value a newer deployment wrote, and a business row that is not there at all. The reason is the same check-then-write reason as the two membership rules, with the state being something other than a membership: an Owner's request carries the business id `BusinessScopeMiddleware` resolved *when the request arrived*, so a write already in flight when the Super Admin's deactivation commits would otherwise land on a business that has been switched off. The invite is the case with teeth — a `Pending` seven-day invite committed onto a deactivated business is redeemable again the moment the business is reactivated, which is exactly the way back in that cancelling every live invite on deactivation exists to close (see [Deactivating, reactivating and releasing members](#deactivating-reactivating-and-releasing-members-issue-545)) — and a reinstatement in flight is the lower-impact one, which could re-activate a membership the Super Admin had just released. The three callers that declare it are the Owner's invite creation (#531), business settings save (#548) and member changes (#533); the lifecycle actions themselves deliberately do not, since a deactivation or reactivation whose own subject is the status would refuse itself. The status read is the port's third read (`IBusinessMembershipWriteStore.FindBusinessStatusAsync`, one projection of `Businesses` by primary key) and returns the stored value uninterpreted, so the Domain rule rather than an adapter decides what an undeclared state means.
 
-**What calls the guard.** Issue #522 provides the index, the rules and the write path. Its callers today are the Owner-only member management of issue #533 — the role change, the revocation and the reinstatement, see [Member management](#member-management-list-role-revoke-and-reinstate-issue-533) — the invite redemption of issue #532, which is the **first request path that creates a membership at all** (see [Invite redemption](#invite-redemption-issue-532)), the self-service business application of issue #541, which is the first path that creates a **business** (see [Self-service business application](#self-service-business-application-issue-541)), the Super Admin's approval and rejection of issue #544, which is the first *platform-admin* caller of the guard and the one that uses the exclusion (see [Super Admin businesses API](#super-admin-businesses-api-issue-544)), and the Super Admin's deactivation, reactivation and member release of issue #545, which are the callers that declare the **empty** intent — none of them activates a membership, and a release must not be subject to the guard's Owner rule at all (see [Deactivating, reactivating and releasing members](#deactivating-reactivating-and-releasing-members-issue-545)). `bootstrap-business` and the end-to-end fixture remain the only *other* paths that create one, and all of them stamp `StatusChangedAtUtc` on creation. What proves this slice: `OneActiveMembershipPerIdentityTests` (the index, including reactivation and the revoked rows it must allow), `AddOneActiveMembershipPerIdentityMigrationTests` (the additive upgrade, and the abort leaving the database untouched), `MembershipEligibilityTests`/`BusinessOwnerRetentionTests` (the two rules), `MembershipWriteGuardTests` (the order the rules are checked in around a write) and `BusinessMembershipWriteTransactionTests`, which runs two writers against a real SQLite file: two simultaneous activations of one identity leave exactly one, and two Owners demoting each other leave one Owner standing. Both of those fail with a deferred transaction.
+**One refusal, one status code.** All three rules refuse with `DomainConflictException` carrying a fixed Domain message, which the API boundary's `DomainExceptionHandler` publishes verbatim as `409 Conflict` (see [Domain and application error mapping](#domain-and-application-error-mapping)): "This person is already a member of a business.", "A business must keep at least one active Owner. Give another member the Owner role first." and — for the status re-check — "This business is no longer active, so the change was not saved.", which deliberately advises no repair, because nobody inside a business that has been switched off can switch it back on. None names another business, member or role — a person told they may not join is not thereby entitled to know which business they already belong to. The filtered index refusing a write becomes the same first message rather than an unexplained `500`: `EfBusinessMembershipWriteStore` recognises that one constraint violation (told apart from the per-`(actor, business)` index by the `BusinessId` that index also names) and nothing else, so every other database failure keeps propagating untranslated, and the SQLite exception type never crosses into the Application layer.
+
+**What calls the guard.** Issue #522 provides the index, the rules and the write path. Its callers today are the Owner-only member management of issue #533 — the role change, the revocation and the reinstatement, see [Member management](#member-management-list-role-revoke-and-reinstate-issue-533) — the invite redemption of issue #532, which is the **first request path that creates a membership at all** (see [Invite redemption](#invite-redemption-issue-532)), the self-service business application of issue #541, which is the first path that creates a **business** (see [Self-service business application](#self-service-business-application-issue-541)), the Super Admin's approval and rejection of issue #544, which is the first *platform-admin* caller of the guard and the one that uses the exclusion (see [Super Admin businesses API](#super-admin-businesses-api-issue-544)), and the Super Admin's deactivation, reactivation and member release of issue #545, which are the callers that declare the **empty** intent — none of them activates a membership, and a release must not be subject to the guard's Owner rule at all (see [Deactivating, reactivating and releasing members](#deactivating-reactivating-and-releasing-members-issue-545)). `bootstrap-business` and the end-to-end fixture remain the only *other* paths that create one, and all of them stamp `StatusChangedAtUtc` on creation. Since issue #680 three writes that create no membership at all also call the guard, for its transaction and its business-status re-check alone: the invite creation of #531, the settings save of #548 and the member changes of #533 (which were already callers for their membership rules). What proves this slice: `OneActiveMembershipPerIdentityTests` (the index, including reactivation and the revoked rows it must allow), `AddOneActiveMembershipPerIdentityMigrationTests` (the additive upgrade, and the abort leaving the database untouched), `MembershipEligibilityTests`/`BusinessOwnerRetentionTests`/`ActiveBusinessWritePolicyTests` (the three rules, the last including that it permits a write exactly where membership resolution grants access), `MembershipWriteGuardTests` (the order the rules are checked in around a write, including the status read happening after `BEGIN IMMEDIATE` and before the write, every status that refuses, a missing business row refusing too, a write declaring no business reading no status at all, and a deactivation that commits while the write lock is awaited) and `BusinessMembershipWriteTransactionTests`, which runs two writers against a real SQLite file: two simultaneous activations of one identity leave exactly one, and two Owners demoting each other leave one Owner standing. Both of those fail with a deferred transaction. `OwnerWriteDuringDeactivationTests` is the same kind of proof for the status re-check, over all three Owner writes.
 
 #### Account state and the membership-not-required marker (issue #523)
 
@@ -1688,11 +1799,13 @@ POST /api/members/{membershipId}/reinstate
 
 **Which rule each change declares.** The operation states its intent rather than the guard inferring it (`MembershipWriteIntent`, see [One active membership per identity](#one-active-membership-per-identity-issue-522)):
 
-| Change | Eligibility (`MembershipEligibility`) | Last Owner (`BusinessOwnerRetention`) |
-| --- | --- | --- |
-| Role change | not checked — it activates nothing | **checked**, with the business named |
-| Revoke | not checked | **checked**, with the business named |
-| Reinstate | **checked** for that member's identity, with their own row excluded | not checked — it cannot remove an Owner |
+| Change | Eligibility (`MembershipEligibility`) | Last Owner (`BusinessOwnerRetention`) | Business still `Active` (`ActiveBusinessWritePolicy`) |
+| --- | --- | --- | --- |
+| Role change | not checked — it activates nothing | **checked**, with the business named | **checked** (issue #680) |
+| Revoke | not checked | **checked**, with the business named | **checked** (issue #680) |
+| Reinstate | **checked** for that member's identity, with their own row excluded | not checked — it cannot remove an Owner | **checked** (issue #680) |
+
+**All three also require the business to still be trading, re-read inside the transaction (issue #680).** Who may do what inside a business is only meaningful while that business trades, and the business id a change carries was resolved by the middleware when the request arrived. The reinstatement is the one with consequences: the Super Admin may deactivate a business and release its members (issue #545), and a reinstatement already in flight would otherwise re-activate a membership that had just been released — occupying that person's one active membership again in a business nobody can reach. A change that arrives after the deactivation commits is refused with `409` and `ActiveBusinessWritePolicy.NotActiveMessage`, having written and audited nothing; one that commits before it stands, and the deactivation does not undo it.
 
 **The business always keeps an active Owner, including against its own Owner.** A revocation or a demotion that would leave none is refused with `409` and the Domain's fixed sentence, and that holds when the Owner is acting on themselves: an Owner may step down or revoke themselves while another active Owner remains, and may not when they are the last one. The rule is judged on the state the write left behind rather than on who performed it, so no list of "operations that could remove an Owner" has to be kept complete. A revoked Owner row does not satisfy it, because a revoked approval administers nothing. This matters because it is unrepairable from inside the application: only an Owner may manage members, roles, the integration and the business record, so a business with no active Owner has no path back short of a human editing the database — which is exactly why it is checked as part of the write, under the write lock, and not reported afterwards.
 
@@ -1708,7 +1821,7 @@ POST /api/members/{membershipId}/reinstate
 
 **What this slice does not do.** No invitation — that is [Invite links](#invite-links-create-list-and-cancel-issue-531) below — and no membership *creation* (#532), no self-service application (#507/#541), and no approval or rejection (#509). The Admin → Users page that calls these four endpoints is issue #534 (see [Admin Users page](#admin-users-page-issue-534)). There is no schema change: the four endpoints read and write columns that already existed.
 
-**What proves this slice.** `MembersApiTests` (the whole pipeline over three seeded businesses and the real migration history: the roster's shape and ordering, a member with no stored name or email, a Manager and an Operator refused every action, `401`, a missing scope and a non-member, another business's membership key not found and left untouched, a role change and a revocation and a reinstatement each applying on the target's next request, every unsupported role name, a revoked membership's role refused, the replayed requests that write nothing, the last active Owner refused both self-revocation and self-demotion, a revoked Owner not counting, the reinstatement refused with `409` for a person who moved on, and the audit event carrying none of the sixteen seeded names and addresses), `MemberManagementConcurrencyTests` (the two races above through the real use cases and adapters against a real SQLite file, plus the committed sequential write and its single audit event), `EfBusinessMemberStoreTests` (the relational adapter: one business's rows in creation order with an undeclared stored role reported as none, another business's key answering nothing, the stored identity normalised and an unusable one reported as none, each write naming only its own columns, and a write for another business changing nothing), `MemberManagementTests` (the decisions over fakes: the vocabulary check before anything is read, the operation order that puts the authoritative read inside the transaction, a membership revoked between the two reads, which rule each change declares, and nothing audited for a refused or no-op change) and `EndpointAuthorizationClassificationTests` (all four endpoints on `Members.Manage` and nothing weaker).
+**What proves this slice.** `MembersApiTests` (the whole pipeline over three seeded businesses and the real migration history: the roster's shape and ordering, a member with no stored name or email, a Manager and an Operator refused every action, `401`, a missing scope and a non-member, another business's membership key not found and left untouched, a role change and a revocation and a reinstatement each applying on the target's next request, every unsupported role name, a revoked membership's role refused, the replayed requests that write nothing, the last active Owner refused both self-revocation and self-demotion, a revoked Owner not counting, the reinstatement refused with `409` for a person who moved on, and the audit event carrying none of the sixteen seeded names and addresses), `MemberManagementConcurrencyTests` (the two races above through the real use cases and adapters against a real SQLite file, plus the committed sequential write and its single audit event), `EfBusinessMemberStoreTests` (the relational adapter: one business's rows in creation order with an undeclared stored role reported as none, another business's key answering nothing, the stored identity normalised and an unusable one reported as none, each write naming only its own columns, and a write for another business changing nothing), `MemberManagementTests` (the decisions over fakes: the vocabulary check before anything is read, the operation order that puts the authoritative read and the status re-read inside the transaction, a membership revoked between the two reads, which rule each change declares, each of the three changes refused once the business is no longer `Active` and when a deactivation commits while the write lock is awaited, and nothing audited for a refused or no-op change), `OwnerWriteDuringDeactivationTests` (the relational race against a real deactivation) and `EndpointAuthorizationClassificationTests` (all four endpoints on `Members.Manage` and nothing weaker).
 
 #### Invite links: create, list and cancel (issue #531)
 
@@ -1732,6 +1845,8 @@ POST /api/members/invites/{inviteId}/cancel
 
 **Cancelling is one conditional statement, and that is the point.** `CancelMemberInvite` reads the invite once — only to tell "this business has no such invite" (`404`) from "it has one, and here is what became of it" — and then `IMemberInviteStore.CancelAsync` cancels it **only while it is still live**, with the status and the expiry condition in the `WHERE` clause and the status and cancellation instant set in the same `UPDATE`. The decision and the mutation are therefore one operation: an invite redeemed between the read and the write is not cancelled on the strength of the stale read, the statement matches nothing, and the use case re-reads and answers from what the invite actually is. That race is the one that matters here — without it a used invite would be recorded as cancelled while the membership it created carried on existing. A replayed cancellation of an already-cancelled invite is accepted and writes nothing (no second instant, no second audit event); a **used** invite and an **expired** one are refused with `409` and the Domain's own sentence, because neither is a state a cancellation may overwrite — the first would make the record disown a membership that exists, the second would claim a deliberate decision where an invite simply ran out.
 
+**A creation runs inside the shared write transaction, and re-checks that the business is still `Active` in it (issue #680).** `CreateMemberInvite` asks none of the membership rules — an invite is an offer, so there is no eligibility rule to re-check here and no Owner to retain — but it does go through [`MembershipWriteGuard`](#one-active-membership-per-identity-issue-522) for the transaction and one rule: the business it is storing the invite in must still be trading, re-read inside the `BEGIN IMMEDIATE` write lock, so the comparison and the insert are one operation. Without that, an Owner's create-invite request that passed the middleware while the business was `Active` could commit a `Pending` seven-day invite *after* the Super Admin's deactivation had cancelled every live invite and committed — and that invite would be redeemable again as soon as the business was reactivated, which is the hole cancelling them exists to close. Whichever of the two writers takes the lock first, the outcome is one of exactly two: the invite committed first and the deactivation cancelled it, or the deactivation committed first and the invite is refused with `409` and `ActiveBusinessWritePolicy.NotActiveMessage`, with no row stored and no audit event. This is also the one rule a creation refuses on *after* its token has been generated; the token of a refused creation never leaves the request, because the response is never produced.
+
 **One store method cancels all of a business's live invites**, and since issue #545 the deactivation of #509 is its caller: `CancelAllLiveAsync` is a single conditional `ExecuteUpdate`, so it commits or rolls back inside the caller's own transaction, it leaves used, already-cancelled and expired invites exactly as they are, and a second call changes nothing — a restarted deactivation is safe. Deactivating a business whose outstanding links still worked would be a way back in after the door was closed. The business id it is given is the only one in this port that does not come from a tenancy resolution: the Super Admin's deactivation passes the id of the business row it has just read inside its own write transaction, never a route value, and that one exception is recorded on the port itself and in [Deactivating, reactivating and releasing members](#deactivating-reactivating-and-releasing-members-issue-545).
 
 **Both cancellations carry the owning business in their own `WHERE` clause.** `ExecuteUpdate` runs in the database and does not pass through `SaveChanges`, so `BusinessOwnershipEnforcer` never sees it — and since issue #532 there is no query filter behind it either. The business id is therefore a parameter of every method on `IMemberInviteStore`, contributed by one private helper the adapter routes all five statements through, so an `UPDATE` here cannot reach another business's invites and cannot be written without an owner at all. (Before #532 the same statements inherited the filter and the adapter instead refused to run without a resolved scope, the way `EfNayaxConnectionTestDraftStore` still does; the protection moved from the scope into the port's signature, which is what the non-tenant-owned pattern requires.)
@@ -1740,7 +1855,7 @@ POST /api/members/invites/{inviteId}/cancel
 
 **What this slice does not do.** Redeeming is [Invite redemption](#invite-redemption-issue-532) below, which is what sets `UsedAtUtc` and `RedeemedByMembershipId`; this slice creates the offer and no membership. There is no email sending either, so the Owner delivers the link themselves. The response carries the **token** rather than a complete URL: the API has no authoritative knowledge of the web application's address, and adding a configured public base URL would be a deployment-configuration decision outside this issue, so the Owner-facing page composes the link from the token - the Admin → Users page of issue #534 (see [Admin Users page](#admin-users-page-issue-534)), which is the one caller `frontend/inventory-app/src` has for these three endpoints. The migration is purely additive — one new table and its indexes — and no existing row, column or access changes.
 
-**What proves this slice.** `MemberInvitesApiTests` (the whole pipeline over two seeded businesses and the real migration history: the creation response's shape and its once-only token, the token stored only as a hash with the business, creator, role and expiry all server-decided, a distinct token of at least the agreed entropy per invite, every unsupported role name and an over-long note refused with nothing stored, note trimming and blank-note normalisation, the list reporting all four states with expiry derived and nothing rewritten, a Manager and an Operator refused every action, `401`, a missing scope and a non-member, another business's invite neither listed nor cancellable and left untouched, the cancellation and its replay, the used and expired refusals, and the audit events carrying neither the token nor the note), `EfMemberInviteStoreTests` (the relational adapter: the business the insert is stored against, one business's invites in creation order, another business's invite neither read nor cancellable in either direction, the business id in the statement confining it whatever scope the context carries, the conditional cancellation declining for every non-live state, the bulk cancellation's scope and idempotency, a rolled-back caller transaction taking the cancellations with it, the per-business token-hash uniqueness, and the redeemed-by foreign key), `MemberInviteTests` (the decisions over fakes: the vocabulary and note checks before anything is written, the store receiving only the hash, token entropy and uniqueness, the audit entry's contents, an invite redeemed between the read and the write, and nothing audited for a refused or replayed change), `MemberInvitePolicyTests` and `MemberInviteTokenTests` (the deterministic rules: the seven-day lifetime, the inclusive expiry boundary, a closed invite keeping its state past the expiry, an undeclared state reported as unknown and never live, note normalisation, and the hash being one-way, deterministic and case-sensitive) and `EndpointAuthorizationClassificationTests` (all three endpoints on `Members.Manage` and nothing weaker).
+**What proves this slice.** `MemberInvitesApiTests` (the whole pipeline over two seeded businesses and the real migration history: the creation response's shape and its once-only token, the token stored only as a hash with the business, creator, role and expiry all server-decided, a distinct token of at least the agreed entropy per invite, every unsupported role name and an over-long note refused with nothing stored, note trimming and blank-note normalisation, the list reporting all four states with expiry derived and nothing rewritten, a Manager and an Operator refused every action, `401`, a missing scope and a non-member, another business's invite neither listed nor cancellable and left untouched, the cancellation and its replay, the used and expired refusals, and the audit events carrying neither the token nor the note), `EfMemberInviteStoreTests` (the relational adapter: the business the insert is stored against, one business's invites in creation order, another business's invite neither read nor cancellable in either direction, the business id in the statement confining it whatever scope the context carries, the conditional cancellation declining for every non-live state, the bulk cancellation's scope and idempotency, a rolled-back caller transaction taking the cancellations with it, the per-business token-hash uniqueness, and the redeemed-by foreign key), `MemberInviteTests` (the decisions over fakes: the vocabulary and note checks before anything is written, the store receiving only the hash, token entropy and uniqueness, the audit entry's contents, an invite redeemed between the read and the write, the insert happening inside the transaction after the status re-read, a deactivated business and a deactivation committing while the write lock is awaited each refusing the creation, and nothing audited for a refused or replayed change), `OwnerWriteDuringDeactivationTests` (the relational race: a creation arriving after a committed deactivation storing nothing, one racing it either cancelled by it or refused, and a deactivation followed by a reactivation leaving no redeemable invite), `MemberInvitePolicyTests` and `MemberInviteTokenTests` (the deterministic rules: the seven-day lifetime, the inclusive expiry boundary, a closed invite keeping its state past the expiry, an undeclared state reported as unknown and never live, note normalisation, and the hash being one-way, deterministic and case-sensitive) and `EndpointAuthorizationClassificationTests` (all three endpoints on `Members.Manage` and nothing weaker).
 
 #### Invite redemption (issue #532)
 
@@ -1836,13 +1951,15 @@ Everything issue #548 already refused is still refused — a missing or blank va
 
 **The time zone's resolvability is still decided centrally.** The policy checks only that an id was submitted; whether the host's time-zone database can keep a calendar in it is answered by `Inventory.Infrastructure.Data.BusinessTimeZoneEnforcer` on `SaveChanges`, exactly as it is for the bootstrap and any other write path (see [Per-business time zone](#per-business-time-zone-issue-499)). Both refusals are a `DomainValidationException` and so the same `400`. That is also why `EfBusinessSettingsStore` writes through a tracked entity and `SaveChanges` rather than an `ExecuteUpdate`: a set-based update would write straight past that enforcer and past `BusinessAbnEnforcer`. The row is read, compared and written inside one transaction, so the audit trail's change set describes the state the write actually replaced.
 
+**Since issue #680 that transaction is [`MembershipWriteGuard`](#one-active-membership-per-identity-issue-522)'s, and the business's lifecycle status is re-read inside it.** The store joins the ambient transaction rather than opening a second one, which SQLite would refuse anyway. The reason for the change is serialisation rather than isolation: the business was resolved from the caller's membership when the request arrived, and a save that commits after the Super Admin's deactivation would rename, re-address or re-register a business that has been switched off — a change nobody inside it can see, undo or administer, and one the `409` the caller's *next* request gets would not explain. The intent names the business and no membership rule, because a settings save activates nothing and removes no Owner, and a save arriving after the deactivation is refused with `409` and `ActiveBusinessWritePolicy.NotActiveMessage`, storing nothing and auditing nothing. A business row that has gone keeps its own separate refusal in the use case; the status re-check reaches it first and refuses the same way, which is the fail-closed direction.
+
 **Changing the zone re-derives every business day, and rewrites nothing.** This is the decision recorded on issue #499 and now reachable: the zone is resolved per request from the business's own record, so from the next request onwards *all* business days and report boundaries — past data as much as future — are derived in the new zone, including that zone's own daylight-saving transitions. **On the next request, and not during the saving one:** `BusinessScopeMiddleware` publishes the zone into the request's `BusinessTimeZoneScope` before the action runs, and that scope can only move forward once, so a `PUT` that changes the zone still *runs* in the old one. That is deliberate rather than incidental — a request deriving two different business dates depending on how far through itself it was would be worse than a change that lands cleanly at a request boundary — and it is why the submitted zone is a value this endpoint *stores*, never the zone the request itself reports in. The repository rule that a business's reporting timezone is never taken from route, query, body or header input is therefore unchanged: resolution still reads the business record and nothing else. No stored instant, sale, purchase, expense, commission, costing row or document changes, because nothing stored is a business date: a business date is derived from a stored UTC instant through `IBusinessCalendar` every time it is needed. The visible consequence is that a figure already printed for a Sydney business day may fall on the adjacent day once the business is in another zone, which is why the page that will call this endpoint (#549) is the one that has to show the warning #499 asked for - the API refuses nothing on that account, because the re-derivation is the agreed behaviour rather than an accident to be guarded against. `BusinessSettingsPersistenceTests` proves both halves on a relational database: an already-stored sale's business date and its business day's UTC boundaries move with the saved zone, the stored instant is unchanged, and a past transition day becomes 23 hours long in the new zone while the other business in the same database is untouched.
 
 **Every change is audited, and the audit carries no values.** `Inventory.Application.Businesses.IBusinessSettingsAudit` takes one entry per stored change — the actor's Entra `(tid, oid)` pair, the business id, the instant from `IClock`, and which settings changed as the closed `BusinessSettingsField` vocabulary — and `InventoryApi.Adapters.Businesses.LoggingBusinessSettingsAudit` emits it as one structured `ILogger` event with the request's correlation id. It is a log port rather than a table for the reason the diagnostics audit is (see [Platform diagnostics](#platform-diagnostics-issue-336)); destination and retention are platform configuration a human verifies. The event deliberately names fields and never values: no contact address, no ABN, no business name and no before-or-after of anything, so the audit trail cannot become a second, unprotected copy of the business's contact and tax detail. A save that changed nothing is not audited, because the event is evidence about a change rather than about an attempt; a rejected save and a save against a business row that has gone are not audited either, for the same reason. The actor is read **before** the write, so a change that could not be attributed is refused rather than stored with an anonymous event.
 
 **What this slice does not do.** It writes no lifecycle status (approve, reject and deactivate are #509's), touches no membership, no role and no Nayax setting, and deletes or transfers nothing. It does not change what a GST report does with `GstRegistered` — still nothing reads that flag, which stays the deliberate follow-up issue #540 described.
 
-**What proves this slice.** `BusinessSettingsPolicyTests` and `BusinessContactEmailTests` (the validation and change-set rules, including that a present zone id is deliberately *not* resolved there, that a refusal never echoes the submitted address or ABN, and — for issue #593 — both reported malformed addresses with the malformed-domain and pasted-delimiter families they belong to, beside the supported valid examples and the trimming and case-preserving behaviour they must not disturb), `BusinessSettingsUseCaseTests` (the business coming from the membership and never the submission, validation before any write, the audit entry's contents, and nothing audited for an unchanged save, a refused one, a missing business or an unattributable actor), `BusinessSettingsPersistenceTests` (the relational read and write with two businesses present: the other business untouched, both central enforcers still refusing and storing nothing, the change set, and the zone re-derivation above), `BusinessSettingsApiTests` (the whole pipeline: an Owner's read and save, a Manager and an Operator refused on both, `401` and the missing-scope `403`, every validation rule answering `400` and storing nothing — including each malformed address of issue #593, against a business whose five settings have all been recorded, leaving every one of them and the audit trail alone — the ABN cleared, the saved zone visible in `/api/me/access` and `/api/business/current` on the next request, and the audit event's contents including the two values it must never carry) and `EndpointAuthorizationClassificationTests`/`CapabilityAuthorizationApiTests` (the capability on each endpoint, and the role matrix).
+**What proves this slice.** `BusinessSettingsPolicyTests` and `BusinessContactEmailTests` (the validation and change-set rules, including that a present zone id is deliberately *not* resolved there, that a refusal never echoes the submitted address or ABN, and — for issue #593 — both reported malformed addresses with the malformed-domain and pasted-delimiter families they belong to, beside the supported valid examples and the trimming and case-preserving behaviour they must not disturb), `BusinessSettingsUseCaseTests` (the business coming from the membership and never the submission, validation before any write, the audit entry's contents, the permitted save running inside the committed write transaction with the status re-read first, the save refused once the business is no longer `Active` and when a deactivation commits while the write lock is awaited, and nothing audited for an unchanged save, a refused one, a missing business or an unattributable actor), `OwnerWriteDuringDeactivationTests` (the relational race against a real deactivation), `BusinessSettingsPersistenceTests` (the relational read and write with two businesses present: the other business untouched, both central enforcers still refusing and storing nothing, the change set, and the zone re-derivation above), `BusinessSettingsApiTests` (the whole pipeline: an Owner's read and save, a Manager and an Operator refused on both, `401` and the missing-scope `403`, every validation rule answering `400` and storing nothing — including each malformed address of issue #593, against a business whose five settings have all been recorded, leaving every one of them and the audit trail alone — the ABN cleared, the saved zone visible in `/api/me/access` and `/api/business/current` on the next request, and the audit event's contents including the two values it must never carry) and `EndpointAuthorizationClassificationTests`/`CapabilityAuthorizationApiTests` (the capability on each endpoint, and the role matrix).
 
 #### Self-service business application (issue #541)
 
@@ -1990,6 +2107,8 @@ POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release   w
 
 **Deactivating is one transaction: the status, the invites, and the hook.** `Businesses.Status` becomes `Deactivated`, which is not `Active`, so `BusinessMembershipResolutionPolicy` resolves nothing and every member of the business gets the ordinary `403` on their very next request — membership resolution is memoised per request only, so there is no cache to wait for and no sign-out to force. **No data is deleted and no membership is touched**, flag and `StatusChangedAtUtc` alike: the members are refused because the business no longer resolves, not because their rows were changed, which is exactly what lets a reactivation put the business back. In the same transaction every invite of that business that is still live is cancelled permanently through issue #531's `IMemberInviteStore.CancelAllLiveAsync` — a deactivated business whose outstanding links still worked would be a way back in after the door was closed, and an invite cancelled by a deactivation that then rolled back would have been withdrawn for nothing. Already-used, already-cancelled and expired invites are left exactly as they are, which also makes a repeated deactivation idempotent, and the response reports how many were cancelled because that is the one part of the transition the business row does not show afterwards. That cancellation is the **one statement this feature makes outside its own port**: `MemberInvite` is one of the five structural non-tenant-owned tables, and `BusinessLifecycleWriter` passes it the business id of the row it has just read *inside* the transaction, never the route value. A second implementation of the same cancellation in the platform store would be two statements that could drift apart.
 
+**And no Owner write can land after it (issue #680).** Cancelling the invites that exist when this transaction runs is only half of "deactivation cancels pending invites permanently": the other half is that none appears afterwards. Because this transition and the Owner's invite creation, settings save and member changes now all run inside the same `BEGIN IMMEDIATE` write path, and each of those three re-reads the business's status inside it, an Owner request already in flight when this commits is refused rather than committed onto a business that has been switched off. The consequence the follow-up review found was specific: a `Pending` seven-day invite created a moment after a deactivation is redeemable again the instant the business is reactivated. A reactivation still revives nothing by itself — no membership, no invite, no session — so what the pair of rules guarantees together is that a deactivation followed by a reactivation leaves no redeemable invite at all. See [One active membership per identity](#one-active-membership-per-identity-issue-522) for the re-check, and `OwnerWriteDuringDeactivationTests` for the relational proof over all three writes.
+
 **The hook point was declared here, and issue #550 is what is behind it (the fourth criterion).** `IBusinessDeactivationHook` is called last inside the deactivation's transaction, after the status and the invites. It exists because issue #512's support sessions have to end when the business they are inside is deactivated, and the only safe place for that is inside this transaction: a session ended by a deactivation that rolled back would have been ended for nothing, and a session left running by a deactivation that committed would be exactly the access the deactivation exists to stop. A hook that throws therefore refuses the whole deactivation rather than leaving a half-finished one. The composition root registers exactly one implementation: #545 shipped a no-op, and [#550](#support-sessions-the-store-and-the-control-endpoints-issue-550) replaced that single line with `EndSupportSessionsOnBusinessDeactivation` rather than editing this transition — **no session logic is in this transition**, then or now.
 
 **Reactivating requires an active Owner, and that refusal is part of the write.** The rule is `BusinessOwnerRetention`'s — the same one the member management of #533 is bound by — re-read inside the transaction over the memberships the business actually holds, so a released Owner, a Manager who is active and a stored role this code cannot read are all "not an Owner" here exactly as they are everywhere else. A business that fails it is refused with `409` and `BusinessLifecyclePolicy.NoActiveOwnerMessage`, having changed nothing. The message is deliberately **not** `BusinessOwnerRetention.LastActiveOwnerMessage`: that one tells the reader to give another member the Owner role first, which only an Owner inside the business can do, and a business that is still deactivated has no reachable Owner at all. Only an Owner may manage members, roles, the integration and the business record, so a trading business without one cannot be administered by anybody inside it and has no repair path short of a human editing the database — which is why this is checked as part of the write rather than reported afterwards. **A reactivation restores only the business**: a membership released while it was off, or revoked by its Owner before that, stays inactive, and a cancelled invite stays cancelled. Both are deliberate decisions about a person, and a business returning is not a reason to undo one — a released person may by now hold an active membership somewhere else, and reviving their old one would deny them *both* businesses (`MembershipEligibility`).
@@ -2003,6 +2122,20 @@ POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release   w
 **Audit: one structured log event per committed action, and no table.** `LoggingPlatformBusinessLifecycleAudit` writes one `ILogger` `Information` event carrying the acting administrator's `(tid, oid)`, the business id, which action it was, the old → new status, the membership id where one applies, how many invites were cancelled where that applies, the instant and the request/correlation id. It never carries the business name, the released member's display name or email address, or their Entra identity — `PlatformBusinessLifecycleAuditEntry` has no field for a name of any kind, so even a sink that printed the whole entry could not emit one. A refused action is not audited, and neither is one that changed nothing. It is a separate port from the decision audit because a lifecycle action records a membership id and an invite count and has no rejection reason; **the log destination and retention period are platform configuration a human must verify**, exactly as for the other two platform trails.
 
 **What proves it.** `Inventory.UnitTests/Domain/Tenancy/BusinessLifecyclePolicyTests` covers the three status gates, including `0` and an undeclared value, and the refusal wording. `Inventory.UnitTests/Application/PlatformAdmin/BusinessLifecycleTests` runs all four over the real `MembershipWriteGuard`: the order the status write, the invite cancellation and the hook happen in inside one transaction, a hook that refuses rolling the whole deactivation back, the status and the Owner list changing while the write lock is awaited, releasing the last active Owner succeeding while the reactivation that follows is refused, the release asking neither of the guard's two questions, and what each refusal leaves unwritten and unaudited. `Inventory.IntegrationTests/Adapters/Persistence/EfPlatformBusinessDirectoryStoreTests` is the relational half: the lifecycle read's memberships, each write touching only its own column, and another business's membership that cannot be released by naming its key here. `Inventory.IntegrationTests/Controllers/SuperAdminBusinessLifecycleApiTests` is the HTTP boundary over the real migration history: the members of a deactivated business refused by their own endpoints while nothing in their rows changed, the live invite cancelled and the closed ones untouched, the reactivation restoring only still-active memberships, every Owner released then the reactivation refused, the members list carrying exactly the four declared properties and neither an email address nor an Entra id, and — end to end — a released person redeeming an invite into another business and staying released when their original business comes back, with `GET /api/me/account-state` reporting `Member` of the new one. `SuperAdminBusinessesApiTests` calls all eleven endpoints of the platform-admin business surface — the eight on this controller and the three support-session ones of #550 — for every caller who is not the configured administrator.
+
+#### Super Admin Businesses page (issue #547)
+
+The two slices above are the API; this one, one slice of [#510](https://github.com/cristhyanc/InventoryApp/issues/510) under #328, is the Angular page in front of it — `/super-admin/businesses`, reached from the sidebar's `Businesses` link beside `Platform Diagnostics` (see [Application shell and navigation](#application-shell-and-navigation-issue-391) above) and guarded exactly like it: `platformAdminGuard`, no capability, no `accountStateGuard`, because platform-admin authority is independent of business role or membership, and because entering the URL directly is safe either way — the eight endpoints decide authority on every request regardless of what the guard or the page did.
+
+**It is presentation only, and the routed page is a thin composition boundary** per [Page composition boundary](#page-composition-boundary-issue-191): `SuperAdminBusinessesComponent` owns the table, the status filter and the three single-call confirmations (approve, deactivate, reactivate) behind the shared `ConfirmationDialogComponent` — the same shape `ProductListComponent` already uses for a single-call confirmation — while Reject (its own reason text and submission state) and Members (its own load, release confirmation and error) are dedicated feature components, `BusinessRejectDialogComponent` and `BusinessMembersDialogComponent`, composed through `[businessId]`/`[businessName]` and their own outputs. Every refusal the page shows is the API's own sentence, verbatim, including reactivate's "no active Owner" one (`BusinessLifecyclePolicy.NoActiveOwnerMessage`) — the page duplicates no rule.
+
+**The table shows exactly the directory's ten fields, minus the one instant the page has no use for.** Name, status, applied date, contact email, ABN, active member count and whether Nayax is configured — `decidedAtUtc` is read by the API but not rendered, because the acceptance criteria name only the first seven. Pending applications sort first because the directory read already returns them that way; the status filter narrows the same ordered list rather than requesting a different one, since the list endpoint takes no server-side filter at all (see [Super Admin businesses API](#super-admin-businesses-api-issue-544) above). Approve and Reject are offered only for a `Pending` business, Deactivate and **View as this business** only for `Active`, and Reactivate and Members only for `Deactivated` — the same `BusinessDecisionPolicy`/`BusinessLifecyclePolicy` gates the API itself enforces, mirrored here only to decide which buttons to show, never to decide whether an action succeeds.
+
+**The pending-count badge (on the sidebar's `Super Admin` group and its `Businesses` link) is re-read after every action, not cached state the page pushes to it.** `SuperAdminBusinessesService.notifyChanged()` is a plain `Subject<void>` notification with no payload, called once a mutating call — approve, reject, deactivate, reactivate or release — has itself completed, and also when approve, deactivate or reactivate is refused with `409` or `404` (issue #681), because that refusal means the business changed or disappeared elsewhere and the page reloads its table for the same reason; `SidebarNavComponent` is the one subscriber, and on each notification (while platform-admin access is granted) it re-reads `GET .../pending-count` itself rather than trusting a number the mutating caller computed. The badge is `null` — rendered as no badge at all — until access is granted and a first read returns, and it is cleared the moment access is lost, the same rule issue #605 already gives the group itself. **A refused read reaches that same stable `null` and asks for nothing further** (issue #673): `GET .../pending-count` is classified `platform-admin`, so its `403` refreshes neither member cache, and it was the capability refresh — not the badge — that used to bring the read straight back round. See [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) for the classification and the loop.
+
+**"View as this business" (issue #553, one slice of #513) is the one action here that does not stay on this page.** `ViewAsBusinessDialogComponent`, composed the same way Reject and Members already are, starts a support session through `SupportSessionService`; see [Support session banner and the in-memory session id](#support-session-banner-and-the-in-memory-session-id-issue-553) for what that does next. No backend change came with it: the dialog calls the one endpoint #550 already shipped (`POST /api/super-admin/support-sessions/{businessId}`), unchanged. Hiding write controls and support-view messages once inside the session is issue #554's separate follow-up.
+
+**What proves it.** `super-admin-businesses.service.spec.ts` covers the eight HTTP calls, including the trimmed/blank/absent reason on reject and the `changed$` notification. `business-reject-dialog.component.spec.ts` and `business-members-dialog.component.spec.ts` cover each dedicated workflow's own load, confirmation, success and API-refusal-shown-verbatim paths; `view-as-business-dialog.component.spec.ts` is the same shape for the required-reason dialog issue #553 added. `super-admin-businesses.component.spec.ts` covers the status filter, which actions each status offers (including **View as this business** for `Active` alone), each confirmation, the reactivate no-active-Owner refusal shown verbatim, and that a reload (and a badge notification) follows every completed action and every `409`/`404` refusal, but not any other failure. `sidebar-nav.component.spec.ts` covers the badge itself: hidden until access is granted, hidden again at zero, shown on both the group and the `Businesses` link once a count is read, re-read on a `changed$` notification, cleared the moment access is lost, and — composed with the real `AccessService`, the real `SuperAdminBusinessesService` and the production `403` chain (issue #673) — settling on a persistent refusal instead of looping, with the badge `null`, the group still offered and no toast. `navigation.spec.ts` and `app.routes.spec.ts` cover the real `Businesses` `NavLink` replacing issue #546's placeholder and the route's guards.
 
 #### Support sessions: the store and the control endpoints (issue #550)
 
@@ -2152,8 +2285,8 @@ member of that business is given it, and `needsRefill` and `needsOrdering` repla
 zeroed or nulled, because `machinesNeedingRefill: 0` reads as a fact about the business's machines.
 That is the same shape issue #329 publishes with `reason: "NayaxNotConnected"` for a business whose
 connection is unusable, and deliberately one shape rather than two: a client maps a stable reason
-code to its own wording, and the reason is never a sentence to display. The UI messages are #513's
-work.
+code to its own wording, and the reason is never a sentence to display. Mapping it to a message - and
+hiding the write controls a read-only session cannot use - is issue #554's work, not this one's.
 
 **And the fleet read is not attempted.** `GetDashboardSummary` branches on
 `IBusinessScope.State == SupportReadOnly` and never calls `CalculateReorderNeeds` at all, so there is
@@ -2187,16 +2320,48 @@ implied so a client never has to infer that a support session means a read-only 
 carries no session id, no business id and no actor. For an ordinary member the field is an explicit
 `null`, so the shape is stable.
 
-**One audit event per request.** `BusinessScopeMiddleware` emits a structured `ILogger` event for
-every request made in a session, carrying the route **template**, the method, the status it was
-answered with, the business id and the session row's own key — so a trail of requests reads as one
-session, tied to the start event #550 recorded under that same key, which is where the
-administrator's identity and their stated reason are. The template rather than the path is the point:
+**One audit event per request, including the refused ones (issue #672).**
+`InventoryApi.Auth.SupportSessionAuditMiddleware` emits a structured `ILogger` event for every
+request made in a session, carrying the route **template**, the method, the status it was answered
+with, the business id and the session row's own key — so a trail of requests reads as one session,
+tied to the start event #550 recorded under that same key, which is where the administrator's
+identity and their stated reason are. The template rather than the path is the point:
 `api/Products/{id}` says which endpoint was reached without recording which record. It carries no
-response body, no count, no query string and never the session id in either form, and it is written
-in a `finally`, so a request that failed is recorded with the status it actually got rather than
-quietly left out. As for the three platform trails beside it, **the log destination and retention
-period are platform configuration a human must verify**.
+response body, no count, no query string and never the session id in either form. As for the three
+platform trails beside it, **the log destination and retention period are platform configuration a
+human must verify**.
+
+**Coverage and final-outcome timing are both decided by where that middleware sits**, and it is the
+outermost one in `Program.cs`: `SupportSessionAuditMiddleware` → `UseExceptionHandler` → `UseCors` →
+`UseAuthentication` → `UseAuthorization` → `BusinessScopeMiddleware` → the endpoint. #551 emitted the
+event from `BusinessScopeMiddleware`, and that position could answer neither half of what the trail
+is for. A request the authorization middleware refuses — a capability the session's set does not
+hold, or any method that is not a read — is refused *above* that middleware and never reached it, so
+the attempts a support trail most needs to show were precisely the ones missing from it. And a
+request whose endpoint throws unwinds *past* it before `UseExceptionHandler` maps the exception, so
+the event recorded the `200` the response still held rather than the `403` or `500` the caller got —
+a Nayax-backed read in a support view, which is a refusal by construction, was recorded as a success.
+From the outermost position both are the same fact read once: every refusal is downstream, and by the
+time `_next` returns the status is the one that was written. The event is still written in a
+`finally`, so a request that failed outright is recorded rather than quietly left out, and there is
+exactly one emitter, so exactly one event per request. A handled exception clears the endpoint before
+the exception handlers run, so the route template is taken from the exception-handler feature on that
+path rather than lost.
+
+**Attribution is the resolved session and never the header.** The header's *presence* decides only
+whether the question is worth asking — every ordinary request leaves this middleware on one
+dictionary lookup — and the business id and session key come from `ISupportSessionAccessor`'s
+verified answer: the presented id hashed and matched against an active, unexpired session of that
+same caller's, for a business that is still `Active`. It is the same memoised answer the capability
+handler and the published scope acted on, so what was authorised, what was read and what is recorded
+cannot disagree. A presented session that is no longer usable and an ordinary member who sets the
+header therefore record **nothing at all**: there is nothing verified to attribute the request to,
+naming the business the caller *presented* would be trusting the header as evidence of itself, and
+neither falls back to anybody's ordinary membership. Why such a session was refused is logged by the
+accessor, for an operator, and the caller's own answer is the `403` above. Recording happens after
+the caller has been answered and so can never change a response: a failure to record is logged as the
+operational problem it is — a request missing from the trail — and is not turned into a second
+failure for a caller who was already served.
 
 **What proves it.** `Inventory.UnitTests/Application/Access/SupportSessionAccessPolicyTests` pins the
 thirteen capabilities literally from the agreed list, the two exclusions as exclusions, that the two
@@ -2243,7 +2408,18 @@ business's Owner, an expired/ended/unknown/another
 administrator's id refused, a deactivation mid-session closing the next request, the no-header request
 falling to the administrator's own (absent) membership, a member unaffected with and without the
 header, no membership written, the `/api/me/access` contract, and the audit event's fields and
-absences. `DocumentStorageProviderSelectionTests` pins that both providers are reached through the
+absences — including, for issue #672, the refused attempts the trail has to carry and the status
+each of them was actually answered with: a read outside the capability set and a refused write each
+recorded once with their `403`, a Nayax-backed read recorded with the `403` its mapped exception
+produced rather than a `200`, a read that found nothing recorded with its `404`, and an expired
+session and a member who merely set the header each recorded as no session at all.
+`Inventory.IntegrationTests/Auth/SupportSessionAuditMiddlewareTests` is that middleware's own
+decision, which only it can be asked directly: the status read after the rest of the pipeline has
+finished with the response, the route template taken from the exception-handler feature once a
+handled exception has cleared the endpoint, a request that threw recorded without the exception being
+swallowed, an unusable session and a `NotRequested` one recording nothing, a request with no header
+not asking the accessor at all, and a failure to record leaving the request untouched.
+`DocumentStorageProviderSelectionTests` pins that both providers are reached through the
 guard.
 
 ### Per-business Nayax connection (issue #518)
@@ -2274,7 +2450,7 @@ allow-list and must not be added to it.
 
 **Encryption lives in Infrastructure, behind `INayaxTokenProtector`.** `AesGcmNayaxTokenProtector`
 encrypts with AES-256-GCM, a fresh random nonce per encryption, and stores
-`base64(nonce || tag || ciphertext)` with the key id in its own column. Authenticated encryption is
+`v2:base64(nonce || tag || ciphertext)` with the key id in its own column. Authenticated encryption is
 the point: a tampered ciphertext fails its tag check and throws rather than decrypting to a
 different token that would then be sent to Nayax, and a per-save nonce means the column cannot
 reveal that two businesses configured the same credential. The key id travels with the ciphertext so
@@ -2291,6 +2467,29 @@ starts and runs normally, and only storing or reading a per-business token fails
 provisioning the key is a human step (see README.md § Configuration and secrets). Since issue #520
 that is what every Nayax call does, so in an environment that uses Nayax a missing key means the
 Nayax features fail closed until a human provisions one — and nothing else does.
+
+**The ciphertext is bound to its business, and that is authenticated rather than merely stored**
+(issue #681). Both members of `INayaxTokenProtector` take a `BusinessId`, and the owning business's
+key is the AES-GCM *associated data*, so the authentication tag covers it: a value encrypted for
+business 4 fails its tag check the moment it is presented as business 9's, whatever the key. Before
+this, encryption on its own answered "is this a genuine ciphertext?" and said nothing about *whose* —
+so a value copied between rows by a hand-written `UPDATE`, a restored backup or a mistaken repair
+decrypted perfectly, and the other business then authenticated to Nayax with it. The business id is
+not a secret and does not have to be; the property wanted is that it cannot be changed without
+invalidating the tag. The adapters resolve it from the context's own tenancy scope — the same scope
+whose query filter selected the row — so it is never a value a request supplied, and both
+`EfNayaxConnectionStore` and `EfNayaxConnectionTestDraftStore` bind it the same way.
+
+**Two stored formats, and the format is self-describing.** A value written since issue #681 carries
+the `v2:` marker and is business-bound. A value written before it is bare base64, is decrypted with
+no associated data, and therefore still decrypts — existing rows keep working across the deployment
+with no migration and no re-encryption step. The marker is unambiguous because base64 contains no
+`:`, so neither format can be mistaken for the other. A legacy row is consequently **not**
+business-bound: re-encrypting one happens when an Owner saves their connection again, or through the
+human-run `migrate-nayax-connection` command, and never as an automatic rewrite — AGENTS.md
+§ Database and migrations forbids a startup data operation, and the protector holds no database to
+do one with. A deployment that wants every row bound re-saves each business's connection
+deliberately, and the marker is how an operator tells a bound row from one still to do.
 
 **`CredentialRevision` is what makes a status write safe.** The Application port is
 `Inventory.Application.Nayax.INayaxConnectionStore`, implemented by
@@ -2365,13 +2564,16 @@ owned table. Here the whole change is two values and a status, so it can be repo
 writing: a dry run opens no transaction on the credential table and the status it reports for
 "after" is declared as a prediction.
 
-**`Ready`, not `PendingPermissions`, and the command never calls Nayax.** Every save through the
-store lands on `PendingPermissions` — a freshly stored token is never assumed to work — so the
-command applies a status result for the exact revision it just wrote, through the same conditional
-`TryApplyStatusResultAsync` path a real permission test uses. The evidence is production use rather
-than a live test, which is also why the instant recorded is when that was adopted. A revision that
-moved in between discards the result rather than describing credentials it was not produced for, and
-the command reports that rather than claiming success.
+**`Ready`, not `PendingPermissions`, on the credential it stores — and the command never calls
+Nayax.** Every save through the store lands on `PendingPermissions` — a freshly stored token is
+never assumed to work — so the command applies a status result for the exact revision it just
+wrote, through the same conditional `TryApplyStatusResultAsync` path a real permission test uses.
+The evidence is production use rather than a live test, which is also why the instant recorded is
+when that was adopted. A revision that moved in between discards the result rather than describing
+credentials it was not produced for, and the command reports that rather than claiming success.
+**That reasoning reaches exactly as far as the credential this run stored** (issue #675): over a
+credential that was already there it writes no status at all, because "the configured token is the
+one in production use" says nothing about a verdict something else already reached on it.
 
 **An apply is one transaction, so a partial state is not something it can leave.** Storing the
 credential and marking the connection `Ready` are two statements, and a command that committed the
@@ -2379,8 +2581,9 @@ first and then failed the second would leave a credential whose status was never
 reporting a failure — the database changed by a run that says it refused. `NayaxConnectionMigrator`
 therefore opens one transaction on the business-scoped context and does everything inside it: the
 authoritative read of what the business holds, the comparison against the configured credential, the
-save, the `Ready` status write and the read-back. It commits only once the connection is actually
-`Ready`. A refusal, a status result the revision guard discarded, and a failed read or write all
+save, the `Ready` status write and the read-back. It commits only once a credential it stored is
+actually `Ready` — a run that stores nothing has nothing to commit either. A refusal, a status
+result the revision guard discarded, and a failed read or write all
 roll it back, so a run that reports anything other than success has written nothing at all, and
 recovering from one is simply running the command again rather than repairing a half-finished
 change. Putting the read inside that transaction is also what makes the "never replace a credential
@@ -2400,10 +2603,16 @@ requires exactly one active business with a usable membership and no unassigned 
 `bootstrap-business` adopted; when a *different* operator id or token is already stored, because
 replacing a credential something else stored is a human decision; and when the token cannot be
 encrypted or the stored ciphertext cannot be decrypted, which fails closed rather than overwriting
-a credential nothing could read. A business already holding exactly the configured pair, marked
-`Ready`, is left completely untouched — the row is not rewritten, so not even the ciphertext changes
-and the revision does not move. The same pair stored but not yet `Ready` has only its status
-written.
+a credential nothing could read. **A business already holding exactly the configured pair is left
+completely untouched, whatever its status says** (issue #675) — the row is not rewritten, so not
+even the ciphertext changes, and the revision, the status, the last-tested instant and the
+machine-check flag all stay exactly as they were. The dry run and the apply agree on that: the dry
+run predicts the stored status rather than `Ready`, and the apply attempts no write at all, not
+even the conditional status write. This is what keeps a re-run from reviving a connection a Nayax
+`401` moved to `NeedsAttention`: that verdict came from Nayax, this command never calls Nayax, and
+only a connection test — the Owner's re-test on Admin → Nayax Settings — can conclude a new status.
+A matching pair stored but not yet `Ready` is therefore left on `PendingPermissions` as well, and
+is also a re-test rather than a re-run.
 
 **The token never leaves the ciphertext column.** It is in no result member, no message, no
 exception and no printed line — not as a length, a prefix or a hash. The operator id is printed,
@@ -2417,11 +2626,14 @@ means that command's outcome — a migrated-but-unbootstrapped database is not m
 migration seeds a `NayaxProcessingFeeRate` with no owner.
 
 The same tests pin the atomicity, with the credential replaced between the save and the `Ready`
-write: on the first-save path the apply leaves no row at all, on the status-only path the row that
-was committed before it comes out byte-for-byte unchanged, a status write that fails outright takes
-the save back with it, the apply that follows a rolled-back one stores the credential at revision 1
-as a first apply would, and every ending reports its database state — only a failed commit is
-allowed to report `Unknown`, and no refusal may claim a write it did not make.
+write: the apply leaves no row at all, a status write that fails outright takes the save back with
+it, the apply that follows a rolled-back one stores the credential at revision 1 as a first apply
+would, and every ending reports its database state — only a failed commit is allowed to report
+`Unknown`, and no refusal may claim a write it did not make. They pin the re-run contract the same
+way: a matching credential in `Ready`, `PendingPermissions` and `NeedsAttention` alike comes out of
+both a dry run and an apply with its status, revision, ciphertext, last-tested instant and
+machine-check flag unchanged, and a store double that throws on either write proves the apply
+attempts none rather than merely leaving the row looking the same.
 
 ### Per-business Nayax credentials (issue #520)
 
@@ -2447,6 +2659,40 @@ business's token to outlive its request. `NayaxLynxClient` queries no EF Core; t
 (`NayaxRequestCredentialProvider`, in `Inventory.Application`, scoped per request) reads #518's
 `INayaxConnectionStore`, which reads the business the `AppDbContext` tenant filters already resolved.
 A caller with no resolved business reads nothing and therefore calls nothing.
+
+**A Nayax call therefore touches the request's persistence, and the store owns that context (issue
+#667).** The credential read is a real `SELECT`, and a `401` is a real `UPDATE`, on the one scoped
+`AppDbContext` of the request that made the call — not on a context of the Nayax client's own. That
+is the right ownership (a second context would be a second tenant scope, which
+[Concurrency inside one request](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)
+rules out), but it means the bounded parallel Nayax fan-outs — the reorder and Pick List fan-outs,
+the per-site machine reads, the catalogue import, the cost-transition preview — put several
+credential reads, and sometimes several `401` writes, on a context that supports exactly one
+operation at a time. **`EfNayaxConnectionStore` admits one operation at a time**, with a gate that is
+per request (the adapter is scoped beside the context it guards), is held for the database work only,
+and is never re-entered: its `SaveCredentialAsync` reads back through the private core rather than
+through its own public `FindAsync`. What that does *not* change is as important as what it does:
+
+- **The fan-out stays parallel.** Only the database statement is serialized, so the remote requests
+  still overlap and the bound on them is still the fan-out's own
+  `MaxConcurrentMachineRequests`. Cancellation is honoured while waiting for a turn, so a cancelled
+  caller stops rather than queuing.
+- **Waiting is not caching.** Every call still resolves its own snapshot when its turn comes, so the
+  status gate still closes mid-fan-out: a call whose turn arrives after a `401` has been recorded
+  reads `NeedsAttention` and fails closed instead of being handed a credential the request resolved
+  earlier. The status, operator id, token and revision of each snapshot still come from one statement,
+  and a refused status still never reaches the ciphertext.
+- **Which `401` wins is still decided by the revision, not by the order of arrival.** The conditional
+  `UPDATE ... WHERE CredentialRevision = @r` is evaluated against the row as it stands when the
+  statement runs, so a whole fan-out of results produced for a superseded revision is discarded, one
+  structured "stale Nayax status result discarded" event each, and the replacement credentials keep
+  their own `PendingPermissions`.
+- **The use case still may not overlap *other* scoped persistence with a Nayax call.** The gate makes
+  the credential path safe against itself, not against the rest of the request;
+  `GetNayaxCatalogReconciliation` and `GetSiteSummaries` await their remote reads before the local
+  ones for that reason.
+- **A support session resolves nothing**, before any of this: the refusal below is taken in the
+  provider, before the store is reached at all.
 
 **And a support session resolves nothing at all** (issue #551). The provider's first act is to refuse
 when the request carries `BusinessScopeState.SupportReadOnly`: before the connection is read, before
@@ -2567,10 +2813,17 @@ failing closed while the other is connected, a denied caller calling nothing, ea
 whether a call happens, a 401 marking only the calling business's row, the call after a 401 being
 refused by the gate, a 403 leaving the row byte-for-byte unchanged, a credential replaced *while the
 request is in flight* leaving the new revision's status alone, and an existing consumer
-(`NayaxCatalogSnapshotProvider`) working unchanged. `NayaxConnectionExceptionHandlerTests` pins the
-`409` contract and its log; `NayaxLynxClientDependencyInjectionTests` pins the base address, that
-registration needs no credential and registers none, and that the registered client is built from the
-provider.
+(`NayaxCatalogSnapshotProvider`) working unchanged. `NayaxParallelCredentialAccessTests` runs the same
+real stack through the real fan-out use cases with the EF command recorder attached (issue #667): a
+bounded reorder fan-out that keeps its remote requests concurrent while one operation at a time
+reaches the context and resolves one credential read per call, concurrent `401`s all answering with
+the stable not-connected error and leaving one `NeedsAttention` row, a whole fan-out of `401`s from a
+superseded revision discarded with the replacement credentials untouched, two businesses each using
+their own credentials and their own status row, and the catalog reconciliation and site dashboard
+keeping their local reads off the context while their remote reads run.
+`NayaxConnectionExceptionHandlerTests` pins the `409` contract and its log;
+`NayaxLynxClientDependencyInjectionTests` pins the base address, that registration needs no credential
+and registers none, and that the registered client is built from the provider.
 
 ### Nayax connection checks and the Test endpoint (issue #536)
 
@@ -2847,9 +3100,13 @@ shown to authenticate must not replace what the business is using today.
 **"Not checked" machine lines do not block `Ready`, and the saved connection records them.** A
 business connecting Nayax before its first machine exists has nothing to run `GET machines/{id}`
 against, which is a fact about the account and not a fault of the credentials. The save stores
-`Ready` and sets `MachineChecksPending`, computed from the report as "any machine-scoped line was
-never checked" — which checks need a machine stays `NayaxConnectionCheckPolicy.RequiresMachine`'s
-answer. A later re-test that reaches them clears it. `false` is therefore both "the machine checks
+`Ready` and sets `MachineChecksPending`, computed from the report as "the machine list was read,
+and a machine-scoped line was still never checked" — which checks need a machine stays
+`NayaxConnectionCheckPolicy.RequiresMachine`'s answer. A machine list that was itself refused or
+never checked leaves the flag unset (issue #681): those lines are unchecked for want of the list,
+not of a machine, the refused line already records `PendingPermissions` (or the sign-in's own
+verdict), and "re-test once your machines are set up" would send an Owner who has machines to the
+wrong fix. A later re-test that reaches them clears it. `false` is therefore both "the machine checks
 passed" and "no check has ever run", deliberately: the flag exists to ask an Owner to re-test once
 their machines are set up, so the additive migration backfills nothing and the connection the
 human-run `migrate-nayax-connection` command stored — which has been authenticating in production —
@@ -2969,10 +3226,16 @@ never tested and is checked on first real use, because a connection test must no
 operator's Nayax data.
 
 **Step 5 exists because the fix is usually Nayax's to make.** When any line failed, the wizard
-composes a ready-to-copy request naming the operator id and every refused area with its cause, links
-the Nayax support portal (`https://nayax.service-now.com/csm`) and offers
-`integration-support@nayax.com` as the secondary contact. The request names no token. Step 5 is
-skipped entirely when the server reported nothing failed.
+composes a ready-to-copy request naming the operator id that was tested — captured with the result,
+not read from the field an Owner may have edited since — and every area refused for lack of a
+permission (`PermissionNotGranted`) with its cause, links the Nayax support portal
+(`https://nayax.service-now.com/csm`) and offers `integration-support@nayax.com` as the secondary
+contact. The request names no token. A line refused for any other cause is not a permission Nayax
+could grant, so it is left out of the request and gets its own advice instead (issue #681): an
+invalid or expired token asks for a new token, an operator id mismatch asks the Owner to check the
+operator id, an unavailable Nayax asks for another try, and an answer nobody interpreted asks for a
+re-test before anyone is asked about it. Step 5 is skipped entirely when the server reported nothing
+failed.
 
 **Save and re-test say what the server said.** Save is not offered for a run whose sign-in did not
 pass, or whose draft has expired — the server refuses both, and this only avoids spending a request
@@ -3279,13 +3542,16 @@ and they are the first realized part of the target `layout/` folder described be
 | `layout/navigation.ts` | The navigation data (`primaryNavigation`) and the pure matching rules `navLinks`, `activeNavRoute` and `activeNavGroup` |
 | `layout/sidebar-nav.component.*` | Renders that data, owns which groups are expanded, and resolves the active entry from the router |
 | `layout/user-menu.component.ts` | The top-right signed-in user control: the active account and a sign-out item, or a sign-in button |
-| `app.component.*` | The shell layout, the sidebar open/collapsed state and its handlers, the narrow layout's top-bar opener, the wide-versus-narrow layout decision, and the MSAL identity it passes to the user menu |
+| `app.component.*` | The shell layout, the sidebar open/collapsed state and its handlers, the narrow layout's top-bar opener, the wide-versus-narrow layout decision, the MSAL identity it passes to the user menu, and whether the sidebar offers the ordinary business navigation at all (issue #676) |
 
 `primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Machines`,
 `Sites`, `Expenses`) and expandable groups (`Products`, `Purchases`, `Reports`, `Admin`). Each
 destination also declares the capability its own page needs, and the sidebar renders only the ones
 the signed-in member holds — see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)
-below. A group
+below — while whether it renders any of them at all follows the authenticated account state the
+shell passes it (issue #676, see [Account-state
+routing](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529)):
+a signed-out visitor and an account with no usable membership are offered no business menu. A group
 heading is a `<button>` that toggles its children and is deliberately not a destination, so no
 group needs an overview page. **Every `route` must be a real page already declared in
 `app.routes.ts`**: `navigation.spec.ts` compares the two and fails on a destination invented ahead
@@ -3301,11 +3567,10 @@ remains a valid bookmark that the home Dashboard's "Open Admin" action and each 
 is the only entry that is not in `primaryNavigation`: `navigationFor(hasPlatformDiagnosticsAccess)`
 appends the whole group, last, and only `GET /api/admin/diagnostics/access` can say yes. It holds
 `Platform Diagnostics` (`/super-admin/diagnostics`, moved out of the business `Admin` group, which
-`/admin/diagnostics` now only redirects to) and a Businesses placeholder (issue #547 builds the real
-page) — a `NavPlaceholder` that renders as inert text, because `navigation.ts`'s one rule, that
-every `route` must be a real page already declared in `app.routes.ts`, leaves no route to give it
-before that page exists. Neither child declares a capability, because no business role grants
-either. `SidebarNavComponent` starts from `navigationFor(false)`, follows
+`/admin/diagnostics` now only redirects to) and, since issue #547 built the real page, `Businesses`
+(`/super-admin/businesses`) — an ordinary `NavLink`, not the `NavPlaceholder` issue #546 gave it
+while no page existed yet; see [Super Admin Businesses page](#super-admin-businesses-page-issue-547)
+below. Neither child declares a capability, because no business role grants either. `SidebarNavComponent` starts from `navigationFor(false)`, follows
 `PlatformDiagnosticsAccessService.granted$`, and re-resolves the active entry whenever that answer
 changes; a refusal, a failure and an unanswered probe all leave the navigation everyone else gets,
 silently, because a navigation menu is not the place to report that one capability could not be
@@ -3405,6 +3670,15 @@ component. `app.component.spec.ts` covers a direct event-only switch between two
 the previous account's response arriving after the switch, the sign-out event, a duplicate
 notification, and the cleanup on destroy.
 
+**And the shell follows the business in effect now (issue #671).** A changed *identity* is not the
+only thing that changes which business a tab resolves: so does a support-session start, end or
+expiry, and so does the account state turning the identity already signed in into a `Member`. The
+shell reads `GET /api/business/current` again on each of those, publishes the zone it answers with,
+and reports an unanswerable lookup explicitly with a retry rather than letting a page render blank
+instants. See [Reloading the business time zone after a context
+change](#reloading-the-business-time-zone-after-a-context-change-issue-671) for which trigger
+withholds the routed page and which deliberately does not.
+
 Adding a navigation entry is therefore a data change in `layout/navigation.ts` once the page and
 its route exist — not a template change in the shell.
 
@@ -3469,6 +3743,833 @@ its route exist — not a template change in the shell.
 - **Sign-in callback.** `auth-callback.component.ts` centres a `.card` on the canvas background
   instead of a bare paragraph; its logic is still just the static "Signing you in..." message.
 
+### Support session banner and the in-memory session id (issue #553)
+
+Issues #550 and #551 built the support-session API and its read-only enforcement with no frontend
+at all - the endpoints were called, and the header sent, by hand. Issue #553 is the one slice of
+#513 that gives the Super Admin a UI for it: the **View as this business** dialog on the
+[Super Admin Businesses page](#super-admin-businesses-page-issue-547), the banner every other page
+shows while a session is active, and the one service, `support-session/support-session.service.ts`
+(`SupportSessionService`), that both own. Hiding write controls and support-view messages once
+inside the session is issue #554's separate follow-up and is not part of this slice.
+
+**The session id lives in this service's memory and nowhere else.** `SupportSessionService` is a
+root singleton holding a private `sessionId: string | null` field, read back only by
+`currentSessionId()` and by the request-context capture issue #669 added - both of them
+`supportSessionInterceptor`'s own accessors, documented below - and never
+written to `localStorage`, `sessionStorage`, a query parameter or any other part of the URL. A page
+reload therefore forgets it, which is what the next two paragraphs exist to handle; this is the
+same trade-off issue #550 made in choosing to answer the start call with the id and no other read
+with it (`SuperAdminStartedSupportSessionResponse` above) - a value that is never written down
+cannot leak through a saved page, a shared link, a browser history entry or a crash dump.
+
+**Every open tab shares the id over `BroadcastChannel`, not through anything persisted.** Starting a
+session broadcasts `{ type: 'started', accountKey, sessionId, businessName, expiresAtUtc }` to every
+other open tab of the same origin, so each of them can both show the banner and present the header on
+its own requests; ending one - from the banner's own **End session**, from another tab, or because the
+server answered `support_session_ended` on some unrelated call (below) - broadcasts (or, for the
+tab that merely received the broadcast, locally applies) `{ type: 'ended', accountKey }` everywhere at
+once. The `accountKey` and the field-by-field check of every received message are issue #670's
+([Refreshing the visible business data on a support-context transition](#refreshing-the-visible-business-data-on-a-support-context-transition-issue-670)):
+the channel is shared by every tab of the origin and these messages carry the one credential this
+application holds, so a malformed message, or one naming another signed-in identity, is ignored
+entirely rather than adopting a session or ending the one a tab is in. The
+listener is attached once, in the constructor, so it is live for every open tab regardless of
+whether anything has subscribed to the banner's state yet. `BroadcastChannel` does not exist in this
+build's Jest environment (`jest-environment-jsdom`'s bundled jsdom predates it), so it is used only
+behind a `typeof BroadcastChannel` check - the same feature-detection `AppComponent` already uses
+for `window.matchMedia` - and the Jest suite supplies a same-process double that preserves the one
+asymmetry that makes a multi-tab test mean anything: a channel never delivers its own posted message
+back to itself.
+
+**A tab that was never told the id this way still learns a session is running.** A freshly opened
+or reloaded tab cannot have received a `BroadcastChannel` message for a session that started before
+it existed, so instead it asks `GET /api/super-admin/support-sessions/active` once - the one read
+issue #550 resolves from the authenticated actor rather than from a presented id. It learns the
+business name and the expiry, and can still end the session (the end call is likewise resolved from
+the actor, not from an id); it cannot itself present the header until another tab's `started`
+broadcast reaches it, because the active read deliberately never answers the id either
+(`SuperAdminActiveSupportSessionResponse` above). **Issue #553 published its banner for that tab
+anyway, which is the defect issue #668 fixed**: such a tab is `unresolved`, not a support view, and
+renders an explanation instead of a page -
+[Failing closed in a tab that cannot present the session](#failing-closed-in-a-tab-that-cannot-present-the-session-issue-668)
+below is the current behaviour of everything in this paragraph. The probe itself is asked once per
+browser session and only for a caller `PlatformDiagnosticsAccessService.isGranted()` already
+confirms is the configured platform administrator, the same cached check `platformAdminGuard` uses -
+asking it unconditionally for every signed-in member would be wasted traffic for a surface that can
+never apply to them.
+
+**`classifyMemberRequest` treats the support-session control surface like the diagnostics probe
+beside it** (`access/member-endpoint.ts`, issue #602's classification, extended here): both are
+`platform-admin` kind, reached as the administrator and authorized the same class-2 way, never
+inside a session, so a `403` from either is excluded from the capability cache's refresh trigger,
+the account-state cache's refresh trigger and the global "you don't have access to this" notice -
+exactly as a refusal of the diagnostics probe already was. Without that extension, an ordinary
+member's browser asking `GET .../active` (or, for a platform administrator outside an eligible
+window, the dialog's own start call) would have its expected `403` misread as a member refusal.
+Issue #673 completed the set by classifying the Super Admin businesses surface the same way; see
+[Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) for
+the full classification table and for the request loop the missing third prefix caused.
+
+**`supportSessionInterceptor` (`support-session/support-session.interceptor.ts`) is what a request
+actually joins a session through.** For every request this build's own API - never the support-
+session control surface itself, never a static asset - it attaches `X-Support-Session:
+<currentSessionId()>` while a session is active, and nothing while one is not. On the way back it
+does two things with one rule:
+
+1. **Reacts to `support_session_ended` from any call made in the context that is still current.** A
+   `403` carrying that code - the one `SupportSessionAuthorizationResultHandler` and
+   `SupportSessionExceptionHandler` both use - calls
+   `SupportSessionService.handleSessionEndedSignal()`, which clears the id, publishes the banner's
+   inactive state, broadcasts the end to other tabs, and does the same three things start and end
+   both do: forgets the cached business (`BusinessService.reset()`), re-reads the capabilities
+   (`AccessService.refresh()`) and navigates to the dashboard. It is idempotent, so a second
+   signal - or one for a tab that was never active - does nothing further.
+2. **Discards a response sent in a business context that is no longer current.** Issue #553
+   compared only the id the request carried, and ran the reaction above first;
+   [Discarding answers from a superseded business context](#discarding-answers-from-a-superseded-business-context-issue-669)
+   below is the current rule: every request captures a context generation as well as the id, the
+   comparison happens **before** anything reacts to the answer, and a superseded answer leaves the
+   caller with neither a value nor an error - exactly `EMPTY` would. A request made with no session
+   active is covered by it too, which the id comparison alone could not be.
+
+**Start, end and the `support_session_ended` signal all do the same three things**, and do them from
+one place (`SupportSessionService`) rather than three: forget the cached business the shell reads
+for every member, re-read the capabilities - the support set inside a session, the administrator's
+own (none) outside one - and navigate to the dashboard, because neither the page that was on screen
+before nor the one a stale capability set rendered belongs to the business now in view. Issue #670
+made that one path **every** transition's path, and made reaching the dashboard actually replace
+what is on it; see
+[Refreshing the visible business data on a support-context transition](#refreshing-the-visible-business-data-on-a-support-context-transition-issue-670).
+
+**Signing out, switching account, and an end nobody asked for (issue #681).** A session belongs to
+the administrator it was granted to, so the shell's sign-out asks
+`SupportSessionService.endBeforeSignOut()` first: it ends the caller's session on the server, forgets
+it in this tab and broadcasts the end, and only then does `AppComponent.logout()` start MSAL's
+sign-out redirect. It always completes and never errors, so a failed end cannot block a sign-out; a
+failed end still forgets the session here - the id must not outlive the identity it was granted
+to - but is not broadcast, because a sibling dropping a session the server still holds would be told
+something false. It navigates nowhere, because the redirect replaces the page. A **change of
+signed-in identity** in a tab that knows of a session forgets it the same way, without an end call
+and without a broadcast: the identity signed in now can neither end another administrator's session
+(the end is answered for the caller's own session only) nor send a message any tab still holding it
+would accept, and the shell discards the previous identity's business context itself (issue #604).
+An end the administrator did not make - the session's own expiry, or the server refusing a call
+with `support_session_ended` - shows one `ToastService.warning` notice
+(`SUPPORT_SESSION_ENDED_MESSAGE`) on top of the transition, so the return to their own dashboard is
+explained; the banner's own **End session**, and an end received from another tab, show none. The
+banner itself uses the design system's danger colours (`md-danger` at 15% behind `md-danger-text`),
+because issue #513 asks for a prominent red banner and it had shipped amber.
+
+**What proves it.** `support-session.service.spec.ts` covers starting a session, ending it, the
+`support_session_ended` signal (idempotent, and inert for a tab that was never active), the id never
+reaching `localStorage`/`sessionStorage`/the URL, a new or reloaded tab's own-session probe (asked
+once, gated on platform-admin eligibility, and never answering the id), and the two `BroadcastChannel`
+cases: a session shared to another open tab and an end applied in every other open tab.
+`support-session.interceptor.spec.ts` covers the header being attached and withheld, every one of the
+control surface, the diagnostics probe and (since issue #673) the Super Admin businesses surface
+never receiving it, the `support_session_ended` reaction, and a stale response - successful or
+refused - being discarded while an unchanged context is left alone (issue #669 added the superseded
+-generation cases there, and `support-session-request-context.spec.ts` for the composed rule).
+`member-endpoint.spec.ts` covers the
+`platform-admin` classification of the support-session control surface and of the Super Admin
+businesses surface. `view-as-business-dialog.component.spec.ts` and
+`support-session-banner.component.spec.ts` are the two components' own behaviour, and
+`super-admin-businesses.component.spec.ts` covers **View as this business** being offered only for
+an `Active` business and composed the same way Reject and Members already are (see
+[Page composition boundary](#page-composition-boundary-issue-191)).
+
+### Hiding write controls and support-view messages (issue #554)
+
+Issue #553 gave the Super Admin a session and a banner with no effect on the business pages viewed
+through it; this is the one slice of #513 that closes the two gaps that left open: a write control
+that still rendered, and a refusal or a degraded card that said nothing about why.
+
+**A support session's capabilities are the wrong signal for a write control, and this is why a new
+one was needed.** `SupportSessionAccessPolicy` (issue #551) grants a session several capabilities
+that gate a write elsewhere in the application - `InventoryOperate`, `PurchasingOperate`,
+`BusinessManage` and the rest - because the method rule, not the capability set, is what makes the
+session read-only. A page that hides a control on the same capability a member's own role uses
+(`AccessService.allows`, issue #528) would therefore still render it inside a session; only
+`Suppliers.ManageGstDefaults`, one of the two capabilities `SupportSessionAccessPolicy.Excluded`
+withholds entirely, happens to hide itself this way already. `SupportSessionService.active$` - a
+`distinctUntilChanged` projection of the banner's own `state$` - is the one flag every other write
+control reads instead: presentation only, exactly as a capability-gated control already is, and the
+backend's read-only enforcement is still what would refuse the write if this page failed to hide or
+disable it. `ProductListComponent` (Delete, hidden; the Active/Inactive toggle, disabled) and
+`ProductFormComponent` (Save, disabled) are this slice's representative pages; rolling the same
+`active$` subscription out to every remaining write control across the application is tracked as
+follow-up under #513 - issues #659, #658, #660 and #657 extend this to expenses and site
+commissions, machines and stock, business administration, and Purchases, purchase details/forms
+and Suppliers (below), and issue #661 closes the audit over everything those five left
+([Auditing the remaining write actions](#auditing-the-remaining-write-actions-across-the-support-view-ui-issue-661)).
+Each page's write method (`confirmDelete`, `toggleActive`, `save`) also
+checks the flag itself and returns before calling the API, the same belt-and-suspenders the
+capability-gated controls already follow - the control actually becomes unavailable rather than
+merely invisible.
+
+**The two refusal messages are read from the response's own `code`, by one interceptor, for every
+request at once.** `support-session/support-session-messages.ts` declares the two codes
+`Inventory.Application.SupportSessions.SupportSessionErrorCodes` answers a refused request with -
+`read_only_support_session` and `unavailable_in_support_view` - and the one sentence this
+application shows for each. `supportSessionMessageInterceptor` reads a `403`'s `code` and shows the
+matching sentence through the same `ToastService` every other failure uses; a write control this
+build failed to hide or disable ahead of the request (a race with the session ending, a page this
+slice has not yet reached) still resolves to the right sentence rather than the generic "you don't
+have access to this" `memberForbiddenNoticeInterceptor` would otherwise show for any other
+member-endpoint `403` - that interceptor excludes both codes for exactly this reason. It is
+installed in `app.config.ts` beside `FORBIDDEN_INTERCEPTORS`, outer to
+`supportSessionInterceptor`, so it never reports a response that one has already discarded as
+stale.
+
+**The Dashboard's two Nayax-fed cards show the same Nayax sentence, read from a flag rather than a
+refusal.** Issue #552 answers a support session's `GET /api/dashboard/summary` with "Needs refill"
+and "Needs ordering" each replaced by `UnavailableDashboardSectionDto`
+(`{ "available": false, "reason": "SupportView" }`) rather than a blanked figure inside either
+card - there was no error to catch, because the backend declined to read the live fleet at all.
+`DashboardSummary.needsRefill`/`needsOrdering` (`models.ts`) are each typed as the real summary
+shape or `UnavailableDashboardSection`, and `isDashboardSectionUnavailable` is the one type guard
+every reader uses. `DashboardComponent`'s value and footer helpers (`refillValueDisplay`,
+`refillFooterText`, and the ordering pair beside them) check it first: the big number reads
+"Unavailable", on the same rule the sales and inventory cards already use for a figure this
+caller was not given, and the footer carries the one sentence - `support-session-messages.ts`'s
+`NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE`, the same constant the interceptor above shows for a
+direct refusal, so the error and the degraded card are never two different sentences for the one
+reason.
+
+**What proves it.** `support-session.service.spec.ts` covers `active$` publishing `true` once a
+session starts and `false` again once it ends, with no duplicate for an unchanged state.
+`product-list.component.spec.ts` and `product-form.component.spec.ts` cover Delete being hidden,
+the status toggle and Save being disabled, and each write method refusing to call the API while a
+session is active - and that both controls render normally while none is. `dashboard.component.spec.ts`
+covers the Nayax sentence appearing for both cards' value and footer when the summary carries
+`{ available: false, reason: "SupportView" }`, and the real figures being unaffected when it does
+not. `support-session-message.interceptor.spec.ts` covers the two messages being shown for their
+own code and nothing else, and `member-forbidden-notice.interceptor.spec.ts` covers the generic
+message staying silent for both support-session codes.
+
+### Extending hidden write controls to expenses and site commissions (issue #659)
+
+Issue #554 rolled `SupportSessionService.active$` out to Products as the representative pages and
+tracked every remaining write control as follow-up under #513. This slice closes that follow-up for
+Operating Expenses and site commissions: `OperatingExpenseComponent`, `SiteCommissionAgreementsComponent`
+and the commission payment control on `SiteCommissionsReportComponent`.
+
+**The same wrong signal, for two more capabilities.** `SupportSessionAccessPolicy` grants a session
+`Capability.ExpensesManage` and `Capability.SiteCommissionsManage` alongside the capabilities #554
+already named, so a page that gates its own write controls on either of those - exactly as Products
+gates on `InventoryOperate` - would still render them inside a session. `active$` is the same shared
+flag these pages now read instead, for the same reason: it is presentation only, and the backend's
+read-only method rule is still what would refuse the write if a page failed to hide or disable it.
+
+**What each page hides or disables, and why hidden rather than disabled differs by control.**
+`OperatingExpenseComponent` hides Add Expense (a page action, like the rest of this build's create
+entry points) and each row's Edit/Delete (following `ProductListComponent`'s Delete), and disables
+Save on the open edit form (following `ProductFormComponent`) - a session cannot open an edit form in
+the first place once Edit is hidden, but Save still checks the flag so a form already open when a
+session starts cannot submit. `SiteCommissionAgreementsComponent` disables its single Save agreement
+button, the same pattern as `ProductFormComponent`'s Save. `SiteCommissionsReportComponent`'s Record
+Payment control - the input group and the button together - hides rather than disables, since (like
+Products' Delete) there is no mid-edit state the control being merely inert would protect. Every
+guarded handler (`startCreate`, `startEdit`, `save`, `remove` on the expense page;
+`saveCommissionAgreement`; `recordPayment`) also checks `sessionActive` itself and returns before
+calling the API, the same belt-and-suspenders #554 established: the control becomes unavailable
+rather than merely invisible or inert.
+
+**Read-only listings and reports are unaffected.** The expense table, the current-agreements table
+and the commission report's rows, details and Print details stay visible and interactive during a
+session; only the controls that attempt a write are touched. Server-side enforcement - the method
+rule behind `ExpensesManage` and `SiteCommissionsManage` alike - is unchanged.
+
+**What proves it.** `operating-expense.component.spec.ts`, added by this slice, covers Add
+Expense/Edit/Delete being hidden and Save being disabled while a session is active, each guarded
+handler (`startCreate`, `startEdit`, `save`, `remove`) refusing to call the service when invoked
+directly, and normal create/edit/delete behaviour while no session is active.
+`site-commission-agreements.component.spec.ts` gained a session-active describe block covering Save
+agreement being disabled and `saveCommissionAgreement` refusing to call the service while a session
+is active, and both staying available while none is. `site-commissions-report.component.spec.ts`,
+added by this slice, covers Record Payment being hidden and `recordPayment` refusing to call the
+service while a session is active, and both working normally while none is.
+
+### Extending the read-only support-view guard to machines and stock (issue #658)
+
+Issue #554 established the pattern and covered Products as its representative pages; this slice
+rolls the same `SupportSessionService.active$` subscription out to the next bounded area #513
+named: machine restock, the machine-level Nayax Sync Restock reconciliation workflow, and the
+manual stock-adjustment form shared by the Stock History page and the preserved
+`/products/:id/stock` entry point. Sites, site products and the Sites list carry no write control
+at all - every call those pages make is a `GET` - so nothing in that family needed a guard.
+
+**`MachineDetailComponent`'s Restock control (quantity input and button) is hidden per row**, the
+same `ProductListComponent.confirmDelete`/Delete-button shape issue #554 used: there is no
+read-only value left in a quantity input nobody may submit, so hiding it rather than disabling it
+is the right call, the same way Delete was hidden rather than disabled. `restockProduct()` also
+returns before calling `StockService.adjust` while a session is active.
+
+**`MachineRestockSyncComponent`'s Sync Restock trigger is disabled, not hidden**, because unlike
+Restock's bare input it is a single well-known action on an otherwise-informative panel - the same
+shape `ProductFormComponent.save` used. It needed the guard for a sharper reason than the others,
+though: `POST /api/machines/{id}/sync-restock` is itself a `POST`, so
+`SupportSessionAccessPolicy.IsReadMethod` refuses even the *preview* fetch during a session, not
+only the apply/resolve calls that follow it - there is no partial, read-only view of this dialog to
+leave open. Every write-shaped method on the component (`syncRestock`, `applySelectedEvents`,
+`resolveDuplicate`, `resolveSelectedAsAlreadyRecorded`) checks `sessionActive` and returns before
+calling `MachineService`, and the dialog's own Apply/resolve buttons are disabled the same way as a
+second line of defence for the rare case the dialog was already open when a session started.
+
+**`StockAdjustmentFormComponent`'s Apply Adjustment button is disabled**, on the same reasoning as
+Save: the rest of the form (reason, machine, notes) stays useful to read, only the write at its end
+is refused. `adjust()` returns before calling `StockService.adjust` while a session is active. Since
+the component is composed into both `StockHistoryPageComponent` and the machine-detail/stock pages
+behind it, this one guard covers every place a manual adjustment can be submitted from.
+
+**What proves it.** `machine-detail.component.spec.ts` covers Restock being hidden while a session
+is active and rendered normally while none is, and `restockProduct()` refusing to call the API
+directly. `machine-restock-sync.component.spec.ts` covers Sync Restock being disabled in both
+states and every one of the four write-shaped methods refusing to call `MachineService` directly
+while a session is active, including the preview fetch. `stock-adjustment-form.component.spec.ts`
+covers Apply Adjustment being disabled in both states and `adjust()` refusing to call
+`StockService.adjust` directly while a session is active. `stock-history-page.component.spec.ts`
+provides `SupportSessionService` for the embedded form so its own existing coverage keeps rendering
+the composed page.
+
+### Disabling business administration write controls in support view (issue #660)
+
+Issue #554 rolled `SupportSessionService.active$` out to Products as the two representative pages;
+this is the next slice of #513's follow-up, carrying the same `active$` subscription to the three
+named business-admin mutation families the parent issue called out - Business Settings, Nayax
+Settings, and members/users/invitations - each judged by the same question: does this page's route
+capability stay granted inside a session?
+
+**Business Settings and Nayax Settings needed the guard, because their capabilities are granted.**
+`Business.Manage` and `Integration.Manage` are both in `SupportSessionAccessPolicy.Capabilities`
+(see [Hiding write controls and support-view messages](#hiding-write-controls-and-support-view-messages-issue-554)
+for why a granted capability is the wrong signal for a write control), so a Super Admin's support
+session reaches both routes with the page rendered exactly as an Owner sees it. `active$` is the
+flag each page's write method checks instead, the same belt-and-suspenders `ProductListComponent`
+and `ProductFormComponent` already follow:
+
+- `BusinessSettingsFormComponent` disables Save and its `submit()`/`save()` both return before
+  validating or calling `BusinessSettingsService.save()` - `save()` is checked a second time
+  because `confirmTimeZoneChange()` reaches it without going through `submit()`'s own guard, which
+  only covers a session that was already active when the form was submitted.
+- `NayaxSettingsComponent` disables Save rate and `saveFeeRate()` returns before calling
+  `NayaxSettingsService.saveRate()`.
+- `NayaxConnectionWizardComponent` disables Test connection, Save connection and Re-test, and
+  `runTest()`, `saveConnection()` and `retest()` each return before calling the matching
+  `NayaxConnectionService` method - `canSave` folds the session flag in beside `canManage`, the
+  existing `Integration.Manage` read, exactly as it already folds in `busy`.
+
+Every one of these pages keeps its read-only information on screen - the stored fee-rate history,
+the stored Nayax connection's status and checklist, the legacy-settings prompt - because only the
+mutating action itself is disabled, never the page.
+
+**Members, Invites and the rest of Admin Users needed no frontend change, because `Members.Manage`
+is excluded.** `SupportSessionAccessPolicy.Excluded` deliberately withholds `MembersManage` from a
+support session (the member list's names and emails are private even from a supporter - see
+[Hiding write controls and support-view messages](#hiding-write-controls-and-support-view-messages-issue-554)),
+and `admin/users`'s route requires exactly that capability (`app.routes.ts`). `requireCapability`
+therefore redirects a session's request to `access-not-allowed` before `MemberManagementComponent`
+or `MemberInvitesComponent` ever mounts, so role change, revoke, reinstate, invite creation and
+invite cancellation are unreachable by construction rather than by a flag either component reads.
+Teaching either component `active$` as well would be an assertion this build can never exercise
+honestly, because the capability that would have to flip for the route to admit a session request
+is the one `SupportSessionAccessPolicy.Excluded` pins shut; the backend side of that is proved by
+`SupportSessionAccessPolicyTests`, and the route guard's generic redirect-on-denial behaviour is
+proved by `capability.guard.spec.ts`, so this slice adds no redundant frontend test for a path that
+cannot be reached.
+
+**What proves it.** `business-settings-form.component.spec.ts`,
+`nayax-settings.component.spec.ts` and `nayax-connection-wizard.component.spec.ts` each cover their
+write control being disabled while a session is active, the write method refusing to call its
+service while one is - including, for Business Settings, a time zone confirmation requested before
+a session started but confirmed after one did - and every control rendering and working normally
+while none is. `business-settings.component.spec.ts` was given the same `SupportSessionService`
+stub `BusinessSettingsFormComponent` now requires, because that page composes the form.
+
+### Extending write-control hiding to Purchases and Suppliers (issue #657)
+
+Issue #554 hid or disabled write controls on two representative pages and left the rest of the
+application as follow-up under #513; this slice rolls the same `SupportSessionService.active$`
+flag out to Purchases, purchase details/forms and Suppliers - the bounded area #657 named. The
+reasoning is unchanged: every endpoint these pages call is `[RequireCapability(Capability
+.PurchasingOperate)]`, one of the capabilities `SupportSessionAccessPolicy.Capabilities` grants a
+session, so a page that hides a control on the same capability a member's own role uses would
+still render it inside a session; `active$` is the one flag that does not make that mistake, and
+the backend's read-only method rule is still what would refuse the write if a page failed to hide
+or disable it.
+
+**What changed, page by page.** `PurchaseListComponent` hides Add Purchase and Delete (`remove`
+checks the flag itself before confirming). `PurchaseUploadComponent` (`/purchases/new`, reached
+both directly and from a supplier order's Receive action) disables Add Purchase and `upload()`
+returns before calling the API. `PurchaseEditFormComponent` - a presentational child with no
+service of its own - takes `sessionActive` as an `@Input` exactly as it already takes `saving` and
+`error`; `PurchaseEditPageComponent` is what actually subscribes to `active$` (alongside its
+existing `Subscription` bag) and passes the flag down, and guards its own `onSave` the same way as
+a second line of defence beneath the form's own `submit()` guard. `SupplierOrdersComponent` hides
+Receive / Create Purchase and Cancel, and `cancelOrder` checks the flag before calling the API;
+Receive is navigation to the already-guarded upload page, so only the control needed hiding, not a
+new guard. `SupplierListComponent` disables the Create/Update submit button and hides Delete,
+guarding `save()` and `remove()` the same way; Edit is left alone because it only sets local form
+state and issues no request of its own - the control that matters is the Save/Create button it
+leads to.
+
+**What this slice deliberately left alone.** `SupplierGstDefaultsComponent` needed no change: its
+editor already hides itself on `AccessService.allows('Suppliers.ManageGstDefaults')`, and that
+capability is one of the two `SupportSessionAccessPolicy.Excluded` withholds entirely, so a
+session's `canManage` is already `false` without reading `active$` at all. Local-only controls
+that issue no request of their own - a draft purchase line's Add Product/Remove, every plain form
+field - are untouched for the same reason the representative pages in #554 left them alone: the
+single Save/Submit control downstream of them is what is actually guarded.
+
+**What proves it.** `purchase-list.component.spec.ts` covers Add Purchase and Delete being hidden,
+and `remove` refusing to call the API, while a session is active - and both rendering normally
+while none is. `purchase-upload.component.spec.ts` covers Add Purchase being disabled and
+`upload()` refusing to call the API. `purchase-edit-form.component.spec.ts` covers Save being
+disabled and `submit()` emitting nothing while `sessionActive` is set directly on the form, and
+`purchase-edit-page.component.spec.ts` covers the page passing its own `active$` subscription down
+as that input and `onSave` refusing to call the API. `supplier-orders.component.spec.ts` covers
+Receive and Cancel being hidden and `cancelOrder` refusing to call the API.
+`supplier-list.component.spec.ts` (new) covers Create/Update being disabled, Delete being hidden,
+`save()` and `remove()` refusing to call the API while a session is active, and normal behaviour
+resuming once a session ends.
+
+### Auditing the remaining write actions across the support view UI (issue #661)
+
+Issues #554, #659, #658, #660 and #657 each guarded one named family of pages. This slice is the
+audit that closes #513's frontend follow-up: every remaining user-triggered write action in the
+Angular application was inventoried, and the ones a support session can still reach now read the
+same `SupportSessionService.active$` flag. Nothing about the signal changed - a session grants the
+capability these pages gate on, so the capability is still the wrong thing to ask
+([Hiding write controls and support-view messages](#hiding-write-controls-and-support-view-messages-issue-554))
+- and nothing about the backend changed: the read-only method rule, the Nayax refusal and the two
+`403` codes are exactly as issue #551 left them.
+
+**A `POST` that only reads is still refused, and that is what made the Admin maintenance pages the
+largest part of this audit.** `SupportSessionAccessPolicy.IsReadMethod` admits `GET` and `HEAD` and
+nothing else, so a Preview/Dry Run step the operator thinks of as a read - Historical GST
+Classification's preview, the AVCO transition's two previews, the costing repair's preview, the
+Nayax sale timestamp repair's preview, the Nayax cost backfill's dry run - is refused exactly as
+its Apply is. Each of those pages is behind `Data.Repair`, which
+`SupportSessionAccessPolicy.Capabilities` grants, so all of them rendered fully operable inside a
+session before this slice. The same reasoning covers `Imports.Run` on Admin → Imports and
+`Inventory.Operate` on Take Inventory and the Products pages below.
+
+**What changed, page by page.**
+
+- `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file, Import
+  products and Import XML files, and `onSalesSelected`, `importProducts` and `importXml` each
+  return before calling `ImportService`. Download template stays enabled: it builds a CSV in the
+  browser and calls no API.
+- `HistoricalGstClassificationWorkflowComponent`, `AvcoTransitionWorkflowComponent`,
+  `CostingRepairComponent`, `HistoricalCostRecoveryWorkflowComponent` and
+  `NayaxSaleTimestampRepairWorkflowComponent` (all `Data.Repair`) disable both their preview and
+  their apply control, and every preview and apply method returns before calling its service. The
+  timestamp repair folds the flag into `canApply` rather than adding a second condition beside it,
+  so Apply is never offered for a plan even when one is on screen and acknowledged. Each page's
+  read-only content - the returned plan, the repair history (`GET`), the explanatory copy - stays
+  on screen, which is why these are disabled rather than hidden.
+- `TakeInventoryComponent` (`take-inventory`, `Inventory.Operate`) disables Apply on every row and
+  `apply()` returns before calling `InventoryCountService`. Confirming an unchanged Current Stock
+  stays available deliberately: it marks the row complete in this browser's session state and calls
+  nothing at all.
+- `ProductNeedsOrderingComponent` (`products/needs-ordering`, `Inventory.Operate`) hides Mark as
+  ordered - it opens a dialog whose only purpose is creating a supplier order - and disables the
+  Active/Inactive toggle, matching `ProductListComponent`'s own toggle. `openOrderForm`, `saveOrder`
+  and `toggleActive` each return before acting.
+- `ProductGstRuleComponent`, composed into the product edit page, disables Save GST rule and
+  `save()` returns before calling `ProductService.setGstRule`.
+- `DashboardComponent` has no write control, but arriving on it posts
+  `POST /api/nayax-sales/sync` - and the Dashboard is exactly where starting a session lands, so
+  every support view began with a refused write and a toast. The call is now skipped entirely
+  while a session is active, and the page says so with
+  `NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE` through a separate
+  `isSalesSyncSkippedInSupportView` flag rather than reusing `isSalesSyncFailed`: a synchronization
+  that was never attempted did not fail, and the persisted Sites and Machines figures are still
+  loaded and still flagged as possibly stale.
+
+**What this audit deliberately excluded, and why.**
+
+- **Admin → Users (members, invites)** - `Members.Manage` is in `SupportSessionAccessPolicy
+  .Excluded`, so `requireCapability` redirects a session before `MemberManagementComponent` or
+  `MemberInvitesComponent` mounts. Recorded by issue #660 and unchanged here.
+- **Supplier GST defaults** - `Suppliers.ManageGstDefaults` is the other excluded capability, so
+  the editor already hides itself. Recorded by issue #657 and unchanged here.
+- **The Super Admin pages** (`super-admin/businesses`, `super-admin/diagnostics`) - these are the
+  platform-admin surface, reached as the administrator themselves under `PlatformAdminPolicy`, not
+  through a session. Approve/reject/deactivate/reactivate/release and the diagnostics query must
+  keep working *while* a session is running, because ending it is one of the actions on that page.
+- **Invite redemption (`/invite/:token`) and the business application (`/apply`)** - both write the
+  caller's **own** membership or application through a `MembershipNotRequiredEndpoint`, neither
+  serves or alters any business's data, and neither route is inside the business shell a support
+  view puts the administrator in. Guarding them would stop a person from joining or applying, which
+  is not what a support session is about.
+- **`SaleCostingBackfillComponent`** - not routed and not imported by any component, so it is
+  unreachable in the running application; it was left exactly as it is rather than guarded, because
+  a guard on dead code proves nothing. Removing it is out of this issue's scope.
+- **Local-only controls** - filters, sorts, the order-quantity inputs, Confirm current stock,
+  Download template, every control that changes component state and issues no request. Only the
+  Save/Apply/Submit at the end of each of those is guarded, the same line #554 drew.
+
+**What proves it.** `admin-imports.component.spec.ts`, `take-inventory.component.spec.ts`,
+`product-needs-ordering.component.spec.ts`, `product-gst-rule.component.spec.ts`,
+`historical-gst-classification-workflow.component.spec.ts`,
+`avco-transition-workflow.component.spec.ts`, `costing-repair.component.spec.ts`,
+`historical-cost-recovery-workflow.component.spec.ts` and
+`nayax-sale-timestamp-repair-workflow.component.spec.ts` each gained a session-active describe
+block covering the control being disabled or hidden while a session is active, every guarded
+handler refusing to call its service when invoked directly - the preview and dry-run handlers
+included - and every control rendering and working normally while no session is active.
+`dashboard.component.spec.ts` covers the sync call never being made in a session, the persisted
+machines and sites still loading, the Nayax sentence replacing the sync-failed warning, and the
+sync still running outside a session. The five routed Admin pages that compose a guarded workflow
+(`avco-transition`, `costing-repair-page`, `historical-cost-recovery`,
+`historical-gst-classification`, `nayax-sale-timestamp-repair`) were given the same
+`SupportSessionService` stub their child now requires.
+
+### Failing closed in a tab that cannot present the session (issue #668)
+
+Issue #553 gave a reloaded or newly opened tab the banner for a session it had learned about from
+`GET .../active` but held no id for. That tab sends no `X-Support-Session` header, so every request
+it makes resolves the administrator's **own** membership
+([Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551)):
+the page showed the administrator's own business under "Viewing as &lt;other business&gt; -
+read-only". Nothing crossed a tenant boundary - the backend resolved exactly the membership it
+should have - but the label was a lie in the one direction that matters, and an administrator acting
+on what they believed was somebody else's data was acting on their own. This slice separates the two
+states and makes the one that cannot be acted on render nothing.
+
+**Three states, one of which is new.** `SupportSessionState`
+(`support-session/support-session.service.ts`) is now a three-way discriminated union on `kind`:
+
+| `kind` | What it means | What the shell renders |
+| --- | --- | --- |
+| `inactive` | Nothing is running, as far as this tab knows: ordinary context, no header, the administrator's own membership | The routed page, unchanged |
+| `viewing` | An **effective** local support view: this tab holds the id, so its requests present the header and the API resolves the session's business | The routed page, under `SupportSessionBannerComponent`'s "Viewing as" banner |
+| `unresolved` | A session is active on the server for this administrator and this tab holds no id for it | `SupportSessionBlockedComponent`'s explanation and **End session**, in place of the routed page; no banner |
+
+`active$` - the flag every write control reads
+([Hiding write controls and support-view messages](#hiding-write-controls-and-support-view-messages-issue-554))
+- is `true` for both `viewing` and `unresolved`. That is the fail-closed answer: no business page is
+rendered in the `unresolved` state at all, and a control that somehow rendered must not offer a
+write either.
+
+**No page means no business-scoped request.** `AppComponent` subscribes to the same `state$` the
+banner does and withholds `<router-outlet />` while `isSupportViewUnresolved`, ahead of the business
+-context gate issue #499 added: what is wrong is not that the business is unknown but that any page
+rendered here would be the administrator's own data for a session naming another business. Because
+the routed page is never created, the reads it would issue are never issued - this is a render gate
+rather than a request filter, so `GET /api/business/current`, `GET /api/me/access` and
+`GET /api/me/account-state` still answer for the administrator themselves, as they must for the
+shell and for the Super Admin pages to keep working.
+
+**The explanation offers exactly one action, and it is not a repair.**
+`layout/support-session-blocked.component.ts` names the business (or "another business" when the
+active read answered no name), says that this tab does not hold the session's identifier and that
+nothing will be shown here, and offers **End session** - the same actor-resolved
+`POST .../active/end` the banner uses, which needs no id either. A failed end leaves the explanation
+on screen and reports the API's own sentence through `ToastService`, because the session is still
+active on the server and this tab is still one that must not render business data. There is
+deliberately **no** resume, re-open or "restart session" action: the id is memory-only by design
+and the active read never answers it, so the only honest ways forward are the tab the session was
+started in, whose `started` broadcast still resolves this one, and ending the session and starting a
+new one through the explicit **View as this business** flow. Nothing in this slice reads an id from
+the probe response, `localStorage`, `sessionStorage` or the URL, and nothing starts or rotates a
+session on the administrator's behalf.
+
+**Recovery is the two paths that already existed.** A `started` broadcast from a sibling tab turns
+`unresolved` into `viewing` with the id in hand, and the page renders; an end - from this tab,
+another tab, the session's own expiry, a `support_session_ended` refusal on some other call, or the
+business being deactivated - returns every tab to `inactive`, which is ordinary context again, with
+the cached business dropped, the capabilities re-read and the dashboard reached afresh. Both of them
+are now the one transition path of issue #670
+([Refreshing the visible business data on a support-context transition](#refreshing-the-visible-business-data-on-a-support-context-transition-issue-670)),
+which is what makes the page the tab lands on a new one rather than the previous business's.
+A delayed probe cannot undo either: the boot check publishes `unresolved` only while this
+tab still holds no id and is still `inactive`, so an answer arriving after a sibling tab's broadcast
+leaves the effective support view alone.
+
+**What proves it.** `support-session.service.spec.ts` covers the reloaded tab's probe publishing
+`unresolved` rather than `viewing`, `active$` reporting `true` for it, no id being adopted or stored
+even when the probe response carries one and no replacement session being started, a delayed probe
+answering into `unresolved` and a delayed probe leaving a sibling tab's `viewing` state alone,
+recovery through a sibling tab's `started` broadcast, an end from `unresolved` returning the tab to
+ordinary context, a failed end leaving it `unresolved`, and another tab's end clearing it.
+`support-session-blocked.component.spec.ts` covers the explanation rendering only for `unresolved`
+(nothing for `inactive` or `viewing`), naming the business and falling back to "another business",
+never saying "Viewing as", ending the session, and a failed end re-enabling the action while keeping
+the explanation. `support-session-banner.component.spec.ts` covers the banner showing nothing for
+`unresolved`. `app.component.spec.ts` covers the routed page being withheld for an administrator
+with their own membership and for one with none (whose business is never looked up), **End session**
+being reachable from the main region, the page rendering again once the session is over, and an
+effective support view still rendering its page.
+
+### Discarding answers from a superseded business context (issue #669)
+
+Issue #553 decided whether an answer still belonged to the context that asked for it by comparing
+the session id the request presented against `currentSessionId()`. That left two holes, both of them
+about an answer arriving into a context it was never asked in:
+
+- **A request sent with no id had nothing to become stale against.** Every ordinary-context request
+  is one, and so is every request of a tab that holds no usable id
+  ([Failing closed in a tab that cannot present the session](#failing-closed-in-a-tab-that-cannot-present-the-session-issue-668)).
+  An administrator who issued a dashboard read, then started a support session for another business
+  while it was in flight, had their **own** business's figures delivered into the support view -
+  nothing crossed a tenant boundary on the server, which resolved exactly the membership it should
+  have, but the page then showed one business's data under another business's banner. The reverse -
+  an ordinary-context answer arriving after a session was started **and ended** again, where the id
+  is `null` at both ends - was invisible to the comparison for the same reason.
+- **The `support_session_ended` reaction ran before the comparison.** A delayed refusal of session A
+  therefore called `handleSessionEndedSignal()` whatever was current when it landed, so one
+  session's expiry ended the session started after it, dropped the cached business and navigated the
+  administrator away from a session that was perfectly alive.
+
+**Every business-scoped request captures a context, and the context has a generation.**
+`SupportSessionService.captureRequestContext()` returns `{ sessionId, generation }` - the id the
+request will present (`null` in ordinary context) and a counter - and `isCurrentContext(context)`
+answers whether both are still current. `supportSessionInterceptor` captures one for every request
+it lets through (so not for the `platform-admin` control surfaces or a `non-api` asset, which never
+carried the header either) and asks the question again when the answer arrives. The generation is a
+counter rather than a comparison of states on purpose: two contexts that *look* alike - ordinary
+context before and after a whole session, the same business viewed under a replacement session - are
+still two contexts, and an answer from the first belongs to neither the page nor the session the
+second is in.
+
+**The service invalidates the generation on every effective context change**, from the one place
+that knows what a request would resolve:
+
+| What changed | Where |
+| --- | --- |
+| A session started here | `start()`, as the id is stored |
+| A session ended here, in another tab, by expiry, or on a `support_session_ended` refusal | `applyEnded()`, which all four reach |
+| Another tab shared a session over `BroadcastChannel` | the `started` message handler |
+| This tab learned from `GET .../active` that it cannot present the running session | the boot check, with the `unresolved` publish - the id does not change there, and the context does, because this tab renders no business page from that moment |
+| The signed-in identity changed | `signedInAccountMayHaveChanged`/`activeAccountKey` (`access/signed-in-account.ts`), the same pair `AccessService` and `AccountStateService` observe |
+
+An identity notification that resolves to the same account key changes nothing - one sign-in reports
+itself twice, as an MSAL account event and as `inProgress$` settling - and neither does *learning* an
+identity where there was none: a request issued before anybody is signed in waits for MSAL's token
+before it is even sent, so invalidating there would discard the first answer of every page loaded
+straight into a sign-in redirect. Losing an identity (a sign-out) and swapping one for another both
+do invalidate. The invalidation also happens **before** the new context issues anything of its own,
+so the capability re-read that start, end and expiry all trigger belongs to the new context instead
+of being discarded as an answer from the one it replaced.
+
+**The comparison happens before anything reacts to the answer, and the interceptor is innermost.**
+`supportSessionInterceptor` is installed last in `app.config.ts`, so it is the first to see a raw
+response on the way back: a superseded answer reaches neither the page, nor the session state, nor
+the capability and account-state caches (`accessForbiddenInterceptor`,
+`accountStateForbiddenInterceptor`), nor the global `403` notice
+(`memberForbiddenNoticeInterceptor`), nor the support-session message interceptor beside them. The
+one reaction this interceptor performs itself is gated on the same comparison, which is what makes a
+delayed `support_session_ended` from session A unable to end session B. A refusal of the context that
+**is** still current does end it, and fails closed exactly as before: the session is cleared, the
+business dropped, the capabilities re-read, the dashboard navigated to - and the caller is told
+nothing either way, because the context it asked in is over. `loadingInterceptor`'s `finalize` still
+ends its spinner, because completion - which a discarded answer still is - is enough.
+
+Nothing here retries a request, caches anything across businesses, or changes what the server
+enforces: a superseded answer is dropped, never reissued, and the API's own refusal codes and the
+memory-only session id are untouched.
+
+**What proves it.** `support-session-request-context.spec.ts` composes the production chain over the
+**real** `SupportSessionService` with `HttpTestingController` holding each response until the test
+chooses, and covers the five transitions the issue names - ordinary-to-support, support-to-ordinary,
+session A to session B, a session ended and restarted for the same business (and the same sequence
+for a request that began with no id at all), and an identity switch, with and without a session - plus
+the unresolved-probe case, a superseded failure reaching neither the global notice nor either member
+cache, a superseded `support_session_ended` not ending the current session, the current session's own
+refusal still ending it, and the unchanged-context answer still being delivered.
+
+### Refreshing the visible business data on a support-context transition (issue #670)
+
+Discarding an answer from a context the page has left (issue #669) is only half of "the page shows
+the business it says it does". The other half is the page itself, and two things were wrong with it.
+
+- **Reaching the dashboard is not the same as replacing what is on it.** Every transition ended with
+  `router.navigate(['/'])`, and the dashboard is where starting a session lands - so the common case
+  was a tab *already* on `/`, where the router has nothing to do: the navigation was ignored, the
+  page component was reused, and the previous business's machines, sites and headline figures stayed
+  on screen after the banner above them had changed or disappeared. `onSameUrlNavigation: 'reload'`
+  alone does not fix it either: it re-runs that route's guards and resolvers, and the default
+  `RouteReuseStrategy` still reuses the component - the figures are held by the component, not by
+  the route.
+- **A cross-tab start was not a transition at all.** The `started` message handler stored the id,
+  moved the request-context generation and published the banner, and stopped there - so every tab
+  but the one the session was started in kept the administrator's own cached business, their own
+  capability set and whatever page was on screen, now labelled "Viewing as &lt;other business&gt;".
+
+**One transition path, reached five ways.** `SupportSessionService.applyBusinessContextChange()` is
+what every effective business-context change does, and nothing does part of it:
+
+| What happened | Where it reaches the path |
+| --- | --- |
+| A session was started here | `start()`, after the id is stored and the banner published |
+| It was ended here | `end()` → `applyEnded()` |
+| It expired | the expiry scheduled from the state's own `expiresAtUtc` → `applyEnded()` |
+| A call made **in the context that is still current** was refused `support_session_ended` | `handleSessionEndedSignal()` → `applyEnded()`, gated by issue #669's comparison |
+| A valid same-identity `started`/`ended` message arrived from another tab | the `BroadcastChannel` handler |
+
+The path drops the cached business (`BusinessService.reset()`), re-reads the capabilities
+(`AccessService.refresh()`), and then takes the tab to the dashboard of the business now in view -
+publishing `contextChanging$` as `true` before the navigation and `false` when it settles. Two
+overlapping transitions keep it `true` until the last of them settles, and a refused or redirected
+navigation still releases it, because the alternative is a shell that withholds every page for the
+rest of the browser session.
+
+**The shell is what clears the page, and it clears it immediately.** `AppComponent` withholds
+`<router-outlet />` while `contextChanging$` is `true` - the same gate it already applies while the
+business lookup settles (issue #499) and while a tab cannot present the session (issue #668) - and
+**flushes that removal synchronously** (`ChangeDetectorRef.detectChanges()`) instead of waiting for
+Angular to look again. Both halves matter:
+
+- the flush is what makes the clearing immediate and, on `/`, what makes it happen at all: a
+  transition is reported from a response callback or a `BroadcastChannel` message and its navigation
+  can settle in the same turn, so a flag set and cleared before the next change detection would
+  never take the page off screen;
+- withholding the outlet is also what *replaces* the page. Destroying a `RouterOutlet` keeps the
+  activated route in `ChildrenOutletContexts` but clears its `attachRef`, so the next outlet
+  `activateWith`s that route into a **new** component instance - which is why this works regardless
+  of what the router decided about reusing the route. The new page runs its own `ngOnInit` and reads
+  the effective context from scratch, under the new capability set and, inside a session, presenting
+  `X-Support-Session` on every request it makes.
+
+The navigation is still made, with `onSameUrlNavigation: 'reload'`, for the two things it is the
+only thing that can do: taking a tab that was on some other page to the dashboard, and
+re-validating the destination's guards under the capabilities the new context reports.
+
+**An expiry is now observed rather than waited for.** Each state carries the expiry the server set
+(`publish()` is the one place a state and its expiry are published together), and the service
+schedules the local end from it, so the tab a session was started in, a tab it was shared with and a
+tab that only learned of it from `GET .../active` all end at the same instant without telling each
+other - which is why an expiry is deliberately not broadcast. **The browser's clock is never the
+authority**: an unreadable instant, or one this clock says has already passed, schedules nothing at
+all, because the server decides when a session is over and refuses the next call with
+`support_session_ended`, and a clock that is hours fast must not be able to end a session that has
+just been granted. The server-side lifetime, the refusal code and the memory-only id are untouched.
+
+**A message from another tab is checked before it is believed.** `BroadcastChannel` is shared by
+every tab of the origin, and a `started` message carries a session id - the one credential this
+application holds - so `readBroadcast` accepts a message only when it names the identity signed in
+*here* (`activeAccountKey`, the same identity the member caches key their answers on), is one of the
+two kinds by exact name, and - for a `started` - carries a non-empty id, a business name and an
+expiry. Anything else is ignored entirely: it cannot adopt a session (that handler is the only place
+in the application that ever learns an id it was not answered directly), and it cannot end one
+either. A tab that does not yet know who is signed in therefore adopts nothing, which is the
+fail-closed answer: its requests resolve the administrator's own membership and it labels nothing as
+anybody else's.
+
+Nothing here changes what the server enforces, the read-only rule, the capability sets, the session's
+server-side lifetime, or where a business comes from. It is the frontend's own answer to "what is on
+screen now". At this point `BusinessService.reset()` still left the shell's cached business unread
+inside a session - the banner names the business from the session itself - which was unchanged from
+issue #553; issue #671 is what reads it again, because the zone that dropped with it is what every
+instant on the rebuilt page is rendered in (see [Reloading the business time zone after a context
+change](#reloading-the-business-time-zone-after-a-context-change-issue-671)).
+
+**What proves it.** `support-session-context-transition.spec.ts` renders the **real**
+`AppComponent`, the real router and the real `DashboardComponent` over the production interceptor
+chain and the real `SupportSessionService`, with `HttpTestingController` answering each business's
+figures, and asserts what is actually on screen: a local start and a local end on `/` each replace
+the previous business's machine and site figures and issue the new context's reads with (or without)
+the session header; a tab on another page is still taken to the dashboard; the session expiring and
+a `support_session_ended` refusal of the current session each do the same with no further call
+needed; another tab's `started` applies the whole transition and presents the id it shared;
+another tab's `ended` returns the page to ordinary context; a message from another identity, with no
+identity, or of an unknown kind changes nothing at all; and an answer the previous context asked for
+never reaches the new page. `support-session.service.spec.ts` covers the transition window around
+the navigation (including two overlapping transitions and a refused navigation), the expiry
+scheduling and the two cases it deliberately refuses to schedule, the identity the outgoing message
+carries, and the received-message rules case by case. `app.component.spec.ts` covers the shell's own
+part: the page leaving the screen as soon as a transition starts, a new outlet - and so a new page -
+when a transition starts and settles before Angular would look again, and a tab that cannot present
+the session still rendering no page at all.
+`support-session.interceptor.spec.ts` adds the interceptor's own superseded-generation and
+reordered-reaction cases, and `support-session.service.spec.ts` covers each invalidation trigger
+above, including the two identity notifications that are deliberately not changes.
+
+### Reloading the business time zone after a context change (issue #671)
+
+Dropping a page and rebuilding it (issue #670) replaces what is on screen, but the rebuilt page still
+renders its instants in whatever time zone is **published** - and the zone was read once per
+signed-in account (issues #499 and #604). Two context changes under one identity therefore left it
+wrong or absent:
+
+- **A support start, end or expiry published no zone at all.** The transition calls
+  `BusinessService.reset()`, which drops the cached business *and* the published zone, and nothing
+  read the business now in view. `AppComponent`'s lookup had already run for this account, so every
+  instant on the page the transition built rendered blank - `BusinessDateTimePipe` renders nothing
+  rather than guess - for the rest of the browser session.
+- **An identity that became a `Member` after that lookup never got a zone either.** The lookup waits
+  for the account state and deliberately asks for no business when it is not `Member` (issue #529),
+  then ends. An accepted invite (issue #535) and an approved application (issue #542) both turn the
+  *same* signed-in identity into a `Member` afterwards, and nothing looked again.
+
+**The service reports the effective business change; the shell reads the business.**
+`SupportSessionService.contextChanged$` emits exactly once per transition, from
+`applyBusinessContextChange()`, immediately after `BusinessService.reset()` and before the capability
+re-read and the dashboard navigation - so the read belongs to the new context rather than being
+discarded as an answer from the one it replaced (issue #669). It is deliberately a second observable
+rather than the rising edge of `contextChanging$`: that one reports whether a transition is
+*settling*, so a session ended and another started before the first navigation finished emits one
+`true` for the two of them, and the second business's zone would never be read while its `reset()`
+had already dropped the first's.
+
+`AppComponent` reads the effective business on that signal, and on the account state reporting that
+the identity whose lookup was skipped as a nonmember has become a `Member`:
+
+| What changed | What the shell does |
+| --- | --- |
+| A support session started, ended, expired, was refused `support_session_ended` in the current context, or was started/ended in another tab | reads the business again and **withholds the routed page** until it answers, on top of the transition window issue #670 already withholds it for |
+| The account state reports `Member` for a context whose lookup was skipped because the account held no membership | reads the business again and **leaves the page where it is** |
+| Anything else - a same-identity re-read, an `unavailable` answer, a state that is still not `Member` | nothing; the context that read its business already has it |
+| The signed-in identity changed | unchanged from issue #604: the whole context is discarded and read again |
+
+The two halves of that difference are both deliberate. A support transition's page renders its
+instants in the zone being read, so it waits. A membership transition's page is an onboarding page
+with no business instant on it which is in the middle of the navigation that acceptance or approval
+performs (`InviteAcceptanceComponent`, `ApplicationPendingComponent` - each re-reads the account
+state and the capabilities and *then* navigates): withholding the routed page would destroy that
+component, tear the navigation down with it, and strand the operator on the page they had just been
+approved off.
+
+**The account-state skip does not apply inside an effective support view.** A platform administrator
+may hold no membership of their own, so their account state is `NoMembership` while they are reading
+somebody else's business. In `viewing` the shell reads the business anyway: the request presents
+`X-Support-Session` (`classifyMemberRequest` treats `api/business/current` as an ordinary member
+endpoint), `GET /api/business/current` needs only `Dashboard.View` - which the support capability set
+holds - and is a `GET`, so it answers for the business in the session. Nothing about the server side
+changes: the business still comes from the stored session row, never from the request.
+
+**A zone that cannot be read is said so, with a retry.** After its retries (`businessLookupRetries`,
+with the growing delay), a lookup that still could not be answered leaves the zone unknown - never
+the browser's, never another business's, never a fixed one, exactly as issue #499 requires - and the
+shell now renders an explicit `role="alert"` explanation above the page with a **Try again** control
+that reads it again, instead of leaving the page to render blanks in silence. The application itself
+is still shown rather than waiting forever, which is unchanged from issue #499. An account that
+simply has no business to look up is not that state and is not reported as one.
+
+**The ordinary settings-save refresh is untouched.** `BusinessService.refresh()` (issue #549) is not
+a context change: the same business is being re-read under the same identity, so it neither bumps the
+stale-load generation nor clears the published zone first, and the zone stays on screen while the
+re-read is in flight. `reset()` remains the only thing that clears it, and only for a changed account
+or a changed effective business; a lookup started before a `reset()` can still publish nothing.
+
+**What proves it.** `support-session-business-time-zone.spec.ts` renders the **real** `AppComponent`,
+the real `SupportSessionService`, the real `BusinessService`/`BusinessTimeZoneService`, the real
+router and the production interceptor chain, with a routed page whose only content is one true
+instant - so the zone is observable exactly as an operator sees it - and two businesses in genuinely
+different zones (`Australia/Sydney` and `America/New_York`). It covers a session starting (the page
+withheld, the read presenting the session id, the viewed business's zone published), the session
+ending, an administrator with no membership of their own, a previous context's answer arriving late
+and publishing nothing, two overlapping transitions both being read, another tab's `started` and
+`ended`, and the session's own expiry. `app.component.spec.ts` covers the shell's decisions - when it
+reads again, the page waiting for a support transition and not for a membership transition, the
+`Member` answers that must change nothing, and the unavailable explanation and its retry -
+`support-session.service.spec.ts` covers `contextChanged$` emitting once per transition for each of
+the five transitions, twice for two overlapping ones, and after the cached business is dropped, and
+`business.service.spec.ts` covers the settings-save refresh keeping its published zone.
+
 ### Member access: capability-built navigation, guards and hidden actions (issue #528)
 
 Until issue #528 the sidebar showed every entry to every member and every route was behind
@@ -3494,7 +4595,7 @@ could only diverge from `Inventory.Application.Access.RoleCapabilities`.
 | `access/access-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the cache, and nothing else |
 | `access/member-endpoint.ts` | `classifyMemberRequest`, the one answer to "is this refused request a member endpoint?" that all three `403` interceptors read (issue #602) |
 | `access/forbidden-interceptors.ts` | `FORBIDDEN_INTERCEPTORS`: the three `403` interceptors in the order `app.config.ts` installs them, so the composed chain is testable as a whole |
-| `layout/navigation.ts` | Each destination's `capability`, and `navigationFor(capabilities, hasPlatformDiagnosticsAccess)` |
+| `layout/navigation.ts` | Each destination's `capability`, and `navigationFor(capabilities, hasPlatformDiagnosticsAccess, businessNavigation)` |
 
 **One cached answer per signed-in identity.** The read is lazy — issued when something first asks,
 which in practice is the shell's sidebar — and only once MSAL reports `InteractionStatus.None`,
@@ -3508,7 +4609,7 @@ is dropped or read again on exactly these triggers:
 | Sign-in | The previous answer is dropped and the capabilities are read as the newly signed-in identity |
 | Sign-out | Cleared without reading again — there is nobody to read it for |
 | MSAL active-account change | The previous identity's answer is dropped immediately and the capabilities are read again, unconditionally, because an answer in flight may have been issued as the previous identity |
-| Any `403` from a member endpoint | Read again unless a read is already in flight. Only a refusal `classifyMemberRequest` calls a `member` one counts: both cache probes, the platform diagnostics surface, `/assets/*` and every other origin are excluded, so a refusal can never drive a refresh loop |
+| Any `403` from a member endpoint | Read again unless a read is already in flight. Only a refusal `classifyMemberRequest` calls a `member` one counts: both cache probes, all three platform-admin surfaces, `/assets/*` and every other origin are excluded, so a refusal can never drive a refresh loop |
 | Window focus more than 5 minutes after the last answer | Read again, so a tab left open all day stops rendering a menu built from a role somebody has since changed |
 | An explicit `refresh()` | Read again, unconditionally. This is what other work calls after changing something relevant |
 
@@ -3570,7 +4671,7 @@ request URL and the API base URL that `ConfigService` resolved and comparing the
 | `member` | Every endpoint under the configured API base that is not named below | Refreshes the capability cache and the account-state cache, and shows the global `403` notice |
 | `access-probe` | `GET /api/me/access`, this cache's own read | Refreshes the account state only, one way (issue #529) |
 | `account-state-probe` | `GET /api/me/account-state`, the sibling cache's own read | Nothing |
-| `platform-admin` | `/api/admin/diagnostics/*` (issue #336), authorized by the configured Entra `(tid, oid)` pair and by no business role | Nothing |
+| `platform-admin` | The three class-2 surfaces, authorized by the configured Entra `(tid, oid)` pair and by no business role: `/api/admin/diagnostics/*` (issue #336), `/api/super-admin/businesses/*` (issues #544 and #545, classified here by issue #673) and `/api/super-admin/support-sessions/*` (issue #550) | Nothing |
 | `non-api` | `/assets/*`, any other origin (MSAL's own traffic), and any path outside the API base | Nothing |
 
 The classification is by path **segment**, so a query string, a trailing slash, a doubled slash and
@@ -3580,7 +4681,28 @@ origin is the configured API's and its path starts with the API's own segments; 
 anything else under that base stays `member`, because an endpoint this build has never heard of
 still refuses a member whose role has changed. The other `/api/admin/*` controllers — historical GST
 classification, the repairs — are ordinary capability-policy member endpoints and are deliberately
-**not** part of `platform-admin`.
+**not** part of `platform-admin`, and neither is a segment that merely begins with the same letters
+(`/api/super-admin/businesses-archive`, were there such a thing).
+
+**`platform-admin` is matched as a prefix per surface, and that is what makes it complete.** Every
+endpoint under one of the three is platform-admin authorized *by construction* — `PlatformAdminPolicy`
+together with `PlatformDiagnosticsEndpointAttribute`, [class 2](#capability-authorization-issue-525)
+— so the Super Admin businesses prefix covers the directory, `pending-count`, `{businessId}/approve`,
+`.../reject`, `.../deactivate`, `.../reactivate`, `.../members` and `.../members/{membershipId}/release`
+without naming them, and would cover a ninth endpoint on that controller the day one is added.
+**The pending-count badge is why that mattered enough to be a defect** (issue #673). It is the one
+platform-admin read made from the shell rather than from behind `platformAdminGuard`'s page, on
+`SidebarNavComponent`'s own long-lived subscription, so while it was classified `member` a persistent
+`403` from it — a grant withdrawn, a configuration change, an administrator signed in elsewhere —
+refreshed the member capability cache, and every capability emission asked the sidebar for the count
+again: refusal, capability read, count, refusal, without end, for a surface no business role was ever
+going to be granted. The badge now reads the count once per access emission, a refusal leaves it
+`null` (no badge at all, the same stable state a failed read always left), and the `Super Admin`
+group it sits on is unaffected — that stays `PlatformDiagnosticsAccessService`'s separate answer.
+Issue #673 changed only the classification; the authorization rules, the endpoints and the probe are
+untouched, and `supportSessionInterceptor` consequently stops attaching `X-Support-Session` to the
+businesses surface, which the API never read on it anyway (`BusinessScopeMiddleware` decides a
+`PlatformDiagnosticsEndpointAttribute` endpoint before it resolves a session at all).
 
 **The refresh reads are bounded, and the table above is why.** `member` refreshes both caches,
 `access-probe` refreshes the account state, and `account-state-probe` refreshes nothing: the edges
@@ -3600,7 +4722,12 @@ a failed menu probe, while failing open shows an entry whose endpoint still refu
 may not do. (The conditional diagnostics link keeps failing *closed* on its own probe, because
 hiding a link no business role grants costs nothing.) Which screen a person with no usable
 membership is shown at all, and the global `403` handler that tells a member a request was refused,
-are issue #529's account-state routing and are deliberately not here.
+are issue #529's account-state routing and are deliberately not here. **Nor is "has this account a
+business menu at all?"**: this fail-open rule is kept exactly as it is, and the account state
+answers that separately, before any capability is rendered — see [the shell withholding the business
+navigation for a known nonmember](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529)
+(issue #676). It is what stops a signed-out visitor and a known nonmember from being offered every
+destination over the same `unavailable` answer a confirmed member's failed probe gives.
 
 **The navigation is built from the capability set**, not conditioned in the sidebar's template:
 `navigationFor` drops each destination whose capability the member does not hold and drops a group
@@ -3613,7 +4740,26 @@ Until the capability set has been read the sidebar renders **no** destination, b
 offered everything and then took entries away would show entries that were never this member's —
 and it renders none again from the moment the signed-in identity changes until the new identity's
 own answer arrives (issue #603); `Platform Diagnostics` is unchanged and still independent of every
-capability.
+capability. Since issue #676 `navigationFor` takes a third answer, the shell's
+`businessNavigation`, and leaves every business destination out while it is `withheld` — the
+capability set decides which destinations a member is offered, and that one decides whether this
+account state is offered any.
+
+**The Admin hub follows the same destination permissions as the sidebar (issue #674).**
+`AdminComponent` (`/admin`) is a second entry point into the same pages the sidebar's `Admin` group
+lists — see [Application shell and navigation](#application-shell-and-navigation-issue-391) — so it
+renders a card only while the member holds the capability `layout/navigation.ts`'s `adminNavGroup`
+declares for that destination's route, read from the same `AccessService.access$` the sidebar
+renders from. It introduces no role-name check and fetches no protected page data of its own to
+decide a card's visibility: a hidden card hides a page rather than protects one, exactly as a
+hidden sidebar entry does, because the endpoint behind each page authorizes every request itself.
+A Manager therefore sees `Imports` and `Site Commission Agreements` without any Owner-only repair
+or integration card, and an Owner sees every destination the sidebar does, including `Users`,
+`Roles` and `Business Settings` — before this the hub rendered its eight repair/integration cards
+unconditionally and had no card for those last three at all, even though the sidebar and each
+page's own "Back to Admin" link already reached them. The hub renders no card at all until the
+capability set has been read, and none again for the window after the signed-in identity changes
+until the new identity's own answer arrives, the same two rules the sidebar follows.
 
 **Route guards are presentation.** Every authenticated route declares
 `canActivate: [MsalGuard, requireCapability(...)]`, with `MsalGuard` first so authentication is
@@ -3655,6 +4801,31 @@ is and no card can ever read a figure it was not given. An *incomplete* valuatio
 before, and a still-loading or failed summary keeps all four cards for the same reason — not
 knowing a figure yet is a different thing from having been told it is not this member's to see.
 
+**Sites and Machines hide the same figures too, from the capability rather than from the response**
+(issue #699). The Dashboard's own Sites/Machines tables, the Sites list, Site Products and the
+Machines list/detail all read `AccessService.allows('Dashboard.ViewFinancials')` the same way the
+supplier GST defaults editor reads `Suppliers.ManageGstDefaults` above, each keeping its own
+`canViewFinancials` field (starting `true`, the same fail-open default) and hiding every revenue,
+direct-profit, margin, profitability-status and trend/comparison column, card and CSV export field
+behind it. This is deliberately **not** the same mechanism as the Dashboard summary: when #699
+landed, those endpoints' responses were not redacted at all, so the page could not key off an
+absent property the way the Dashboard does and reads the capability directly instead — a page-level
+hide rather than a boundary. The boundary underneath it has since arrived on both pages' endpoints.
+The **site** endpoints withhold their figures since [issue #697](#site-financial-redaction-issue-697),
+which makes `GET /api/sites` and `GET /api/sites/{id}/products` send `null` for the three site
+revenue figures and the estimated card profit to a caller without the capability; the pages keep
+reading the capability rather than switching to the response, because a `null` estimate has always
+also meant "could not be estimated". The **machine and product** endpoints withhold theirs as `null`
+since issue #698 (see [Machine and product financial redaction](#machine-and-product-financial-redaction-issue-698)),
+so the Machines list and detail hide now sits in front of a real boundary too.
+Unit cost and site/machine selling price carry no capability check and stay visible to every role.
+`Machine`, `Site` and `SiteProduct.estimatedCardProfit`/`Product.suggestedNetValue`/
+`suggestedPriceValue` are all optional and nullable in `models.ts` for the same reason
+`DashboardSummary`'s two figures are, and both #697 and #698 chose `null` on the existing fields:
+every template that reads them shows "Unavailable" (never `$0.00`, never `NaN`) when they are
+absent or `null`. `formatting/revenue-trend.ts`'s `trend`/`trendLabel`/`trendClass` accept a withheld figure
+on the same terms, reporting `'Unavailable'`/`'value-muted'` rather than treating it as a real zero.
+
 **What proves this slice.** `access.service.spec.ts` (the cached read, the fifteen-name vocabulary,
 an undeclared name dropped, the MSAL wait, every refresh trigger including the five-minute focus
 boundary either side, the refusal trigger coalescing, a superseded answer discarded, the fail-open
@@ -3670,17 +4841,24 @@ flight, and a same-identity refresh keeping its own answer),
 `navigation.spec.ts` (the per-role menus, written out literally from #328's table, a partly-allowed
 group, the empty and unknown capability sets, and the diagnostics link's independence),
 `sidebar-nav.component.spec.ts` (the rendered menu per role, no destination before the first answer,
-a re-render when the capabilities change, and the menu emptied and rebuilt across an account change
-against the real service), `capability.guard.spec.ts` (allowed, refused, any-of, fail-open, waiting
+a re-render when the capabilities change, the menu emptied and rebuilt across an account change
+against the real service, and — for issue #673 — the really rendered sidebar composed with the real
+`AccessService`, the real `SuperAdminBusinessesService` and the production `403` chain, proving that
+a persistently refused pending-count read settles after the two reads the access emissions ask for,
+leaves the badge `null` with the group still offered, and tells the operator nothing),
+`capability.guard.spec.ts` (allowed, refused, any-of, fail-open, waiting
 for an unread answer, waiting for the new account instead of deciding from the previous account's
 capabilities, and the page naming no capability or role), `app.routes.spec.ts` (every authenticated
 route guarded, the two exceptions, and `MsalGuard` first),
 `access-forbidden.interceptor.spec.ts` (the `403`
 trigger, the excluded probes, diagnostics surface and assets, and every other status ignored),
 `member-endpoint.spec.ts` (every classification, for the local and the deployed API base URL, with
-query strings, trailing slashes, other origins and the member `/api/admin/*` controllers),
+query strings, trailing slashes, mixed case, other origins, the member `/api/admin/*` controllers
+and — for issue #673 — each of the eight Super Admin businesses endpoints plus the look-alike
+segments that stay `member`),
 `forbidden-interceptor-chain.spec.ts` (the composed chain: the asserted request count for
-persistent probe refusals, coalescing, the silent diagnostics probe and the preserved notice),
+persistent probe refusals, coalescing, the silent diagnostics probe, the silent Super Admin
+businesses surface on both the local and the deployed base, and the preserved notice),
 `supplier-gst-defaults.component.spec.ts` (the hidden Save, the read-only pickers, no `PUT`, the
 control returning on a refresh, and — against the real service — the Save control taken away the
 moment the signed-in account changes, no `PUT` issued in that window, a late answer for the
@@ -3723,7 +4901,27 @@ this test instead of agreeing with itself. TypeScript's own excess-property chec
 but the test is what explains the failure and what catches a capability silently *removed* from a
 role's list, which the compiler alone would not.
 
+**Kept in sync with the backend authority, not a second hand-kept table (issue #677).**
+`role-definitions.spec.ts` alone can only catch `role-definitions.ts` disagreeing with itself and
+with the published vocabulary; it never asked `Inventory.Application.Access.RoleCapabilities` what
+a role actually grants, so a capability added, removed or moved to a different role purely on the
+backend disagreed with nothing. `frontend/inventory-app/src/app/architecture/role-capabilities-contract.guard.ts`
+(tested by the co-located `role-capabilities-contract.guard.spec.ts`) closes that gap by reading the
+real `Inventory.Application.Access.Capabilities.cs` and `RoleCapabilities.cs` source files off disk —
+the backend's own `ByRole` table, not a second copy of it someone has to remember to update — and
+comparing the capability set each `[BusinessRole.X] = FrozenSet.ToFrozenSet([...])` entry grants
+against `ROLE_DEFINITIONS`. It fails loudly, rather than passing vacuously, if it cannot find a role
+block or a capability's published name at all, so a `RoleCapabilities` rewritten into a shape the
+parser no longer recognises is a build failure rather than a silent "every role grants nothing" that
+would agree with anything. This needs no live service, no generated artifact and no production
+credentials: it is a plain file read of the checked-out backend source, run inside the same
+`npm run test` step `role-definitions.spec.ts` already runs in.
+
 **What proves this slice.** `role-definitions.spec.ts` (the vocabulary-sync assertions above),
+`role-capabilities-contract.guard.spec.ts` (the backend-source parser's own fixture-based coverage
+of a capability added to a role, one reassigned between roles, and the two failure-loudly cases
+above; and, against the real backend source, that it declares exactly Operator, Manager and Owner
+and that each grants precisely the capabilities `role-definitions.ts` describes and nothing else),
 `roles.component.spec.ts` (the three sections in order, each role's own capabilities rendered and
 no other role's, no form control or action anywhere on the page, and the link back to Admin), and
 `navigation.spec.ts` / `app.routes.spec.ts` (the `Roles` destination offered to an Owner and
@@ -3747,7 +4945,8 @@ way as.
 | `access/access-unavailable.component.ts` | The page `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` are routed to |
 | `access/account-state-forbidden.interceptor.ts` | The "`403` from a member endpoint" trigger on the account-state cache, mirroring `accessForbiddenInterceptor` |
 | `access/member-forbidden-notice.interceptor.ts` | The global `403` handler: "you don't have access to this", except on a bypass route or for a refusal `classifyMemberRequest` does not call a member one |
-| `app.component.ts` | Waits for the account state before looking up the business at all |
+| `app.component.ts` | Waits for the account state before looking up the business at all, and decides from it whether the sidebar offers the ordinary business navigation (issue #676) |
+| `access/business-navigation.ts` | `businessNavigationFor`, the pure rule behind that decision, and the `BusinessNavigationVisibility` the sidebar renders (issue #676) |
 
 **The routing contract** (agreed under #328, with its contract corrections of 10 Oct 2026):
 `Member` reaches the route it asked for; every other state redirects before that route's own
@@ -3789,7 +4988,9 @@ endpoint - `classifyMemberRequest`, the same classification `accessForbiddenInte
 the two interceptors cannot disagree about what counts as one. A `403` from
 `GET /api/admin/diagnostics/access` is therefore silent on every route: that probe is the sidebar's
 quiet platform-admin question (issue #335), its refusal is the expected answer for every ordinary
-member, and it says nothing about a business membership. It does not fire while the current route is
+member, and it says nothing about a business membership. The two other platform-admin surfaces are
+silent for the same reason — the support-session control endpoints, and (issue #673) the sidebar's
+other quiet shell read, `GET /api/super-admin/businesses/pending-count`. It does not fire while the current route is
 `/welcome`,
 `/application-pending`, `/application-rejected`, `/access-unavailable` or `/invite/:token`
 (`ACCOUNT_STATE_BYPASS_PATHS`, matched by prefix for the invite token): a person on one of them has
@@ -3835,6 +5036,12 @@ first and asks for the business only when it answers `Member` - an account with 
 membership has no business to look up, and the call would only receive the same `403` every other
 member endpoint already gives it. An account state that could not be read still attempts the
 lookup, for the same fail-open reason the guard does: the endpoint itself remains the boundary.
+Since issue #671 that skip has one exception and one consequence: it does not apply inside an
+effective support view, where the business the request resolves is the session's and the
+administrator may hold no membership of their own, and a *later* `Member` answer for the same
+identity - an accepted invite, an approved application - makes the shell read the business it
+skipped. See [Reloading the business time zone after a context
+change](#reloading-the-business-time-zone-after-a-context-change-issue-671).
 
 **And the state it waits for is the current identity's** (issue #604). The shell starts that lookup
 afresh on the same account-change trigger these caches use (see [Application shell and
@@ -3845,6 +5052,38 @@ business lookup - or refused one - by the previous account's `Member` or `NoMemb
 answered, exactly once, and not at all while it is still pending; the documented unavailable
 fallback and the bounded retries are unchanged, and a late answer from the superseded read reaches
 no shell decision at all.
+
+**The shell also withholds the business navigation from a known nonmember** (issue #676). Until it
+did, the sidebar was rendered independently of the account state and built its menu from the
+capability answer alone — and that answer cannot tell these cases apart, because
+`GET /api/me/access` answers `unavailable` for all of them: nobody signed in, a member whose probe
+failed, and somebody whose membership the API has already refused. `unavailable` offers *every*
+destination (the fail-open rule above), so a signed-out visitor and a known nonmember were offered
+a full business menu whose every endpoint would refuse them. `access/business-navigation.ts` adds
+the one rule that distinguishes them, from what only the shell knows:
+
+| What the shell knows | Ordinary business navigation |
+| --- | --- |
+| Nobody signed in | Withheld — there is no account to be a member of, and every destination would answer `401` |
+| An effective support view (`viewing`) | Offered, whatever the administrator's own state says: the session names the business the tab's requests resolve, the same exception issue #671 gives the business lookup |
+| Account state `unread` | Withheld — nothing has been answered yet, the same rule the sidebar already follows for an unread capability set |
+| Account state `Member` | Offered; which destinations is still the capability set's decision, fail-open answer included |
+| Account state `NoMembership`, `ApplicationPending`, `ApplicationRejected`, `MembershipRevoked`, `BusinessDeactivated`, `MembershipAmbiguous` | Withheld — `BusinessScopeMiddleware` refuses every business call for them, and `accountStateGuard` routes each to the page that explains it |
+| Account state `unavailable` | Offered — the documented fail-open case, unchanged: a failed probe must not strand a legitimate member |
+
+`AppComponent` decides it (`businessNavigation`) and `SidebarNavComponent` renders it through
+`navigationFor`'s third argument, which leaves the business destinations out **structurally** rather
+than through an empty capability set, so a destination that declares no capability of its own cannot
+leak into a withheld menu either. Three things are deliberately unchanged: `AccessService` still
+fails open on its own unreadable answer and is not made to fail closed anywhere; the separately
+authorized `Super Admin` group still follows `GET /api/admin/diagnostics/access` alone, so a
+platform administrator with no business membership is offered that group and nothing else
+(issue #546); and a tab that cannot present a support session still renders no routed page at all
+(issue #668), with its own account state deciding its menu, because its requests resolve the
+administrator's own membership. A changed identity withholds the menu from the moment it changes,
+for the same reason issue #603 publishes `unread` again: the previous account's answer was somebody
+else's. Like every other capability and account-state rendering rule here, **this hides a menu
+rather than protecting a page.**
 
 **What proves this slice.** `account-state.service.spec.ts` (mirroring `access.service.spec.ts`:
 the cached read, every refresh trigger, the unknown-state fallback, a superseded answer discarded,
@@ -3865,7 +5104,14 @@ interceptors composed over the real caches: persistent probe refusals settling a
 request count, the one-way refresh, and the preserved notice and suppression), and
 `app.routes.spec.ts`/`app.component.spec.ts` (`accountStateGuard`'s position on every business
 route, the five bypass routes, and the shell asking for no business before the account state is
-known).
+known). Issue #676's withheld navigation adds `business-navigation.spec.ts` (the rule for signed
+out, unread, every published nonmember state, `Member`, the unreadable account state and an
+effective support view), the real shell rendering the real sidebar in `app.component.spec.ts` (each
+of those states, a `Member` whose capability probe failed keeping every destination, an identity
+transition withholding the menu until the new state answers, a platform-only administrator keeping
+`Super Admin` alone, an effective support view, and a tab that cannot present a session), and
+`sidebar-nav.component.spec.ts`/`navigation.spec.ts` (a withheld menu rendering no destination for
+an unreadable capability set while an offered one still renders them all).
 
 ### Admin Users page (issue #534)
 
@@ -3889,11 +5135,13 @@ themselves regardless of what this page renders.
 
 **The role control displays this component's own state, so an unsaved role can never stay on screen.** The native `<select>` moves to the chosen option the moment the Owner picks it, before the confirmation dialog has been answered and before the server has seen the request, so what the control displays is `MemberManagementComponent`'s own `selectedRoles` state (keyed by membership id) and not `member.role`. Cancelling the confirmation, and any failure of the role change - the last-Owner `409` included - puts that state back to the server-confirmed `member.role`, and a confirmed change records the role the response returned. Binding the control one-way to `member.role` instead could not do this: the bound expression never changes when the server refuses a change, so Angular would not re-touch the DOM, the control would keep showing a role the server rejected right next to the toast refusing it, and re-choosing the same role would raise no `change` event to retry with. The server remains the only authority on what a role actually is; this state is what the Owner is looking at.
 
+**The selection lives on each `<option>`, not on the `<select>` itself (issue #678).** A combined implementation review of 15 October 2026 flagged a hypothesis: `[value]` on the `<select>` was assigned while the `@for` block below it was still creating the `<option>` elements, which is a real Angular update-order hazard rather than a theoretical one. A regression test confirmed it - a `Manager` or `Operator` row's native `select.value` read back as `Owner` (the first declared role) immediately after the asynchronous member load, even though `displayedRole()` returned the right role throughout, because Angular's update pass set the `<select>`'s own `value` property before the `@for` repeater had written each `<option>`'s `value`, so the browser's selection search found no match yet and kept the first option's default selection. The fix moves the selection onto each `<option>`'s own `[selected]="role === displayedRole(member)"` binding (and `[selected]="!displayedRole(member)"` on the disabled `Unknown` option for a member with no role yet), so Angular sets each option's selectedness directly on that option once it exists, with no value search and no dependency on instruction order between the `<select>` and its `@for` content.
+
 **The invite link is composed here, once, and kept nowhere else.** `MemberInviteService.create` returns the token exactly once, on the same terms `InviteRedemptionService` documents for the redemption side; `MemberInvitesComponent` builds the link as `${window.location.origin}/invite/${token}` - the API has no authoritative knowledge of the web application's address - holds it only in the component's own `justCreated` field, and clears that field when the Owner dismisses it or creates another invite. Copying follows the same clipboard-with-fallback shape as the Nayax connection wizard's support-request copy ([The Nayax connection wizard](#the-nayax-connection-wizard-issue-538)): `navigator.clipboard.writeText` when available, and a toast pointing at the selectable field when it is not.
 
 **What this slice does not do.** No bulk member or invite actions, no audit-event view, and no business-settings editing - those are other pages. Redeeming an invite is the separate `/invite/:token` page ([Invite acceptance page](#invite-acceptance-page-issue-535)), and there is no email sending, so the Owner delivers the composed link themselves.
 
-**What proves this slice.** `member.service.spec.ts` and `member-invite.service.spec.ts` (every call, its URL and body, and the API base URL join), `member-management.component.spec.ts` (the roster rendered, the load error and empty states, a role change and a revoke and a reinstate each requiring confirmation and calling nothing until confirmed, a cancelled confirmation calling nothing, an unchanged role prompting nothing, the last-Owner and already-a-member refusals shown verbatim, and the selected option itself asserted at the DOM level - reverting to the stored role after a cancelled and after a refused role change, with the refusal toast kept and the same selection retryable afterwards, and keeping the new role once the API confirms it), `member-invites.component.spec.ts` (the list rendered, the load error and empty states, a role required before creation, the created link shown once with its expiry and copied to the clipboard or falling back to manual selection, the link dismissed on Done, a pending cancellation requiring confirmation, and the API's own refusal shown verbatim for a refused creation or cancellation), and `admin-users.component.spec.ts` (the page composing both sections).
+**What proves this slice.** `member.service.spec.ts` and `member-invite.service.spec.ts` (every call, its URL and body, and the API base URL join), `member-management.component.spec.ts` (the roster rendered, the load error and empty states, a role change and a revoke and a reinstate each requiring confirmation and calling nothing until confirmed, a cancelled confirmation calling nothing, an unchanged role prompting nothing, the last-Owner and already-a-member refusals shown verbatim, and the selected option itself asserted at the DOM level - the native `select.value` and its selected option's label read back correctly for an Owner, a Manager and an Operator row immediately after the asynchronous member load and again after the list is reloaded with a different role (issue #678, where this assertion is what caught the ordering defect above), the disabled `Unknown` option selected for a member with no role, reverting to the stored role after a cancelled and after a refused role change, with the refusal toast kept and the same selection retryable afterwards, and keeping the new role once the API confirms it), `member-invites.component.spec.ts` (the list rendered, the load error and empty states, a role required before creation, the created link shown once with its expiry and copied to the clipboard or falling back to manual selection, the link dismissed on Done, a pending cancellation requiring confirmation, and the API's own refusal shown verbatim for a refused creation or cancellation), and `admin-users.component.spec.ts` (the page composing both sections).
 
 ### Invite acceptance page (issue #535)
 
@@ -3905,34 +5153,56 @@ this slice is the one caller `frontend/inventory-app/src` has for it.
 
 | File | Responsibility |
 | --- | --- |
-| `access/invite-acceptance.component.ts` | `InviteAcceptanceComponent`: reads the token, strips it from the address bar, decides Accept-button vs. redirect from the cached account state, calls the redemption endpoint, and refreshes both caches before landing on the dashboard |
+| `access/invite-acceptance.component.ts` | `InviteAcceptanceComponent`, at `/invite`: takes the tab's pending invite token into memory, decides Accept-button vs. redirect from the cached account state, calls the redemption endpoint, and refreshes both caches before landing on the dashboard |
+| `access/invite-address-bar.guard.ts` | `inviteTokenAddressBarGuard` (issue #681): `/invite/:token`'s `canMatch` guard, which hands the token to the pending invite, strips it from the address bar and redirects to `/invite` before `MsalGuard` runs; `pendingInviteTokenGuard`, which matches the acceptance page at `/invite` only while a pending invite exists; and `INVITE_ADDRESS_BAR_ROUTE` |
+| `access/pending-invite-token.ts` | The pending invite (issue #681): the token held in this tab's `sessionStorage` through a sign-in redirect, read and removed in one step, expiring after 15 minutes |
+| `access/invite-link-reopen.component.ts` | `InviteLinkReopenComponent` (issue #681): the tokenless `/invite` page, telling a person who reloads or returns to it to open their invite link again |
 | `access/invite-redemption.service.ts` | `InviteRedemptionService`: the one `POST /api/invites/redeem` call, with the token in the request body and nothing else |
 | `access/account-state.guard.ts` | Gained `REDEEMABLE_ACCOUNT_STATES` and `nonRedeemableAccountStateDestination`, alongside `ACCOUNT_STATE_ROUTE` |
 
-**The token never leaves memory, and the address bar is cleared before anything else runs.**
-`InviteAcceptanceComponent.ngOnInit` reads the token from the route `ActivatedRoute` already
-matched and holds it only in a component field; its very next statement, before any analytics,
-logging or navigation, is `history.replaceState(history.state, '', '/invite')`. That rewrites the
-browser's own history entry — independently of what Angular's router still thinks the current URL
-is — so the token is gone from the address bar an instant after the page loads. Application code
-never writes it to `localStorage`, `sessionStorage`, a cookie, a log line or an error report, and
-`InviteRedemptionService` sends it only in this one request's JSON body, never in a URL path or
-query string, so no HTTP or router logging of a request or route *URL* can ever carry it either —
-there is no app-level logging of either kind in this build today, and this is why there will not
-be one carrying it later.
+**The token never reaches the address bar's history, `MsalGuard` or MSAL (issue #681).**
+`/invite/:token` never activates. Its `canMatch` guard, `inviteTokenAddressBarGuard`, runs during
+route recognition, before any `canActivate` guard: it hands the token to the tab's pending invite
+(`access/pending-invite-token.ts`), rewrites the current history entry to `/invite` with
+`history.replaceState` when the address bar shows the link, and redirects the navigation to
+`/invite`. The acceptance page is matched at `/invite` only while a pending invite exists
+(`pendingInviteTokenGuard`), so `MsalGuard` only ever runs on `/invite`. A signed-out visitor's
+sign-in redirect therefore starts from, is stored by MSAL as, and returns to `/invite`: the token is
+not in MSAL's redirect start page or its `localStorage` cache (`auth-config.ts`), not in a history
+entry Back returns to, and not in the page address a `Referer` could be built from. The history
+rewrite is the guard's, not the router's, because the router updates the address bar only after a
+navigation's guards pass, and a signed-out visitor's `MsalGuard` leaves the page before that. An
+in-app navigation from the welcome page's invite field never put the token in the address bar, so
+the guard leaves that page's own history entry alone.
 
-**MSAL's own transient copy is the one accepted residual.** A signed-out visitor reaches this
-component at all only after `MsalGuard` (still the route's only guard — see [Account-state
-routing](#account-state-routing-the-access-unavailable-page-and-the-global-403-handler-issue-529))
-has sent them through the login redirect, with this exact URL — token included — as its own
-default redirect start page, and brought them back to it once the round trip completes. Nothing in
-this slice starts, configures or reads that bookkeeping: it is MSAL's existing
-`BrowserCacheLocation.LocalStorage` (`auth-config.ts`), already relied on by every other bypass
-route on this guard, holding the address for exactly the length of one redirect and clearing it
-once it lands. The token is single-use, expires after seven days, and is stored only as a hash on
-the server (`MemberInviteToken.Hash`, [Invite redemption](#invite-redemption-issue-532)) — so this
-one transient, third-party copy is the full extent of what survives a sign-in round trip, and it is
-accepted rather than worked around.
+**The pending invite is the one place the token waits.** Before the review of PR #696 the token
+crossed the sign-in round trip inside MSAL's redirect start page, which MSAL keeps in
+`localStorage` (shared by every tab and kept after the tab closes) until the redirect lands; that
+was a copy this application neither controlled nor cleared. The pending invite is narrower:
+`sessionStorage`, so one tab only and gone when the tab closes, never sent to any server, removed by
+`InviteAcceptanceComponent.ngOnInit` in the same step that reads it into a component field, and
+treated as absent (and removed) once it is more than 15 minutes old, so an abandoned sign-in does
+not leave an invite waiting. A browser that refuses storage loses the hand-off and shows the
+`/invite` page below. After `ngOnInit`, the token is held only in memory and never written to a
+cookie, a log line or an error report, and `InviteRedemptionService` sends it only in this one
+request's JSON body, never in a URL path or query string, so no HTTP or router logging of a request
+or route *URL* can ever carry it either. The token is single-use, expires after seven days, and is
+stored only as a hash on the server (`MemberInviteToken.Hash`,
+[Invite redemption](#invite-redemption-issue-532)).
+
+**The tokenless `/invite` explains itself (issue #681).** Once the page has taken the pending
+invite, a reload of `/invite` or a Back into it matches the second `/invite` route,
+`InviteLinkReopenComponent`, which says to open the invite link again and offers the home page,
+instead of falling through to the `'**'` wildcard and landing on the dashboard or the welcome page
+with no explanation. It carries no guard, like the public `auth` route, because it makes no request
+at all, and `memberForbiddenNoticeInterceptor` treats `/invite` as one of its bypass routes.
+`invite-address-bar.guard.spec.ts` drives a signed-out visitor through the application's real
+route table, with `MsalGuard` replaced by a stand-in that starts the login redirect from the
+router state's URL: the address bar reads `/invite` when the redirect starts, the redirect start
+page is `/invite` too, nothing is written to `localStorage`, and the invite page reached after
+sign-in redeems the token and empties the pending invite. `pending-invite-token.spec.ts` covers
+the read-once, expiry and refused-storage rules, and `invite-link-reopen.component.spec.ts` pins
+the tokenless route and its text.
 
 **Eligibility is read from the cached account state, never assumed.**
 `REDEEMABLE_ACCOUNT_STATES` — `NoMembership`, `MembershipRevoked` and `ApplicationRejected` —
@@ -4392,17 +5662,21 @@ calculates, caches or persists anything: no limit is restated, no result is writ
 storage or a log, and no value is rendered as markup.
 
 With this split `AdminComponent` is a link hub only: it holds no workflow state, no service
-dependency and no second copy of any Admin tool, so it no longer owns duplicate costing, import or
-configuration logic. It deliberately keeps its own `/admin` address rather than redirecting to
-`/admin/nayax-settings`, because the home Dashboard's "Open Admin" action and each
-dedicated page's "Back to Admin" link point at it. The sidebar's `Admin` group (issue #391) is now
-the primary way into the eight dedicated pages, so `AdminComponent` is a second, still valid entry
-point rather than the only one; the root shell no longer links to `/admin` itself, because the
-group heading replaced that single header link. The hub links to only those eight pages, and never
-to `/super-admin/diagnostics`, because that page is offered only to the configured platform
-administrator, in its own group, and only the diagnostics API can say who that is. It is reached
-from the sidebar's `Super Admin` group, or by URL, and the page's own "Back to Admin" link still
-points at the business hub, the way every dedicated page's does.
+dependency beyond the cached capability read, and no second copy of any Admin tool, so it no
+longer owns duplicate costing, import or configuration logic. It deliberately keeps its own
+`/admin` address rather than redirecting to `/admin/nayax-settings`, because the home Dashboard's
+"Open Admin" action and each dedicated page's "Back to Admin" link point at it. The sidebar's
+`Admin` group (issue #391) is now the primary way into its eleven dedicated pages, so
+`AdminComponent` is a second, still valid entry point rather than the only one; the root shell no
+longer links to `/admin` itself, because the group heading replaced that single header link. The
+hub links to all eleven of those pages — never to `/super-admin/diagnostics`, because that page is
+offered only to the configured platform administrator, in its own group, and only the diagnostics
+API can say who that is — but renders only the cards the signed-in member's own capabilities allow,
+the same destinations and the same rule the sidebar's `Admin` group uses (issue #674; see [Member
+access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)).
+`/super-admin/diagnostics` is reached from the sidebar's `Super Admin` group, or by URL, and the
+page's own "Back to Admin" link still points at the business hub, the way every dedicated page's
+does.
 
 ### Runtime configuration and API contracts
 
@@ -5414,6 +6688,7 @@ A business's calendar days are derived in **its own** IANA time zone, stored on 
 - **It fails closed.** A request with no resolved business, or a business whose stored id the host's time-zone database cannot resolve, gets `Inventory.Application.Time.BusinessTimeZoneUnavailableException` from every member of the port - never `Australia/Sydney`, never the host's zone, never UTC. A substituted zone would move sales, fees, commissions and profit between business days with nothing looking wrong. The exception is not mapped to a caller-facing status: it falls through to `GlobalExceptionHandler`, which logs it and answers a generic `500`. The middleware does not refuse the whole request when a business has no usable zone (most endpoints derive no business date at all); it logs the condition, and any business-date derivation in that request fails.
 - **Maintenance commands have no business calendar, and need none.** The human-invoked `bootstrap-business`, `migrate-database` and database-backup commands run outside a request, so no business is resolved and no zone is published: resolving `IBusinessCalendar` there succeeds but every member fails closed. None of them derives a business date. `BusinessBootstrapper` creates its business with `Australia/Sydney` stated explicitly - the zone the pre-tenancy data it adopts has always been reported in - rather than relying on a default. A maintenance command that ever does need a business date must construct a `ZonedBusinessCalendar` with the zone it means, explicitly.
 - **The frontend gets the zone from the API.** `GET /api/business/current` returns `{ name, timeZoneId }` for the trusted current business, carrying the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and no identifier in either direction. It replaced the frontend's hard-coded `BUSINESS_TIME_ZONE` constant: `BusinessService` reads it once sign-in has settled - and again whenever the signed-in account changes, including a direct MSAL active-account switch (issue #604, see [Application shell and navigation](#application-shell-and-navigation-issue-391)) - and publishes the zone into `BusinessTimeZoneService`, which `BusinessDateTimePipe` and the calendar-input components read. The shell holds the routed page back until that lookup has settled, so a page on screen is one whose business context is known; a lookup that failed renders the application with dates unavailable rather than in a guessed zone, and a changed account publishes no zone at all until its own business has answered. Issue #521 also surfaces the same name and zone in `GET /api/me/access` alongside the caller's role and capabilities (see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521)); that endpoint does not replace this one, and the frontend still reads the zone from here.
+- **The zone is re-read whenever the *effective* business changes under one identity** (issue #671), because once per account is not once per business. A support-session start, end or expiry drops the published zone (`BusinessService.reset()`) and the shell reads the business now in view - the session's business inside a support view, the administrator's own outside one - withholding the routed page until it answers; an accepted invite or an approved application that turns the identity already signed in into a `Member` is read the same way, without taking the onboarding page performing that navigation off screen. A lookup that still could not be answered is reported explicitly, with a retry, instead of leaving a page to render blank instants; no zone is ever substituted. The settings-save refresh of issue #549 is deliberately not one of these changes and keeps its published zone while it re-reads. See [Reloading the business time zone after a context change](#reloading-the-business-time-zone-after-a-context-change-issue-671).
 - **A zone change applies to all history.** The owner's decision (recorded on issue #499) is that changing a business's zone later re-derives every historical business day in the new zone, with a warning. Nothing stored is rewritten; the boundaries simply move. Since issue #548 that change is reachable: `PUT /api/business/settings` saves the zone, the next request resolves it from the business's own record, and every business date - for data already stored as much as for new data - is derived in the new zone, including its daylight-saving transitions. See [Business settings API](#business-settings-api-issue-548); the page that shows the warning is issue #549.
 - **Testing.** Two-business relational tests prove isolated boundaries for `Australia/Sydney` and `America/New_York`, including each zone's daylight-saving transition days in both directions (a 23-hour and a 25-hour business day), the write-path refusal, and the fail-closed read for a zone corrupted directly in the database (`PerBusinessTimeZonePersistenceTests`, `ZonedBusinessCalendarTests`, `CurrentBusinessCalendarTests`, `BusinessTimeZonesTests`, `BusinessTimeZoneMigrationTests`, `CurrentBusinessApiTests`).
 
@@ -7892,7 +9167,7 @@ files" as the historical record of that slice, not as a test to look for today.
 9. **Sites and Machines dashboard slice done** (issue #241, a child of the #147 umbrella; #240 migrates Products separately). `SiteService.GetAll`/`GetProducts` and `MachineService.GetById`/`GetAll` are the migrated endpoints; `MachineService.GetMachineProducts` was left to the sibling Products migration because it returned the EF `Product` entity directly, and issue #240 has since migrated it in full to `Inventory.Application.Machines.ListMachineProducts` - see item 6 above.
    - `Inventory.Domain.Sites.SiteStockPolicy` computes a site's overall stock percentage and its low/empty product alert counts from already-fetched machine-product facts; `Inventory.Domain.Sites.SiteProductPricingPolicy` computes the site product preview's average retail price and estimated card-sale profit, given an already-resolved per-item commission amount and fee rate. `Inventory.Domain.Machines.MachineDashboardPeriods` is the pure today/week-to-date/previous-comparable-week/last-week/month-to-date/two-weeks-ago range arithmetic, moved out of the former `MachineService` statics unchanged; `Inventory.Domain.Machines.MachineDashboardDirectProfitPolicy` and `MachineProfitabilityStatusPolicy` are the machine dashboard's period direct-profit and status-message rules, given already-resolved facts. Both direct-profit policies are deliberately kept separate from `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy`, which answers the same question at report-row (aggregate period) granularity rather than the dashboard's fixed rolling periods, matching the precedent the reporting slice already documented for row-level versus aggregate rules.
    - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same bounded per-site/per-machine fan-out (`Task.WhenAll` over each site's/machine's `GetMachineProductsAsync` calls) the former services used. `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Issue #150 moved commission/fee resolution and payment/status classification to Domain-owned rules and Application use cases/ports; these consumers use those authorities rather than API service wrappers. The ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (the exact per-price Domain commission calculation computes each entry, not a re-derived multiplier), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact. `ResolveMachineProductPricing` uses the same Sites financial port, while `EfLatestNayaxSalesStore` uses the Domain transaction-status classifier.
-   - **Scoped EF reads serialized (issue #313).** The Nayax fan-out above is unchanged and still concurrent, but no two `ISiteFactsStore` calls are ever in flight together, because the store is scoped and its EF adapter shares one `AppDbContext` (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). `GetSiteProducts` awaits its cost-basis, commission and fee reads one at a time instead of starting all three and joining them with `Task.WhenAll`. `GetSiteSummaries` no longer builds its per-site summaries concurrently: it reads the catalogue activity facts, then loads every site's recent completed sales through one scoped read over the whole fleet's machine ids with the same 16-day lookback each per-site read used, and distributes them per machine in memory, so the per-site aggregation itself is pure. Site-name ordering, machine counts, stock percentages, alert counts, per-site revenue attribution, financial-configuration handling, the API routes and response JSON, and exception behaviour are unchanged; tenancy is unchanged too, since the batched read is still scoped only by the central `AppDbContext` query filters. The focused regression tests live in `backend/Inventory.IntegrationTests/Application/Sites/` (call-sequence recorders plus the behavioural assertions) and in `EfSiteFactsStoreTenancyTests` (the batched completed-sales read loads no other business's sales).
+   - **Scoped EF reads serialized (issue #313).** The Nayax fan-out above is unchanged and still concurrent, but no two `ISiteFactsStore` calls are ever in flight together, because the store is scoped and its EF adapter shares one `AppDbContext` (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). `GetSiteProducts` awaits its cost-basis, commission and fee reads one at a time instead of starting all three and joining them with `Task.WhenAll`. `GetSiteSummaries` no longer builds its per-site summaries concurrently: it reads the catalogue activity facts, then loads every site's recent completed sales through one scoped read over the whole fleet's machine ids with the same 16-day lookback each per-site read used, and distributes them per machine in memory, so the per-site aggregation itself is pure. Site-name ordering, machine counts, stock percentages, alert counts, per-site revenue attribution, financial-configuration handling, the API routes and response JSON, and exception behaviour are unchanged; tenancy is unchanged too, since the batched read is still scoped only by the central `AppDbContext` query filters. The focused regression tests live in `backend/Inventory.IntegrationTests/Application/Sites/` (call-sequence recorders plus the behavioural assertions) and in `EfSiteFactsStoreTenancyTests` (the batched completed-sales read loads no other business's sales). Issue #667 later moved that one batched read to after the machine-product fan-out completes, because a Nayax call resolves its credentials through the same context since issue #520; the fan-out itself is still concurrent.
    - `EfSiteFactsStore`/`EfMachineDashboardFactsStore`, `EfSiteCommissionStore`, `EfNayaxProcessingFeeFactsProvider`, and `EfNayaxSalesQueries` were temporary API-owned adapters because they depend on `AppDbContext` and persistence models. `SiteNameResolverAdapter` was one of them until issue #306, which found it had no `AppDbContext` dependency at all and merged it into `Inventory.Infrastructure.Sites.SiteNameResolver`; `EfNayaxProcessingFeeFactsProvider` and `EfNayaxSalesQueries` left with the reporting adapters in issue #308 (Persistence 7/8) for `Inventory.Infrastructure.Reporting.Persistence` and `Inventory.Infrastructure.Data`; the first three followed in issue #309 (Persistence 8/8) for `Inventory.Infrastructure.Persistence`, beside the `AppDbContext`, the entities and the migrations issue #307 had already moved. Entity-specific EF query expressions stay in those persistence adapters; they implement Application-owned ports and apply the authoritative Domain rules. The existing report facts adapters likewise compose the migrated commission and fee use cases and Domain rules. Issue #154 closed this item's remaining architectural debt rather than relocating anything further: the commission, fee, payment-method and transaction-status rules issue #150 moved into `Inventory.Domain` are now asserted to be declared there and nowhere else, no file under `InventoryApi` names one, `Inventory.Domain`/`Inventory.Application` are asserted to declare no `IQueryable` or expression tree at all, and `EfNayaxSalesQueries` is `internal` so the completed-sale predicate cannot be called from outside `Inventory.Infrastructure` - see [InventoryApi](#inventoryapi).
    - `InventoryApi.Services.SiteService`/`MachineService` were not deleted by this slice: it left them as thin delegators that only mapped the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine`/`Product` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal — and physically deleting them was left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.
    - **Sites/Machines delegators removed and the machine responses are API-owned** (issue #302, child 1 of 8 of #153).
@@ -8046,6 +9321,8 @@ EF Core InMemory tests remain useful for fast service checks but must not be the
 `CalculateReorderNeedsTests.Handle_BoundsPerMachineConcurrency_ToTheConfiguredLimit`, which waits on the use case with a wall-clock hang guard, runs the use case off xUnit's test synchronization context (`Task.Run`), as ASP.NET Core does. Otherwise the use case's continuations queue for one of xUnit's few test threads, which in the integration project are often busy with long synchronous SQLite tests, and the guard can expire after the work has finished.
 
 **Call-sequence (yielding-recorder) tests.** Some defects are about *when* calls happen rather than what they return; two operations overlapping on one request-scoped `AppDbContext` is the current example (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). Neither an InMemory nor a relational SQLite test can prove that one, because SQLite's synchronous async implementation completes each call before the next one starts. Such behavior is tested instead with an in-memory fake of the port that records a `start:`/`end:` marker per call, tracks how many calls were ever in flight at once, and awaits `Task.Yield()` before completing — so an implementation that starts two calls before awaiting either produces an interleaved trace and a concurrency count above one. `ResolveMachineProductPricingTests`' call-sequence recorder and the Sites equivalents (`backend/Inventory.IntegrationTests/Application/Sites/RecordingSiteFactsStore.cs`, plus `RecordingNayaxLynxClient`, which gates its machine-product calls so a serialized fan-out fails rather than hangs) are the examples. Pair them with the behavioral assertions the serialization must not change — per-site totals and revenue attribution, ordering, failure propagation, and the relational two-business isolation tests — so a concurrency fix cannot silently drop a site or move revenue between sites.
+
+**Parked-command tests, when the overlap is inside a real adapter.** A recorder fake proves when a *port* is called, but not when the real EF adapter behind it reaches the context — and since issue #520 that happens inside the Nayax client, where no fake is wanted. `NayaxParallelCredentialAccessTests` (issue #667) instead attaches a `DbCommandInterceptor` to the request's own `AppDbContext` options which parks every command briefly, inside EF's critical section, and records how many were ever in flight. That makes the context genuinely asynchronous for the length of the park, so the defect is a deterministic failure (EF's "a second operation was started on this context instance") rather than a source-level argument, and the fixed code is asserted positively: one command in flight at a time, with the remote fan-out still concurrent at the HTTP handler. The window closes as soon as an overlap is seen, so a failing run is fast and a serialized one costs one short park per command. Use it with the real provider, the real store and relational SQLite — the HTTP handler is the only double — and keep the behavioural assertions beside it (which credentials went on the wire, which status row was written, two businesses), so a serialization fix cannot quietly change what a call resolves.
 
 **Two-writer tests.** A check-then-write rule enforced by a transaction needs two *real* writers, which neither an InMemory provider (no locking) nor a shared in-memory SQLite database (one connection) can provide. Such a test uses a temporary SQLite **file** instead, with one `AppDbContext` and connection per writer, and releases the operations together at a `Barrier` so the window the rule has to close is actually opened; it then asserts both the surviving data and that the loser was refused with the rule's own message rather than a provider error. `BusinessMembershipWriteTransactionTests` (issue #522) is the example — two simultaneous activations of one identity, and two Owners demoting each other — and it is written so that both cases fail if the write transaction is downgraded from `BEGIN IMMEDIATE` to the provider's deferred default. Delete the file in `Dispose` and clear the connection pool with it, so a run leaves nothing behind.
 

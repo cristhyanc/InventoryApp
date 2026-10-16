@@ -76,6 +76,13 @@ public static class NayaxConnectionCheckPolicy
             401 => NayaxConnectionCheckFailure.InvalidOrExpiredToken,
             403 => NayaxConnectionCheckFailure.PermissionNotGranted,
             404 when IsOperatorScoped(check) => NayaxConnectionCheckFailure.OperatorIdMismatch,
+            // Nayax answered, but about itself rather than about the credentials (issue #681). A
+            // 408 is its own request timeout and a 429 is its own rate limit, so both say "ask me
+            // again shortly" and neither is a verdict on the token, the operator id or a
+            // permission - exactly what NayaxUnavailable means. Reported as "unrecognised" they
+            // sent an Owner looking for a permission to request, which is the one thing that would
+            // not help.
+            408 or 429 => NayaxConnectionCheckFailure.NayaxUnavailable,
             >= 500 and <= 599 => NayaxConnectionCheckFailure.NayaxUnavailable,
             _ => NayaxConnectionCheckFailure.UnexpectedResponse,
         };

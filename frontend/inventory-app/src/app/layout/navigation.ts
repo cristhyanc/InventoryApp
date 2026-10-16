@@ -1,3 +1,4 @@
+import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { Capability, CapabilitySet } from '../access/capabilities';
 
 /**
@@ -33,10 +34,11 @@ export interface NavLink {
 }
 
 /**
- * An inert group child with no page of its own yet (issue #546's Businesses placeholder, built in
- * #547). It renders as plain text rather than a link, because this file's one rule - every `route`
- * must be a real page already declared in `app.routes.ts` - leaves no route to give it before that
- * page exists.
+ * An inert group child with no page of its own yet. It renders as plain text rather than a link,
+ * because this file's one rule - every `route` must be a real page already declared in
+ * `app.routes.ts` - leaves no route to give it before that page exists. Issue #546 introduced this
+ * for the Businesses destination, and issue #547 built that page, so nothing uses it today; the
+ * type is kept for the next Super Admin destination that lands before its own page does.
  */
 export interface NavPlaceholder {
   readonly kind: 'placeholder';
@@ -59,6 +61,30 @@ export type NavItem = NavLink | NavGroup;
 function link(label: string, route: string, capability: Capability): NavLink {
   return { kind: 'link', label, route, capability };
 }
+
+/**
+ * The business `Admin` group's declared destinations, exported on their own so the Admin hub page
+ * (`AdminComponent`) can filter its own cards from the same capability-to-route data the sidebar
+ * renders, rather than a second, hand-kept copy that could drift from it (issue #674).
+ */
+export const adminNavGroup: NavGroup = {
+  kind: 'group',
+  label: 'Admin',
+  icon: 'settings',
+  children: [
+    link('Nayax Settings', '/admin/nayax-settings', 'Integration.Manage'),
+    link('Site Commission Agreements', '/admin/site-commission-agreements', 'SiteCommissions.Manage'),
+    link('Imports', '/admin/imports', 'Imports.Run'),
+    link('Historical Cost Recovery', '/admin/historical-cost-recovery', 'Data.Repair'),
+    link('AVCO Transition', '/admin/avco-transition', 'Data.Repair'),
+    link('Costing Repair', '/admin/costing-repair', 'Data.Repair'),
+    link('Historical GST Classification', '/admin/historical-gst-classification', 'Data.Repair'),
+    link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair'),
+    link('Users', '/admin/users', 'Members.Manage'),
+    link('Roles', '/admin/roles', 'Roles.View'),
+    link('Business Settings', '/admin/business-settings', 'Business.Manage')
+  ]
+};
 
 export const primaryNavigation: readonly NavItem[] = [
   { kind: 'link', label: 'Dashboard', route: '/', icon: 'home', capability: 'Dashboard.View' },
@@ -105,23 +131,7 @@ export const primaryNavigation: readonly NavItem[] = [
       link('Site Commissions', '/reports/site-commissions', 'SiteCommissions.Manage')
     ]
   },
-  {
-    kind: 'group',
-    label: 'Admin',
-    icon: 'settings',
-    children: [
-      link('Nayax Settings', '/admin/nayax-settings', 'Integration.Manage'),
-      link('Site Commission Agreements', '/admin/site-commission-agreements', 'SiteCommissions.Manage'),
-      link('Imports', '/admin/imports', 'Imports.Run'),
-      link('Historical Cost Recovery', '/admin/historical-cost-recovery', 'Data.Repair'),
-      link('AVCO Transition', '/admin/avco-transition', 'Data.Repair'),
-      link('Costing Repair', '/admin/costing-repair', 'Data.Repair'),
-      link('Historical GST Classification', '/admin/historical-gst-classification', 'Data.Repair'),
-      link('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair'),
-      link('Users', '/admin/users', 'Members.Manage'),
-      link('Roles', '/admin/roles', 'Roles.View')
-    ]
-  }
+  adminNavGroup
 ];
 
 /**
@@ -140,10 +150,16 @@ export const platformDiagnosticsNavLink: NavLink = {
   route: '/super-admin/diagnostics'
 };
 
-/** The Businesses page's placeholder (issue #546; the real page is issue #547). */
-export const businessesNavPlaceholder: NavPlaceholder = {
-  kind: 'placeholder',
-  label: 'Businesses'
+/**
+ * The Businesses page (issue #546's placeholder, built in issue #547): approve/reject a pending
+ * application, deactivate/reactivate a trading one, and release a member of a deactivated one.
+ * Like `platformDiagnosticsNavLink`, it declares no capability - no business role grants it, only
+ * the platform-admin probe below does.
+ */
+export const businessesNavLink: NavLink = {
+  kind: 'link',
+  label: 'Businesses',
+  route: '/super-admin/businesses'
 };
 
 /**
@@ -157,7 +173,7 @@ export const superAdminNavGroup: NavGroup = {
   kind: 'group',
   label: 'Super Admin',
   icon: 'settings',
-  children: [platformDiagnosticsNavLink, businessesNavPlaceholder]
+  children: [platformDiagnosticsNavLink, businessesNavLink]
 };
 
 /**
@@ -173,19 +189,30 @@ export const superAdminNavGroup: NavGroup = {
  * menu over a failed read would be worse than offering a page that answers `403` - see
  * `AccessService`.
  *
+ * `businessNavigation` says whether those business destinations are on offer **at all**
+ * (issue #676). `withheld` leaves none of them in, whatever the capability set says and whether or
+ * not one was ever read: a signed-out visitor and an account the API has already said holds no
+ * usable membership are offered no business menu, which no capability answer could decide, because
+ * the answer for both of them is the fail-open `undefined` one. Withholding is structural rather
+ * than an empty capability set, so a destination that declares no capability of its own cannot
+ * leak into it either. Who that is is `businessNavigationFor`'s decision, not this file's.
+ *
  * `Super Admin` keeps the behaviour issue #335 gave `Platform Diagnostics`, unchanged and
- * independent of any capability: the whole group is appended, last, only while
- * `GET /api/admin/diagnostics/access` confirms access, and neither of its children declares a
- * capability of its own because no business role grants either.
+ * independent of any capability **and of `businessNavigation`**: the whole group is appended,
+ * last, only while `GET /api/admin/diagnostics/access` confirms access, and neither of its
+ * children declares a capability of its own because no business role grants either. An
+ * administrator with no membership of their own is therefore offered that group and nothing else.
  *
  * Everything here copies rather than mutates, so `primaryNavigation` stays the full declared
  * navigation and one member's rendered menu can never leak into another's.
  */
 export function navigationFor(
   capabilities: CapabilitySet | undefined,
-  hasPlatformDiagnosticsAccess: boolean
+  hasPlatformDiagnosticsAccess: boolean,
+  businessNavigation: BusinessNavigationVisibility
 ): readonly NavItem[] {
-  const offered = hasPlatformDiagnosticsAccess ? [...primaryNavigation, superAdminNavGroup] : primaryNavigation;
+  const business: readonly NavItem[] = businessNavigation === 'offered' ? primaryNavigation : [];
+  const offered = hasPlatformDiagnosticsAccess ? [...business, superAdminNavGroup] : business;
 
   if (capabilities === undefined) {
     return offered;

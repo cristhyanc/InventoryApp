@@ -1,6 +1,8 @@
-import { Component } from '@angular/core';
+import { Component, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { Subscription } from 'rxjs';
 import { NayaxCostBackfillResult, ReportingService } from '../../../services/reporting.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
  * The Nayax Historical Cost Recovery workflow as a dedicated feature component, composed by the
@@ -26,8 +28,8 @@ import { NayaxCostBackfillResult, ReportingService } from '../../../services/rep
       <div class="card-body">
         <p class="text-sm value-muted">Recover pending completed-sale COGS from transaction-level Nayax Product Cost Price without replacing finalized inventory-ledger costs.</p>
         <div class="mt-4 flex flex-wrap gap-2">
-          <button type="button" class="btn btn-primary" [disabled]="loading" (click)="backfillNayax(true)">Dry Run</button>
-          <button type="button" class="btn btn-primary" [disabled]="loading" (click)="applyNayaxBackfill()">Apply Nayax Cost Backfill</button>
+          <button type="button" class="btn btn-primary" [disabled]="loading || sessionActive" (click)="backfillNayax(true)">Dry Run</button>
+          <button type="button" class="btn btn-primary" [disabled]="loading || sessionActive" (click)="applyNayaxBackfill()">Apply Nayax Cost Backfill</button>
         </div>
         @if (nayaxBackfillResult) {
           <div class="mt-4 grid grid-cols-2 gap-2 text-sm value-muted">
@@ -43,20 +45,41 @@ import { NayaxCostBackfillResult, ReportingService } from '../../../services/rep
     </section>
   `
 })
-export class HistoricalCostRecoveryWorkflowComponent {
+export class HistoricalCostRecoveryWorkflowComponent implements OnDestroy {
   loading = false;
   error = '';
   nayaxBackfillResult: NayaxCostBackfillResult | null = null;
 
-  constructor(private readonly reportingService: ReportingService) {}
+  /**
+   * Whether a support session is active (issue #661): both actions are disabled while it is,
+   * because a session grants `DataRepair` - the capability this page and the backfill endpoint are
+   * gated on - and the backend refuses it only by its read-only method rule, never by withholding
+   * the capability. The *dry run* is guarded too: it is the same `POST`, so that rule refuses it
+   * as surely as the apply. See `SupportSessionService.active$`.
+   */
+  sessionActive = false;
+
+  private readonly sessionActiveSubscription: Subscription;
+
+  constructor(private readonly reportingService: ReportingService, supportSession: SupportSessionService) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+  }
 
   applyNayaxBackfill(): void {
+    if (this.sessionActive) return;
     if (window.confirm('Apply transaction-level Nayax historical costs to eligible pending completed sales?')) {
       this.backfillNayax(false);
     }
   }
 
   backfillNayax(dryRun: boolean): void {
+    // Checked here as well as disabled in the template, so the request is actually unavailable
+    // rather than merely inert - the endpoint refuses it either way.
+    if (this.sessionActive) return;
     this.loading = true;
     this.error = '';
     this.reportingService.backfillNayaxSaleCosts(dryRun).subscribe({

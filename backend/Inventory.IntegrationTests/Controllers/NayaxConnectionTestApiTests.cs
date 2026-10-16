@@ -501,6 +501,7 @@ public sealed class NayaxConnectionTestApiTests : IClassFixture<NayaxConnectionT
                 DirectoryTenantId = DirectoryTenantId,
                 ObjectId = objectId,
                 Role = role,
+                IsActive = true,
                 CreatedAtUtc = CreatedAt,
             };
     }

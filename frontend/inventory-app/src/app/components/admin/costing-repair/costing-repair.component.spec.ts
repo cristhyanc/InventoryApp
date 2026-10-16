@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
-import { Subject, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { CostingRepairComponent } from './costing-repair.component';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import {
   InventoryCostRepairApplied,
   InventoryCostRepairPreview,
@@ -96,7 +97,8 @@ async function createHarness(
       recostedSaleCount: 2
     } as InventoryCostRepairApplied)
   ),
-  historyFn: jest.Mock = jest.fn(() => of([] as InventoryCostRepairRecord[]))
+  historyFn: jest.Mock = jest.fn(() => of([] as InventoryCostRepairRecord[])),
+  sessionActive: Observable<boolean> = of(false)
 ): Promise<Harness> {
   const toast = { success: jest.fn(), error: jest.fn() };
   await TestBed.configureTestingModule({
@@ -106,7 +108,8 @@ async function createHarness(
         provide: InventoryCostRepairService,
         useValue: { preview: previewFn, apply: applyFn, history: historyFn }
       },
-      { provide: ToastService, useValue: toast }
+      { provide: ToastService, useValue: toast },
+      { provide: SupportSessionService, useValue: { active$: sessionActive } }
     ]
   }).compileComponents();
 
@@ -522,7 +525,8 @@ describe('CostingRepairComponent (issue #361)', () => {
             provide: InventoryCostRepairService,
             useValue: { preview: previewFn, apply: jest.fn(), history: jest.fn(() => of([])) }
           },
-          { provide: ToastService, useValue: toast }
+          { provide: ToastService, useValue: toast },
+          { provide: SupportSessionService, useValue: { active$: of(false) } }
         ]
       }).compileComponents();
       // Deliberately no published zone: GET /api/business/current has not answered yet.
@@ -557,6 +561,63 @@ describe('CostingRepairComponent (issue #361)', () => {
 
       expect(component.effectiveAtError).toBeNull();
       expect((previewFn.mock.calls[0][0] as InventoryCostRepairRequest).effectiveAt).toBe(expectedUtc);
+    });
+  });
+
+  describe('in a support session (issue #661)', () => {
+    function button(host: HTMLElement, text: string): HTMLButtonElement | undefined {
+      return Array.from(host.querySelectorAll('button')).find(candidate => candidate.textContent?.includes(text));
+    }
+
+    it('disables Preview repair while a session is active', async () => {
+      const { component, fixture, host } = await createHarness(jest.fn(), jest.fn(), undefined, of(true));
+
+      component.productId = 1;
+      fixture.detectChanges();
+
+      expect(button(host, 'Preview repair')?.disabled).toBe(true);
+    });
+
+    it('leaves Preview repair enabled while no session is active', async () => {
+      const { component, fixture, host } = await createHarness(jest.fn(), jest.fn(), undefined, of(false));
+
+      component.productId = 1;
+      fixture.detectChanges();
+
+      expect(button(host, 'Preview repair')?.disabled).toBe(false);
+    });
+
+    it('disables Apply repair while a session is active, when a preview is on screen', async () => {
+      const { component, fixture, host } = await createHarness(jest.fn(), jest.fn(), undefined, of(true));
+
+      component.productId = 1;
+      component.preview = preview();
+      fixture.detectChanges();
+
+      expect(button(host, 'Apply repair')?.disabled).toBe(true);
+    });
+
+    /**
+     * The preview is a `POST` as well, which a support session's read-only method rule refuses the
+     * same as the apply, so the guard covers both.
+     */
+    it('calls neither the preview nor the apply endpoint from a guarded handler', async () => {
+      jest.spyOn(window, 'confirm').mockReturnValue(true);
+      const previewFn = jest.fn();
+      const applyFn = jest.fn();
+      const { component } = await createHarness(previewFn, applyFn, undefined, of(true));
+
+      component.productId = 1;
+      component.quantity = 4;
+      component.unitCost = 2;
+      component.reason = 'Machine stock at the 2026 cutover was never costed.';
+      component.previewRepair();
+      component.preview = preview();
+      component.applyRepair();
+
+      expect(previewFn).not.toHaveBeenCalled();
+      expect(applyFn).not.toHaveBeenCalled();
+      expect(component.loading).toBe(false);
     });
   });
 });

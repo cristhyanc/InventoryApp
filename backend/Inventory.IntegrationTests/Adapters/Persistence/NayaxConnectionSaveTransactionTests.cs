@@ -186,9 +186,11 @@ public class NayaxConnectionSaveTransactionTests
     private static NayaxConnectionCheckReport AllPassed() =>
         new([.. NayaxConnectionCheckPolicy.All.Select(NayaxConnectionCheckLine.Passed)], 1);
 
+    // Decrypted for the business the row belongs to: the ciphertext is bound to it (issue #681).
     private static string Decrypt(BusinessNayaxConnection connection) =>
         Protector().Unprotect(
-            new ProtectedNayaxToken(connection.EncryptionKeyId, connection.AccessTokenCiphertext));
+            new ProtectedNayaxToken(connection.EncryptionKeyId, connection.AccessTokenCiphertext),
+            BusinessId.From(connection.BusinessId));
 
     private static ActorIdentity Actor(string objectId)
     {

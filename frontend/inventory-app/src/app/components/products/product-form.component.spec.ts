@@ -1,11 +1,12 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
-import { of } from 'rxjs';
+import { Observable, of } from 'rxjs';
 import { ProductFormComponent } from './product-form.component';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { Category, GstClassification, Product, Supplier } from '../../models/models';
+import { SupportSessionService } from '../../support-session/support-session.service';
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -50,7 +51,7 @@ const suppliers: Supplier[] = [
 ];
 
 /** The routed edit page, rendered the way entering `/products/7/edit` renders it. */
-async function render(overrides: { update?: jest.Mock } = {}) {
+async function render(overrides: { update?: jest.Mock; sessionActive?: Observable<boolean> } = {}) {
   const update = overrides.update ?? jest.fn(() => of(undefined));
   const navigate = jest.fn();
 
@@ -68,6 +69,7 @@ async function render(overrides: { update?: jest.Mock } = {}) {
       },
       { provide: CategoryService, useValue: { getAll: jest.fn(() => of(categories)) } },
       { provide: SupplierService, useValue: { getAll: jest.fn(() => of(suppliers)) } },
+      { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       provideRouter([]),
       { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap({ id: '7' }) } } }
     ]
@@ -180,5 +182,32 @@ describe('ProductFormComponent editing (issue #478 regression cover)', () => {
     const cancel = host.querySelector('a.btn-secondary') as HTMLAnchorElement;
     expect(cancel.getAttribute('href')).toBe('/products');
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Save while a support session is active (issue #554). A session grants `InventoryOperate`, so
+ * this control would otherwise still render enabled.
+ */
+describe('ProductFormComponent write control during a support session (issue #554)', () => {
+  it('disables Save while a session is active', async () => {
+    const { host } = await render({ sessionActive: of(true) });
+
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('does not write the edit while a session is active, even if save() is invoked directly', async () => {
+    const { component, update, navigate } = await render({ sessionActive: of(true) });
+
+    component.save();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('leaves Save enabled while no session is active', async () => {
+    const { host } = await render({ sessionActive: of(false) });
+
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(false);
   });
 });

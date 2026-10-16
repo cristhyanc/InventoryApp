@@ -1,7 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { NgModel } from '@angular/forms';
 import { By } from '@angular/platform-browser';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
 import {
   NayaxConnectionRetestResult,
@@ -10,6 +10,7 @@ import {
   NayaxConnectionTestResult
 } from '../../../services/nayax-connection.service';
 import { ToastService } from '../../../services/toast.service';
+import { SupportSessionService } from '../../../support-session/support-session.service';
 import { NayaxConnectionChecklistComponent } from './nayax-connection-checklist.component';
 import { NayaxConnectionWizardComponent } from './nayax-connection-wizard.component';
 
@@ -70,7 +71,7 @@ interface ToastStub {
 
 async function render(
   overrides: Partial<Record<keyof ConnectionStub, () => Observable<unknown>>> = {},
-  options: { canManage?: boolean } = {}
+  options: { canManage?: boolean; sessionActive?: Observable<boolean> } = {}
 ) {
   const connections: ConnectionStub = {
     test: jest.fn(overrides.test ?? (() => of(testResult()))),
@@ -90,7 +91,8 @@ async function render(
     providers: [
       { provide: NayaxConnectionService, useValue: connections },
       { provide: ToastService, useValue: toast },
-      { provide: AccessService, useValue: { allows: () => of(options.canManage ?? true) } }
+      { provide: AccessService, useValue: { allows: () => of(options.canManage ?? true) } },
+      { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } }
     ]
   }).compileComponents();
 
@@ -378,6 +380,86 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
       expect(request).toContain('does not have permission');
       expect(request).not.toContain('Signing in');
       expect(request).not.toContain(TOKEN);
+    });
+
+    it('names the operator id that was tested, not one typed into the field afterwards', async () => {
+      const { component, fixture, host, enterOperatorId, runTestWith } = await render({ test: refused });
+
+      runTestWith(TOKEN, ' 7788 ');
+      component.goTo(1);
+      enterOperatorId('9999');
+      component.goTo(5);
+      fixture.detectChanges();
+
+      const request = component.supportRequest();
+      expect(request).toContain('Operator ID: 7788');
+      expect(request).not.toContain('9999');
+      expect(host.querySelector<HTMLTextAreaElement>('[data-testid="support-request"]')?.value).toContain(
+        'Operator ID: 7788'
+      );
+    });
+
+    it('asks Nayax only for areas refused for lack of a permission, with its own advice for the rest', async () => {
+      const { component, fixture, host, runTestWith } = await render({
+        test: () =>
+          of(
+            testResult({
+              nothingFailed: false,
+              checks: [
+                { check: 'SignIn', status: 'Passed', failure: null },
+                { check: 'Machines', status: 'Failed', failure: 'PermissionNotGranted' },
+                { check: 'ProductCatalogue', status: 'Failed', failure: 'OperatorIdMismatch' },
+                { check: 'MachineLastSales', status: 'Failed', failure: 'NayaxUnavailable' }
+              ]
+            })
+          )
+      });
+
+      runTestWith();
+      component.next();
+      fixture.detectChanges();
+
+      const request = component.supportRequest();
+      expect(request).toContain('Machine list (GET machines)');
+      expect(request).not.toContain('Operator product catalogue');
+      expect(request).not.toContain('Machine recent sales');
+
+      const mismatch = host.querySelector('[data-testid="refusal-advice-OperatorIdMismatch"]');
+      expect(mismatch?.textContent).toContain('operator id 7788');
+      expect(mismatch?.textContent).toContain('Check the operator id');
+      expect(mismatch?.textContent).toContain('Operator product catalogue');
+      const unavailable = host.querySelector('[data-testid="refusal-advice-NayaxUnavailable"]');
+      expect(unavailable?.textContent).toContain('Try the test again');
+      expect(unavailable?.textContent).toContain('Machine recent sales');
+      expect(host.querySelector('[data-testid="refusal-advice-InvalidOrExpiredToken"]')).toBeNull();
+    });
+
+    it('sends an Owner whose token expired to generate a new one, not to ask for permissions', async () => {
+      const { component, fixture, host, runTestWith } = await render({
+        test: () =>
+          of(
+            testResult({
+              nothingFailed: false,
+              machineCount: null,
+              checks: [
+                { check: 'SignIn', status: 'Failed', failure: 'InvalidOrExpiredToken' },
+                { check: 'Machines', status: 'Failed', failure: 'InvalidOrExpiredToken' },
+                { check: 'Machine', status: 'NotChecked', failure: null }
+              ]
+            })
+          )
+      });
+
+      runTestWith();
+      component.next();
+      fixture.detectChanges();
+
+      expect(component.step).toBe(5);
+      expect(host.querySelector('[data-testid="refusal-advice-InvalidOrExpiredToken"]')?.textContent).toContain(
+        'Generate a new Lynx token'
+      );
+      expect(host.querySelector('[data-testid="support-request"]')).toBeNull();
+      expect(host.querySelector('[data-testid="no-permission-request"]')).toBeTruthy();
     });
 
     it('offers the Nayax support portal and the integration mailbox as the second contact', async () => {
@@ -670,6 +752,64 @@ describe('NayaxConnectionWizardComponent (issue #538)', () => {
       expect(connections.test).not.toHaveBeenCalled();
       expect(connections.save).not.toHaveBeenCalled();
       expect(connections.retest).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Test, Save connection and Re-test while a support session is active (issue #660). A session
+   * grants `IntegrationManage`, so these controls would otherwise still render enabled.
+   */
+  describe('Support session', () => {
+    it('disables Test connection while a session is active, and runTest() writes nothing', async () => {
+      const { component, connections, fixture, host, enterOperatorId, pasteToken } = await render(
+        {},
+        { sessionActive: of(true) }
+      );
+
+      enterOperatorId('7788');
+      component.goTo(3);
+      fixture.detectChanges();
+      pasteToken(TOKEN);
+
+      expect((host.querySelector('[data-testid="run-test"]') as HTMLButtonElement).disabled).toBe(true);
+
+      component.runTest();
+
+      expect(connections.test).not.toHaveBeenCalled();
+    });
+
+    it('disables Re-test while a session is active, and retest() writes nothing', async () => {
+      const { component, connections, host } = await render(
+        { status: () => of(state({ status: 'Ready' })) },
+        { sessionActive: of(true) }
+      );
+
+      expect((host.querySelector('[data-testid="retest"]') as HTMLButtonElement).disabled).toBe(true);
+
+      component.retest();
+
+      expect(connections.retest).not.toHaveBeenCalled();
+    });
+
+    it('disables Save connection once a session starts after a passing test, and saveConnection() writes nothing', async () => {
+      const sessionActive = new Subject<boolean>();
+      sessionActive.next(false);
+      const { component, connections, fixture, host, runTestWith } = await render({}, { sessionActive });
+
+      runTestWith();
+      component.goTo(6);
+      fixture.detectChanges();
+      expect(component.canSave).toBe(true);
+
+      sessionActive.next(true);
+      fixture.detectChanges();
+
+      expect(component.canSave).toBe(false);
+      expect((host.querySelector('[data-testid="save-connection"]') as HTMLButtonElement).disabled).toBe(true);
+
+      component.saveConnection();
+
+      expect(connections.save).not.toHaveBeenCalled();
     });
   });
 });

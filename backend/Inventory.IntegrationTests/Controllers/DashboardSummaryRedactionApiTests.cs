@@ -269,6 +269,7 @@ public sealed class DashboardSummaryRedactionApiTests : IClassFixture<DashboardS
                 DirectoryTenantId = DirectoryTenantId,
                 ObjectId = objectId,
                 Role = role,
+                IsActive = true,
                 CreatedAtUtc = CreatedAt,
                 StatusChangedAtUtc = CreatedAt,
             };

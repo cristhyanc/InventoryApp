@@ -443,6 +443,30 @@ describe('PurchaseEditFormComponent template (issue #475)', () => {
   });
 
   /**
+   * Save while a support session is active (issue #657, extending #554): disabled in the
+   * template, and `submit()` itself refuses to emit even if invoked directly - the same
+   * belt-and-suspenders the capability-gated controls already follow.
+   */
+  it('disables the Save button while a support session is active, and leaves it enabled while none is', async () => {
+    const { fixture, host } = await render(purchase());
+    expect((host.querySelector('[data-testid="edit-purchase-save"]') as HTMLButtonElement).disabled).toBe(false);
+
+    fixture.componentInstance.sessionActive = true;
+    fixture.detectChanges();
+
+    expect((host.querySelector('[data-testid="edit-purchase-save"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('emits no save while a support session is active, even if submit() is invoked directly', () => {
+    const { component, saved } = createForm(purchase());
+    component.sessionActive = true;
+
+    component.submit();
+
+    expect(saved).toHaveLength(0);
+  });
+
+  /**
    * The responsive rules are the ones `/purchases/new` already uses and that issue #410's restyle
    * verified at 1440px and 390px: a single column of fields that becomes two at `md`, and a
    * line-item row that is one column per control below `md`. This pins the classes rather than

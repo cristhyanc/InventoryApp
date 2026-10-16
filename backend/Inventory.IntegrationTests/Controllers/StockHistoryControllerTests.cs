@@ -2,6 +2,7 @@ using Inventory.Application.Stock;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Stock;
 using InventoryApi.Tests.Application.Time;
 using InventoryApi.Tests.Swagger;
@@ -23,7 +24,11 @@ public class StockHistoryControllerTests
     private static readonly DateTime CreatedAt = new(2024, 6, 15, 2, 0, 0, DateTimeKind.Utc);
 
     private static StockHistoryController CreateController(FakeStockAdjustmentStore store) =>
-        new(new ListStockHistory(store, new FakeBusinessCalendar(new DateTime(2024, 6, 15))));
+        new(
+            new ListStockHistory(store, new FakeBusinessCalendar(new DateTime(2024, 6, 15))),
+            // An Owner, so the page carries each movement's inventory value; the role-dependent
+            // shape itself is StockAndPurchasingFinancialRedactionApiTests (issue #700).
+            TestCurrentCapabilities.Owner);
 
     private static StockHistoryEntry Entry(string productName = "Coke") =>
         new(

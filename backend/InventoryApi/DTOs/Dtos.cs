@@ -137,6 +137,12 @@ public record PurchaseResponseDto(
     PurchaseGstSummaryDto? Gst = null
 );
 
+// One row of GET /api/sites. The three revenue figures are nullable since issue #697: a caller
+// without Dashboard.ViewFinancials - today an Operator - is sent null for each of them, never 0,
+// and GetSiteSummaries does not read the site's completed sales for that caller at all. Null here
+// means "not this caller's to see"; a period a caller may see that holds no completed sale is an
+// honest 0. Every other field, the route and the status codes are unchanged, and a Manager's and an
+// Owner's response is what it always was.
 public record SiteSummaryDto(
     long SiteId,
     string SiteName,
@@ -144,13 +150,17 @@ public record SiteSummaryDto(
     decimal TotalStockPercentage,
     int LowProductCount,
     int EmptyProductCount,
-    decimal TodayRevenue,
-    decimal CurrentWeekRevenue,
-    decimal PreviousComparableWeekRevenue
+    decimal? TodayRevenue,
+    decimal? CurrentWeekRevenue,
+    decimal? PreviousComparableWeekRevenue
 );
 
 public record SiteProductMachineMdbCodeDto(long MachineId, string MachineLabel, int? MdbCode);
 
+// One row of GET /api/sites/{id}/products. EstimatedCardProfit was already nullable for an estimate
+// that cannot be made, and since issue #697 it is also null for a caller without
+// Dashboard.ViewFinancials; AverageUnitCost and SitePrice are deliberately never withheld. See
+// Inventory.Application.Sites.SiteProductRecord for both cases.
 public record SiteProductDto(
     long ProductId,
     string Name,

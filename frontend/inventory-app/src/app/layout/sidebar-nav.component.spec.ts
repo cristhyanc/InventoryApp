@@ -1,3 +1,5 @@
+import { provideHttpClient, withInterceptors } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
@@ -5,11 +7,16 @@ import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
 import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService, MemberAccess, MemberAccessState } from '../access/access.service';
+import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { CAPABILITIES, Capability, capabilitySet } from '../access/capabilities';
+import { FORBIDDEN_INTERCEPTORS } from '../access/forbidden-interceptors';
 import { apiConfig, queuedReads, readingHttp, signedInIdentity } from '../access/identity-cache.spec-helpers';
 import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
+import { ConfigService } from '../services/config.service';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { PlatformDiagnosticsAccess, PlatformDiagnosticsService } from '../services/platform-diagnostics.service';
+import { SuperAdminBusinessesService } from '../services/super-admin-businesses.service';
+import { ToastService } from '../services/toast.service';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './sidebar-nav.component';
 import { NavGroup, navLinks, primaryNavigation } from './navigation';
 
@@ -50,6 +57,15 @@ async function render(
     access?: Observable<MemberAccessState>;
     /** The real `AccessService`, for the tests that are about what it publishes when (issue #603). */
     accessService?: AccessService;
+    pendingCount?: () => Observable<number>;
+    businessesChanged$?: Observable<void>;
+    /**
+     * Whether the shell offers the ordinary business destinations at all (issue #676). It defaults
+     * to `offered`, the signed-in member every test here but that issue's own is about; the
+     * decision itself is the shell's (`app.component.spec.ts`) and the rule's
+     * (`business-navigation.spec.ts`).
+     */
+    businessNavigation?: BusinessNavigationVisibility;
   } = {}
 ): Promise<Rendered> {
   await TestBed.configureTestingModule({
@@ -63,6 +79,13 @@ async function render(
       {
         provide: PlatformDiagnosticsAccessService,
         useValue: { granted$: options.diagnosticsAccess ?? of(false) }
+      },
+      {
+        provide: SuperAdminBusinessesService,
+        useValue: {
+          pendingCount: jest.fn(options.pendingCount ?? (() => of(0))),
+          changed$: options.businessesChanged$ ?? NEVER
+        }
       }
     ]
   }).compileComponents();
@@ -74,6 +97,7 @@ async function render(
   const fixture = TestBed.createComponent(SidebarNavComponent);
   fixture.componentRef.setInput('expanded', options.expanded ?? true);
   fixture.componentRef.setInput('drawer', options.drawer ?? false);
+  fixture.componentRef.setInput('businessNavigation', options.businessNavigation ?? 'offered');
   if (options.navId !== undefined) {
     fixture.componentRef.setInput('navId', options.navId);
   }
@@ -278,7 +302,7 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     expect(host.textContent).not.toContain('Super Admin');
   });
 
-  it('renders Platform Diagnostics and the inert Businesses placeholder once the API confirms access', async () => {
+  it('renders Platform Diagnostics and Businesses once the API confirms access', async () => {
     const { fixture, host } = await render({ diagnosticsAccess: of(true) });
     expect(link(host, '/super-admin/diagnostics')).toBeNull();
 
@@ -289,10 +313,9 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     expect(diagnostics).not.toBeNull();
     expect(diagnostics?.textContent?.trim()).toBe('Platform Diagnostics');
 
-    expect(host.textContent).toContain('Businesses');
-    expect(Array.from(host.querySelectorAll('a')).some((anchor) => anchor.textContent?.trim() === 'Businesses')).toBe(
-      false
-    );
+    const businesses = link(host, '/super-admin/businesses');
+    expect(businesses).not.toBeNull();
+    expect(businesses?.textContent?.trim()).toBe('Businesses');
   });
 
   it('marks the diagnostics page active and opens the Super Admin group for it', async () => {
@@ -311,8 +334,188 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     ]);
     expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
       ...navLinks(primaryNavigation).map((entry) => entry.route),
-      '/super-admin/diagnostics'
+      '/super-admin/diagnostics',
+      '/super-admin/businesses'
     ]);
+  });
+});
+
+/**
+ * The pending-business-applications badge on the `Super Admin` group and its `Businesses` child
+ * (issue #547), re-read whenever the Businesses page reports a completed action.
+ */
+describe('SidebarNavComponent pending-business badge (issue #547)', () => {
+  it('shows no badge while platform-admin access is not confirmed', async () => {
+    const { host } = await render({ diagnosticsAccess: of(false), pendingCount: () => of(3) });
+
+    expect(host.textContent).not.toContain('3');
+  });
+
+  it('shows the pending count on the group heading once access is confirmed', async () => {
+    const { host } = await render({ diagnosticsAccess: of(true), pendingCount: () => of(2) });
+
+    expect(groupToggle(host, 'Super Admin').textContent).toContain('2');
+  });
+
+  it('shows no badge while the count is zero', async () => {
+    const { host } = await render({ diagnosticsAccess: of(true), pendingCount: () => of(0) });
+
+    expect(groupToggle(host, 'Super Admin').textContent?.trim()).toBe('Super Admin▾');
+  });
+
+  it('shows the pending count beside the Businesses link once its group is open', async () => {
+    const { fixture, host } = await render({ diagnosticsAccess: of(true), pendingCount: () => of(5) });
+
+    groupToggle(host, 'Super Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/super-admin/businesses')?.textContent).toContain('5');
+  });
+
+  it('re-reads the count when the Businesses page reports a completed action', async () => {
+    const changed = new Subject<void>();
+    const pendingCount = jest.fn().mockReturnValueOnce(of(4)).mockReturnValueOnce(of(1));
+    const { fixture, host } = await render({
+      diagnosticsAccess: of(true),
+      pendingCount,
+      businessesChanged$: changed
+    });
+
+    expect(groupToggle(host, 'Super Admin').textContent).toContain('4');
+
+    changed.next();
+    fixture.detectChanges();
+
+    expect(groupToggle(host, 'Super Admin').textContent).toContain('1');
+    expect(pendingCount).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears a previously granted count the moment platform-admin access is lost', async () => {
+    const diagnosticsAccess = new BehaviorSubject(true);
+    const { fixture, host, component } = await render({ diagnosticsAccess, pendingCount: () => of(3) });
+
+    expect(groupToggle(host, 'Super Admin').textContent).toContain('3');
+
+    diagnosticsAccess.next(false);
+    fixture.detectChanges();
+
+    expect(component.pendingBusinessCount).toBeNull();
+  });
+});
+
+/**
+ * The badge and the composed `403` chain together (issue #673). Nothing here is doubled except
+ * MSAL, the configured API base URL, the toast and the platform-admin probe: the real
+ * `AccessService`, the real `SuperAdminBusinessesService`, the production `403` interceptors and
+ * the really rendered sidebar are all installed, because the loop this covers lives in none of
+ * them on its own. A refused `GET .../pending-count` refreshed the member capability cache, and
+ * every capability emission asked this component for the count again.
+ */
+describe('SidebarNavComponent pending-count refusal (issue #673)', () => {
+  const ACCESS_READ = '/api/me/access';
+  const PENDING_COUNT = '/api/super-admin/businesses/pending-count';
+
+  interface ComposedRender extends Rendered {
+    httpMock: HttpTestingController;
+    toastError: jest.Mock;
+  }
+
+  async function renderWithRealChain(): Promise<ComposedRender> {
+    const identity = signedInIdentity();
+    const toastError = jest.fn();
+
+    await TestBed.configureTestingModule({
+      imports: [SidebarNavComponent],
+      providers: [
+        provideRouter([{ path: '**', component: BlankPageComponent }]),
+        provideHttpClient(withInterceptors([...FORBIDDEN_INTERCEPTORS])),
+        provideHttpClientTesting(),
+        { provide: ConfigService, useValue: apiConfig() },
+        { provide: ToastService, useValue: { error: toastError } },
+        { provide: MsalService, useValue: identity.msal },
+        { provide: MsalBroadcastService, useValue: identity.broadcast },
+        // Platform access was confirmed and is still cached, which is the state the loop needed:
+        // the group is rendered, so the badge keeps asking for a count the server now refuses.
+        { provide: PlatformDiagnosticsAccessService, useValue: { granted$: of(true) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(SidebarNavComponent);
+    fixture.componentRef.setInput('expanded', true);
+    fixture.componentRef.setInput('businessNavigation', 'offered');
+    fixture.detectChanges();
+
+    return {
+      fixture,
+      component: fixture.componentInstance,
+      host: fixture.nativeElement as HTMLElement,
+      httpMock: TestBed.inject(HttpTestingController),
+      toastError
+    };
+  }
+
+  /**
+   * Answers every outstanding request - the capability read with an Owner's own answer, everything
+   * else with `403` - round after round until nothing is issuing any more, and returns the URLs in
+   * the order they were answered. A chain that never settles is the defect, so the rounds are
+   * capped and exhausting the cap fails loudly rather than hanging the suite.
+   */
+  function settle(rendered: ComposedRender, rounds = 12): string[] {
+    const answered: string[] = [];
+
+    for (let round = 0; round < rounds; round++) {
+      const outstanding = rendered.httpMock.match(() => true);
+      if (outstanding.length === 0) {
+        rendered.fixture.detectChanges();
+        return answered;
+      }
+
+      for (const request of outstanding) {
+        answered.push(request.request.url);
+        if (request.request.url === ACCESS_READ) {
+          request.flush({
+            role: 'Owner',
+            capabilities: [...CAPABILITIES],
+            businessName: 'Vending Co',
+            timeZoneId: 'Australia/Sydney'
+          });
+        } else {
+          request.flush('refused', { status: 403, statusText: 'Forbidden' });
+        }
+      }
+
+      rendered.fixture.detectChanges();
+    }
+
+    throw new Error(`the chain was still issuing requests after ${rounds} rounds: ${answered.join(', ')}`);
+  }
+
+  it('settles instead of looping when the pending count keeps being refused', async () => {
+    const rendered = await renderWithRealChain();
+
+    // One read when the cached platform grant arrives and one when the capability set is first
+    // answered, and then nothing: the refusals themselves drive no further request at all.
+    expect(settle(rendered)).toEqual([ACCESS_READ, PENDING_COUNT, PENDING_COUNT]);
+    rendered.httpMock.verify();
+  });
+
+  it('leaves the badge in a stable unavailable state, with the group still offered', async () => {
+    const rendered = await renderWithRealChain();
+
+    settle(rendered);
+
+    expect(rendered.component.pendingBusinessCount).toBeNull();
+    expect(groupToggle(rendered.host, 'Super Admin').textContent?.trim()).toBe('Super Admin▾');
+  });
+
+  it('tells the operator nothing and leaves the member capability set alone', async () => {
+    const rendered = await renderWithRealChain();
+
+    settle(rendered);
+
+    expect(rendered.toastError).not.toHaveBeenCalled();
+    // The capabilities were read once, for this identity, and the refusals never re-read them.
+    expect(rendered.component.navigation.length).toBeGreaterThan(0);
   });
 });
 
@@ -355,6 +558,7 @@ describe('SidebarNavComponent Super Admin group across an identity change (issue
         provideRouter([{ path: '**', component: BlankPageComponent }]),
         { provide: AccessService, useValue: { access$: of(EVERY_CAPABILITY) } },
         { provide: PlatformDiagnosticsService, useValue: { access, query: jest.fn() } },
+        { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } },
         {
           provide: MsalService,
           useValue: {
@@ -373,6 +577,7 @@ describe('SidebarNavComponent Super Admin group across an identity change (issue
 
     const fixture = TestBed.createComponent(SidebarNavComponent);
     fixture.componentRef.setInput('expanded', true);
+    fixture.componentRef.setInput('businessNavigation', 'offered');
     fixture.detectChanges();
 
     return {
@@ -790,5 +995,93 @@ describe('SidebarNavComponent drawer behaviour (issue #391)', () => {
     link(host, '/categories')?.click();
 
     expect(navigated).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * What the sidebar renders when the shell withholds the business navigation (issue #676). The
+ * decision is the shell's - this component conditions nothing in its template and owns no part of
+ * it - so here it arrives as the input it is, with the capability answers that make the two cases
+ * it has to tell apart indistinguishable on their own.
+ */
+describe('SidebarNavComponent with the business navigation withheld (issue #676)', () => {
+  const UNAVAILABLE: MemberAccessState = { status: 'unavailable' };
+
+  /** Every rendered destination that is not the separately authorized Super Admin group's. */
+  function businessDestinations(host: HTMLElement): string[] {
+    return Array.from(host.querySelectorAll('a'))
+      .map((anchor) => anchor.getAttribute('href') ?? '')
+      .filter((href) => !href.startsWith('/super-admin'));
+  }
+
+  it('renders no business destination, and still renders the navigation landmark', async () => {
+    const { host } = await render({ businessNavigation: 'withheld', access: of(EVERY_CAPABILITY) });
+
+    expect(businessDestinations(host)).toEqual([]);
+    expect(host.querySelector(`nav[aria-label="Primary"]`)).not.toBeNull();
+  });
+
+  /**
+   * The conflation this issue exists for: a signed-out visitor's and a known nonmember's
+   * `GET /api/me/access` both answer `unavailable`, the one answer that offers every destination.
+   */
+  it('renders none for a capability set that could not be read either', async () => {
+    const { host } = await render({ businessNavigation: 'withheld', access: of(UNAVAILABLE) });
+
+    expect(businessDestinations(host)).toEqual([]);
+    expect(host.textContent).not.toContain('Dashboard');
+  });
+
+  /** The same unreadable capability answer, for somebody the account state confirmed is a member. */
+  it('keeps every destination for an offered menu whose capability set could not be read', async () => {
+    const { host } = await render({ businessNavigation: 'offered', access: of(UNAVAILABLE) });
+
+    expect(businessDestinations(host)).toEqual(
+      expect.arrayContaining(['/', '/pick-list', '/machines', '/sites', '/expenses'])
+    );
+  });
+
+  it('keeps the Super Admin group for a platform administrator with no business menu', async () => {
+    const { host } = await render({
+      businessNavigation: 'withheld',
+      access: of(UNAVAILABLE),
+      diagnosticsAccess: of(true)
+    });
+
+    expect(businessDestinations(host)).toEqual([]);
+    expect(groupToggle(host, 'Super Admin')).not.toBeNull();
+  });
+
+  it('fills the menu in when the shell offers it, without being re-created', async () => {
+    const { fixture, host } = await render({ businessNavigation: 'withheld', access: of(EVERY_CAPABILITY) });
+    expect(businessDestinations(host)).toEqual([]);
+
+    fixture.componentRef.setInput('businessNavigation', 'offered');
+    fixture.detectChanges();
+
+    expect(link(host, '/pick-list')).not.toBeNull();
+
+    fixture.componentRef.setInput('businessNavigation', 'withheld');
+    fixture.detectChanges();
+
+    expect(businessDestinations(host)).toEqual([]);
+  });
+
+  /** The input is what says so: nothing is offered to a host that never answered the question. */
+  it('renders no business destination until a host says the menu is offered', async () => {
+    await TestBed.configureTestingModule({
+      imports: [SidebarNavComponent],
+      providers: [
+        provideRouter([{ path: '**', component: BlankPageComponent }]),
+        { provide: AccessService, useValue: { access$: of(EVERY_CAPABILITY) } },
+        { provide: PlatformDiagnosticsAccessService, useValue: { granted$: of(false) } },
+        { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(SidebarNavComponent);
+    fixture.detectChanges();
+
+    expect(businessDestinations(fixture.nativeElement as HTMLElement)).toEqual([]);
   });
 });

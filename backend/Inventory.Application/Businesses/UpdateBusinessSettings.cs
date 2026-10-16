@@ -23,6 +23,15 @@ namespace Inventory.Application.Businesses;
 /// actually changed something, because the event is evidence about a change rather than about an
 /// attempt.</para>
 ///
+/// <para><strong>The save runs inside the shared write transaction, and the business's lifecycle
+/// status is re-read in it</strong> (issue #680). The business was resolved from the caller's
+/// membership when the request arrived; by the time the save reaches the database the Super Admin
+/// may have deactivated it, and a settings write committed onto a business that has been switched
+/// off is a change nobody can see, undo or administer. <see cref="MembershipWriteGuard"/>'s
+/// <c>BEGIN IMMEDIATE</c> transaction is what serialises this save with that deactivation, and the
+/// intent it is given names the business and no membership rule: this use case activates nothing and
+/// removes no Owner.</para>
+///
 /// <para><strong>An unauditable change is not made.</strong> The acting identity is read
 /// <em>before</em> the write, and a request with no identified actor is refused rather than stored
 /// with an anonymous audit event. A request cannot normally reach this - resolving the current
@@ -41,6 +50,7 @@ public sealed class UpdateBusinessSettings
     private readonly ICurrentBusinessProvider _currentBusiness;
     private readonly IAuthenticatedActorAccessor _actors;
     private readonly IBusinessSettingsStore _store;
+    private readonly MembershipWriteGuard _guard;
     private readonly IBusinessSettingsAudit _audit;
     private readonly IClock _clock;
 
@@ -48,12 +58,14 @@ public sealed class UpdateBusinessSettings
         ICurrentBusinessProvider currentBusiness,
         IAuthenticatedActorAccessor actors,
         IBusinessSettingsStore store,
+        MembershipWriteGuard guard,
         IBusinessSettingsAudit audit,
         IClock clock)
     {
         _currentBusiness = currentBusiness;
         _actors = actors;
         _store = store;
+        _guard = guard;
         _audit = audit;
         _clock = clock;
     }
@@ -68,7 +80,10 @@ public sealed class UpdateBusinessSettings
     /// resolve. Nothing is written.
     /// </exception>
     /// <exception cref="DomainConflictException">
-    /// The resolved business no longer exists; see <see cref="GetBusinessSettings"/>.
+    /// The resolved business stopped being <see cref="BusinessStatus.Active"/> before the save
+    /// committed (<see cref="ActiveBusinessWritePolicy.NotActiveMessage"/>, issue #680), or it no
+    /// longer exists at all; see <see cref="GetBusinessSettings"/>. Nothing is written or audited in
+    /// either case.
     /// </exception>
     public async Task<BusinessSettings> Handle(
         BusinessSettingsSubmission submission,
@@ -92,7 +107,16 @@ public sealed class UpdateBusinessSettings
             submission.GstRegistered,
             submission.TimeZoneId);
 
-        var result = await _store.SaveAsync(businessId, submitted, cancellationToken).ConfigureAwait(false)
+        // Inside the shared BEGIN IMMEDIATE transaction (issue #680), which re-reads the business's
+        // lifecycle status in the lock before the save: the business id was resolved when the
+        // request arrived, and a deactivation that commits in between must refuse this save rather
+        // than be overwritten by it. The store joins that transaction rather than opening its own.
+        var result = await _guard
+                .ExecuteAsync(
+                    new MembershipWriteIntent(BusinessThatMustStillBeActive: businessId),
+                    token => _store.SaveAsync(businessId, submitted, token),
+                    cancellationToken)
+                .ConfigureAwait(false)
             ?? throw new DomainConflictException(BusinessSettingsMessages.BusinessUnavailable);
 
         if (result.ChangedFields.Count > 0)
