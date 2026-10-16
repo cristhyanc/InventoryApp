@@ -8,9 +8,15 @@ import { loadingInterceptor } from './interceptors/loading.interceptor';
 import { supportSessionInterceptor } from './support-session/support-session.interceptor';
 import { supportSessionMessageInterceptor } from './support-session/support-session-message.interceptor';
 import { browserAuthProviders } from './auth/browser-auth-providers';
+import { MsalService } from '@azure/msal-angular';
+import { firstValueFrom } from 'rxjs';
 
 export function initializeApp(configService: ConfigService) {
   return () => configService.load();
+}
+
+export function initializeMsal(msal: MsalService) {
+  return () => firstValueFrom(msal.initialize());
 }
 
 export const appConfig: ApplicationConfig = {
@@ -37,6 +43,12 @@ export const appConfig: ApplicationConfig = {
       ]),
       withInterceptorsFromDi()
     ),
+    {
+  provide: APP_INITIALIZER,
+  useFactory: initializeMsal,
+  deps: [MsalService],
+  multi: true
+},
     { provide: APP_INITIALIZER, useFactory: initializeApp, deps: [ConfigService], multi: true },
     // How the browser authenticates. The real Microsoft Entra/MSAL wiring lives in
     // auth/browser-auth-providers.ts; the dedicated end-to-end build configuration replaces that

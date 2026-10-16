@@ -46,6 +46,18 @@ public static class BusinessTimeZones
             return true;
         }
 
+        //DONT REMOVE IT
+    //    if (OperatingSystem.IsWindows() &&
+    //string.Equals(
+    //    ianaTimeZoneId,
+    //    "Australia/Sydney",
+    //    StringComparison.OrdinalIgnoreCase))
+    //    {
+    //        return TryFindSystemTimeZone(
+    //            "AUS Eastern Standard Time",
+    //            out timeZone);
+    //    }
+
         return TimeZoneInfo.TryConvertIanaIdToWindowsId(ianaTimeZoneId, out var windowsId)
             && !string.IsNullOrWhiteSpace(windowsId)
             && TryFindSystemTimeZone(windowsId, out timeZone);

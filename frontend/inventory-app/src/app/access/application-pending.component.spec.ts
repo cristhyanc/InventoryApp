@@ -57,11 +57,11 @@ async function createHarness(accountStateRefreshResult: AccountStateAnswer): Pro
 describe('ApplicationPendingComponent (issue #542)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  it('explains that the Super Admin will review the application', async () => {
+  it('explains that the Admin will review the application', async () => {
     const { fixture } = await createHarness(known('ApplicationPending'));
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.textContent).toContain('Super Admin');
+    expect(fixture.nativeElement.textContent).toContain('Admin');
   });
 
   it('stays on the page and reports still pending when the re-read is still ApplicationPending', async () => {

@@ -39,7 +39,7 @@ const GENERIC_ERROR_MESSAGE = "Couldn't check your application status. Try again
       <section class="card">
         <div class="card-body">
           <p class="text-md-body">
-            Your application has been submitted. The Super Admin will review it, and you can check back here for a
+            Your application has been submitted. The Admin will review it, and you can check back here for a
             decision.
           </p>
 
