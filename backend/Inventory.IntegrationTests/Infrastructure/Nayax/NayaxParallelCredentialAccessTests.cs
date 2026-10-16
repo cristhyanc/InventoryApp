@@ -13,6 +13,7 @@ using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Sites;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Time;
 using InventoryApi.Tests.Http;
 using Microsoft.Data.Sqlite;
@@ -289,7 +290,8 @@ public class NayaxParallelCredentialAccessTests
             new EfSiteFactsStore(request.Db),
             new SiteNameResolver(),
             time.Clock,
-            time.Calendar);
+            time.Calendar,
+            TestCurrentCapabilities.Owner);
 
         var summaries = await useCase.Handle(CancellationToken.None);
 
