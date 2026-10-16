@@ -6,6 +6,10 @@ import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewC
  * It is presentation only: the shell keeps the MSAL identity and the redirect calls, and this
  * component shows the active account and reports the two intents the application actually has.
  * There is deliberately no profile or account destination here, because no such page exists.
+ *
+ * An entry that needs an access answer is **projected** into the panel rather than built here, so
+ * that stays true: `RolePreviewMenuComponent`'s **View as** section (issue #721) decides for itself
+ * whether it is offered, and closes this panel through {@link close} when it acts.
  */
 @Component({
   selector: 'app-user-menu',
@@ -45,6 +49,12 @@ import { Component, ElementRef, EventEmitter, HostListener, Input, Output, ViewC
               Signed in as
               <span class="block truncate font-medium text-md-gray-800">{{ displayName }}</span>
             </p>
+            <!--
+              Whatever the shell composes into the menu, which today is the Super Admin's
+              **View as** entry (issue #721). It is projected rather than built here so this
+              component keeps owning no access decision of its own.
+            -->
+            <ng-content />
             <div class="my-1 border-t border-md-gray-200"></div>
             <button
               type="button"
@@ -94,6 +104,14 @@ export class UserMenuComponent {
 
   toggle(): void {
     this.isOpen = !this.isOpen;
+  }
+
+  /**
+   * Closes the panel, for projected content that has just acted on the operator's behalf: a click
+   * inside the menu is a click inside this element, so nothing else would dismiss it.
+   */
+  close(): void {
+    this.isOpen = false;
   }
 
   requestSignOut(): void {

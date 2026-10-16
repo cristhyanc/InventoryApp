@@ -8,6 +8,8 @@ import { ToastContainerComponent } from "./components/shared/toast-container.com
 import { IconComponent } from './components/shared/icon.component';
 import { LoadingIndicatorComponent } from './components/shared/loading-indicator.component';
 import { BreadcrumbsComponent } from './layout/breadcrumbs/breadcrumbs.component';
+import { RolePreviewBannerComponent } from './layout/role-preview-banner.component';
+import { RolePreviewMenuComponent } from './layout/role-preview-menu.component';
 import { PRIMARY_NAVIGATION_ID, SidebarNavComponent } from './layout/sidebar-nav.component';
 import { SupportSessionBannerComponent } from './layout/support-session-banner.component';
 import { SupportSessionBlockedComponent } from './layout/support-session-blocked.component';
@@ -15,6 +17,7 @@ import { UserMenuComponent } from './layout/user-menu.component';
 import { AccountStateAnswer, AccountStateService } from './access/account-state.service';
 import { BusinessNavigationVisibility, businessNavigationFor } from './access/business-navigation';
 import { activeAccountKey, signedInAccountMayHaveChanged } from './access/signed-in-account';
+import { RolePreviewService } from './role-preview/role-preview.service';
 import { BusinessService } from './services/business.service';
 import { SupportSessionService } from './support-session/support-session.service';
 import { loginRequest } from './auth-config';
@@ -86,6 +89,15 @@ import { loginRequest } from './auth-config';
  * middle of the navigation acceptance or approval performs, and destroying it would strand the
  * operator there. A lookup that cannot be answered says so, with a retry
  * ({@link isBusinessUnavailable}), instead of leaving every instant blank with no explanation.
+ *
+ * **A started or exited role preview is the same transition, from a second source** (issue #721).
+ * `RolePreviewService` reports one exactly as `SupportSessionService` does - `contextChanging$`
+ * around its navigation, `contextChanged$` when the context itself changed - so the preview
+ * replaces the page and re-reads the business through the machinery already here. The two are kept
+ * as separate flags and combined, because one settling says nothing about the other. The shell
+ * also passes the sidebar whether a preview is active, since the `Super Admin` group belongs to no
+ * business role, and composes the **View as** entry into the user menu
+ * (`RolePreviewMenuComponent`), which decides for itself whether it is offered.
  */
 @Component({
   selector: 'app-root',
@@ -99,7 +111,9 @@ import { loginRequest } from './auth-config';
     LoadingIndicatorComponent,
     BreadcrumbsComponent,
     SupportSessionBannerComponent,
-    SupportSessionBlockedComponent
+    SupportSessionBlockedComponent,
+    RolePreviewBannerComponent,
+    RolePreviewMenuComponent
   ],
   templateUrl: './app.component.html'
 })
@@ -167,11 +181,21 @@ export class AppComponent implements OnInit, OnDestroy {
 
   /**
    * Whether a business-context transition is still settling (issue #670), which is the other reason
-   * the routed page is withheld. It is `SupportSessionService.contextChanging$` and nothing the
-   * shell decides: the service owns when a context changes, and the shell owns what that does to
-   * what is on screen.
+   * the routed page is withheld. It is `SupportSessionService.contextChanging$` and, since
+   * issue #721, `RolePreviewService.contextChanging$` beside it - neither is anything the shell
+   * decides: each service owns when its own context changes, and the shell owns what that does to
+   * what is on screen. They are kept apart and combined below because one of them settling says
+   * nothing about the other.
    */
-  private isBusinessContextChanging = false;
+  private isSupportContextChanging = false;
+  private isRolePreviewContextChanging = false;
+
+  /**
+   * Whether the Super Admin is previewing a business role (issue #721), which the sidebar withholds
+   * the `Super Admin` group for: no business role is offered it, so a preview that kept it would be
+   * showing the one group the previewed role cannot see.
+   */
+  isRolePreviewActive = false;
 
   /**
    * The signed-in identity the business context above was requested for, or `null` when nobody is
@@ -206,6 +230,7 @@ export class AppComponent implements OnInit, OnDestroy {
     private readonly accountState: AccountStateService,
     private readonly businessService: BusinessService,
     private readonly supportSession: SupportSessionService,
+    private readonly rolePreview: RolePreviewService,
     private readonly changeDetector: ChangeDetectorRef
   ) {}
 
@@ -231,6 +256,11 @@ export class AppComponent implements OnInit, OnDestroy {
    */
   get isBusinessContextReady(): boolean {
     return !this.isLoggedIn || (this.isBusinessSettled && !this.isBusinessContextChanging);
+  }
+
+  /** Either context transition withholds the page; both have to settle before it comes back. */
+  private get isBusinessContextChanging(): boolean {
+    return this.isSupportContextChanging || this.isRolePreviewContextChanging;
   }
 
   /**
@@ -301,7 +331,22 @@ export class AppComponent implements OnInit, OnDestroy {
     // What a changed business context does to the page on screen (issue #670).
     this.supportSession.contextChanging$
       .pipe(takeUntil(this.destroying$))
-      .subscribe((changing) => this.applyBusinessContextChange(changing));
+      .subscribe((changing) => this.applyBusinessContextChange(changing, 'support'));
+
+    // A started or exited role preview does the same to the page (issue #721): the capabilities
+    // the page was rendered under have been replaced, so the page is too.
+    this.rolePreview.contextChanging$
+      .pipe(takeUntil(this.destroying$))
+      .subscribe((changing) => this.applyBusinessContextChange(changing, 'role-preview'));
+
+    this.rolePreview.contextChanged$
+      .pipe(takeUntil(this.destroying$))
+      .subscribe(() => this.requestBusinessContext(true));
+
+    // Whether the sidebar still offers the `Super Admin` group (issue #721).
+    this.rolePreview.active$
+      .pipe(takeUntil(this.destroying$))
+      .subscribe((active) => (this.isRolePreviewActive = active));
 
     // The effective business itself changed (issue #671), which is a different question from
     // whether its transition is still settling: the zone the previous context published has been
@@ -394,12 +439,18 @@ export class AppComponent implements OnInit, OnDestroy {
    * It is only ever flushed on the way *in*: releasing the page is Angular's ordinary change
    * detection, and a flush during the shell's own first render would be re-entrant.
    */
-  private applyBusinessContextChange(changing: boolean): void {
-    if (changing === this.isBusinessContextChanging) {
+  private applyBusinessContextChange(changing: boolean, source: 'support' | 'role-preview'): void {
+    const wasChanging = this.isBusinessContextChanging;
+    if (source === 'support') {
+      this.isSupportContextChanging = changing;
+    } else {
+      this.isRolePreviewContextChanging = changing;
+    }
+
+    if (this.isBusinessContextChanging === wasChanging) {
       return;
     }
 
-    this.isBusinessContextChanging = changing;
     if (changing) {
       this.changeDetector.detectChanges();
     }

@@ -1,6 +1,7 @@
 import { HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { catchError, throwError } from 'rxjs';
+import { isRolePreviewRefusal } from '../role-preview/role-preview';
 import { ConfigService } from '../services/config.service';
 import { AccessService } from './access.service';
 import { classifyMemberRequest } from './member-endpoint';
@@ -39,6 +40,12 @@ export function isMemberAccessRefusal(url: string, apiBaseUrl: string): boolean 
  * one of them is the expected answer for every member and says nothing about a business role, and
  * so are static assets and any other origin, which are not member endpoints at all.
  *
+ * **The role preview's own two `403`s are excluded too** (issue #721, {@link isRolePreviewRefusal}).
+ * `read_only_role_preview` is about the request's *method* and `role_preview_not_permitted` about
+ * the preview itself; neither says the cached capabilities are behind the server, and re-reading
+ * them over the first would turn every refused write during a preview into a capability read.
+ * `rolePreviewInterceptor` reacts to both, and ending a preview re-reads the capabilities itself.
+ *
  * It reports nothing to the operator and routes nowhere. Showing "you don't have access to this"
  * for a refused member request is issue #529's global `403` handler, which is a separate decision
  * from keeping this cache current.
@@ -52,7 +59,8 @@ export const accessForbiddenInterceptor: HttpInterceptorFn = (req, next) => {
       if (
         error instanceof HttpErrorResponse &&
         error.status === 403 &&
-        isMemberAccessRefusal(req.url, config.apiBaseUrl)
+        isMemberAccessRefusal(req.url, config.apiBaseUrl) &&
+        !isRolePreviewRefusal(error)
       ) {
         access.refreshUnlessReading();
       }

@@ -84,6 +84,20 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
     this.businessNavigation$.next(visibility);
   }
 
+  private readonly rolePreviewActive$ = new BehaviorSubject(false);
+
+  /**
+   * Whether the Super Admin is previewing a business role (issue #721), which withholds the
+   * `Super Admin` group and its badge: no business role is offered that group, so a preview that
+   * kept it would be showing the one part of the menu the previewed role cannot see. Like
+   * {@link businessNavigation} it is the shell's answer and this component only renders it, and it
+   * defaults to "not previewing" so a host that does not say changes nothing.
+   */
+  @Input()
+  set rolePreviewActive(active: boolean) {
+    this.rolePreviewActive$.next(active);
+  }
+
   /** A destination was chosen, so a narrow drawer can be dismissed. */
   @Output() readonly navigated = new EventEmitter<void>();
 
@@ -144,17 +158,22 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
     combineLatest([
       this.access.access$,
       hasDiagnosticsAccess,
-      this.businessNavigation$.pipe(distinctUntilChanged())
+      this.businessNavigation$.pipe(distinctUntilChanged()),
+      this.rolePreviewActive$.pipe(distinctUntilChanged())
     ])
       .pipe(takeUntil(this.destroying$))
-      .subscribe(([access, diagnosticsGranted, businessNavigation]) => {
-        this.navigation = navigationFor(renderedCapabilities(access), diagnosticsGranted, businessNavigation);
+      .subscribe(([access, diagnosticsGranted, businessNavigation, rolePreviewActive]) => {
+        // A preview withholds the `Super Admin` group exactly as a refused probe does (issue #721):
+        // what the previewed role is shown is the business menu its own capabilities allow, and
+        // that group belongs to no business role at all.
+        const diagnosticsOffered = diagnosticsGranted && !rolePreviewActive;
+        this.navigation = navigationFor(renderedCapabilities(access), diagnosticsOffered, businessNavigation);
         // A page opened by URL before the answers arrived becomes the active entry once its link
         // exists, so the owning group reflects where the operator actually is.
         this.applyActiveRoute(this.router.url);
 
-        this.hasSuperAdminAccess = diagnosticsGranted;
-        if (diagnosticsGranted) {
+        this.hasSuperAdminAccess = diagnosticsOffered;
+        if (diagnosticsOffered) {
           this.refreshPendingBusinessCount();
         } else {
           // No access means no rendered group to show it beside, and a previous identity's count

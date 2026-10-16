@@ -2,6 +2,7 @@ import { HttpErrorResponse, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { Router } from '@angular/router';
 import { catchError, throwError } from 'rxjs';
+import { isRolePreviewRefusal } from '../role-preview/role-preview';
 import { ConfigService } from '../services/config.service';
 import { ToastService } from '../services/toast.service';
 import {
@@ -70,6 +71,11 @@ export function isAccountStateBypassRoute(currentUrl: string): boolean {
  * **Nor does it fire for one of the two support-session refusals** (issue #554): see
  * {@link isSupportSessionRefusal}. `supportSessionMessageInterceptor` is the one that reports
  * those, with the sentence the refusal is actually about.
+ *
+ * **Nor for one of the role preview's two** (issue #721, {@link isRolePreviewRefusal}). "You don't
+ * have access to this" is true of the previewed role and useless to the administrator reading it:
+ * `rolePreviewInterceptor` answers a refused write with the sentence that names the preview and
+ * the way out of it, and a refusal of the preview itself with the notice that it has ended.
  */
 export const memberForbiddenNoticeInterceptor: HttpInterceptorFn = (req, next) => {
   const toast = inject(ToastService);
@@ -83,7 +89,8 @@ export const memberForbiddenNoticeInterceptor: HttpInterceptorFn = (req, next) =
         error.status === 403 &&
         isMemberAccessRefusal(req.url, config.apiBaseUrl) &&
         !isAccountStateBypassRoute(router.url) &&
-        !isSupportSessionRefusal(error)
+        !isSupportSessionRefusal(error) &&
+        !isRolePreviewRefusal(error)
       ) {
         toast.error("You don't have access to this.");
       }
