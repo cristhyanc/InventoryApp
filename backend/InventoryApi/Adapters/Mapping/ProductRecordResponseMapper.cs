@@ -24,13 +24,57 @@ namespace InventoryApi.Adapters.Mapping;
 /// (issue #681), recoverable by summing this one - so a caller who may not be shown it is answered
 /// <c>null</c>. Unit cost, the catalogue selling price and the machine slot's own price are not
 /// financial figures by that decision and are unchanged for every role.</para>
+///
+/// <para>Issue #700 closed the gap #698 left open deliberately. A product's
+/// <see cref="ProductResponse.StockAdjustments"/> carry each movement's
+/// <c>inventoryValueAfter</c>, and the most recent movement's is the product's current valuation -
+/// so withholding the column while publishing the history beside it withheld nothing. The nested
+/// movements are therefore projected under the same visibility, by the same rule
+/// <see cref="StockAdjustmentResponseMapper"/> applies on the stock endpoints.</para>
 /// </summary>
 public static class ProductRecordResponseMapper
 {
     public static ProductResponse ToResponse(ProductRecord record, FinancialFigureVisibility visibility) =>
-        visibility == FinancialFigureVisibility.Visible
-            ? Full(record)
-            : Full(record) with { InventoryValue = null };
+        new()
+        {
+            Id = record.Id,
+            Name = record.Name,
+            Sku = record.Sku,
+            Description = record.Description,
+            UnitPrice = record.UnitPrice,
+            AverageUnitCost = record.AverageUnitCost,
+            CostingQuantity = record.CostingQuantity,
+            InventoryValue = visibility.Withhold(record.InventoryValue),
+            QuantityInStock = record.QuantityInStock,
+            LowStockThreshold = record.LowStockThreshold,
+            RestockTo = record.RestockTo,
+            Unit = record.Unit,
+            IsActive = record.IsActive,
+            CreatedAt = record.CreatedAt,
+            UpdatedAt = record.UpdatedAt,
+            CategoryId = record.CategoryId,
+            Category = record.Category is null
+                ? null
+                : new CategoryResponse(record.Category.Id, record.Category.Name, record.Category.Description),
+            SupplierId = record.SupplierId,
+            Supplier = record.Supplier is null
+                ? null
+                : new SupplierResponse(
+                    record.Supplier.Id,
+                    record.Supplier.Name,
+                    record.Supplier.ContactName,
+                    record.Supplier.Phone,
+                    record.Supplier.Email,
+                    record.Supplier.Address),
+            StockAdjustments = record.StockAdjustments
+                .Select(adjustment => ToMovementResponse(adjustment, visibility))
+                .ToList(),
+
+            // Resolved live by the reorder-alert listing, not persisted; zero on the read paths that
+            // do not resolve them, exactly as before. The derived values follow from these.
+            MachineReplenishmentNeed = record.MachineReplenishmentNeed,
+            OnOrderQuantity = record.OnOrderQuantity,
+        };
 
     /// <summary>
     /// One slot in a machine's product listing (issue #302): the catalogue product it dispenses,
@@ -54,59 +98,27 @@ public static class ProductRecordResponseMapper
                 record.MaxStockInMachine),
         };
 
-    private static ProductResponse Full(ProductRecord record) => new()
-    {
-        Id = record.Id,
-        Name = record.Name,
-        Sku = record.Sku,
-        Description = record.Description,
-        UnitPrice = record.UnitPrice,
-        AverageUnitCost = record.AverageUnitCost,
-        CostingQuantity = record.CostingQuantity,
-        InventoryValue = record.InventoryValue,
-        QuantityInStock = record.QuantityInStock,
-        LowStockThreshold = record.LowStockThreshold,
-        RestockTo = record.RestockTo,
-        Unit = record.Unit,
-        IsActive = record.IsActive,
-        CreatedAt = record.CreatedAt,
-        UpdatedAt = record.UpdatedAt,
-        CategoryId = record.CategoryId,
-        Category = record.Category is null
-            ? null
-            : new CategoryResponse(record.Category.Id, record.Category.Name, record.Category.Description),
-        SupplierId = record.SupplierId,
-        Supplier = record.Supplier is null
-            ? null
-            : new SupplierResponse(
-                record.Supplier.Id,
-                record.Supplier.Name,
-                record.Supplier.ContactName,
-                record.Supplier.Phone,
-                record.Supplier.Email,
-                record.Supplier.Address),
-        StockAdjustments = record.StockAdjustments.Select(adjustment => new ProductStockAdjustmentResponse(
-            adjustment.Id,
-            adjustment.ProductId,
-            adjustment.ReceiptItemId,
-            adjustment.QuantityChange,
-            adjustment.QuantityAfter,
-            adjustment.UnitCost,
-            adjustment.TotalCost,
-            adjustment.CostingQuantityAfter,
-            adjustment.AverageUnitCostAfter,
-            adjustment.InventoryValueAfter,
-            (StockAdjustmentReason)adjustment.Reason,
-            (StockAdjustmentSource)adjustment.Source,
-            adjustment.MachineId,
-            adjustment.Notes,
-            adjustment.EatBefore,
-            adjustment.CreatedAt,
-            adjustment.EffectiveAt)).ToList(),
-
-        // Resolved live by the reorder-alert listing, not persisted; zero on the read paths that do
-        // not resolve them, exactly as before. The derived values follow from these.
-        MachineReplenishmentNeed = record.MachineReplenishmentNeed,
-        OnOrderQuantity = record.OnOrderQuantity,
-    };
+    /// <summary>
+    /// One movement in the product's own history, in the same wire shape the stock endpoints
+    /// publish, with the same figure withheld under the same visibility (issue #700).
+    /// </summary>
+    private static ProductStockAdjustmentResponse ToMovementResponse(
+        ProductStockAdjustmentRecord record, FinancialFigureVisibility visibility) => new(
+            record.Id,
+            record.ProductId,
+            record.ReceiptItemId,
+            record.QuantityChange,
+            record.QuantityAfter,
+            record.UnitCost,
+            record.TotalCost,
+            record.CostingQuantityAfter,
+            record.AverageUnitCostAfter,
+            visibility.Withhold(record.InventoryValueAfter),
+            (StockAdjustmentReason)record.Reason,
+            (StockAdjustmentSource)record.Source,
+            record.MachineId,
+            record.Notes,
+            record.EatBefore,
+            record.CreatedAt,
+            record.EffectiveAt);
 }

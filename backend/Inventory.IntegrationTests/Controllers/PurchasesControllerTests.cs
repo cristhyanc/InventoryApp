@@ -3,6 +3,7 @@ using Inventory.Application.Purchases;
 using Inventory.Domain.Gst;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -38,7 +39,10 @@ public class PurchasesControllerTests
             new UpdatePurchase(store),
             new DeletePurchase(store, storage),
             new ComputePurchaseTotalValidation(),
-            new ComputePurchaseGstSummary());
+            new ComputePurchaseGstSummary(),
+            // An Owner, so a line's nested product carries its inventory value; the role-dependent
+            // shape itself is StockAndPurchasingFinancialRedactionApiTests (issue #700).
+            TestCurrentCapabilities.Owner);
     }
 
     private static Mock<IDocumentStorage> NoDocuments()

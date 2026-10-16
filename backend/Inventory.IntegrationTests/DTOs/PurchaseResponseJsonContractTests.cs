@@ -21,9 +21,17 @@ namespace InventoryApi.Tests.DTOs;
 ///
 /// <see cref="PurchaseJsonContractTests"/> keeps covering the "purchase"/"validation" envelope
 /// itself (issue #127); this file covers what is now inside the "purchase" key.
+///
+/// Every byte-for-byte comparison here is of the <see cref="FinancialFigureVisibility.Visible"/>
+/// projection, stated explicitly since issue #700, which is what asserts that a Manager's and an
+/// Owner's purchase response is unchanged by that slice. The redacted projection withholds exactly
+/// one key's value and is pinned by
+/// <see cref="Response_withholds_only_the_nested_products_inventory_value_when_redacted"/>.
 /// </summary>
 public class PurchaseResponseJsonContractTests
 {
+    private const FinancialFigureVisibility Visible = FinancialFigureVisibility.Visible;
+
     private static readonly JsonSerializerOptions WebDefaults = new(JsonSerializerDefaults.Web);
 
     private static PurchaseProductSummaryRecord ProductRecord() => new(
@@ -146,7 +154,7 @@ public class PurchaseResponseJsonContractTests
     {
         var record = FullyPopulatedRecord();
 
-        var response = JsonSerializer.Serialize(PurchaseResponseMapper.ToResponse(record), WebDefaults);
+        var response = JsonSerializer.Serialize(PurchaseResponseMapper.ToResponse(record, Visible), WebDefaults);
 
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), response);
     }
@@ -170,7 +178,7 @@ public class PurchaseResponseJsonContractTests
             ],
         };
 
-        var response = JsonSerializer.Serialize(PurchaseResponseMapper.ToResponse(record), WebDefaults);
+        var response = JsonSerializer.Serialize(PurchaseResponseMapper.ToResponse(record, Visible), WebDefaults);
 
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), response);
         Assert.Contains("\"supplier\":null", response, StringComparison.Ordinal);
@@ -182,7 +190,7 @@ public class PurchaseResponseJsonContractTests
     {
         var record = FullyPopulatedRecord() with { Items = [] };
 
-        var response = JsonSerializer.Serialize(PurchaseResponseMapper.ToResponse(record), WebDefaults);
+        var response = JsonSerializer.Serialize(PurchaseResponseMapper.ToResponse(record, Visible), WebDefaults);
 
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), response);
         Assert.Contains("\"items\":[]", response, StringComparison.Ordinal);
@@ -197,7 +205,7 @@ public class PurchaseResponseJsonContractTests
     public void Response_exposes_the_same_keys_in_the_same_order_the_entity_did()
     {
         var json = JsonSerializer.Serialize(
-            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord()), WebDefaults);
+            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord(), Visible), WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(
@@ -233,7 +241,7 @@ public class PurchaseResponseJsonContractTests
     public void Response_carries_each_components_gst_classification_and_provenance()
     {
         var json = JsonSerializer.Serialize(
-            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord()), WebDefaults);
+            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord(), Visible), WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         var root = document.RootElement;
@@ -257,7 +265,7 @@ public class PurchaseResponseJsonContractTests
     public void Response_derives_each_item_line_total_from_its_quantity_and_unit_cost()
     {
         var json = JsonSerializer.Serialize(
-            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord()), WebDefaults);
+            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord(), Visible), WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(27.60m, document.RootElement.GetProperty("items")[0].GetProperty("lineTotal").GetDecimal());
@@ -272,7 +280,7 @@ public class PurchaseResponseJsonContractTests
     public void Response_omits_the_owning_business()
     {
         var json = JsonSerializer.Serialize(
-            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord()), WebDefaults);
+            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord(), Visible), WebDefaults);
 
         Assert.DoesNotContain("businessId", json, StringComparison.OrdinalIgnoreCase);
     }
@@ -286,12 +294,44 @@ public class PurchaseResponseJsonContractTests
     public void Response_keeps_the_stored_document_metadata_the_entity_exposed()
     {
         var json = JsonSerializer.Serialize(
-            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord()), WebDefaults);
+            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord(), Visible), WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal("scan.jpg", document.RootElement.GetProperty("fileName").GetString());
         Assert.Equal("abc-def.jpg", document.RootElement.GetProperty("storedFileName").GetString());
         Assert.Equal("image/jpeg", document.RootElement.GetProperty("contentType").GetString());
         Assert.Equal(2048, document.RootElement.GetProperty("fileSizeBytes").GetInt64());
+    }
+
+    /// <summary>
+    /// The redacted projection (issue #700) withholds the nested catalogue product's
+    /// <c>inventoryValue</c> and changes nothing else: every key stays, in its position, and the
+    /// purchase's own figures - the invoice total, the delivery and package charges, the line's
+    /// unit cost and its extended total - are value-for-value the visible projection's. The
+    /// recorded decision keeps all of those visible to an Operator, who entered them.
+    /// </summary>
+    [Fact]
+    public void Response_withholds_only_the_nested_products_inventory_value_when_redacted()
+    {
+        var record = FullyPopulatedRecord();
+
+        var redacted = JsonSerializer.Serialize(
+            PurchaseResponseMapper.ToResponse(record, FinancialFigureVisibility.Redacted), WebDefaults);
+
+        var visible = JsonSerializer.Serialize(PurchaseResponseMapper.ToResponse(record, Visible), WebDefaults);
+        Assert.Contains("\"inventoryValue\":8.75", visible, StringComparison.Ordinal);
+        Assert.Equal(
+            visible.Replace("\"inventoryValue\":8.75", "\"inventoryValue\":null", StringComparison.Ordinal),
+            redacted);
+
+        using var document = JsonDocument.Parse(redacted);
+        var item = document.RootElement.GetProperty("items")[0];
+        Assert.Equal(JsonValueKind.Null, item.GetProperty("product").GetProperty("inventoryValue").ValueKind);
+
+        // Not zeroed, and the cost figures beside it are untouched.
+        Assert.Equal(1.25m, item.GetProperty("product").GetProperty("averageUnitCost").GetDecimal());
+        Assert.Equal(1.15m, item.GetProperty("unitCost").GetDecimal());
+        Assert.Equal(27.60m, item.GetProperty("lineTotal").GetDecimal());
+        Assert.Equal(65.40m, document.RootElement.GetProperty("totalAmount").GetDecimal());
     }
 }

@@ -28,10 +28,24 @@ public enum FinancialFigureVisibility
 }
 
 /// <summary>
-/// Resolves <see cref="FinancialFigureVisibility"/> for the current request.
+/// Resolves <see cref="FinancialFigureVisibility"/> for the current request, and applies it to one
+/// figure.
 /// </summary>
 public static class FinancialFigureVisibilityResolution
 {
+    /// <summary>
+    /// The figure itself when the caller may be shown it, and <see langword="null"/> when they may
+    /// not. Never <c>0</c>: a withheld amount arriving as zero is a financial statement about the
+    /// business and a false one, so "not yours to see" and "genuinely nothing" stay distinguishable
+    /// (AGENTS.md § Profit calculations, docs/architecture.md § Operator-readable financial
+    /// disclosure).
+    ///
+    /// <para>One expression, shared by every mapper that withholds an amount (issue #700), so the
+    /// never-zero rule is written once rather than per response type.</para>
+    /// </summary>
+    public static decimal? Withhold(this FinancialFigureVisibility visibility, decimal? figure) =>
+        visibility == FinancialFigureVisibility.Visible ? figure : null;
+
     /// <summary>
     /// Asks the one capability service what the current request may do. It goes through
     /// <see cref="CurrentCapabilities"/> rather than naming a role, so what these endpoints withhold,
