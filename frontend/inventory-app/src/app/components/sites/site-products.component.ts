@@ -32,8 +32,8 @@ export class SiteProductsComponent implements OnInit, OnDestroy {
   private readonly financialsAccessSubscription: Subscription;
 
   constructor(
-    private route: ActivatedRoute,
-    private siteService: SiteService,
+    private readonly route: ActivatedRoute,
+    private readonly siteService: SiteService,
     access: AccessService
   ) {
     this.financialsAccessSubscription = access
