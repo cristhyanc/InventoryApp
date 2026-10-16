@@ -4609,6 +4609,118 @@ the session still rendering no page at all.
 reordered-reaction cases, and `support-session.service.spec.ts` covers each invalidation trigger
 above, including the two identity notifications that are deliberately not changes.
 
+### Super Admin role preview in the Angular app (issue #721)
+
+The API half of the preview is [Super Admin role preview](#super-admin-role-preview-issue-720)
+(issue #720): a request carrying `X-Role-Preview: Owner`, `Manager` or `Operator` is answered
+exactly as that role would be answered. This is the half an administrator can see — **View as** in
+the user menu, a banner while it lasts, and one click out of it — and its whole design is that the
+browser decides *nothing* about what the role may do.
+
+**No frontend role table takes part in it.** The preview sends a header and renders what
+`GET /api/me/access` answers under it, so the narrowed capability set reaches the navigation, the
+route guards and the hidden actions through
+[Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)'s
+existing path, with no per-page change. `access/capabilities.ts` still holds no role, and
+`components/admin/roles/role-definitions.ts` — the Roles page's descriptive content
+([The Roles page](#the-roles-page-issue-530)) — is read by nothing here. A browser-built preview
+could only diverge from `Inventory.Application.Access.RoleCapabilities`, and it would still have
+received the financial figures the API withholds inside the response rather than at the screen.
+
+| File | Responsibility |
+| --- | --- |
+| `role-preview/role-preview.ts` | The published contract: the header name, the three role names, the three refusal codes, and the two sentences shown for them — mirrored from `RolePreviewPolicy`/`RolePreviewErrorCodes`, exactly as `support-session-messages.ts` mirrors the session's own |
+| `role-preview/role-preview.service.ts` | `RolePreviewService`: the previewed role, in this tab's memory only, and the transition starting or ending one performs |
+| `role-preview/role-preview.interceptor.ts` | `rolePreviewInterceptor`: presents the header, reports the read-only refusal, ends the preview on the other two |
+| `layout/role-preview-menu.component.ts` | The **View as** entry, projected into `UserMenuComponent`, and `offeredPreviewRoles` — the rule for which roles it offers |
+| `layout/role-preview-banner.component.ts` | The "Viewing as &lt;role&gt; (preview, read-only)" banner and its **Exit preview** action |
+
+**Where it is offered, and which roles.** `offeredPreviewRoles` is the whole rule: only while
+`PlatformDiagnosticsAccessService` confirms the signed-in actor — the same
+`GET /api/admin/diagnostics/access` answer the `Super Admin` navigation group is built from, read
+through its long-lived `granted$` so a grant goes the moment the Microsoft account changes
+(issue #605) — only while `GET /api/me/access` has answered `granted`, never the role that answer
+reports as the caller's own, and never while a preview is already active. Inside a support session
+the API reports no role at all, so all three are offered there. A hidden entry hides a control
+rather than protecting one: the API refuses the header from anybody else with
+`role_preview_not_permitted`.
+
+**The preview lives in this tab's memory, and nowhere else.** It is never written to
+`localStorage`, `sessionStorage`, a cookie or the URL, and — unlike a support session's id — never
+shared with another tab. A reload and a new tab therefore start with no preview and nothing to
+resume, which is deliberate: there is no credential to carry, and a view the administrator cannot
+see the banner of is a view they would forget they were in.
+
+**Which requests carry the header.** `classifyMemberRequest` (issue #602), the same classification
+the three `403` interceptors read: a `member` endpoint, and both cache probes — `GET /api/me/access`
+answered *without* the header would report the administrator's own capabilities and rebuild the full
+menu underneath the preview. A `platform-admin` request never carries it (the diagnostics probe, the
+Super Admin businesses surface and the support-session control surface are authorized by the
+configured Entra pair and by no business role, so narrowing them could only refuse the surface the
+preview is started from), and a `non-api` request never did either. In `app.config.ts` the
+interceptor sits after the three `403` interceptors and the support-session message interceptor and
+**before** `supportSessionInterceptor`, so it never reacts to an answer that one has already
+discarded as belonging to a context this tab has left (issue #669).
+
+**Starting and exiting take issue #670's transition, from a second source.**
+`RolePreviewService.applyPreviewChange()` sets or clears the role **first**, then drops the cached
+business (`BusinessService.reset`), reports `contextChanged$` so the shell reads the business again
+(issue #671), re-reads the capabilities (`AccessService.refresh`) and navigates to the dashboard
+while `contextChanging$` is `true`. `AppComponent` withholds the routed page for that window exactly
+as it does for a support transition — which is what *replaces* a page the tab was already on — and
+keeps the two flags apart, because one settling says nothing about the other. The ordering is the
+point: the capability read and every request the rebuilt page makes are the first ones sent under
+the preview, or the first ones sent without it.
+
+**What the preview changes about the shell.** Nothing per page. The sidebar renders the narrowed
+capability set as it renders any other, and the one thing the shell adds is withholding the
+top-level `Super Admin` group (and its pending-applications badge) while a preview is active: no
+business role is offered that group, so keeping it would be showing the one part of the menu the
+previewed role cannot see. That is passed to the sidebar as an input, like issue #676's
+`businessNavigation`, because the sidebar owns no access decision of its own.
+
+**Write controls stay visible, and the API is the read-only rail.** This is the opposite of the
+support view's choice (issue #554), on purpose: a preview is meant to be honest about what the role
+is *offered*, and hiding the controls would answer a different question. A write therefore reaches
+the API and is refused with `read_only_role_preview`, which `rolePreviewInterceptor` reports as
+"Previewing as &lt;role&gt; is read-only. Exit the preview to make changes." — naming the role the
+request was actually sent under rather than whatever is current when the answer arrives. The two
+`403` interceptors that would otherwise answer it leave it alone: `memberForbiddenNoticeInterceptor`
+would say "You don't have access to this", which is true of the previewed role and useless to the
+administrator reading it, and `accessForbiddenInterceptor` would turn every refused write into a
+capability re-read. The account-state cache still re-reads, exactly as it does for a support
+session's own read-only refusal, and that read is a dead end.
+
+**Four things end a preview.** **Exit preview** and the API refusing the preview itself
+(`role_preview_not_permitted`, `invalid_role_preview`) both take the transition above; the second
+also says "The role preview has ended." because nobody asked for it. A support session starting or
+ending, and a change of signed-in identity including a sign-out, only *forget* the role: each of
+those already drops the business, re-reads the capabilities and rebuilds the page, and a second
+transition would navigate twice. The support signal is `SupportSessionService.contextChanged$`,
+which is published before that transition's own capability read, so the read is the first one made
+without the header; it is subscribed rather than `active$` because `active$` flows through `state$`,
+whose subscription is what starts a tab's own-session probe.
+
+**What proves it.** `role-preview/role-preview.interceptor.spec.ts` pins which requests carry the
+header (both probes included, both platform-admin and non-api excluded, a deployed API origin, and
+nothing once the preview ends) and what each code does, including a `500` carrying the read-only
+code and a code the preview is not about. `role-preview.service.spec.ts` covers start, exit,
+re-choosing the role in view, switching directly between roles, overlapping and refused navigations,
+the refusal signal and its idempotence, the support-context signal, the identity change and the
+sign-out, and that nothing is persisted. `role-preview-forbidden-chain.spec.ts` composes the
+production chain over the real member caches and is the "one toast, no member message, no capability
+read" criterion. `role-preview-context-transition.spec.ts` renders the **real** shell, router,
+`DashboardComponent` and interceptor chain and asserts what is on screen: starting the preview from
+the user menu on `/` replaces the figures with the ones the previewed role is answered and presents
+the header on every one of the page's reads, the banner appears, the `Super Admin` group goes, the
+menu closes, **Exit preview** puts all of it back, and a tab on another page is taken to the
+dashboard. `role-preview-capability-source.spec.ts` is the source check that none of this imports
+`role-definitions.ts` or names a capability of its own, and that `capabilities.ts` still names no
+role. `layout/role-preview-menu.component.spec.ts` covers who is offered the entry and which roles,
+`layout/role-preview-banner.component.spec.ts` the banner, `layout/sidebar-nav.component.spec.ts`
+the Operator menu and the withheld `Super Admin` group, and `layout/user-menu.component.spec.ts` the
+projection and the panel closing.
+
 ### Reloading the business time zone after a context change (issue #671)
 
 Dropping a page and rebuilding it (issue #670) replaces what is on screen, but the rebuilt page still
@@ -4706,6 +4818,13 @@ entry, a redirected route and a hidden button therefore hide a page rather than 
 exactly the reason the conditional `Platform Diagnostics` link already did. There is deliberately
 no frontend role source: no claim, flag, stored value or second table, because a second source
 could only diverge from `Inventory.Application.Access.RoleCapabilities`.
+
+**During a Super Admin's role preview the answer here is the narrowed one** (issues #720 and
+#721), and it is still the API's answer: `GET /api/me/access` is re-read with `X-Role-Preview`, the
+API intersects the request's capabilities with the previewed role's, and everything below renders
+that set exactly as it renders any other. Nothing in the browser computes it, the triggers and the
+fail-open rule are unchanged, and the preview adds no second role source — see
+[Super Admin role preview in the Angular app](#super-admin-role-preview-in-the-angular-app-issue-721).
 
 | File | Responsibility |
 | --- | --- |

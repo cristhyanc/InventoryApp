@@ -66,6 +66,11 @@ async function render(
      * (`business-navigation.spec.ts`).
      */
     businessNavigation?: BusinessNavigationVisibility;
+    /**
+     * Whether the Super Admin is previewing a business role (issue #721). Like the two answers
+     * above it is the shell's, and the sidebar only renders it.
+     */
+    rolePreviewActive?: boolean;
   } = {}
 ): Promise<Rendered> {
   await TestBed.configureTestingModule({
@@ -98,6 +103,7 @@ async function render(
   fixture.componentRef.setInput('expanded', options.expanded ?? true);
   fixture.componentRef.setInput('drawer', options.drawer ?? false);
   fixture.componentRef.setInput('businessNavigation', options.businessNavigation ?? 'offered');
+  fixture.componentRef.setInput('rolePreviewActive', options.rolePreviewActive ?? false);
   if (options.navId !== undefined) {
     fixture.componentRef.setInput('navId', options.navId);
   }
@@ -337,6 +343,66 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
       '/super-admin/diagnostics',
       '/super-admin/businesses'
     ]);
+  });
+});
+
+/**
+ * The menu a role preview renders (issue #721). The capability set is the API's own answer to
+ * `GET /api/me/access` made under `X-Role-Preview`, so the sidebar needs no rule of its own for
+ * it; the one thing the preview changes here is the `Super Admin` group, which belongs to no
+ * business role and so cannot be part of what a previewed role is shown.
+ */
+describe('SidebarNavComponent during a role preview (issue #721)', () => {
+  /** The capabilities the API answers an Operator with, as `navigation.spec.ts` pins them. */
+  const OPERATOR = granted(['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate']);
+
+  it('renders exactly the Operator menu and hides the Super Admin group', async () => {
+    const { component, host } = await render({
+      access: of(OPERATOR),
+      diagnosticsAccess: of(true),
+      rolePreviewActive: true
+    });
+
+    expect(component.navigation.map((entry) => entry.label)).toEqual([
+      'Dashboard',
+      'Pick List',
+      'Products',
+      'Machines',
+      'Sites',
+      'Purchases'
+    ]);
+    expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
+      '/',
+      '/pick-list',
+      '/products',
+      '/take-inventory',
+      '/categories',
+      '/stock-history',
+      '/machines',
+      '/sites',
+      '/purchases',
+      '/purchases/orders',
+      '/suppliers'
+    ]);
+    expect(host.textContent).not.toContain('Super Admin');
+    expect(link(host, '/super-admin/businesses')).toBeNull();
+  });
+
+  it('reads no pending-applications badge while the group it belongs to is hidden', async () => {
+    const pendingCount = jest.fn(() => of(3));
+    await render({ diagnosticsAccess: of(true), rolePreviewActive: true, pendingCount });
+
+    expect(pendingCount).not.toHaveBeenCalled();
+  });
+
+  it('restores the group as soon as the preview ends', async () => {
+    const { fixture, host } = await render({ diagnosticsAccess: of(true), rolePreviewActive: true });
+    expect(host.textContent).not.toContain('Super Admin');
+
+    fixture.componentRef.setInput('rolePreviewActive', false);
+    fixture.detectChanges();
+
+    expect(host.textContent).toContain('Super Admin');
   });
 });
 

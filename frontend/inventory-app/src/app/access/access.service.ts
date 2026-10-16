@@ -25,7 +25,7 @@ import { activeAccountKey, signedInAccountMayHaveChanged } from './signed-in-acc
 
 /** The `GET /api/me/access` response body (issue #521). */
 interface MeAccessResponse {
-  role: string;
+  role: string | null;
   capabilities: string[];
   businessName: string;
   timeZoneId: string;
@@ -33,8 +33,13 @@ interface MeAccessResponse {
 
 /** What the signed-in member may do, as `GET /api/me/access` reported it. */
 export interface MemberAccess {
-  /** The member's own role name - `Owner`, `Manager` or `Operator` - for display only. */
-  readonly role: string;
+  /**
+   * The member's own role name - `Owner`, `Manager` or `Operator` - for display only, and `null`
+   * inside a support session, where the caller holds no membership in the business being viewed
+   * and the API reports none (issue #551). It is never a capability source: what may be done comes
+   * from {@link capabilities} alone.
+   */
+  readonly role: string | null;
   readonly capabilities: CapabilitySet;
   readonly businessName: string;
   readonly timeZoneId: string;
@@ -290,7 +295,7 @@ export class AccessService implements OnDestroy {
           (response): MemberAccessState => ({
             status: 'granted',
             access: {
-              role: response.role,
+              role: response.role ?? null,
               capabilities: capabilitySet(response.capabilities ?? []),
               businessName: response.businessName,
               timeZoneId: response.timeZoneId

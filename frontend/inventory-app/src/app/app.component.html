@@ -1,5 +1,10 @@
 <div class="flex min-h-screen flex-col bg-md-gray-100">
+  <!--
+    Both banners, because an administrator can be in both at once (issue #721): the support-session
+    one says whose data is on screen, the role-preview one says as whom it is being answered.
+  -->
   <app-support-session-banner />
+  <app-role-preview-banner />
   <header class="sticky top-0 z-30">
     <div class="flex items-center gap-3 px-4 py-3 sm:px-6">
       <!--
@@ -23,11 +28,19 @@
       }
       <div class="ml-auto">
         <app-user-menu
+          #userMenu
           [isSignedIn]="isLoggedIn"
           [userName]="userName"
           (signInRequested)="login()"
           (signOutRequested)="logout()"
-        />
+        >
+          <!--
+            The Super Admin's **View as** entry (issue #721). It is projected into the menu so the
+            menu itself keeps owning no access decision, and it closes the panel when a preview
+            starts, because every page behind it is about to be rebuilt.
+          -->
+          <app-role-preview-menu (previewStarted)="userMenu.close()" />
+        </app-user-menu>
       </div>
     </div>
   </header>
@@ -48,6 +61,7 @@
         [expanded]="isSidebarExpanded"
         [drawer]="isSidebarDrawer"
         [businessNavigation]="businessNavigation"
+        [rolePreviewActive]="isRolePreviewActive"
         (navigated)="onSidebarNavigated()"
         (dismissed)="closeSidebar()"
         (expandRequested)="expandSidebar()"
