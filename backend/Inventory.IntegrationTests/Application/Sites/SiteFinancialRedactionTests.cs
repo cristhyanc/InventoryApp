@@ -262,11 +262,17 @@ public class SiteFinancialRedactionTests
 
     /// <summary>A request inside an active support session for the same business.</summary>
     private static CurrentCapabilities SupportSession() =>
-        new(FakeSupportSessionAccessor.Active(businessId: 1), FakeCurrentBusinessProvider.SupportSession(1));
+        new(
+            FakeSupportSessionAccessor.Active(businessId: 1),
+            FakeCurrentBusinessProvider.SupportSession(1),
+            new FakeRolePreviewAccessor());
 
     /// <summary>A caller whose membership does not resolve, for any denial reason.</summary>
     private static CurrentCapabilities Denied() =>
-        new(new FakeSupportSessionAccessor(), FakeCurrentBusinessProvider.Denied());
+        new(
+            new FakeSupportSessionAccessor(),
+            FakeCurrentBusinessProvider.Denied(),
+            new FakeRolePreviewAccessor());
 
     /// <summary>
     /// Everything both use cases read, so one fixture serves the revenue and the estimate: an active

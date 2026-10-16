@@ -4,6 +4,7 @@ using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Auth;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.SupportSessions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -407,7 +408,7 @@ public class BusinessCapabilityAuthorizationHandlerTests
         httpContext.Request.Method = method;
 
         return new(
-            new CurrentCapabilities(session, provider),
+            new CurrentCapabilities(session, provider, new FakeRolePreviewAccessor()),
             session,
             new HttpContextAccessor { HttpContext = httpContext },
             NullLogger<BusinessCapabilityAuthorizationHandler>.Instance);

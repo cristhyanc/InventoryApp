@@ -4,6 +4,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Products;
 using InventoryApi.Tests.Application.SupportSessions;
@@ -130,7 +131,8 @@ public class GetDashboardSummarySupportViewTests
                     new BusinessScope(),
                     capabilities: new CurrentCapabilities(
                         new FakeSupportSessionAccessor(),
-                        FakeCurrentBusinessProvider.Denied()),
+                        FakeCurrentBusinessProvider.Denied(),
+                        new FakeRolePreviewAccessor()),
                     salesFacts: salesFacts,
                     catalog: catalog)
                 .Handle(CancellationToken.None));
@@ -169,10 +171,12 @@ public class GetDashboardSummarySupportViewTests
         businessScope.State == BusinessScopeState.SupportReadOnly
             ? new CurrentCapabilities(
                 FakeSupportSessionAccessor.Active(SupportedBusinessId),
-                FakeCurrentBusinessProvider.SupportSession(SupportedBusinessId))
+                FakeCurrentBusinessProvider.SupportSession(SupportedBusinessId),
+                new FakeRolePreviewAccessor())
             : new CurrentCapabilities(
                 new FakeSupportSessionAccessor(),
-                new FakeCurrentBusinessProvider(SupportedBusinessId));
+                new FakeCurrentBusinessProvider(SupportedBusinessId),
+                new FakeRolePreviewAccessor());
 
     private static Mock<INayaxLynxClient> EmptyFleet()
     {

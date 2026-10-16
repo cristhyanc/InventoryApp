@@ -336,6 +336,14 @@ builder.Services.AddScoped<IActorProfileAccessor, EntraActorProfileAccessor>();
 // use cases all act on one answer.
 builder.Services.AddScoped<ISupportSessionAccessor, RequestSupportSessionAccessor>();
 
+// Which role, if any, this request is being answered as (issue #720). The implementation is in this
+// layer for the same reason the one above is: the role name arrives in the X-Role-Preview header and
+// whether it is honoured is this layer's own platform-admin policy, and it is the only thing in the
+// application that reads that header's value. Scoped and memoised, so RolePreviewMiddleware, the
+// capability authorization handler, the use cases and the response projections all narrow by one
+// answer. It resolves no business: a preview only ever removes capabilities.
+builder.Services.AddScoped<IRolePreviewAccessor, RequestRolePreviewAccessor>();
+
 // The host-side half of that refresh: one background drain that runs each queued write in its own
 // new service scope, after the request that scheduled it has finished and with no business
 // resolved. It is the only hosted service this application runs; see
@@ -423,6 +431,15 @@ if (app.Environment.IsDevelopment())
 // endpoints, so no business document has an anonymous URL.
 app.UseCors("AllowAngularDevClient");
 app.UseAuthentication();
+
+// A Super Admin's role preview (issue #720). After authentication, because whether the
+// X-Role-Preview header is honoured at all is the platform-admin policy's answer about this caller;
+// and before UseAuthorization() and BusinessScopeMiddleware, so a refused preview is answered before
+// the capability policies run, before any business is resolved, before the endpoint runs and before
+// issue #524's profile refresh is ever scheduled. Its position is pinned by RolePreviewApiTests. It
+// refuses only a previewed request - every other request leaves it on one dictionary lookup - and
+// what an honoured preview does is narrow CurrentCapabilities, not refuse anything.
+app.UseMiddleware<RolePreviewMiddleware>();
 
 // Endpoint authorization: [Authorize], the platform diagnostics policy and the capability policies
 // of issue #525. The order with the business-scope middleware below is deliberate and is pinned by

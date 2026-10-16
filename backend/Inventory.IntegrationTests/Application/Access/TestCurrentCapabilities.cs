@@ -21,7 +21,10 @@ public static class TestCurrentCapabilities
     /// <paramref name="role"/>, outside any support session.
     /// </summary>
     public static CurrentCapabilities ForRole(BusinessRole role, int businessId = 1) =>
-        new(new FakeSupportSessionAccessor(), new FakeCurrentBusinessProvider(businessId, role));
+        new(
+            new FakeSupportSessionAccessor(),
+            new FakeCurrentBusinessProvider(businessId, role),
+            new FakeRolePreviewAccessor());
 
     /// <summary>
     /// An Owner's capabilities: every declared capability, which is what a test that predates

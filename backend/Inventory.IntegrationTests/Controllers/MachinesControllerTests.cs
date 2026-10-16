@@ -10,6 +10,7 @@ using Inventory.Domain.Machines;
 using Inventory.Domain.Nayax;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
@@ -66,7 +67,9 @@ public class MachinesControllerTests
             // An Owner, so the dashboard actions answer the full response; the role-dependent shape
             // itself is MachineAndProductFinancialRedactionApiTests, through the real pipeline.
             new CurrentCapabilities(
-                new FakeSupportSessionAccessor(), new FakeCurrentBusinessProvider(businessId: 1)));
+                new FakeSupportSessionAccessor(),
+                new FakeCurrentBusinessProvider(businessId: 1),
+                new FakeRolePreviewAccessor()));
     }
 
     /// <summary>A ledger with no refill, sale, count or baseline for the machine (issue #56).</summary>

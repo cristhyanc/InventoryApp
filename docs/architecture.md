@@ -1496,7 +1496,7 @@ Ownership answers "whose data is this?". A role answers "what may this member do
 
 **Defining a capability is not enforcing one.** Issue #521 stores the role, publishes the vocabulary and reports it, and enforces nothing. Enforcement is [Capability authorization](#capability-authorization-issue-525) below, which reads `RoleCapabilities.Allows` so that what an endpoint enforces and what `GET /api/me/access` reports cannot drift apart.
 
-**`GET /api/me/access`** returns the caller's role, that role's capability names, and their business's name and time zone (issue #499). It takes no parameter of any kind and describes the caller alone: no other member, no other business, and no identifier for either. It carries the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and deliberately no capability requirement of its own — a member must be able to ask what they may do whatever role they hold. `GET /api/business/current` keeps its own contract (and since issue #525 requires `Dashboard.View`, which every role holds).
+**`GET /api/me/access`** returns the caller's role, that role's capability names, and their business's name and time zone (issue #499). It takes no parameter of any kind and describes the caller alone: no other member, no other business, and no identifier for either. One header changes what it *reports*, and only for one caller: a platform administrator's `X-Role-Preview` (issue #720) narrows the reported capability list to that list intersected with the previewed role's, so a Super Admin previewing an Operator is told exactly what an Operator would be told. The `role` field is unchanged by it — it is the caller's own stored role, and the preview changes what they may do rather than who they are — and nothing was added to the contract. See [Super Admin role preview](#super-admin-role-preview-issue-720). It carries the same `[Authorize]`, delegated-scope and membership requirements as every other business endpoint, and deliberately no capability requirement of its own — a member must be able to ask what they may do whatever role they hold. `GET /api/business/current` keeps its own contract (and since issue #525 requires `Dashboard.View`, which every role holds).
 
 **A role only ever arrives from a reviewed path.** `bootstrap-business` accepts an optional `Role` name per configured member, validated against the same vocabulary and defaulting to `Owner` in the command's own options; an unrecognised name refuses the whole run and writes nothing. That default is the configuration's, not the entity's — the membership it writes always states a role (issue #679). Re-running never changes the role an existing member already holds, for the same reason it never resurrects a revoked approval. The additive migration backfilled every pre-existing membership to `Owner`, so no existing member's access changed. Changing a role afterwards is the Owner-only member management of issue #533, on one endpoint — `PUT /api/members/{membershipId}/role` — which accepts the role's published *name*, checked against this same vocabulary before anything is stored, and never a stored value; see [Member management](#member-management-list-role-revoke-and-reinstate-issue-533). That is still the only request path that writes a role onto a *membership*. One other path accepts a role from client input: creating an invite link (issue #531) records the role its redemption will grant, on the invite row rather than on a membership, and checks the submitted name against this same vocabulary in the same way — see [Invite links](#invite-links-create-list-and-cancel-issue-531). No endpoint anywhere accepts a stored role value.
 
@@ -1513,6 +1513,8 @@ A role that nothing checks is a label. Issue #525 is where the capability table 
 **The role comes from the request's memoised membership resolution.** The handler resolves it through `ICurrentBusinessProvider` — the same per-request scoped provider `BusinessScopeMiddleware` uses — so the capability decision and the business the request then acts in come from one membership lookup and cannot disagree, and a role change applies on the member's next request exactly as it already did. Resolving it in the handler rather than reading a `BusinessScope` the middleware published is deliberate: `UseAuthorization()` runs **before** `UseMiddleware<BusinessScopeMiddleware>()`, so a policy that waited for the published scope would be able to pass before any membership had been checked. This is the same reasoning the diagnostics bypass follows in re-evaluating its own policy instead of inferring one from pipeline position. The order is stated in `Program.cs` and pinned by `CapabilityAuthorizationApiTests`; the handler's independence from it is pinned by `BusinessCapabilityAuthorizationHandlerTests`.
 
 **A support session is the second source of a capability, and the handler is read-only for it** (issue #551). Since #551 the handler asks `Inventory.Application.Access.CurrentCapabilities`, which is the one place that chooses between `RoleCapabilities` for a member and `SupportSessionAccessPolicy`'s fixed set for a platform administrator inside a support session; the support state itself comes from `ISupportSessionAccessor`, for the same ordering reason the role does not come from the published scope. In that state the handler additionally requires the request's method to be `GET` or `HEAD`, and that rule is checked first and independently: a write is refused as a write — `403` with `read_only_support_session`, whatever capability it carried — rather than as a missing capability. See [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
+
+**A role preview is a third input to that one answer, and it only ever subtracts** (issue #720). `CurrentCapabilities` now has a third per-request fact beside the membership and the support session: `IRolePreviewAccessor`, the role a platform administrator asked to be answered as in the `X-Role-Preview` header. Whichever of the two sources applies still decides what the request would have been allowed, and the preview is then **intersected** with the previewed role's own capabilities — so the base is the caller's own role outside a support session and the session's fixed set inside one, and a preview can never grant a capability the request did not already hold. Because this handler, `GET /api/me/access` and the financial redaction all ask that one class, none of them has a rule about previews. The read-only half is not in this handler, deliberately: it has to hold on the endpoints that declare no capability as well, so `RolePreviewMiddleware` applies it ahead of `UseAuthorization()`. The three refusals it makes — `role_preview_not_permitted` (`403`), `invalid_role_preview` (`400`) and `read_only_role_preview` (`403`), in that precedence, with a support session's own refusals between the second and the third — are described in [Super Admin role preview](#super-admin-role-preview-issue-720).
 
 **A refusal is a bare `403`.** It names no capability, no role, and none of the roles that would have been allowed; the reason — which capability, which role, or that the membership did not resolve — is logged for an operator instead. The two support-session refusals of issue #551 are the single exception and are not an exception to the principle: `SupportSessionAuthorizationResultHandler` gives *only* a failure carrying one of those two codes a body, and that body carries the code and a fixed sentence and nothing else. Because authorization runs first, a caller with no usable membership gets that bare `403` on a capability endpoint rather than `BusinessScopeMiddleware`'s "not associated with a business" sentence, which is strictly less than they were told before; endpoints that declare no capability yet are unchanged, and `GET /api/me/account-state` remains the only place a caller learns their own account state. The handler fails closed in every direction: an unauthenticated caller, a membership that does not resolve for any reason (missing, revoked, ambiguous, a business whose lifecycle status is not `Active`, a stored role this deployment does not declare) and a member whose role simply does not grant the capability all leave the requirement unmet, and an unmet requirement is a refusal rather than a fallback to the least-privileged role.
 
@@ -2421,6 +2423,125 @@ swallowed, an unusable session and a `NotRequested` one recording nothing, a req
 not asking the accessor at all, and a failure to record leaving the request untouched.
 `DocumentStorageProviderSelectionTests` pins that both providers are reached through the
 guard.
+
+#### Super Admin role preview (issue #720)
+
+A support session answers "what does this business's data look like?". This slice of
+[#719](https://github.com/cristhyanc/InventoryApp/issues/719), under #328, answers the other
+question a Super Admin gets asked: "what does an Operator *see*?" A request carries
+`X-Role-Preview: Owner`, `Manager` or `Operator`, and is answered exactly as that role would be
+answered — the same pages refused, the same financial figures withheld.
+
+**Who may send it, and how that is decided.** `InventoryApi.Auth.RequestRolePreviewAccessor` is the
+only thing in the application that reads the header's value. It is the boundary implementation of one
+narrow Application port, `IRolePreviewAccessor`, so the inner layers get the answer — which role —
+and never the header. A preview is honoured only when `PlatformAdminPolicy` succeeds, re-evaluated on
+**this** request rather than inferred from the fact that the authorization middleware ran, for the
+same reason the support-session accessor and the diagnostics membership bypass re-evaluate theirs. It
+is registered per request and memoised, so the middleware, the capability handler through
+`CurrentCapabilities`, the use cases and the response projections all narrow by one answer and the
+policy is evaluated once.
+
+**It narrows by intersection, which is the whole safety argument.** `CurrentCapabilities` resolves
+what the request would have been allowed — the caller's own role's capabilities, or the support
+session's fixed set — and then applies `RolePreviewPolicy.Narrow`, an intersection with the previewed
+role's own set. So a Manager previewing an Owner is still answered a Manager's capabilities; a
+previewed request in a support session is answered the support set minus whatever the role lacks, and
+`Suppliers.ManageGstDefaults` stays absent under a `Manager` preview because the support set never
+held it; and a platform administrator with no usable membership and no session gets the refusal they
+get without the header, because the base is resolved **before** the narrowing. `X-Role-Preview` never
+takes part in resolving a business: there are still exactly three ways that happens (see
+[Tenant ownership](#tenant-ownership-issue-64)), and a preview is not one of them.
+
+**It is read-only, at the HTTP boundary, on every endpoint.** `InventoryApi.Auth.RolePreviewMiddleware`
+sits after `UseAuthentication()` and before `UseAuthorization()` and `BusinessScopeMiddleware`, and
+refuses every previewed request whose method is not `GET` or `HEAD` with `403` and
+`read_only_role_preview`. It is a middleware rather than a rule in the capability handler because the
+rule has to hold on the endpoints that declare no capability too — the three membership-not-required
+ones and the Super Admin's own write surface — and a rule added per endpoint class is a rule somebody
+forgets to add to the next class. Its position is what makes "nothing is written" true of a refusal:
+the endpoint never runs, no business is resolved, and issue #524's profile refresh is never even
+scheduled. The method list is an allowlist of two, so a verb nobody thought of is refused by
+construction. Every request without the header leaves this middleware on one dictionary lookup.
+
+**Three refusals, in one precedence.** `role_preview_not_permitted` (`403`) first: the caller is not
+the platform administrator, so the header means nothing on their request. Then `invalid_role_preview`
+(`400`): the value is not exactly one of the three published role names — a different case, a stored
+value like `20`, `Viewer`, a blank value, or the header sent twice — so the preview cannot be read.
+Then a support session's own refusals, `support_session_ended` and `read_only_support_session`, which
+are about a credential rather than a view and are made where they already were; the middleware steps
+aside for exactly the requests they answer, which is a request that presented a session on an endpoint
+where a session is honoured. Then `read_only_role_preview`, the one refusal that says the preview
+itself was fine. Each body is RFC 7807 with the same `code`/`message` extensions the application's
+other handled refusals carry, and names no business, actor, capability or presented value.
+
+**Why a refusal and not a silent ignore.** The support-session header's value is deliberately *not
+read* for a caller the platform-admin policy refuses: it is a credential, and reading it for an
+ordinary member would let a session rule refuse a request that has nothing to do with sessions. This
+header is the opposite shape — its only effect is to take access away — so ignoring it would answer a
+client that believes it is previewing an Operator with everything an Owner may see. The same
+reasoning makes `CurrentCapabilities` grant **nothing** for a preview state the boundary refused: that
+path is unreachable behind the middleware, and its direction is what matters. An *unauthenticated*
+request is left alone, so it keeps its ordinary `401` and the anonymous health probes are unaffected —
+the same choice `BusinessScopeMiddleware` makes, and for the same reason: turning a `401` into a `403`
+would hide the difference between "you are not signed in" and "you may not preview a role".
+
+**Why it is server-side rather than built from `role-definitions.ts`.** The financial figures an
+Operator must not see are withheld by the API, inside responses every role may request (see
+[Operator-readable financial disclosure](#operator-readable-financial-disclosure-issue-700)), so a
+preview assembled in the browser would still have received them. And `docs/architecture.md`'s own rule
+for [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)
+and [The Roles page](#the-roles-page-issue-530) is that the frontend must not become a second role
+source for a navigation or authorization decision. Deciding the preview once, in
+`CurrentCapabilities`, means the capability policies, the reported list and the redaction follow it
+together or not at all. The Angular half — the menu, the banner, the interceptor and the wording — is
+the sibling task #721.
+
+**Why there is no audit event and no persistence-level layer.** A preview grants nothing: every
+previewed request is one the caller's own membership or support session already permitted, narrowed.
+There is therefore nothing to record that the existing trails do not already cover — a previewed
+request inside a support session is audited by `SupportSessionAuditMiddleware` exactly as any other
+request in that session is. And the read-only rule is a safety rail rather than a security boundary,
+because the administrator's own membership genuinely permits those writes; adding a
+`SaveChanges`-level refusal for previews would imply a boundary that is not there. Both are recorded
+decisions of #720, not omissions.
+
+**No configuration, and one deployment note.** No migration, no data change and no new setting: the
+header is honoured only for the `(tid, oid)` pair that is already configured. The API's CORS policy
+(`Program.cs`) allows any request header, so no change was needed there; a reverse proxy or gateway
+in front of the API that enumerates allowed headers must allow `X-Role-Preview` the same way it
+allows `X-Support-Session`, which is deployed configuration outside this repository.
+
+**What proves it.** `Inventory.UnitTests/Application/Access/RolePreviewPolicyTests` pins the parse
+(each exact name, and every rejected shape: wrong case, a stored value, an undeclared role, blank,
+padded and comma-joined), the read-method allowlist including a blank and an unknown verb, the three
+previewable roles, and the intersection over every base/preview pair there is — never adding a
+capability the base lacked, never adding one the role lacks, and keeping the published order.
+`CurrentCapabilitiesRolePreviewTests` is the narrowing itself: each preview role from an Owner base, a
+preview of a *wider* role granting no more than the caller's own, both support-session bases, `Allows`
+agreeing with the reported list for every capability, no header changing nothing, an unresolved
+membership still refused with the header, an unusable preview granting nothing, and the one memoised
+lookup. `Inventory.IntegrationTests/Auth/RequestRolePreviewAccessorTests` is the boundary decision,
+including the empty header value an HTTP client will not send, the header sent twice (with two roles
+and with one), the policy asked before the value is read, an unauthenticated request asking for
+nothing without evaluating the policy, no request at all, and the memoisation.
+`Inventory.IntegrationTests/Controllers/RolePreviewApiTests` is the pipeline: `/api/me/access` under
+each role with the stored role unchanged, a bare `403` for a capability the previewed role lacks
+beside the same endpoints unrefused without the header, every non-read method refused with
+`read_only_role_preview` on a capability endpoint, both membership-not-required writes and three
+Super Admin writes — with the pending business still pending and the expense never recorded, beside
+the control that the same write succeeds without the header — an ordinary Owner, Manager and stranger
+refused with `role_preview_not_permitted` and no data served and no membership changed, every
+undeclared value refused with `invalid_role_preview`, both precedence pairs, an unauthenticated
+request's `401`, an administrator whose membership was deactivated refused identically with and
+without the header, and the support-session composition in four directions including a write refused
+as the session's own and a dead session still refused as ended.
+`Inventory.IntegrationTests/Controllers/RolePreviewFinancialRedactionApiTests` is the figures: on the
+dashboard summary, the machine list, the site list and the global stock history, a previewed Operator
+is answered byte-for-byte what a **real** Operator of that business is answered and not what the
+administrator is answered without the header, each surface's withheld fields are absent or `null`
+rather than `0`, none of the four seeded amounts appears anywhere in a previewed body, and a `Manager`
+preview is still given the figures.
 
 ### Per-business Nayax connection (issue #518)
 

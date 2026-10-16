@@ -5,6 +5,7 @@ using Inventory.Application.Products;
 using Inventory.Application.Reorder;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Tenancy;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Products;
 using InventoryApi.Tests.Application.SupportSessions;
@@ -38,7 +39,8 @@ public class GetDashboardSummaryRedactionTests
         IProductCatalogStore catalog,
         Mock<INayaxLynxClient>? nayax = null) =>
         UseCase(
-            new CurrentCapabilities(new FakeSupportSessionAccessor(), currentBusiness),
+            new CurrentCapabilities(
+                new FakeSupportSessionAccessor(), currentBusiness, new FakeRolePreviewAccessor()),
             salesFacts,
             catalog,
             nayax);
@@ -120,7 +122,8 @@ public class GetDashboardSummaryRedactionTests
         var summary = await UseCase(
                 new CurrentCapabilities(
                     FakeSupportSessionAccessor.Active(businessId: 1),
-                    FakeCurrentBusinessProvider.SupportSession(businessId: 1)),
+                    FakeCurrentBusinessProvider.SupportSession(businessId: 1),
+                    new FakeRolePreviewAccessor()),
                 SalesFacts(),
                 Catalog(),
                 businessScope: SupportScope())
