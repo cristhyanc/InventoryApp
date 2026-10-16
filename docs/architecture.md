@@ -7426,8 +7426,9 @@ previous `ProductName`-only default order.
 `PickListComponent` (`frontend/inventory-app/src/app/components/pick-list`, routed at `/pick-list`)
 is a thin, entirely client-side consumer of the read-only `GET /api/pick-list` projection above: it
 restates none of its arithmetic, including the projection's default ascending-by-MDB-code product
-ordering (issue #496) - the page renders `pickListProducts` in the order the backend returned it
-rather than re-sorting. Its row-level MDB Code column shows each product's `mdbCode`, and each
+ordering (issue #496) - until an operator clicks a sortable header, the page renders `pickListProducts`
+in the order the backend returned it rather than re-sorting (see "Client-side Product/MDB Code
+sorting (issue #718)" below). Its row-level MDB Code column shows each product's `mdbCode`, and each
 machine cell additionally shows that machine's own `mdbCode` alongside its Current/Target figures, so
 a product with a different (or repeated) code on another machine stays visible per machine rather
 than being collapsed into the row-level value. Every piece of state the page adds on top of that projection -
@@ -7492,6 +7493,28 @@ identical column widths. The separator between header and body is the opaque `md
 surface itself, as in every other #410 table: a collapsed border between `<thead>` and `<tbody>`
 scrolls away with the body, and #410 defines no shadow token for a sticky header rule, so the header
 cells carry no shadow (issue #417).
+
+**Client-side Product/MDB Code sorting (issue #718).** The Product and MDB Code headers are each a
+`<button type="button">` calling `sortBy(column)`, using the same shared `nextSortState`/
+`sortAriaState`/`sortColumnLabel`/`compareSortValues` helpers
+(`frontend/inventory-app/src/app/components/shared/sortable-column.ts`, issue #583) as the Products
+and Needs Ordering tables: the first click on a header sorts ascending, a second click reverses it,
+and clicking the other header starts that one ascending. The active header's `[attr.aria-sort]`
+reflects `ascending`/`descending` (`none` otherwise) and its visible label gains the
+`(ascending)`/`(descending)` suffix. Product sorts by `productName` as locale-aware,
+case-insensitive text; MDB Code sorts by the row-level `PickListProduct.mdbCode` numerically. A
+product with `mdbCode === null` (shown as "—") always sorts last regardless of direction, the same
+page-local null policy Needs Ordering uses for its own missing values - this placement, and the
+relative order of two missing-code rows, does not flip with direction, only the order of the
+non-missing values does. Ties (equal or both-missing codes, or equal names) fall back to
+`productName`, then `productId`, so the order is deterministic. The sort is a derived view computed
+inside `visibleProducts()`: it never mutates `pickListProducts`, composes with the existing applied
+Products filter, and leaves `pickedCells`, totals and progress figures unchanged. `sortColumn`/
+`sortDirection` live only on the component instance - the same as every other piece of page state
+here - so the chosen sort survives Apply (including a machine-selection refetch) and chip removal,
+but Reset clears it back to no active column, and the next loaded pick list appears in backend order.
+No other column (Total to Pick, the per-machine columns) is sortable, and sorting never calls an
+endpoint or introduces a query parameter.
 
 #### Supplier Orders frontend page (issue #387)
 

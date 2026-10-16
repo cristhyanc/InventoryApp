@@ -6,7 +6,7 @@ import { MachineService } from '../../services/machine.service';
 import { ProductService } from '../../services/product.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
-import { Machine, PickListResult, Product } from '../../models/models';
+import { Machine, PickListProduct, PickListResult, Product } from '../../models/models';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
@@ -88,6 +88,43 @@ function pickListResult(overrides: Partial<PickListResult> = {}): PickListResult
       }
     ],
     ...overrides
+  };
+}
+
+interface PickListProductOverrides {
+  productId: number;
+  productName: string;
+  mdbCode: number | null;
+}
+
+/** Builds a minimal pick list product row for sort tests; machine 10 always has a 1-to-pick cell so the row is actionable. */
+function pickListProduct(overrides: PickListProductOverrides): PickListProduct {
+  return {
+    productId: overrides.productId,
+    productName: overrides.productName,
+    mdbCode: overrides.mdbCode,
+    storageQuantityInStock: 50,
+    totalQuantityToPick: 1,
+    storageShortageQuantity: 0,
+    machineQuantities: [{ machineId: 10, mdbCode: overrides.mdbCode, currentQuantity: 0, targetQuantity: 1, quantityToPick: 1 }]
+  };
+}
+
+/**
+ * Five products in a backend order distinct from every sort order below, covering: a
+ * case-insensitive name tie ("apple"/"Apple", ids 2 and 3), two missing MDB codes whose relative
+ * order must stay name/id order in either sort direction (ids 3 and 5), and numeric MDB codes
+ * that are not in string order (2, 5, 10) so a lexicographic bug would be caught.
+ */
+function sortDataset(): PickListResult {
+  return {
+    products: [
+      pickListProduct({ productId: 1, productName: 'Banana', mdbCode: 5 }),
+      pickListProduct({ productId: 2, productName: 'apple', mdbCode: 2 }),
+      pickListProduct({ productId: 3, productName: 'Apple', mdbCode: null }),
+      pickListProduct({ productId: 4, productName: 'Cherry', mdbCode: 10 }),
+      pickListProduct({ productId: 5, productName: 'Date', mdbCode: null })
+    ]
   };
 }
 
@@ -411,6 +448,147 @@ describe('PickListComponent reset', () => {
     expect(component.pickListProducts).toEqual([]);
     expect(component.lastRefreshedAt).toBeNull();
     expect(component.isPicked(1, 10)).toBe(false);
+  });
+});
+
+describe('PickListComponent sorting', () => {
+  const sortProducts = [1, 2, 3, 4, 5].map((id) => product({ id, name: `Catalogue ${id}` }));
+
+  function createSortHarness(): Harness {
+    return createHarness(undefined, sortProducts, jest.fn(() => of(sortDataset())));
+  }
+
+  it('keeps the backend order and reports aria-sort none on both columns until a header is clicked', () => {
+    const { component } = createSortHarness();
+    applyMachines(component, [10]);
+
+    expect(component.visibleProducts().map((p) => p.productId)).toEqual([1, 2, 3, 4, 5]);
+    expect(component.ariaSort('name')).toBe('none');
+    expect(component.ariaSort('mdbCode')).toBe('none');
+    expect(component.sortLabel('Product', 'name')).toBe('Product');
+    expect(component.sortLabel('MDB Code', 'mdbCode')).toBe('MDB Code');
+  });
+
+  it('sorts by product name ascending, case-insensitively, breaking a name tie by product id', () => {
+    const { component } = createSortHarness();
+    applyMachines(component, [10]);
+
+    component.sortBy('name');
+
+    expect(component.visibleProducts().map((p) => p.productId)).toEqual([2, 3, 1, 4, 5]);
+    expect(component.ariaSort('name')).toBe('ascending');
+    expect(component.sortLabel('Product', 'name')).toBe('Product (ascending)');
+  });
+
+  it('sorts by product name descending on a second click of the same header', () => {
+    const { component } = createSortHarness();
+    applyMachines(component, [10]);
+
+    component.sortBy('name');
+    component.sortBy('name');
+
+    expect(component.visibleProducts().map((p) => p.productId)).toEqual([5, 4, 1, 3, 2]);
+    expect(component.ariaSort('name')).toBe('descending');
+    expect(component.sortLabel('Product', 'name')).toBe('Product (descending)');
+  });
+
+  it('sorts by MDB Code numerically ascending, with 2 before 10, and missing codes last', () => {
+    const { component } = createSortHarness();
+    applyMachines(component, [10]);
+
+    component.sortBy('mdbCode');
+
+    expect(component.visibleProducts().map((p) => p.productId)).toEqual([2, 1, 4, 3, 5]);
+    expect(component.ariaSort('mdbCode')).toBe('ascending');
+    expect(component.sortLabel('MDB Code', 'mdbCode')).toBe('MDB Code (ascending)');
+  });
+
+  it('sorts by MDB Code descending on a second click, with missing codes still last', () => {
+    const { component } = createSortHarness();
+    applyMachines(component, [10]);
+
+    component.sortBy('mdbCode');
+    component.sortBy('mdbCode');
+
+    expect(component.visibleProducts().map((p) => p.productId)).toEqual([4, 1, 2, 3, 5]);
+    expect(component.ariaSort('mdbCode')).toBe('descending');
+  });
+
+  it('breaks a tie between two missing MDB codes by product name, then product id', () => {
+    const { component } = createSortHarness();
+    applyMachines(component, [10]);
+
+    component.sortBy('mdbCode');
+
+    // Products 3 ("Apple") and 5 ("Date") both have a missing code; 3 sorts before 5 by name.
+    const order = component.visibleProducts().map((p) => p.productId);
+    expect(order.indexOf(3)).toBeLessThan(order.indexOf(5));
+  });
+
+  it('clicking the other sortable header makes it active ascending and clears the previous header', () => {
+    const { component } = createSortHarness();
+    applyMachines(component, [10]);
+    component.sortBy('name');
+    component.sortBy('name');
+
+    component.sortBy('mdbCode');
+
+    expect(component.ariaSort('mdbCode')).toBe('ascending');
+    expect(component.ariaSort('name')).toBe('none');
+    expect(component.sortLabel('Product', 'name')).toBe('Product');
+  });
+
+  it('keeps the active sort applied to the visible rows across a product-filter Apply', () => {
+    const { component } = createSortHarness();
+    applyMachines(component, [10]);
+    component.sortBy('name');
+
+    component.stagedProductIds = [1, 2, 3];
+    component.applyFilters();
+
+    expect(component.visibleProducts().map((p) => p.productId)).toEqual([2, 3, 1]);
+  });
+
+  it('keeps the active sort applied to the visible rows across a machine-change refetch', () => {
+    const getPickList = jest.fn(() => of(sortDataset()));
+    const { component } = createHarness(undefined, sortProducts, getPickList);
+    applyMachines(component, [10]);
+    component.sortBy('name');
+
+    applyMachines(component, [10, 20]);
+
+    expect(getPickList).toHaveBeenCalledWith([10, 20]);
+    expect(component.visibleProducts().map((p) => p.productId)).toEqual([2, 3, 1, 4, 5]);
+  });
+
+  it('leaves picked marks, Total to Pick, and progress unaffected by sorting', () => {
+    const { component } = createSortHarness();
+    applyMachines(component, [10]);
+    const row = component.pickListProducts.find((p) => p.productId === 1)!;
+    component.togglePicked(row, 10);
+    const totalBefore = component.totalToPickUnits();
+    const pickedBefore = component.pickedActionableCellCount();
+    const actionableBefore = component.actionableCellCount();
+
+    component.sortBy('mdbCode');
+
+    expect(component.isPicked(1, 10)).toBe(true);
+    expect(component.totalToPickUnits()).toBe(totalBefore);
+    expect(component.pickedActionableCellCount()).toBe(pickedBefore);
+    expect(component.actionableCellCount()).toBe(actionableBefore);
+  });
+
+  it('Reset clears the active sort so the next loaded pick list appears in backend order', () => {
+    const { component } = createSortHarness();
+    applyMachines(component, [10]);
+    component.sortBy('name');
+
+    component.resetAll();
+    applyMachines(component, [10]);
+
+    expect(component.ariaSort('name')).toBe('none');
+    expect(component.ariaSort('mdbCode')).toBe('none');
+    expect(component.visibleProducts().map((p) => p.productId)).toEqual([1, 2, 3, 4, 5]);
   });
 });
 
@@ -783,5 +961,98 @@ describe('PickListComponent rendered structure', () => {
     const { host } = await render(undefined, undefined, undefined, 'Ready');
 
     expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
+  });
+
+  it('reports aria-sort none on both sortable headers until one is clicked', async () => {
+    const { host, openDropdown, checkOption, applyFilters } = await render();
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+
+    const headers = Array.from(host.querySelectorAll('thead th'));
+    expect(headers[0].getAttribute('aria-sort')).toBe('none');
+    expect(headers[1].getAttribute('aria-sort')).toBe('none');
+  });
+
+  it('clicking the Product header sorts rows by name ascending, then descending on a second click', async () => {
+    const { host, openDropdown, checkOption, applyFilters, requireButton, click } = await render();
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+    const headers = Array.from(host.querySelectorAll('thead th'));
+
+    click(requireButton('Product'));
+
+    const rowsAscending = Array.from(host.querySelectorAll('tbody tr'));
+    expect(rowsAscending[0].textContent).toContain('Chips');
+    expect(rowsAscending[1].textContent).toContain('Coke');
+    expect(headers[0].getAttribute('aria-sort')).toBe('ascending');
+    expect(requireButton('Product').textContent?.trim()).toBe('Product (ascending)');
+
+    click(requireButton('Product'));
+
+    const rowsDescending = Array.from(host.querySelectorAll('tbody tr'));
+    expect(rowsDescending[0].textContent).toContain('Coke');
+    expect(rowsDescending[1].textContent).toContain('Chips');
+    expect(headers[0].getAttribute('aria-sort')).toBe('descending');
+    expect(requireButton('Product').textContent?.trim()).toBe('Product (descending)');
+  });
+
+  it('clicking the MDB Code header sorts rows numerically ascending, then descending on a second click', async () => {
+    const { host, openDropdown, checkOption, applyFilters, requireButton, click } = await render();
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+    const headers = Array.from(host.querySelectorAll('thead th'));
+
+    click(requireButton('MDB Code'));
+
+    const rowsAscending = Array.from(host.querySelectorAll('tbody tr'));
+    expect(rowsAscending[0].textContent).toContain('Coke');
+    expect(rowsAscending[1].textContent).toContain('Chips');
+    expect(headers[1].getAttribute('aria-sort')).toBe('ascending');
+    expect(requireButton('MDB Code').textContent?.trim()).toBe('MDB Code (ascending)');
+
+    click(requireButton('MDB Code'));
+
+    const rowsDescending = Array.from(host.querySelectorAll('tbody tr'));
+    expect(rowsDescending[0].textContent).toContain('Chips');
+    expect(rowsDescending[1].textContent).toContain('Coke');
+    expect(headers[1].getAttribute('aria-sort')).toBe('descending');
+    expect(requireButton('MDB Code').textContent?.trim()).toBe('MDB Code (descending)');
+  });
+
+  it('clicking the other sortable header makes it active ascending and clears the previously active one', async () => {
+    const { host, openDropdown, checkOption, applyFilters, requireButton, click } = await render();
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+    const headers = Array.from(host.querySelectorAll('thead th'));
+    click(requireButton('Product'));
+
+    click(requireButton('MDB Code'));
+
+    expect(headers[1].getAttribute('aria-sort')).toBe('ascending');
+    expect(headers[0].getAttribute('aria-sort')).toBe('none');
+    expect(requireButton('Product').textContent?.trim()).toBe('Product');
+  });
+
+  it('Reset clears an active sort so a subsequently loaded pick list appears in backend order', async () => {
+    const { host, openDropdown, checkOption, applyFilters, requireButton, click } = await render();
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+    click(requireButton('Product'));
+
+    click(requireButton('Reset'));
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+
+    const headers = Array.from(host.querySelectorAll('thead th'));
+    expect(headers[0].getAttribute('aria-sort')).toBe('none');
+    const rows = Array.from(host.querySelectorAll('tbody tr'));
+    expect(rows[0].textContent).toContain('Coke');
+    expect(rows[1].textContent).toContain('Chips');
   });
 });
