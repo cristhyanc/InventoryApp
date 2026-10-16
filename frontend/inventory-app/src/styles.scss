@@ -359,12 +359,27 @@
     @apply text-md-info-text;
   }
 
-  /* A success toast (#489) floats over page content, so its surface must be opaque: the same
-     15% md-success tint as an inline .alert-success, layered over solid white (#E4F3E5), so
-     nothing underneath shows through. Inline alerts and badges keep their translucent tint. */
+  /* Floating toasts appear over page content, so their surfaces must be opaque: the same
+     15% semantic tint as an inline .alert-*, layered over solid white, so nothing underneath
+     shows through. Inline alerts and badges keep their translucent tint. */
   .toast.alert-success {
     @apply bg-white;
     background-image: linear-gradient(theme('colors.md-success / 15%'), theme('colors.md-success / 15%'));
+  }
+
+  .toast.alert-danger {
+    @apply bg-white;
+    background-image: linear-gradient(theme('colors.md-danger / 15%'), theme('colors.md-danger / 15%'));
+  }
+
+  .toast.alert-warning {
+    @apply bg-white;
+    background-image: linear-gradient(theme('colors.md-warning / 15%'), theme('colors.md-warning / 15%'));
+  }
+
+  .toast.alert-info {
+    @apply bg-white;
+    background-image: linear-gradient(theme('colors.md-info / 15%'), theme('colors.md-info / 15%'));
   }
 
   /* ---- Form fields ------------------------------------------------------------------- */

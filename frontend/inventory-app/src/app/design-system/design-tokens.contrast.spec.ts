@@ -315,6 +315,20 @@ describe('shared class text contrast', () => {
     }
   }
 
+  // Toasts are opaque overlays on white with a 15% tint, same compositing as inline alerts on white.
+  for (const status of STATUSES) {
+    pairs.push([
+      `.toast.alert-${status} title`,
+      color(`md-${status}-text`),
+      tint(status, SURFACE_WHITE),
+    ]);
+    pairs.push([
+      `.toast.alert-${status} body text`,
+      gray(800),
+      tint(status, SURFACE_WHITE),
+    ]);
+  }
+
   it.each(pairs)('%s reaches WCAG AA 4.5:1', (_label, foreground, background) => {
     expect(contrastRatio(foreground, background)).toBeGreaterThanOrEqual(4.5);
   });
@@ -370,6 +384,12 @@ describe('styles.scss', () => {
   it('builds the status badges and alerts from a 15% tint of the solid colour', () => {
     for (const status of STATUSES) {
       expect(stylesScss).toContain(`bg-md-${status}/15`);
+    }
+  });
+
+  it('provides opaque toast surfaces for all four status variants', () => {
+    for (const status of STATUSES) {
+      expect(stylesScss).toContain(`.toast.alert-${status}`);
     }
   });
 
