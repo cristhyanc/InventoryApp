@@ -73,7 +73,8 @@ public class MachineJsonContractTests
     {
         var summary = FullyPopulatedSummary();
 
-        var response = JsonSerializer.Serialize(MachineResponseMapper.ToResponse(summary), WebDefaults);
+        var response = JsonSerializer.Serialize(
+            MachineResponseMapper.ToResponse(summary, FinancialFigureVisibility.Visible), WebDefaults);
 
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(summary), WebDefaults), response);
     }
@@ -105,7 +106,8 @@ public class MachineJsonContractTests
             TwoWeeksAgoDirectProfit: null,
             ProfitabilityStatus: null);
 
-        var response = JsonSerializer.Serialize(MachineResponseMapper.ToResponse(summary), WebDefaults);
+        var response = JsonSerializer.Serialize(
+            MachineResponseMapper.ToResponse(summary, FinancialFigureVisibility.Visible), WebDefaults);
 
         Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(summary), WebDefaults), response);
         Assert.Contains("\"machineName\":null", response, StringComparison.Ordinal);
@@ -123,7 +125,8 @@ public class MachineJsonContractTests
     public void Machine_response_exposes_the_same_keys_in_the_same_order_the_entity_did()
     {
         var json = JsonSerializer.Serialize(
-            MachineResponseMapper.ToResponse(FullyPopulatedSummary()), WebDefaults);
+            MachineResponseMapper.ToResponse(FullyPopulatedSummary(), FinancialFigureVisibility.Visible),
+            WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(
@@ -136,6 +139,71 @@ public class MachineJsonContractTests
                 "previousComparableWeekDirectProfit", "monthToDateGrossRevenue",
                 "monthToDateDirectProfit", "profitabilityStatus",
             },
+            document.RootElement.EnumerateObject().Select(property => property.Name));
+    }
+
+    /// <summary>
+    /// The redacted projection (issue #698): the same keys in the same order, with every one of the
+    /// thirteen figures <c>Dashboard.ViewFinancials</c> governs serialized as an explicit
+    /// <c>null</c>. Pinned here, beside the full shape, because "withheld" must stay distinguishable
+    /// from both "absent" and "zero" - a key that disappeared would break a client that binds to it,
+    /// and a zero would read as a real figure (AGENTS.md § Profit calculations).
+    /// </summary>
+    [Fact]
+    public void Redacted_machine_response_keeps_every_key_and_nulls_every_financial_figure()
+    {
+        var json = JsonSerializer.Serialize(
+            MachineResponseMapper.ToResponse(FullyPopulatedSummary(), FinancialFigureVisibility.Redacted),
+            WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(
+            new[]
+            {
+                "machineID", "machineName", "machineNumber", "actorID", "todayGrossRevenue",
+                "currentWeekGrossRevenue", "lastWeekGrossRevenue", "twoWeeksAgoGrossRevenue",
+                "todayDirectProfit", "twoWeeksAgoDirectProfit", "lastWeekDirectProfit",
+                "currentWeekDirectProfit", "previousComparableWeekGrossRevenue",
+                "previousComparableWeekDirectProfit", "monthToDateGrossRevenue",
+                "monthToDateDirectProfit", "profitabilityStatus",
+            },
+            document.RootElement.EnumerateObject().Select(property => property.Name));
+
+        // Identity survives; every figure is null.
+        Assert.Equal(42, document.RootElement.GetProperty("machineID").GetInt64());
+        Assert.Equal("Pavillion Left", document.RootElement.GetProperty("machineName").GetString());
+        Assert.Equal(91, document.RootElement.GetProperty("actorID").GetInt64());
+        foreach (var property in document.RootElement.EnumerateObject().Skip(4))
+        {
+            Assert.Equal(JsonValueKind.Null, property.Value.ValueKind);
+        }
+    }
+
+    /// <summary>
+    /// The redacted product projection (issue #698): <c>inventoryValue</c> alone is withheld, and
+    /// unit cost, the catalogue selling price and the machine slot's own price - which the recorded
+    /// decision keeps visible to every role - are untouched.
+    /// </summary>
+    [Fact]
+    public void Redacted_machine_product_response_withholds_only_the_inventory_value()
+    {
+        var slot = FullyPopulatedSlot();
+
+        var json = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(slot, FinancialFigureVisibility.Redacted), WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("inventoryValue").ValueKind);
+        Assert.Equal(1.25m, document.RootElement.GetProperty("averageUnitCost").GetDecimal());
+        Assert.Equal(3.50m, document.RootElement.GetProperty("unitPrice").GetDecimal());
+        Assert.Equal(5m, document.RootElement.GetProperty("machinePrice").GetDecimal());
+        Assert.Equal(7, document.RootElement.GetProperty("costingQuantity").GetInt32());
+
+        // The same keys in the same order as the full projection: one value is withheld, not a field.
+        using var full = JsonDocument.Parse(JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(slot, FinancialFigureVisibility.Visible), WebDefaults));
+        Assert.Equal(
+            full.RootElement.EnumerateObject().Select(property => property.Name),
             document.RootElement.EnumerateObject().Select(property => property.Name));
     }
 
@@ -198,7 +266,8 @@ public class MachineJsonContractTests
     {
         var slot = FullyPopulatedSlot();
 
-        var response = JsonSerializer.Serialize(ProductRecordResponseMapper.ToResponse(slot), WebDefaults);
+        var response = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(slot, FinancialFigureVisibility.Visible), WebDefaults);
 
         Assert.Equal(
             JsonSerializer.Serialize(LegacyProductEntityShape.ForMachineSlot(slot), WebDefaults),
@@ -233,7 +302,8 @@ public class MachineJsonContractTests
             QuantityInStock = 0,
         };
 
-        var response = JsonSerializer.Serialize(ProductRecordResponseMapper.ToResponse(slot), WebDefaults);
+        var response = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(slot, FinancialFigureVisibility.Visible), WebDefaults);
 
         Assert.Equal(
             JsonSerializer.Serialize(LegacyProductEntityShape.ForMachineSlot(slot), WebDefaults),
@@ -253,7 +323,8 @@ public class MachineJsonContractTests
     public void Machine_product_response_carries_the_full_product_shape_with_the_slot_values_overlaid()
     {
         var json = JsonSerializer.Serialize(
-            ProductRecordResponseMapper.ToResponse(FullyPopulatedSlot()), WebDefaults);
+            ProductRecordResponseMapper.ToResponse(FullyPopulatedSlot(), FinancialFigureVisibility.Visible),
+            WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(
@@ -292,7 +363,8 @@ public class MachineJsonContractTests
     {
         var slot = FullyPopulatedSlot();
 
-        var json = JsonSerializer.Serialize(ProductRecordResponseMapper.ToResponse(slot), WebDefaults);
+        var json = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(slot, FinancialFigureVisibility.Visible), WebDefaults);
 
         using var document = JsonDocument.Parse(json);
         Assert.Equal(2m, document.RootElement.GetProperty("projectedStockForReorder").GetDecimal());
@@ -309,9 +381,11 @@ public class MachineJsonContractTests
     public void Machine_responses_omit_the_owning_business()
     {
         var machine = JsonSerializer.Serialize(
-            MachineResponseMapper.ToResponse(FullyPopulatedSummary()), WebDefaults);
+            MachineResponseMapper.ToResponse(FullyPopulatedSummary(), FinancialFigureVisibility.Visible),
+            WebDefaults);
         var product = JsonSerializer.Serialize(
-            ProductRecordResponseMapper.ToResponse(FullyPopulatedSlot()), WebDefaults);
+            ProductRecordResponseMapper.ToResponse(FullyPopulatedSlot(), FinancialFigureVisibility.Visible),
+            WebDefaults);
 
         Assert.DoesNotContain("businessId", machine, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("businessId", product, StringComparison.OrdinalIgnoreCase);

@@ -14,13 +14,47 @@ namespace InventoryApi.Adapters.Mapping;
 /// copy of a reorder formula.
 ///
 /// Since issue #302 the machine-product view is projected here too, through the
-/// <see cref="ToResponse(MachineProductRecord)"/> overload below, so the two endpoints that serve a
-/// product cannot drift apart: the catalogue shape is built once and the machine slot's own values
-/// are overlaid on it.
+/// <see cref="ToResponse(MachineProductRecord, FinancialFigureVisibility)"/> overload below, so the
+/// two endpoints that serve a product cannot drift apart: the catalogue shape is built once and the
+/// machine slot's own values are overlaid on it.
+///
+/// <para>Since issue #698 both projections depend on <see cref="FinancialFigureVisibility"/>:
+/// <see cref="ProductResponse.InventoryValue"/> is the value of the business's stock at cost - the
+/// figure the Dashboard withholds (issue #527) and <c>inventory-value-summary</c> refuses
+/// (issue #681), recoverable by summing this one - so a caller who may not be shown it is answered
+/// <c>null</c>. Unit cost, the catalogue selling price and the machine slot's own price are not
+/// financial figures by that decision and are unchanged for every role.</para>
 /// </summary>
 public static class ProductRecordResponseMapper
 {
-    public static ProductResponse ToResponse(ProductRecord record) => new()
+    public static ProductResponse ToResponse(ProductRecord record, FinancialFigureVisibility visibility) =>
+        visibility == FinancialFigureVisibility.Visible
+            ? Full(record)
+            : Full(record) with { InventoryValue = null };
+
+    /// <summary>
+    /// One slot in a machine's product listing (issue #302): the catalogue product it dispenses,
+    /// with the machine's own price, raw Nayax commission metadata, MDB code, slot capacity and
+    /// resolved suggested pricing overlaid, and with the slot's stock replacing the product's
+    /// storage stock - the same overlay, in the same order, the retired <c>MachineService</c>
+    /// applied to the entity. The slot stock override is why the derived reorder values the response
+    /// computes describe this machine slot rather than the storage shelf, exactly as before.
+    /// </summary>
+    public static ProductResponse ToResponse(
+        MachineProductRecord record, FinancialFigureVisibility visibility) =>
+        ToResponse(record.Product, visibility) with
+        {
+            QuantityInStock = record.QuantityInStock,
+            MachineSlot = new MachineSlotOverlay(
+                record.MachinePrice,
+                record.CommissionValue,
+                record.SuggestedNetValue,
+                record.SuggestedPriceValue,
+                record.MdbCode,
+                record.MaxStockInMachine),
+        };
+
+    private static ProductResponse Full(ProductRecord record) => new()
     {
         Id = record.Id,
         Name = record.Name,
@@ -75,25 +109,4 @@ public static class ProductRecordResponseMapper
         MachineReplenishmentNeed = record.MachineReplenishmentNeed,
         OnOrderQuantity = record.OnOrderQuantity,
     };
-
-    /// <summary>
-    /// One slot in a machine's product listing (issue #302): the catalogue product it dispenses,
-    /// with the machine's own price, raw Nayax commission metadata, MDB code, slot capacity and
-    /// resolved suggested pricing overlaid, and with the slot's stock replacing the product's
-    /// storage stock - the same overlay, in the same order, the retired <c>MachineService</c>
-    /// applied to the entity. The slot stock override is why the derived reorder values the response
-    /// computes describe this machine slot rather than the storage shelf, exactly as before.
-    /// </summary>
-    public static ProductResponse ToResponse(MachineProductRecord record) =>
-        ToResponse(record.Product) with
-        {
-            QuantityInStock = record.QuantityInStock,
-            MachineSlot = new MachineSlotOverlay(
-                record.MachinePrice,
-                record.CommissionValue,
-                record.SuggestedNetValue,
-                record.SuggestedPriceValue,
-                record.MdbCode,
-                record.MaxStockInMachine),
-        };
 }

@@ -94,7 +94,8 @@ public class MachineUseCaseTests
 
         var rows = await MachineProducts(db, nayaxMock.Object).Handle(1, CancellationToken.None);
 
-        var product = ProductRecordResponseMapper.ToResponse(Assert.Single(rows));
+        var product = ProductRecordResponseMapper.ToResponse(
+            Assert.Single(rows), FinancialFigureVisibility.Visible);
         Assert.NotNull(product.Supplier);
         Assert.Equal("Acme", product.Supplier!.Name);
     }
@@ -125,7 +126,7 @@ public class MachineUseCaseTests
 
         var summary = await MachineDashboard(db, nayaxMock.Object).Handle(1, CancellationToken.None);
         Assert.NotNull(summary);
-        var machine = MachineResponseMapper.ToResponse(summary!);
+        var machine = MachineResponseMapper.ToResponse(summary!, FinancialFigureVisibility.Visible);
         Assert.Equal(1, machine.MachineID);
         Assert.True(machine.TodayGrossRevenue >= 0);
     }
