@@ -24,18 +24,20 @@
         <div class="mt-2 text-md-card-title font-semibold text-md-gray-800">{{ machine?.machineName || 'Unnamed machine' }}</div>
         <div class="text-md-body text-md-gray-600">#{{ machine?.machineNumber || machine?.machineID }}</div>
       </div>
-      <div class="rounded-md-card bg-md-gray-100 p-4">
-        <div class="text-md-badge uppercase tracking-wide value-muted">Today Gross</div>
-        <div class="mt-2 text-md-card-title font-semibold text-md-info-text">${{ machine?.todayGrossRevenue?.toFixed(2) }}</div>
-      </div>
-      <div class="rounded-md-card bg-md-gray-100 p-4">
-        <div class="text-md-badge uppercase tracking-wide value-muted">Today Direct Profit</div>
-        <div class="mt-2 text-md-card-title font-semibold text-md-info-text">{{ machine?.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine!.todayDirectProfit!.toFixed(2)) }}</div>
-      </div>
-      <div class="rounded-md-card bg-md-gray-100 p-4">
-        <div class="text-md-badge uppercase tracking-wide value-muted">Current Week Gross</div>
-        <div class="mt-2 text-md-card-title font-semibold text-md-info-text">${{ machine?.currentWeekGrossRevenue?.toFixed(2) }}</div>
-      </div>
+      @if (canViewFinancials) {
+        <div class="rounded-md-card bg-md-gray-100 p-4">
+          <div class="text-md-badge uppercase tracking-wide value-muted">Today Gross</div>
+          <div class="mt-2 text-md-card-title font-semibold text-md-info-text">{{ machine?.todayGrossRevenue == null ? 'Unavailable' : ('$' + machine!.todayGrossRevenue!.toFixed(2)) }}</div>
+        </div>
+        <div class="rounded-md-card bg-md-gray-100 p-4">
+          <div class="text-md-badge uppercase tracking-wide value-muted">Today Direct Profit</div>
+          <div class="mt-2 text-md-card-title font-semibold text-md-info-text">{{ machine?.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine!.todayDirectProfit!.toFixed(2)) }}</div>
+        </div>
+        <div class="rounded-md-card bg-md-gray-100 p-4">
+          <div class="text-md-badge uppercase tracking-wide value-muted">Current Week Gross</div>
+          <div class="mt-2 text-md-card-title font-semibold text-md-info-text">{{ machine?.currentWeekGrossRevenue == null ? 'Unavailable' : ('$' + machine!.currentWeekGrossRevenue!.toFixed(2)) }}</div>
+        </div>
+      }
     </div>
 
     <app-machine-restock-sync
@@ -63,8 +65,10 @@
                     <th scope="col" class="table-cell">Name</th>
                     <th scope="col" class="table-cell">Average Unit Cost</th>
                     <th scope="col" class="table-cell">Machine Price</th>
-                    <th scope="col" class="table-cell">Estimated Card Profit</th>
-                    <th scope="col" class="table-cell">50% Card Margin Price</th>
+                    @if (canViewFinancials) {
+                      <th scope="col" class="table-cell">Estimated Card Profit</th>
+                      <th scope="col" class="table-cell">50% Card Margin Price</th>
+                    }
                     <th scope="col" class="table-cell">Stock</th>
                     <th scope="col" class="table-cell">Actions</th>
                   </tr>
@@ -75,9 +79,11 @@
                     <td class="table-cell">{{ product.name }}</td>
                     <td class="table-cell">{{ product.averageUnitCost > 0 ? ('$' + product.averageUnitCost.toFixed(2)) : 'Unavailable' }}</td>
                     <td class="table-cell">${{ product.machinePrice?.toFixed(2) ?? '0.00' }}</td>
-                    <td class="table-cell">{{ product.suggestedNetValue == null ? 'Unavailable' : ('$' + product.suggestedNetValue.toFixed(2) + ' / ' + (product.suggestedNetValue / (product.machinePrice || 1) * 100).toFixed(2) + '%') }}
-                    </td>
-                    <td class="table-cell">{{ product.suggestedPriceValue == null ? 'Unavailable' : ('$' + product.suggestedPriceValue.toFixed(2)) }}</td>
+                    @if (canViewFinancials) {
+                      <td class="table-cell">{{ product.suggestedNetValue == null ? 'Unavailable' : ('$' + product.suggestedNetValue.toFixed(2) + ' / ' + (product.suggestedNetValue / (product.machinePrice || 1) * 100).toFixed(2) + '%') }}
+                      </td>
+                      <td class="table-cell">{{ product.suggestedPriceValue == null ? 'Unavailable' : ('$' + product.suggestedPriceValue.toFixed(2)) }}</td>
+                    }
                     <td class="table-cell">
                       <span class="badge" [ngClass]="stockClass(product)">
                         {{ product.quantityInStock }} / {{ product.maxStockInMachine }}

@@ -28,7 +28,8 @@ export interface RoleAccessDefinition {
 /** A human-readable sentence for every published capability, independent of which role holds it. */
 export const CAPABILITY_DESCRIPTIONS: Readonly<Record<Capability, string>> = {
   'Dashboard.View': 'View the dashboard.',
-  'Dashboard.ViewFinancials': "See the dashboard's financial figures: sales this week and inventory value at cost.",
+  'Dashboard.ViewFinancials':
+    'See sales, revenue, profit, margin, profitability status, trend/comparison figures and inventory value at cost, across the Dashboard, Sites and Machines pages. Unit cost and selling price are unrestricted.',
   'PickList.View': 'View the pick list.',
   'Inventory.Operate':
     'Manage products, categories, take inventory, stock history, machines (including Sync Restock), and sites.',

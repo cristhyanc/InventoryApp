@@ -41,6 +41,11 @@ function route(id = '1'): ActivatedRoute {
   return { paramMap: of(convertToParamMap({ id })) } as unknown as ActivatedRoute;
 }
 
+/** A stub `AccessService` for the direct-construction tests below, granted by default. */
+function accessServiceStub(canViewFinancials = true): AccessService {
+  return { allows: () => of(canViewFinancials) } as unknown as AccessService;
+}
+
 function createComponent(
   products: SiteProduct[],
   siteRoute: ActivatedRoute = route()
@@ -50,7 +55,7 @@ function createComponent(
     getProducts: () => of(products)
   } as unknown as SiteService;
 
-  const component = new SiteProductsComponent(siteRoute, siteService);
+  const component = new SiteProductsComponent(siteRoute, siteService, accessServiceStub());
   component.ngOnInit();
   component.products$.subscribe();
   return component;
@@ -190,7 +195,7 @@ describe('SiteProductsComponent multi-machine MDB codes', () => {
 });
 
 describe('SiteProductsComponent rendered table', () => {
-  async function render(products: SiteProduct[], nayaxStatus: NayaxConnectionStatusName = 'Ready') {
+  async function render(products: SiteProduct[], nayaxStatus: NayaxConnectionStatusName = 'Ready', canViewFinancials = true) {
     const siteService = { getAll: () => of([site()]), getProducts: () => of(products) } as unknown as SiteService;
 
     await TestBed.configureTestingModule({
@@ -199,7 +204,7 @@ describe('SiteProductsComponent rendered table', () => {
         { provide: ActivatedRoute, useValue: route() },
         { provide: SiteService, useValue: siteService },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
-        { provide: AccessService, useValue: { allows: () => of(true) } }
+        { provide: AccessService, useValue: { allows: () => of(canViewFinancials) } }
       ]
     }).compileComponents();
 
@@ -297,5 +302,102 @@ describe('SiteProductsComponent rendered table', () => {
     const { host } = await render([product()], 'Ready');
 
     expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
+  });
+});
+
+/**
+ * `Dashboard.ViewFinancials` hides the Estimated Card Profit column, in the table and in the CSV
+ * export (issue #699): a role without it - an Operator - sees and exports neither, while a
+ * Manager or an Owner sees and exports it exactly as before.
+ */
+describe('SiteProductsComponent Estimated Card Profit gated on Dashboard.ViewFinancials (issue #699)', () => {
+  async function render(products: SiteProduct[], canViewFinancials: boolean) {
+    const siteService = { getAll: () => of([site()]), getProducts: () => of(products) } as unknown as SiteService;
+
+    await TestBed.configureTestingModule({
+      imports: [SiteProductsComponent],
+      providers: [
+        { provide: ActivatedRoute, useValue: route() },
+        { provide: SiteService, useValue: siteService },
+        { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
+        { provide: AccessService, useValue: { allows: () => of(canViewFinancials) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(SiteProductsComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement };
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('shows no Estimated Card Profit header or figure to an Operator, keeping unit cost and site price', async () => {
+    const { host } = await render([product({ estimatedCardProfit: 1.5, averageUnitCost: 0.8, sitePrice: 3 })], false);
+
+    expect(host.textContent).not.toContain('Estimated Card Profit');
+    expect(host.textContent).not.toContain('$1.50');
+    expect(host.textContent).toContain('$0.80');
+    expect(host.textContent).toContain('$3.00');
+  });
+
+  it('keeps the Estimated Card Profit column exactly as today for a Manager or an Owner', async () => {
+    const { host } = await render([product({ estimatedCardProfit: 1.5 })], true);
+
+    expect(host.textContent).toContain('Estimated Card Profit');
+    expect(host.textContent).toContain('$1.50');
+  });
+
+  it('renders without error when a granted role is sent a product with the figure absent', async () => {
+    const { host } = await render([product({ estimatedCardProfit: null })], true);
+
+    expect(host.textContent).toContain('Estimated Card Profit');
+    expect(host.textContent).toContain('Unavailable');
+    expect(host.textContent).not.toContain('NaN');
+    expect(host.textContent).not.toContain('$0.00');
+  });
+
+  /** `URL.createObjectURL`/`revokeObjectURL` do not exist in jsdom, so this replaces them directly. */
+  function captureExportedCsv(): { captured: () => Promise<string> } {
+    let capturedBlob: Blob | null = null;
+    (URL as unknown as { createObjectURL: (blob: Blob) => string }).createObjectURL = (blob: Blob) => {
+      capturedBlob = blob;
+      return 'blob:stub';
+    };
+    (URL as unknown as { revokeObjectURL: (url: string) => void }).revokeObjectURL = () => undefined;
+    HTMLAnchorElement.prototype.click = jest.fn();
+
+    return {
+      captured: () =>
+        new Promise<string>((resolve, reject) => {
+          if (capturedBlob === null) {
+            reject(new Error('Expected the export to have created a Blob.'));
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsText(capturedBlob);
+        })
+    };
+  }
+
+  it('drops Estimated Card Profit from the CSV export for an Operator', async () => {
+    const { host } = await render([product({ estimatedCardProfit: 1.5 })], false);
+    const { captured } = captureExportedCsv();
+
+    const exportButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Export CSV');
+    exportButton?.click();
+
+    expect(await captured()).not.toContain('Estimated Card Profit');
+  });
+
+  it('keeps Estimated Card Profit in the CSV export for a Manager or an Owner', async () => {
+    const { host } = await render([product({ estimatedCardProfit: 1.5 })], true);
+    const { captured } = captureExportedCsv();
+
+    const exportButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Export CSV');
+    exportButton?.click();
+
+    expect(await captured()).toContain('Estimated Card Profit');
   });
 });

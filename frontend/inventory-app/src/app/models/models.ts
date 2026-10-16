@@ -55,8 +55,14 @@ export interface Product {
   inventoryValue?: number | null;
   machinePrice: number | null;
   commissionValue: number | null;
-  suggestedNetValue: number | null;
-  suggestedPriceValue: number | null;
+  /**
+   * The machine product listing's "Estimated Card Profit"/"50% Card Margin Price" - a profit and
+   * a margin-derived price, hidden from a role without `Dashboard.ViewFinancials` by the Machine
+   * Detail page (issue #699); optional and nullable on the same rule as {@link Site}/
+   * {@link Machine}.
+   */
+  suggestedNetValue?: number | null;
+  suggestedPriceValue?: number | null;
   quantityInStock: number;
   maxStockInMachine: number;
   machineReplenishmentNeed: number;
@@ -257,25 +263,36 @@ export interface ProductPriceComparison {
   historyNewestFirst: ProductPriceHistoryEntry[];
 }
 
+/**
+ * Every revenue, direct-profit and profitability-status figure is optional and nullable: a role
+ * without `Dashboard.ViewFinancials` is not shown them at all, by the frontend-level check this
+ * page and the Machines list/detail apply (issue #699), and the API itself is expected to start
+ * withholding them the same way once #697/#698 land. The frontend must not assume any of these
+ * figures is always present.
+ */
 export interface Machine {
   machineID: number;
   machineName?: string | null;
   machineNumber?: string | null;
-  todayGrossRevenue: number;
-  currentWeekGrossRevenue: number;
-  lastWeekGrossRevenue: number;
-  twoWeeksAgoGrossRevenue: number;
+  todayGrossRevenue?: number | null;
+  currentWeekGrossRevenue?: number | null;
+  lastWeekGrossRevenue?: number | null;
+  twoWeeksAgoGrossRevenue?: number | null;
   todayDirectProfit: number | null;
   twoWeeksAgoDirectProfit: number | null;
   lastWeekDirectProfit: number | null;
   currentWeekDirectProfit: number | null;
-  previousComparableWeekGrossRevenue: number;
+  previousComparableWeekGrossRevenue?: number | null;
   previousComparableWeekDirectProfit: number | null;
-  monthToDateGrossRevenue: number;
+  monthToDateGrossRevenue?: number | null;
   monthToDateDirectProfit: number | null;
   profitabilityStatus?: string | null;
 }
 
+/**
+ * Every revenue figure is optional and nullable, on the same `Dashboard.ViewFinancials` rule as
+ * {@link Machine} (issue #699).
+ */
 export interface Site {
   siteId: number;
   siteName: string;
@@ -283,9 +300,9 @@ export interface Site {
   totalStockPercentage: number;
   lowProductCount: number;
   emptyProductCount: number;
-  todayRevenue: number;
-  currentWeekRevenue: number;
-  previousComparableWeekRevenue: number;
+  todayRevenue?: number | null;
+  currentWeekRevenue?: number | null;
+  previousComparableWeekRevenue?: number | null;
 }
 
 /** One machine's MDB code for a Site Products row (issue #495); null when Nayax has none. */
@@ -300,7 +317,11 @@ export interface SiteProduct {
   name: string;
   averageUnitCost: number | null;
   sitePrice: number;
-  estimatedCardProfit: number | null;
+  /**
+   * Hidden from a role without `Dashboard.ViewFinancials` by the Site Products page (issue #699);
+   * optional and nullable on the same rule as {@link Site}/{@link Machine}.
+   */
+  estimatedCardProfit?: number | null;
   quantityInStock: number;
   maxStock: number;
   /**

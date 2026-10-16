@@ -24,7 +24,8 @@ function site(overrides: Partial<Site> = {}): Site {
 
 async function renderWith(
   getAll: () => ReturnType<SiteService['getAll']>,
-  nayaxStatus: NayaxConnectionStatusName = 'Ready'
+  nayaxStatus: NayaxConnectionStatusName = 'Ready',
+  canViewFinancials = true
 ) {
   await TestBed.configureTestingModule({
     imports: [SiteListComponent],
@@ -32,7 +33,7 @@ async function renderWith(
       provideRouter([]),
       { provide: SiteService, useValue: { getAll } },
       { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
-      { provide: AccessService, useValue: { allows: () => of(true) } }
+      { provide: AccessService, useValue: { allows: () => of(canViewFinancials) } }
     ]
   }).compileComponents();
 
@@ -210,5 +211,48 @@ describe('SiteListComponent', () => {
     fixture.detectChanges();
 
     expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
+  });
+});
+
+/**
+ * `Dashboard.ViewFinancials` hides the Today/This Week/vs Last Week revenue columns (issue #699):
+ * a role without it - an Operator - sees none of the three, while a Manager or an Owner sees them
+ * exactly as before.
+ */
+describe('SiteListComponent revenue columns gated on Dashboard.ViewFinancials (issue #699)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('shows no Today/This Week/vs Last Week column or figure to an Operator, keeping stock and navigation', async () => {
+    const { fixture, host } = await renderWith(() => of([site({ siteName: 'North Mall', todayRevenue: 12.5 })]), 'Ready', false);
+    fixture.detectChanges();
+
+    const headers = Array.from(host.querySelectorAll('th')).map((th) => th.textContent?.trim());
+    expect(headers).toEqual(['Site', 'Machines', 'Stock', 'Low / Empty']);
+    expect(host.textContent).not.toContain('$12.50');
+    expect(host.textContent).toContain('North Mall');
+    expect(host.querySelector('tbody tr td a')).not.toBeNull();
+  });
+
+  it('keeps the revenue columns exactly as today for a Manager or an Owner', async () => {
+    const { fixture, host } = await renderWith(() => of([site({ todayRevenue: 12.5, currentWeekRevenue: 150 })]), 'Ready', true);
+    fixture.detectChanges();
+
+    const headers = Array.from(host.querySelectorAll('th')).map((th) => th.textContent?.trim());
+    expect(headers).toEqual(['Site', 'Machines', 'Stock', 'Low / Empty', 'Today', 'This Week', 'vs Last Week']);
+    expect(host.textContent).toContain('$12.50');
+    expect(host.textContent).toContain('$150.00');
+  });
+
+  it('renders without error when a granted role is sent a site with the figures absent', async () => {
+    const { fixture, host } = await renderWith(
+      () => of([site({ todayRevenue: null, currentWeekRevenue: null, previousComparableWeekRevenue: null })]),
+      'Ready',
+      true
+    );
+    fixture.detectChanges();
+
+    expect(host.textContent).toContain('Unavailable');
+    expect(host.textContent).not.toContain('NaN');
+    expect(host.textContent).not.toContain('$0.00');
   });
 });

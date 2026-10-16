@@ -1502,6 +1502,8 @@ A role that nothing checks is a label. Issue #525 is where the capability table 
 
 **Where it is enforced: the authorization middleware, from one table.** `InventoryApi.Auth.CapabilityPolicy` names one ASP.NET Core authorization policy per declared `Capability` (`Capability:Inventory.Operate`, and so on for all fifteen), `Program.cs` registers every one of them, and `BusinessCapabilityAuthorizationHandler` answers them all by asking `RoleCapabilities.Allows`. A controller or action declares one with `[RequireCapability(Capability.InventoryOperate)]`, which is an `AuthorizeAttribute` carrying that policy's name, so the decision is made by the authorization middleware before any action runs — not by a filter each controller has to remember, and not inside a use case. Every capability is registered even where no endpoint declares it yet, so #526 added attributes and nothing else, and the member-management issues will do the same. `Dashboard.ViewFinancials` is the one capability that is deliberately **not** an endpoint requirement: what a role without it may not see is two figures inside a response every role may request, which an `AuthorizeAttribute` cannot express — see [Dashboard financial redaction](#dashboard-financial-redaction-issue-527).
 
+**`Dashboard.ViewFinancials` now also governs every revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699), not only the two figures #527 redacts in the Dashboard summary response. Unlike #527, this is read on the frontend alone, from `AccessService.allows('Dashboard.ViewFinancials')` the same way every other hidden action in [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528) is: `GET /api/sites`, `GET /api/sites/{id}/products` and the machine endpoints do not yet redact these figures in their responses, so this is a frontend-only hide ahead of the backend redaction #697 and #698 add, and not yet a security boundary on its own — an Operator who inspected the raw response could still read the figures today. Unit cost and site/machine selling price are unaffected and stay visible to every role.
+
 **Controllers reference capabilities, never roles.** Which roles hold a capability is `RoleCapabilities`'s single answer, and it is the same answer `GET /api/me/access` reports, so the API and the frontend's rendering decisions cannot disagree. An architecture test fails the build if any controller attribute names a `BusinessRole` at all.
 
 **The role comes from the request's memoised membership resolution.** The handler resolves it through `ICurrentBusinessProvider` — the same per-request scoped provider `BusinessScopeMiddleware` uses — so the capability decision and the business the request then acts in come from one membership lookup and cannot disagree, and a role change applies on the member's next request exactly as it already did. Resolving it in the handler rather than reading a `BusinessScope` the middleware published is deliberate: `UseAuthorization()` runs **before** `UseMiddleware<BusinessScopeMiddleware>()`, so a policy that waited for the published scope would be able to pass before any membership had been checked. This is the same reasoning the diagnostics bypass follows in re-evaluating its own policy instead of inferring one from pipeline position. The order is stated in `Program.cs` and pinned by `CapabilityAuthorizationApiTests`; the handler's independence from it is pinned by `BusinessCapabilityAuthorizationHandlerTests`.
@@ -4712,6 +4714,24 @@ is and no card can ever read a figure it was not given. An *incomplete* valuatio
 `inventoryValueAtCost: null`, which is present: that card stays and reports "Unavailable" exactly as
 before, and a still-loading or failed summary keeps all four cards for the same reason — not
 knowing a figure yet is a different thing from having been told it is not this member's to see.
+
+**Sites and Machines hide the same figures too, from the capability rather than from the response**
+(issue #699). The Dashboard's own Sites/Machines tables, the Sites list, Site Products and the
+Machines list/detail all read `AccessService.allows('Dashboard.ViewFinancials')` the same way the
+supplier GST defaults editor reads `Suppliers.ManageGstDefaults` above, each keeping its own
+`canViewFinancials` field (starting `true`, the same fail-open default) and hiding every revenue,
+direct-profit, margin, profitability-status and trend/comparison column, card and CSV export field
+behind it. This is deliberately **not** the same mechanism as the Dashboard summary: those
+endpoints' responses are not yet redacted, so the page cannot key off an absent property the way
+the Dashboard does, and reads the capability directly instead — a frontend-only hide, not yet a
+second boundary, until #697 and #698 make the underlying endpoints withhold the figures themselves.
+Unit cost and site/machine selling price carry no capability check and stay visible to every role.
+`Machine`, `Site` and `SiteProduct.estimatedCardProfit`/`Product.suggestedNetValue`/
+`suggestedPriceValue` are all optional and nullable in `models.ts` for the same reason
+`DashboardSummary`'s two figures are: ready for either shape #697/#698 end up choosing, and every
+template that reads them shows "Unavailable" (never `$0.00`, never `NaN`) when they are absent or
+`null`. `formatting/revenue-trend.ts`'s `trend`/`trendLabel`/`trendClass` accept a withheld figure
+on the same terms, reporting `'Unavailable'`/`'value-muted'` rather than treating it as a real zero.
 
 **What proves this slice.** `access.service.spec.ts` (the cached read, the fifteen-name vocabulary,
 an undeclared name dropped, the MSAL wait, every refresh trigger including the five-minute focus

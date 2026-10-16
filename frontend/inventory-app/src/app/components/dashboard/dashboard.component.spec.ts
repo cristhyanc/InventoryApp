@@ -65,6 +65,7 @@ function createComponent(
     getAllSites?: () => Observable<Site[]>;
     getLowStock?: () => Observable<Product[]>;
     sessionActive?: Observable<boolean>;
+    canViewFinancials?: boolean;
   } = {}
 ): DashboardComponent {
   const productService = {
@@ -83,7 +84,8 @@ function createComponent(
     siteService,
     nayaxSalesSyncService,
     dashboardService,
-    { active$: overrides.sessionActive ?? of(false) } as unknown as SupportSessionService
+    { active$: overrides.sessionActive ?? of(false) } as unknown as SupportSessionService,
+    { allows: () => of(overrides.canViewFinancials ?? true) } as unknown as AccessService
   );
 }
 
@@ -445,8 +447,10 @@ async function renderDashboard(
   overrides: {
     products?: Product[];
     machines?: Machine[];
+    sites?: Site[];
     summary$?: Observable<DashboardSummary>;
     sessionActive?: Observable<boolean>;
+    canViewFinancials?: boolean;
   } = {}
 ): Promise<HTMLElement> {
   await TestBed.configureTestingModule({
@@ -455,13 +459,15 @@ async function renderDashboard(
       provideRouter([]),
       { provide: ProductService, useValue: { getLowStock: () => of(overrides.products ?? []) } },
       { provide: MachineService, useValue: { getAll: () => of(overrides.machines ?? []) } },
-      { provide: SiteService, useValue: { getAll: () => of([]) } },
+      { provide: SiteService, useValue: { getAll: () => of(overrides.sites ?? []) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } },
       // The composed legacy-business-settings-prompt (issue #549) is stubbed to stay hidden: it is
       // its own component with its own tests, and not what this page's own tests are about.
-      { provide: AccessService, useValue: { allows: () => of(false) } },
+      // Issue #699's own `Dashboard.ViewFinancials` check reads this same stub, so it defaults
+      // `false` here too - tests about the Sites/Machines financial columns override it.
+      { provide: AccessService, useValue: { allows: () => of(overrides.canViewFinancials ?? false) } },
       { provide: BusinessSettingsService, useValue: { get: () => of(null) } }
     ]
   }).compileComponents();
@@ -798,5 +804,69 @@ describe('DashboardComponent Nayax sales sync in a support session (issue #661)'
     expect(syncLatest).toHaveBeenCalledTimes(1);
     expect(component.isSalesSyncSkippedInSupportView).toBe(false);
     expect(component.isSalesSyncFailed).toBe(false);
+  });
+});
+
+/**
+ * `Dashboard.ViewFinancials` hides the Sites/Machines tables' revenue, direct-profit, margin and
+ * trend columns (issue #699) - not only the two headline cards #527/#528 already redact. A role
+ * without it - an Operator - sees none of those columns, while a Manager or an Owner sees them
+ * exactly as before.
+ */
+describe('DashboardComponent Sites/Machines financial figures gated on Dashboard.ViewFinancials (issue #699)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  function sitesTable(host: HTMLElement): HTMLElement {
+    const section = Array.from(host.querySelectorAll('section.card')).find((el) => el.textContent?.includes('Sites'));
+    return section!.querySelector('table') as HTMLElement;
+  }
+
+  function machinesTableEl(host: HTMLElement): HTMLElement {
+    const section = Array.from(host.querySelectorAll('section.card')).find((el) => el.textContent?.includes('Machines'));
+    return section!.querySelector('table') as HTMLElement;
+  }
+
+  it('shows no revenue, profit, margin or trend column to an Operator', async () => {
+    const host = await renderDashboard({ machines: [MACHINE], sites: [SITE], canViewFinancials: false });
+
+    const sitesHeaders = Array.from(sitesTable(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
+    expect(sitesHeaders).toEqual(['Site', 'Stock', 'Low / Empty', 'Products']);
+    expect(sitesTable(host).textContent).not.toContain('$');
+
+    const machinesHeaders = Array.from(machinesTableEl(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
+    expect(machinesHeaders).toEqual(['Machine']);
+    expect(machinesTableEl(host).textContent).not.toContain('$');
+    expect(machinesTableEl(host).querySelector('tfoot')).toBeNull();
+  });
+
+  it('keeps the Sites/Machines columns and totals exactly as today for a Manager or an Owner', async () => {
+    const host = await renderDashboard({ machines: [MACHINE], sites: [SITE], canViewFinancials: true });
+
+    const sitesHeaders = Array.from(sitesTable(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
+    expect(sitesHeaders).toEqual(['Site', 'Stock', 'Low / Empty', 'Today', 'This Week', 'vs Last Week', 'Products']);
+    expect(sitesTable(host).textContent).toContain('$12.00');
+
+    const machinesHeaders = Array.from(machinesTableEl(host).querySelectorAll('th')).map((th) => th.textContent?.trim());
+    expect(machinesHeaders).toEqual(['Machine', 'Today', 'This Week', 'Last Week', 'vs Last Week', 'Month to Date']);
+    expect(machinesTableEl(host).textContent).toContain('$12.00 sales');
+    expect(machinesTableEl(host).querySelector('tfoot')).not.toBeNull();
+  });
+
+  it('renders without error when a granted role is sent a site and machine with the figures absent', async () => {
+    const withheldSite: Site = { ...SITE, todayRevenue: null, currentWeekRevenue: null, previousComparableWeekRevenue: null };
+    const withheldMachine: Machine = {
+      ...MACHINE,
+      todayGrossRevenue: null,
+      currentWeekGrossRevenue: null,
+      lastWeekGrossRevenue: null,
+      monthToDateGrossRevenue: null,
+      previousComparableWeekGrossRevenue: null
+    };
+    const host = await renderDashboard({ machines: [withheldMachine], sites: [withheldSite], canViewFinancials: true });
+
+    expect(sitesTable(host).textContent).toContain('Unavailable');
+    expect(machinesTableEl(host).textContent).toContain('Unavailable');
+    expect(host.textContent).not.toContain('NaN');
+    expect(host.textContent).not.toContain('$0.00');
   });
 });

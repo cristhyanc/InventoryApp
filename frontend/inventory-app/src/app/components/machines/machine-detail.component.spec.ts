@@ -15,6 +15,11 @@ function supportSessionStub(active: Observable<boolean> = of(false)): SupportSes
   return { active$: active } as unknown as SupportSessionService;
 }
 
+/** A stub `AccessService` for the direct-construction tests below, granted by default. */
+function accessServiceStub(canViewFinancials = true): AccessService {
+  return { allows: () => of(canViewFinancials) } as unknown as AccessService;
+}
+
 function product(quantityInStock: number): Product {
   return { id: 55, name: 'Beef Jerky', quantityInStock } as Product;
 }
@@ -39,7 +44,8 @@ describe('MachineDetailComponent product refresh', () => {
       {} as StockService,
       {} as ToastService,
       breadcrumbServiceStub(),
-      supportSessionStub()
+      supportSessionStub(),
+      accessServiceStub()
     );
 
     component.ngOnInit();
@@ -67,7 +73,7 @@ describe('MachineDetailComponent breadcrumb label', () => {
     const route = { paramMap: of(convertToParamMap({ id })) } as unknown as ActivatedRoute;
     const breadcrumbService = breadcrumbServiceStub();
     const component = new MachineDetailComponent(
-      route, machineService, {} as StockService, {} as ToastService, breadcrumbService, supportSessionStub()
+      route, machineService, {} as StockService, {} as ToastService, breadcrumbService, supportSessionStub(), accessServiceStub()
     );
 
     component.ngOnInit();
@@ -194,5 +200,130 @@ describe('MachineDetailComponent write control during a support session (issue #
     fixture.componentInstance.restockProduct(product(8), { machineID: 7 } as Machine, 5);
 
     expect(stockAdjust).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `Dashboard.ViewFinancials` hides the revenue/direct-profit summary cards and the products
+ * table's Estimated Card Profit/50% Card Margin Price columns (issue #699): a role without it -
+ * an Operator - sees neither, while a Manager or an Owner sees them exactly as before.
+ */
+describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinancials (issue #699)', () => {
+  function fullProduct(overrides: Partial<Product> = {}): Product {
+    return {
+      id: 55,
+      name: 'Beef Jerky',
+      mdbCode: 12,
+      averageUnitCost: 2,
+      machinePrice: 5,
+      suggestedNetValue: 1.5,
+      suggestedPriceValue: 4.75,
+      quantityInStock: 10,
+      maxStockInMachine: 20,
+      ...overrides
+    } as Product;
+  }
+
+  async function render(canViewFinancials: boolean, products: Product[] = [fullProduct()]) {
+    await TestBed.configureTestingModule({
+      imports: [MachineDetailComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: { paramMap: of(convertToParamMap({ id: '7' })) } },
+        {
+          provide: MachineService,
+          useValue: {
+            get: () =>
+              of({
+                machineID: 7,
+                machineName: 'Snack Attack 42',
+                todayGrossRevenue: 88,
+                currentWeekGrossRevenue: 444,
+                todayDirectProfit: 30
+              } as Machine),
+            getProducts: () => of(products)
+          }
+        },
+        { provide: StockService, useValue: {} },
+        { provide: ToastService, useValue: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } },
+        { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
+        { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
+        { provide: AccessService, useValue: { allows: () => of(canViewFinancials) } },
+        { provide: SupportSessionService, useValue: supportSessionStub() }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(MachineDetailComponent);
+    fixture.detectChanges(false);
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('shows no revenue, profit, margin or estimated-profit text to an Operator', async () => {
+    const host = await render(false);
+
+    expect(host.textContent).not.toContain('Today Gross');
+    expect(host.textContent).not.toContain('Today Direct Profit');
+    expect(host.textContent).not.toContain('Current Week Gross');
+    expect(host.textContent).not.toContain('Estimated Card Profit');
+    expect(host.textContent).not.toContain('50% Card Margin Price');
+    expect(host.textContent).not.toContain('$88.00');
+    expect(host.textContent).not.toContain('$1.50');
+    expect(host.textContent).toContain('Snack Attack 42');
+    expect(host.textContent).toContain('Beef Jerky');
+  });
+
+  it('keeps the summary cards and product columns exactly as today for a Manager or an Owner', async () => {
+    const host = await render(true);
+
+    expect(host.textContent).toContain('Today Gross');
+    expect(host.textContent).toContain('$88.00');
+    expect(host.textContent).toContain('Estimated Card Profit');
+    expect(host.textContent).toContain('50% Card Margin Price');
+    expect(host.textContent).toContain('$1.50');
+    expect(host.textContent).toContain('$4.75');
+  });
+
+  it('renders without error when a granted role is sent a machine and product with the figures absent', async () => {
+    const host = await TestBed.configureTestingModule({
+      imports: [MachineDetailComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: { paramMap: of(convertToParamMap({ id: '7' })) } },
+        {
+          provide: MachineService,
+          useValue: {
+            get: () =>
+              of({
+                machineID: 7,
+                machineName: 'Unknown figures',
+                todayGrossRevenue: null,
+                currentWeekGrossRevenue: null,
+                todayDirectProfit: null
+              } as Machine),
+            getProducts: () => of([fullProduct({ suggestedNetValue: null, suggestedPriceValue: null })])
+          }
+        },
+        { provide: StockService, useValue: {} },
+        { provide: ToastService, useValue: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } },
+        { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
+        { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
+        { provide: AccessService, useValue: { allows: () => of(true) } },
+        { provide: SupportSessionService, useValue: supportSessionStub() }
+      ]
+    })
+      .compileComponents()
+      .then(() => {
+        const fixture = TestBed.createComponent(MachineDetailComponent);
+        fixture.detectChanges(false);
+        return fixture.nativeElement as HTMLElement;
+      });
+
+    expect(host.textContent).toContain('Unknown figures');
+    expect(host.textContent).toContain('Unavailable');
+    expect(host.textContent).toContain('Profit unavailable');
+    expect(host.textContent).not.toContain('NaN');
+    expect(host.textContent).not.toContain('$0.00');
   });
 });

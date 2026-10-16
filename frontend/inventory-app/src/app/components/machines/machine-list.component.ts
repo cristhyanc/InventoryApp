@@ -1,11 +1,13 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { Subscription } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
 import { Machine } from '../../models/models';
 import { ListLoadState } from '../shared/list-load-state';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
+import { AccessService } from '../../access/access.service';
 
 @Component({
   selector: 'app-machine-list',
@@ -13,16 +15,38 @@ import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-
   imports: [CommonModule, FormsModule, RouterLink, NayaxStatusBannerComponent],
   templateUrl: './machine-list.component.html'
 })
-export class MachineListComponent implements OnInit {
+export class MachineListComponent implements OnInit, OnDestroy {
   machines: Machine[] = [];
   filteredMachines: Machine[] = [];
   search = '';
   readonly loadState = new ListLoadState();
 
-  constructor(private readonly machineService: MachineService) {}
+  /**
+   * Whether the signed-in member's role grants `Dashboard.ViewFinancials` (issue #699): the
+   * sales, profit and profitability-status figures on each card are hidden without it, on the
+   * frontend-level check this page applies ahead of `GET /api/machines` redacting the figures
+   * itself (#697/#698). Starts `true`, the fail-open default every other capability-gated
+   * control in this codebase uses while the capability has not been read yet.
+   */
+  canViewFinancials = true;
+
+  private readonly financialsAccessSubscription: Subscription;
+
+  constructor(
+    private readonly machineService: MachineService,
+    access: AccessService
+  ) {
+    this.financialsAccessSubscription = access
+      .allows('Dashboard.ViewFinancials')
+      .subscribe((allowed) => (this.canViewFinancials = allowed));
+  }
 
   ngOnInit(): void {
     this.load();
+  }
+
+  ngOnDestroy(): void {
+    this.financialsAccessSubscription.unsubscribe();
   }
 
   load(): void {
