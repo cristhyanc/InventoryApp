@@ -9,6 +9,7 @@ import { BreadcrumbService } from '../../layout/breadcrumbs/breadcrumb.service';
 import { MachineRestockSyncComponent } from './machine-restock-sync/machine-restock-sync.component';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { AccessService } from '../../access/access.service';
 import {
   Machine,
   Product,
@@ -36,8 +37,19 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
    */
   sessionActive = false;
 
+  /**
+   * Whether the signed-in member's role grants `Dashboard.ViewFinancials` (issue #699): the
+   * revenue/direct-profit summary cards and the products table's Estimated Card Profit/50% Card
+   * Margin Price columns are hidden without it, on the frontend-level check this page applies
+   * ahead of the machine endpoints redacting those figures themselves (#697/#698). Starts
+   * `true`, the fail-open default every other capability-gated control in this codebase uses
+   * while the capability has not been read yet.
+   */
+  canViewFinancials = true;
+
   private machineId: number | null = null;
   private readonly sessionActiveSubscription: Subscription;
+  private readonly financialsAccessSubscription: Subscription;
 
   constructor(
     private readonly route: ActivatedRoute,
@@ -45,13 +57,18 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
     private readonly stockService: StockService,
     private readonly toastService: ToastService,
     private readonly breadcrumbService: BreadcrumbService,
-    supportSession: SupportSessionService
+    supportSession: SupportSessionService,
+    access: AccessService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+    this.financialsAccessSubscription = access
+      .allows('Dashboard.ViewFinancials')
+      .subscribe((allowed) => (this.canViewFinancials = allowed));
   }
 
   ngOnDestroy(): void {
     this.sessionActiveSubscription.unsubscribe();
+    this.financialsAccessSubscription.unsubscribe();
   }
 
   ngOnInit(): void {

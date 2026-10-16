@@ -1,14 +1,15 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
-import { catchError, of, tap } from 'rxjs';
+import { catchError, of, Subscription, tap } from 'rxjs';
 import { Site } from '../../models/models';
 import { SiteService } from '../../services/site.service';
 import { ListLoadState } from '../shared/list-load-state';
 import { trendLabel, trendClass } from '../../formatting/revenue-trend';
 import { siteStockClass } from '../../formatting/site-stock-status';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
+import { AccessService } from '../../access/access.service';
 
 @Component({
   selector: 'app-site-list',
@@ -16,15 +17,37 @@ import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-
   imports: [CommonModule, FormsModule, RouterLink, NayaxStatusBannerComponent],
   templateUrl: './site-list.component.html'
 })
-export class SiteListComponent implements OnInit {
+export class SiteListComponent implements OnInit, OnDestroy {
   sites: Site[] = [];
   search = '';
   readonly loadState = new ListLoadState();
 
-  constructor(private readonly siteService: SiteService) {}
+  /**
+   * Whether the signed-in member's role grants `Dashboard.ViewFinancials` (issue #699): the
+   * Today/This Week/vs Last Week revenue columns are hidden without it, on the frontend-level
+   * check this page applies ahead of `GET /api/sites` redacting the figures itself (#697/#698).
+   * Starts `true`, the fail-open default every other capability-gated control in this codebase
+   * uses while the capability has not been read yet.
+   */
+  canViewFinancials = true;
+
+  private readonly financialsAccessSubscription: Subscription;
+
+  constructor(
+    private readonly siteService: SiteService,
+    access: AccessService
+  ) {
+    this.financialsAccessSubscription = access
+      .allows('Dashboard.ViewFinancials')
+      .subscribe((allowed) => (this.canViewFinancials = allowed));
+  }
 
   ngOnInit(): void {
     this.load();
+  }
+
+  ngOnDestroy(): void {
+    this.financialsAccessSubscription.unsubscribe();
   }
 
   load(): void {
@@ -56,11 +79,11 @@ export class SiteListComponent implements OnInit {
     return siteStockClass(site);
   }
 
-  trendLabel(current: number, previous: number): string {
+  trendLabel(current: number | null | undefined, previous: number | null | undefined): string {
     return trendLabel(current, previous);
   }
 
-  trendClass(current: number, previous: number): string {
+  trendClass(current: number | null | undefined, previous: number | null | undefined): string {
     return trendClass(current, previous);
   }
 

@@ -1,10 +1,11 @@
 import { CommonModule } from '@angular/common';
-import { Component, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
-import { BehaviorSubject, catchError, map, Observable, of, switchMap, tap } from 'rxjs';
+import { BehaviorSubject, catchError, map, Observable, of, Subscription, switchMap, tap } from 'rxjs';
 import { Site, SiteProduct } from '../../models/models';
 import { SiteService } from '../../services/site.service';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
+import { AccessService } from '../../access/access.service';
 
 @Component({
   selector: 'app-site-products',
@@ -12,17 +13,37 @@ import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-
   imports: [CommonModule, RouterLink, NayaxStatusBannerComponent],
   templateUrl: './site-products.component.html'
 })
-export class SiteProductsComponent implements OnInit {
+export class SiteProductsComponent implements OnInit, OnDestroy {
   site$!: Observable<Site | null>;
   products$!: Observable<SiteProduct[]>;
   products: SiteProduct[] = [];
   loading$ = new BehaviorSubject(true);
   error$ = new BehaviorSubject('');
 
+  /**
+   * Whether the signed-in member's role grants `Dashboard.ViewFinancials` (issue #699): the
+   * Estimated Card Profit column and its CSV export field are hidden without it, on the
+   * frontend-level check this page applies ahead of the site products endpoint redacting the
+   * figure itself (#697/#698). Starts `true`, the fail-open default every other
+   * capability-gated control in this codebase uses while the capability has not been read yet.
+   */
+  canViewFinancials = true;
+
+  private readonly financialsAccessSubscription: Subscription;
+
   constructor(
     private route: ActivatedRoute,
-    private siteService: SiteService
-  ) {}
+    private siteService: SiteService,
+    access: AccessService
+  ) {
+    this.financialsAccessSubscription = access
+      .allows('Dashboard.ViewFinancials')
+      .subscribe((allowed) => (this.canViewFinancials = allowed));
+  }
+
+  ngOnDestroy(): void {
+    this.financialsAccessSubscription.unsubscribe();
+  }
 
   ngOnInit(): void {
     const siteId$ = this.route.paramMap.pipe(map(params => Number(params.get('id'))));
@@ -116,7 +137,7 @@ export class SiteProductsComponent implements OnInit {
       case 'mdbCode': return product.mdbCode;
       case 'averageUnitCost': return product.averageUnitCost;
       case 'sitePrice': return product.sitePrice;
-      case 'estimatedCardProfit': return product.estimatedCardProfit;
+      case 'estimatedCardProfit': return product.estimatedCardProfit ?? null;
       case 'quantityInStock': return product.quantityInStock;
     }
   }
@@ -140,12 +161,15 @@ export class SiteProductsComponent implements OnInit {
   exportProducts(site: Site): void {
     if (!this.products.length) return;
 
-    const headers = ['Product', 'Average Unit Cost', 'Site Price', 'Estimated Card Profit', 'Stock', 'Max Stock'];
+    // Estimated Card Profit is a profit figure hidden from a role without `Dashboard.ViewFinancials`
+    // (issue #699): the export must not carry it into a file an Operator can save and read outside
+    // the page's own rendering.
+    const headers = ['Product', 'Average Unit Cost', 'Site Price', ...(this.canViewFinancials ? ['Estimated Card Profit'] : []), 'Stock', 'Max Stock'];
     const rows = this.products.map(product => [
       product.name,
       product.averageUnitCost?.toFixed(2) ?? 'Unavailable',
       product.sitePrice.toFixed(2),
-      product.estimatedCardProfit?.toFixed(2) ?? 'Unavailable',
+      ...(this.canViewFinancials ? [product.estimatedCardProfit?.toFixed(2) ?? 'Unavailable'] : []),
       product.quantityInStock.toString(),
       product.maxStock.toString()
     ]);

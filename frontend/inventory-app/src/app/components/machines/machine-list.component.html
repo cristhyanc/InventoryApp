@@ -41,27 +41,29 @@
                     <div class="text-md-badge value-muted">#{{ machine.machineNumber }}</div>
                   }
                 </div>
-                @if (machine.profitabilityStatus) {
+                @if (canViewFinancials && machine.profitabilityStatus) {
                   <span class="badge badge-neutral shrink-0">{{ machine.profitabilityStatus }}</span>
                 }
               </div>
 
-              <div class="grid grid-cols-2 gap-3 text-md-body">
-                <div>
-                  <div class="text-md-badge uppercase tracking-wide value-muted">Today</div>
-                  <div class="text-md-gray-600">${{ machine.todayGrossRevenue.toFixed(2) }} sales</div>
-                  <div class="text-md-badge value-muted">
-                    {{ machine.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine.todayDirectProfit.toFixed(2) + ' profit') }}
+              @if (canViewFinancials) {
+                <div class="grid grid-cols-2 gap-3 text-md-body">
+                  <div>
+                    <div class="text-md-badge uppercase tracking-wide value-muted">Today</div>
+                    <div class="text-md-gray-600">{{ machine.todayGrossRevenue == null ? 'Unavailable' : ('$' + machine.todayGrossRevenue.toFixed(2) + ' sales') }}</div>
+                    <div class="text-md-badge value-muted">
+                      {{ machine.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine.todayDirectProfit.toFixed(2) + ' profit') }}
+                    </div>
+                  </div>
+                  <div>
+                    <div class="text-md-badge uppercase tracking-wide value-muted">This Week</div>
+                    <div class="text-md-gray-600">{{ machine.currentWeekGrossRevenue == null ? 'Unavailable' : ('$' + machine.currentWeekGrossRevenue.toFixed(2) + ' sales') }}</div>
+                    <div class="text-md-badge value-muted">
+                      {{ machine.currentWeekDirectProfit == null ? 'Profit unavailable' : ('$' + machine.currentWeekDirectProfit.toFixed(2) + ' profit') }}
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <div class="text-md-badge uppercase tracking-wide value-muted">This Week</div>
-                  <div class="text-md-gray-600">${{ machine.currentWeekGrossRevenue.toFixed(2) }} sales</div>
-                  <div class="text-md-badge value-muted">
-                    {{ machine.currentWeekDirectProfit == null ? 'Profit unavailable' : ('$' + machine.currentWeekDirectProfit.toFixed(2) + ' profit') }}
-                  </div>
-                </div>
-              </div>
+              }
             </a>
           }
         </div>

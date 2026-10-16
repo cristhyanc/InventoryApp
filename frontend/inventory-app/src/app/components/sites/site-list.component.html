@@ -37,9 +37,11 @@
                 <th scope="col" class="table-cell">Machines</th>
                 <th scope="col" class="table-cell">Stock</th>
                 <th scope="col" class="table-cell">Low / Empty</th>
-                <th scope="col" class="table-cell table-num">Today</th>
-                <th scope="col" class="table-cell table-num">This Week</th>
-                <th scope="col" class="table-cell table-num">vs Last Week</th>
+                @if (canViewFinancials) {
+                  <th scope="col" class="table-cell table-num">Today</th>
+                  <th scope="col" class="table-cell table-num">This Week</th>
+                  <th scope="col" class="table-cell table-num">vs Last Week</th>
+                }
               </tr>
             </thead>
             <tbody>
@@ -56,11 +58,13 @@
                     <span class="badge" [ngClass]="siteStockClass(site)">{{ site.totalStockPercentage.toFixed(0) }}%</span>
                   </td>
                   <td class="table-cell">{{ site.lowProductCount }} low · {{ site.emptyProductCount }} empty</td>
-                  <td class="table-cell table-num">${{ site.todayRevenue.toFixed(2) }}</td>
-                  <td class="table-cell table-num">${{ site.currentWeekRevenue.toFixed(2) }}</td>
-                  <td class="table-cell table-num" [ngClass]="trendClass(site.currentWeekRevenue, site.previousComparableWeekRevenue)">
-                    {{ trendLabel(site.currentWeekRevenue, site.previousComparableWeekRevenue) }}
-                  </td>
+                  @if (canViewFinancials) {
+                    <td class="table-cell table-num">{{ site.todayRevenue == null ? 'Unavailable' : ('$' + site.todayRevenue.toFixed(2)) }}</td>
+                    <td class="table-cell table-num">{{ site.currentWeekRevenue == null ? 'Unavailable' : ('$' + site.currentWeekRevenue.toFixed(2)) }}</td>
+                    <td class="table-cell table-num" [ngClass]="trendClass(site.currentWeekRevenue, site.previousComparableWeekRevenue)">
+                      {{ trendLabel(site.currentWeekRevenue, site.previousComparableWeekRevenue) }}
+                    </td>
+                  }
                 </tr>
               }
             </tbody>

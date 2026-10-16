@@ -8,6 +8,7 @@ import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
+import { AccessService } from '../../access/access.service';
 import {
   DashboardInventorySummary,
   DashboardOrderingSummary,
@@ -73,7 +74,18 @@ export class DashboardComponent implements OnInit, OnDestroy {
    */
   private sessionActive = false;
 
+  /**
+   * Whether the signed-in member's role grants `Dashboard.ViewFinancials` (issue #699), read from
+   * `AccessService` rather than from the Sites/Machines responses themselves: those endpoints do
+   * not yet redact revenue, profit, margin or trend figures for an Operator (#697/#698 will), so
+   * this is the frontend's own hide until they do. Starts `true` - the fail-open default every
+   * other capability-gated control in this codebase uses - so a figure is never hidden from the
+   * role it belongs to merely because the capability has not been read yet.
+   */
+  canViewFinancials = true;
+
   private readonly sessionActiveSubscription: Subscription;
+  private readonly financialsAccessSubscription: Subscription;
 
   constructor(
     private readonly productService: ProductService,
@@ -81,9 +93,13 @@ export class DashboardComponent implements OnInit, OnDestroy {
     private readonly siteService: SiteService,
     private readonly nayaxSalesSyncService: NayaxSalesSyncService,
     private readonly dashboardService: DashboardService,
-    supportSession: SupportSessionService
+    supportSession: SupportSessionService,
+    access: AccessService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+    this.financialsAccessSubscription = access
+      .allows('Dashboard.ViewFinancials')
+      .subscribe((allowed) => (this.canViewFinancials = allowed));
   }
 
   ngOnInit(): void {
@@ -94,6 +110,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     this.sessionActiveSubscription.unsubscribe();
+    this.financialsAccessSubscription.unsubscribe();
   }
 
   /**
@@ -355,11 +372,11 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return `${inventory.productCount} products · ${inventory.unitsInStorage} units in storage (excludes machines)`;
   }
 
-  trendLabel(current: number, previous: number): string {
+  trendLabel(current: number | null | undefined, previous: number | null | undefined): string {
     return trendLabel(current, previous);
   }
 
-  trendClass(current: number, previous: number): string {
+  trendClass(current: number | null | undefined, previous: number | null | undefined): string {
     return trendClass(current, previous);
   }
 
@@ -369,6 +386,16 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   get totalTodaySales(): number {
     return this.machines.reduce((sum, m) => sum + (m.todayGrossRevenue ?? 0), 0);
+  }
+
+  /**
+   * Whether every machine's today's gross revenue is known (issue #699): a fleet that includes a
+   * withheld/unknown figure must not have the Totals row read its `?? 0` fallback as a real zero
+   * and report a fabricated `$0.00`, the same rule {@link isTodayProfitComplete} already follows
+   * for direct profit.
+   */
+  get isTodayRevenueComplete(): boolean {
+    return this.machines.every(m => m.todayGrossRevenue != null);
   }
 
   get totalTodayDirectProfit(): number {
@@ -381,6 +408,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   get totalCurrentWeekSales(): number {
     return this.machines.reduce((sum, m) => sum + (m.currentWeekGrossRevenue ?? 0), 0);
+  }
+
+  get isCurrentWeekRevenueComplete(): boolean {
+    return this.machines.every(m => m.currentWeekGrossRevenue != null);
   }
 
   get totalCurrentWeekDirectProfit(): number {
@@ -399,6 +430,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return this.machines.reduce((sum, m) => sum + (m.lastWeekGrossRevenue ?? 0), 0);
   }
 
+  get isLastWeekRevenueComplete(): boolean {
+    return this.machines.every(m => m.lastWeekGrossRevenue != null);
+  }
+
   get totalLastWeekDirectProfit(): number {
     return this.machines.reduce((sum, m) => sum + (m.lastWeekDirectProfit ?? 0), 0);
   }
@@ -409,6 +444,10 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   get totalMonthToDateSales(): number {
     return this.machines.reduce((sum, m) => sum + (m.monthToDateGrossRevenue ?? 0), 0);
+  }
+
+  get isMonthToDateRevenueComplete(): boolean {
+    return this.machines.every(m => m.monthToDateGrossRevenue != null);
   }
 
   get totalMonthToDateDirectProfit(): number {
