@@ -8511,6 +8511,71 @@ The import side of that flow (`POST api/imports/pending-xml`) is the
   (see [Uploaded transaction export import](#uploaded-transaction-export-import-issue-301)), which
   deleted `ImportService`/`IImportService` entirely.
 
+### Provider identity link tables (issue #732)
+
+`Product.Id` and `Category.Id` *are* the Nayax `NayaxProductID` and `ProductGroupID`: the catalogue
+import below writes the remote identifier as the local primary key. A local key that another system
+issues is global rather than per business, cannot be chosen at all by a business with no provider
+connected, and has room for exactly one provider's answer. Issue #732 (child A1 of #329, decision
+P1) adds the place a provider id belongs instead — and does only that. No existing id, foreign key
+or behaviour changes, and nothing reads a link yet: resolving through one is #733 (A2), #745 (A2b),
+#747 (A2c) and #734 (A3), and database-generated ids for new rows are #735 (A4).
+
+**Two tables, one shape.** `ProductExternalIds` and `CategoryExternalIds` each carry `BusinessId`,
+`Provider`, `ExternalId` and the local row's id behind their own surrogate key. Both are ordinary
+tenant-owned entities (`IBusinessOwned`), so the central mechanism in `AppDbContext` gives each its
+required business key, its `BusinessId` index and its global query filter, and
+`BusinessOwnershipEnforcer` stamps every insert — a link is business data like any other, and this
+is not a new kind of table.
+
+**`ExternalId` is opaque text.** It is stored as written and compared exactly; shared code never
+parses it and never assumes it is numeric, which is what lets a later provider that issues a GUID
+or a code need no schema change. `Inventory.Domain.Providers.NayaxExternalId` is the one place a
+Nayax numeric id becomes that text (`From`) and is read back from it (`TryParse`), in the invariant
+decimal form — the Lynx contract declares `NayaxProductID` as `integer<int64>` and `ProductGroupID`
+as `integer<int32>`, so both fit a `long`. `Inventory.Domain.Providers.ExternalProvider` names the
+issuer and has one member, `Nayax = 1`; it is numbered from 1 so an unwritten column is not a
+provider by default.
+
+**Two uniqueness rules, saying different things.** `(BusinessId, Provider, ExternalId)` is unique:
+one provider id names at most one local row. It is scoped by business for the reason every
+constraint over an externally supplied value is (see [Tenant ownership](#tenant-ownership-issue-64))
+— two operators' catalogues may legitimately both contain product 100, and a global index would let
+whichever imported first deny the other its own id. `(BusinessId, Provider, ProductId)` /
+`(BusinessId, Provider, CategoryId)` is unique as well: a local row carries at most one id per
+provider, so "which Nayax product is this?" has one answer. A second provider is a second row, never
+a replacement.
+
+**A link cannot cross a business, and the database is what says so.** Each link's foreign key is the
+pair `(BusinessId, local id)` against the `(BusinessId, Id)` alternate key added to `Products` and
+`Categories`, with `ON DELETE CASCADE`. Application validation alone was explicitly not enough here:
+a link is what will later resolve a remote identifier to a local product, and a link that crossed a
+business would resolve one business's sale onto another's product. The cascade is the second half of
+the same statement — a link is part of the row it names, so deleting a product or category takes its
+provider ids with it rather than leaving a mapping to nothing.
+
+Two consequences of that alternate key are worth knowing. The migration that adds it rebuilds
+`Products` and `Categories`, because SQLite cannot add a constraint to an existing table; EF copies
+every row by name and `Id` is each table's `INTEGER PRIMARY KEY`, so every key value and every
+foreign key into those tables still resolves afterwards (`AddProviderIdentityLinksMigrationTests`
+asserts it on a seeded database). And `BusinessId` is now part of a key of `Product` and `Category`,
+so EF refuses outright to modify it on a tracked entity, before `BusinessOwnershipEnforcer`'s
+immutability rule is reached — the same rule as everywhere else, enforced earlier and harder, and
+not a path any request could take in the first place, since `BusinessId` is never bound from input.
+
+**The backfill claims nothing it cannot see.** `AddProviderIdentityLinks` inserts one Nayax link per
+existing product and category, with that row's own `BusinessId` and `CAST(Id AS TEXT)` as the
+`ExternalId` — the mapping the import already made true, not a match on names or prices. It is
+additive and ignored by code already running in production, which is what lets it apply at
+Production startup ahead of the slices that read a link. The alternate keys are a separate, earlier
+migration (`AddProductAndCategoryBusinessKeys`) so the rebuild happens *before* those inserts: the
+SQLite generator defers a pending rebuild to the end of the migration it occurs in, which would have
+run them against a parent key that did not exist yet.
+
+**The import keeps the links true.** `EfNayaxProductCatalogImportStore` writes a Nayax link for
+every product and category in the snapshot that has none, and leaves an existing link exactly as it
+is; it still sets `Id` from the Nayax id, which #735 (A4) changes.
+
 ### Nayax product catalogue import (issue #300)
 
 `POST api/imports/products` is a one-way sync of the Nayax operator catalogue into the local
@@ -8556,6 +8621,11 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   stopped returning is never removed (that drift is reported by the catalog reconciliation report
   below). Every row an import creates or updates now carries the same import instant, taken once
   from the shared `Inventory.Application.Time.IClock` port instead of a per-row `DateTime.UtcNow`.
+- Since issue #732 the import also writes the provider identity link for every product and category
+  in the snapshot that does not already have one, and keeps an existing link untouched (see
+  [Provider identity link tables](#provider-identity-link-tables-issue-732)). It is the only writer
+  of a Nayax link besides that issue's backfill, and it still sets `Id` from the Nayax id — #735
+  (A4) is where a new row stops being keyed that way.
 - Reads and writes are scoped to the caller's business by the central `AppDbContext` query filters
   and `BusinessOwnershipEnforcer` alone, with no business predicate of its own. Because
   `Product.Id`/`Category.Id` *are* the Nayax identifiers and are the single-column primary keys,

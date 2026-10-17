@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.MachineStock;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Inventory.Infrastructure.Models;
@@ -77,6 +78,14 @@ public class AppDbContext : DbContext
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Supplier> Suppliers => Set<Supplier>();
     public DbSet<Product> Products => Set<Product>();
+
+    /// <summary>
+    /// Each provider's own identifier for a local product, and the same for a category (issue
+    /// #732). Ordinary tenant-owned data; see <see cref="ProductExternalId"/> for why a provider id
+    /// lives beside the local row instead of being its key.
+    /// </summary>
+    public DbSet<ProductExternalId> ProductExternalIds => Set<ProductExternalId>();
+    public DbSet<CategoryExternalId> CategoryExternalIds => Set<CategoryExternalId>();
     public DbSet<StockAdjustment> StockAdjustments => Set<StockAdjustment>();
     public DbSet<Purchase> Receipts => Set<Purchase>();
     public DbSet<NayaxSales> NayaxSales => Set<NayaxSales>();
@@ -181,6 +190,7 @@ public class AppDbContext : DbContext
         ConfigureTenancy(modelBuilder);
         ConfigureMemberInvites(modelBuilder);
         ConfigureSupportSessions(modelBuilder);
+        ConfigureProviderLinks(modelBuilder);
 
         modelBuilder.Entity<Product>()
             .Property(p => p.UnitPrice)
@@ -890,6 +900,72 @@ public class AppDbContext : DbContext
             fromProvider => fromProvider.HasValue
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                 : fromProvider);
+    }
+
+    /// <summary>
+    /// Maps the provider identity link tables of issue #732 (parent #329 decision P1).
+    ///
+    /// Both are ordinary tenant-owned entities, so <see cref="ConfigureBusinessOwnership"/> gives
+    /// each its required business key, its <c>BusinessId</c> index and its global query filter;
+    /// what is declared here is everything specific to a link.
+    ///
+    /// Two uniqueness rules, and each is a different statement. <c>(BusinessId, Provider,
+    /// ExternalId)</c> says one provider id names at most one local row - per business, because an
+    /// external id is a value two businesses may legitimately hold (docs/architecture.md § Tenant
+    /// ownership), and a global index over it would let whichever business imported first deny the
+    /// other its own catalogue. <c>(BusinessId, Provider, ProductId)</c>/<c>CategoryId</c> says a
+    /// local row carries at most one id per provider, which is what keeps "which Nayax product is
+    /// this?" a question with one answer; a second provider gets its own row rather than replacing
+    /// that one.
+    ///
+    /// The foreign key is the pair <c>(BusinessId, local id)</c> against an alternate key on the
+    /// principal, not the local id alone. That is the point of the whole mapping: it makes "a link
+    /// belongs to the same business as the row it points at" a constraint SQLite enforces on every
+    /// insert and update, rather than a rule only <see cref="BusinessOwnershipEnforcer"/> applies -
+    /// AGENTS.md requires the database-level guarantee here because the link is the thing that will
+    /// later resolve a remote identifier to a local product, and a link that crossed a business
+    /// would resolve one business's sale onto another's product. Cascade, because a link is part of
+    /// the row it names: deleting a product or category takes its provider ids with it rather than
+    /// leaving a mapping to nothing.
+    /// </summary>
+    private static void ConfigureProviderLinks(ModelBuilder modelBuilder)
+    {
+        // The principal side of both foreign keys below, declared explicitly rather than left for
+        // HasPrincipalKey to infer: it is a constraint on Products and Categories in its own right -
+        // "(business, local id) identifies one row" - and the migration that added it rebuilt those
+        // two tables to state it, which is not something to leave implied by a relationship.
+        modelBuilder.Entity<Product>().HasAlternateKey(product => new { product.BusinessId, product.Id });
+        modelBuilder.Entity<Category>().HasAlternateKey(category => new { category.BusinessId, category.Id });
+
+        var productLink = modelBuilder.Entity<ProductExternalId>();
+
+        productLink.Property(x => x.Provider).IsRequired();
+        productLink.Property(x => x.ExternalId).IsRequired().HasMaxLength(ExternalId.MaxLength);
+
+        productLink.HasIndex(x => new { x.BusinessId, x.Provider, x.ExternalId }).IsUnique();
+        productLink.HasIndex(x => new { x.BusinessId, x.Provider, x.ProductId }).IsUnique();
+
+        productLink
+            .HasOne(link => link.Product)
+            .WithMany()
+            .HasForeignKey(link => new { link.BusinessId, link.ProductId })
+            .HasPrincipalKey(product => new { product.BusinessId, product.Id })
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var categoryLink = modelBuilder.Entity<CategoryExternalId>();
+
+        categoryLink.Property(x => x.Provider).IsRequired();
+        categoryLink.Property(x => x.ExternalId).IsRequired().HasMaxLength(ExternalId.MaxLength);
+
+        categoryLink.HasIndex(x => new { x.BusinessId, x.Provider, x.ExternalId }).IsUnique();
+        categoryLink.HasIndex(x => new { x.BusinessId, x.Provider, x.CategoryId }).IsUnique();
+
+        categoryLink
+            .HasOne(link => link.Category)
+            .WithMany()
+            .HasForeignKey(link => new { link.BusinessId, link.CategoryId })
+            .HasPrincipalKey(category => new { category.BusinessId, category.Id })
+            .OnDelete(DeleteBehavior.Cascade);
     }
 
     /// <summary>
