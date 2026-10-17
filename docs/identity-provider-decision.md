@@ -130,35 +130,63 @@ pair stays unique: `oid` is unique inside the directory. Two things it does cost
 
 ## 5. Token validation design
 
-The target state is **exactly two trusted issuers, each with its own complete validation, and no
-issuer-agnostic path.**
+The target state is **exactly two validation schemes, each with its own complete, self-contained
+validation, and no issuer-agnostic path.** "Two schemes" is not "two issuer strings": the workforce
+scheme is deliberately multi-tenant and keeps accepting a tenant-specific issuer from *any* Entra
+tenant, each bound to that token's own `tid`, exactly as `common` does today; the External ID scheme
+accepts one pinned issuer and nothing else. Preserving today's workforce sign-in *requires* that
+asymmetry, and § 5.1 states each scheme's rule separately so neither is tightened or loosened into
+the other.
 
 ### 5.1 The rules, stated exactly
 
-For a request to be authenticated, all of the following must hold. A failure is `401`; a validated
+For a request to be authenticated, all of the following must hold, **within the one scheme the token's
+issuer selects** — never by pooling the two schemes' accepted values. A failure is `401`; a validated
 token that fails the scope check is `403`, as today.
 
 1. **Signature.** Verified against the signing keys published by the authority that issued it,
    discovered from that authority's own OpenID Connect metadata document. The two authorities have
    separate metadata and separate keys; a key from one must never validate a token claiming the
    other's issuer.
-2. **Issuer.** `iss` must be one of exactly two accepted values: the workforce value the current
-   `common` configuration already validates (tenant-specific, matched against the token's `tid`), or
-   the one fixed External ID tenant issuer. The accepted set is configuration this repository holds,
-   not a wildcard and not a pattern.
-3. **Issuer-to-tenant binding.** `tid` must be the tenant the validated issuer names. The workforce
-   half of this is what `Microsoft.Identity.Web`'s Entra issuer validation already does on `common`;
-   the External ID half is a single fixed `tid` and must be asserted explicitly. **A design that
-   validated the signature and then read `tid` without binding it to the issuer would be the central
-   vulnerability of this whole change** (§ 11, T1).
-4. **Audience.** `aud` must be the audience of the API app registration *in the tenant that issued
-   the token* — the workforce registration for A, the External ID registration for B/C/D. The two
-   audiences are different values and must be configured explicitly as a per-issuer list, not merged
-   into one pool: merging them would let a token issued by one tenant for its own API be accepted as
-   the other's. The implementation task must **pin the accepted audiences explicitly** rather than
-   rely on whatever `Microsoft.Identity.Web` derives from `ClientId` by default, and must pin the
-   registration's accepted access-token version **[TBC-H]** so `api://<client-id>` versus the bare
-   client id is a decision rather than a default.
+2. **Issuer, stated per scheme.** There are two issuer rules, and neither scheme accepts the other's
+   issuers:
+   - **Workforce scheme (unchanged, and deliberately multi-tenant).** `iss` must be a
+     tenant-specific Entra v2 issuer of the form `https://login.microsoftonline.com/<tid>/v2.0`
+     (including the issuer aliases `Microsoft.Identity.Web` already recognises), for **any** Entra
+     tenant, validated by the same `Microsoft.Identity.Web` Entra issuer validator the `common`
+     authority uses today — which matches the issuer against the token's own `tid` (rule 3) rather
+     than against a list of tenants this repository holds. That is the whole meaning of "workforce
+     Microsoft sign-in is preserved": a work or school account in a tenant nobody here has ever
+     heard of still signs in. It must **not** be replaced by a literal issuer string, a single-tenant
+     authority, or a tenant allowlist, because any of those would silently break existing users in
+     other tenants.
+   - **External ID scheme (new, single-tenant and pinned).** `iss` must equal **one literal value**:
+     the v2 issuer of the one configured External ID tenant **[TBC-H]**. Pinned, not templated: no
+     wildcard, no repository-authored pattern, no tenant placeholder, and no second External ID
+     tenant.
+
+   So the accepted issuer *set* is "any Entra tenant, bound to its own `tid`" plus "one fixed External
+   ID issuer" — not two literal strings. No wildcard or hand-written regular expression is accepted
+   on either side, and a token whose issuer satisfies neither rule matches no scheme and is `401`.
+3. **Issuer-to-tenant binding, in both schemes.** `tid` must be the tenant the validated issuer
+   names. In the workforce scheme that binding is what makes multi-tenant acceptance safe, and it is
+   exactly what `Microsoft.Identity.Web`'s Entra issuer validation already performs on `common`: the
+   token can only ever assert the tenant that signed it. It must be preserved as-is and never widened
+   — in particular, `ValidateIssuer` must not be turned off, and no custom `IssuerValidator` may
+   replace the Entra one, for the second scheme's benefit. In the External ID scheme the bound value
+   is a single fixed `tid` and must be asserted explicitly. **A design that validated the signature
+   and then read `tid` without binding it to the issuer would be the central vulnerability of this
+   whole change** (§ 11, T1).
+4. **Audience, per scheme.** `aud` must be the audience of the API app registration *in the tenant
+   that issued the token* — the workforce registration for A, the External ID registration for B/C/D.
+   The two audiences are different values; **each scheme validates only its own**, and they are never
+   merged into one pool, because merging them would let a token issued by one tenant for its own API
+   be accepted as the other's. Per-scheme audience validation survives the asymmetry in rule 2
+   unchanged: the workforce scheme accepts many issuers but still exactly one audience, and the
+   External ID scheme accepts one issuer and one audience. The implementation task must **pin the
+   accepted audiences explicitly** rather than rely on whatever `Microsoft.Identity.Web` derives from
+   `ClientId` by default, and must pin each registration's accepted access-token version **[TBC-H]**
+   so `api://<client-id>` versus the bare client id is a decision rather than a default.
 5. **Scope.** `scp` must contain `access_as_user`. Unchanged, and still enforced by
    `[RequiredScope]` on every controller.
 6. **Token type.** The token must be an access token for the API. An ID token, a token for Microsoft
@@ -173,18 +201,27 @@ token that fails the scope check is `403`, as today.
 
 Two shapes are available. The recommendation is the first; #710 chooses and verifies with tests.
 
-- **Recommended: two named JWT bearer schemes and a policy scheme that picks one by the token's
-  issuer.** Register `AddMicrosoftIdentityWebApi` twice — one scheme bound to the existing `AzureAd`
-  section, one bound to a new `ExternalId` section — and front them with a
+- **Recommended: two named JWT bearer schemes — the existing multi-tenant workforce validator and a
+  second pinned to the External ID tenant — behind a policy scheme that picks one by the token's
+  issuer.** Register `AddMicrosoftIdentityWebApi` twice: one scheme bound to the existing `AzureAd`
+  section, keeping `TenantId: common` and therefore keeping the Entra issuer validator that accepts
+  any tenant's issuer bound to that token's `tid`; one bound to a new `ExternalId` section, pinned to
+  that tenant's single issuer and its own audience. Front them with an
   `AddPolicyScheme`/`ForwardDefaultSelector` that reads the unvalidated `iss` **only** to choose
-  which scheme performs the real validation. Each scheme then validates issuer, audience, keys and
-  tenant binding completely for its own authority. Picking a scheme is not trusting a claim: the
-  chosen scheme still rejects everything that does not match it, and a token naming neither issuer
-  matches no scheme and is `401`.
-- **Rejected: one scheme with both issuers in `ValidIssuers` and both audiences in `ValidAudiences`.**
-  Fewer moving parts, but it makes the issuer-to-audience pairing implicit — any valid issuer with
-  any valid audience passes — which is exactly the confusion rule 4 exists to prevent. It would have
-  to be re-tightened with a custom validator, at which point it is no simpler.
+  which scheme performs the real validation. Each scheme then validates signature, issuer, audience
+  and tenant binding completely for its own authority, under its own rule from § 5.1. Picking a
+  scheme is not trusting a claim: the chosen scheme still rejects everything that does not match it,
+  so routing an External ID-issued token to the workforce scheme (or the reverse) ends in `401`
+  rather than in an acceptance, and a token matching neither rule reaches no scheme and is `401`.
+  The selector itself must be covered by § 5.4's mismatch tests, because its input is unvalidated.
+- **Rejected: one scheme with both issuer rules in `ValidIssuers`/`IssuerValidator` and both
+  audiences in `ValidAudiences`.** Fewer moving parts, but it makes the issuer-to-audience pairing
+  implicit — any accepted issuer with any accepted audience passes — which is exactly the confusion
+  rule 4 exists to prevent. It is also the shape in which the two schemes' *different* issuer rules
+  get flattened: a single validator that must accept both "any Entra tenant, bound to its `tid`" and
+  "one pinned External ID issuer" is one edit away from accepting any Entra tenant's token with the
+  External ID audience. It would have to be re-tightened with a custom validator, at which point it
+  is no simpler.
 
 `AddInventoryApiAuthentication` stays the single composition-root decision point, and the `E2ETest`
 branch stays an either/or that registers the synthetic scheme **and nothing else** — the E2E host
@@ -213,6 +250,32 @@ application settings and need no Key Vault reference. **Empty must fail closed:*
 empty the second scheme is not registered at all and only workforce sign-in works, which is both the
 shipped state and the rollback state (§ 15). No implementation task may make an absent or
 half-filled section mean "accept any issuer".
+
+### 5.4 Required regression tests for the two schemes (#710)
+
+The two schemes are a security boundary, and the asymmetry in § 5.1 rule 2 — many accepted workforce
+issuers, one pinned External ID issuer — is the part a later edit is most likely to get wrong in a
+way nothing notices. **#710 is not complete without regression tests proving each scheme accepts
+only what its own rule allows.** At minimum:
+
+| What must be covered | Expected outcome |
+| --- | --- |
+| **Two different workforce tenants.** A valid workforce access token from tenant X and one from tenant Y, each with the workforce audience and `access_as_user` | Both accepted; the actor resolves to `(X, oid)` and `(Y, oid)` respectively. **One tenant is not enough**: a regression that pinned the workforce scheme to a single tenant would still pass a one-tenant test while having broken sign-in for every other tenant's users |
+| **A valid External ID token.** Issued by the configured External ID tenant, with the External ID API audience and `access_as_user` | Accepted; the actor resolves to `(ExternalIdTenantId, oid)` |
+| **Issuer mismatch — a third tenant claiming the External ID `tid`.** A token correctly signed by an attacker-controlled Entra tenant whose `tid` claim is the External ID tenant id | `401` (§ 11, T1) |
+| **Issuer mismatch — the External ID issuer with a foreign `tid`** | `401` |
+| **An issuer neither rule accepts** (a non-Entra issuer, or a malformed or absent `iss`) | `401`, matching no scheme |
+| **Tenant mismatch inside the workforce scheme.** `iss` names tenant X, `tid` claims tenant Y | `401`; adding the second scheme must not loosen the issuer-to-`tid` binding |
+| **Audience mismatch across the schemes.** A workforce-audience token presented as an External ID token, and an External ID-audience token presented as a workforce token | `401` each — per-scheme audience validation, never a merged pool (§ 11, T2) |
+| **Audience mismatch within a scheme.** The SPA's audience, or a Microsoft Graph token, from either authority | `401` (§ 11, T2) |
+| **An ID token used as a bearer token**, for each authority | `401` (§ 11, T3) |
+| **Missing scope.** A validly issued token from either scheme without `access_as_user` in `scp` | `403`, as today |
+| **Empty and half-filled `ExternalId` configuration** | The second scheme is not registered, every External ID token is `401`, and workforce sign-in is unaffected (§ 11, T10) |
+| **The `E2ETest` host** | `E2ETestAuthenticationCompositionTests` and `E2ETestAuthenticationFailsClosedTests` extended, not replaced: it still registers the synthetic scheme **and nothing else** |
+
+These are requirements on #710, not tests this design-only document adds. How a token is minted in a
+test (a test signing key with a stubbed metadata document, rather than a real tenant) is #710's
+choice, provided no test key or metadata stub is reachable from a non-test code path.
 
 ## 6. Rollout options, evaluated
 
@@ -446,8 +509,8 @@ invite redemption, tenancy, and administrator elevation.
 
 | # | Threat | Scenario | Mitigation in this design | Residual risk / who verifies |
 | --- | --- | --- | --- | --- |
-| **T1** | **Issuer confusion** | A token signed by any Entra tenant (an attacker's own, created in minutes) is accepted, and its self-asserted `tid`/`oid` are read as identity. Worst case: the attacker mints `tid` = the External ID tenant id and `oid` = a real member's object id, and reads that member's business. | Two fixed trusted issuers; per-issuer signing keys; **`tid` bound to the validated issuer** (§ 5.1 rules 2–3). The attacker's token carries their own tenant's issuer, which is not in the accepted set at all. | The highest-severity risk of the change. It is wholly a correctness property of #710's validation. Required test: a token correctly signed by a *third* Entra tenant but carrying the External ID `tid` must be `401`. |
-| **T2** | **Audience substitution** | A token legitimately issued for the SPA, for Microsoft Graph, or for the *other* tenant's API registration is replayed against this API. | Per-issuer audience list, pinned explicitly, never merged across issuers (§ 5.1 rule 4); `scp` must contain `access_as_user`. | Required tests: SPA-audience token → `401`; workforce-audience token presented as an External ID token → `401`; valid token with no `access_as_user` → `403`. |
+| **T1** | **Issuer confusion** | A token signed by any Entra tenant (an attacker's own, created in minutes) is accepted, and its self-asserted `tid`/`oid` are read as identity. Worst case: the attacker mints `tid` = the External ID tenant id and `oid` = a real member's object id, and reads that member's business. | Two separate validation schemes with separate signing keys, and **`tid` bound to the validated issuer in both** (§ 5.1 rules 2–3). The workforce scheme *does* accept the attacker's own tenant's issuer — `common` always has, and preserving workforce sign-in means it must keep doing so — but it binds `tid` to that issuer, so such a token can only ever assert the attacker's own `(tid, oid)`, which resolves no membership and is `403` on every business endpoint. The External ID scheme accepts only the one pinned issuer, so a token the attacker signed can never carry the External ID `tid`. The mitigation is therefore the binding, not the issuer list. | The highest-severity risk of the change. It is wholly a correctness property of #710's validation, and § 5.4's issuer and tenant mismatch rows are its required tests — in particular, a token correctly signed by a *third* Entra tenant but carrying the External ID `tid` must be `401`. |
+| **T2** | **Audience substitution** | A token legitimately issued for the SPA, for Microsoft Graph, or for the *other* tenant's API registration is replayed against this API. | Per-scheme audience validation, pinned explicitly, never merged into one pool across the two schemes (§ 5.1 rule 4); `scp` must contain `access_as_user`. | Required tests are § 5.4's audience and scope rows: SPA-audience token → `401`; workforce-audience token presented as an External ID token and the reverse → `401`; valid token with no `access_as_user` → `403`. |
 | **T3** | **ID token used as an access token** | The SPA's ID token is sent as the bearer token; it names the right user and is signed by a trusted authority. | Audience and `scp` checks reject it (§ 4, § 5.1 rule 6). No code path accepts an ID token. | Required test, per authority. |
 | **T4** | **Token replay / stolen token** | A bearer token is captured and reused before it expires. | HTTPS only; short access-token lifetime; no token in a URL, a log, an audit event or an error message; the invite token likewise never in a URL (§ 10.2). Unchanged by this design. | Residual and accepted, as today: a stolen unexpired bearer token is usable until it expires. Token binding/DPoP is out of scope. |
 | **T5** | **Malicious account linking** | An attacker links their Google or email identity to a victim's account — classically by claiming the victim's email address — and inherits the victim's business and role. | **Structurally impossible under Option C: there is no linking flow.** A new identity is a new actor with no membership and no inherited anything; email is never an identity (§ 10.1); no automatic linking by email, ever. | The strongest argument for Option C. If linking is ever revived, #713's full requirements apply and this row must be re-done. |
@@ -500,6 +563,12 @@ that cannot be confirmed, blocks approval. Model recollection is not verificatio
 - [ ] Which Microsoft account types can be federated in (personal MSA, work/school, both) **[TBC-H]**
 - [ ] Google federation is supported, what must be configured on the Google side, and how a user is
       routed to it **[TBC-H]**
+- [ ] How sign-up/sign-in **user flows** work in the current product: that a flow must be created,
+      that each intended identity provider is enabled **inside** the flow rather than only at tenant
+      level, and that the SPA application must be explicitly associated with the flow before it can
+      use it — see
+      [Add your application to the user flow](https://learn.microsoft.com/en-us/entra/external-id/customers/how-to-user-flow-add-application)
+      **[TBC-H]**
 - [ ] Local email/password sign-up exists, verifies the mailbox at sign-up, and offers self-service
       password reset and recovery **[TBC-H]**
 - [ ] MFA and anti-abuse controls available (and whether they cost extra or need a premium tier):
@@ -521,7 +590,9 @@ in all of them.
 
 1. **Phase 0 — approval.** Merge this document. No code, no configuration, no tenant.
 2. **Phase 1 — human verification.** § 13's checklist. No code.
-3. **Phase 2 — provider setup (human, outside this repository).** § 14.2. No code.
+3. **Phase 2 — provider setup (human, outside this repository).** § 14.2, which includes creating the
+   sign-up/sign-in user flow, enabling the intended providers inside it, and associating the SPA
+   application with it. No code.
 4. **Phase 3 — API accepts the second issuer (#710).** The second scheme is registered **only when
    the `ExternalId` section is filled**, so merging and deploying it with the section empty changes
    nothing observable. Then a non-production environment is configured and a human signs in with a
@@ -536,7 +607,8 @@ in all of them.
    code path; it is the verification that the pieces compose.
 7. **Phase 6 — consolidated security, staging and rollback validation (#714).** Including the
    rollback rehearsal in § 15 and the T6/T8/T9 tests above.
-8. **Phase 7 — production activation.** A human fills the production configuration, verifies in
+8. **Phase 7 — production activation.** Gated on § 14.2's staging journey verification having passed
+   for every supported journey. A human fills the production configuration, verifies in
    production, and separately decides whether `SelfServiceOnboarding:Enabled` changes — which has its
    own release gate (`docs/tenant-rollout.md`) and is **not** part of this work.
 
@@ -550,17 +622,42 @@ sign-in is removed. Removing it later would be its own decision, with its own mi
 - Register the **SPA** application in that tenant as a public client using authorization code with
   PKCE, with exactly the redirect URIs in use (`http://localhost:4200/auth`, the deployed Static Web
   App origin's `/auth`) and the post-logout URIs, and grant it delegated access to the API scope.
-- Configure the Microsoft and Google identity providers, including creating the Google OAuth client
-  in Google Cloud and registering its client id and secret **in the External ID tenant** — that
-  secret lives in the provider, never in this repository, a pipeline, or an application setting.
-- Configure the local email/password sign-up journey, its email verification, and the password reset
-  and recovery experience.
+- Configure the Microsoft and Google identity providers **in the tenant**, including creating the
+  Google OAuth client in Google Cloud and registering its client id and secret **in the External ID
+  tenant** — that secret lives in the provider, never in this repository, a pipeline, or an
+  application setting.
+- **Create the sign-up/sign-in user flow.** An External ID tenant with registered applications and
+  configured identity providers still has no sign-in experience until a user flow exists; this step
+  is not optional and is not implied by any step above **[TBC-H]**.
+- **Enable the intended identity providers inside that user flow.** Enabling a provider at tenant
+  level is not the same as offering it in a flow: Microsoft, Google and email + password must each be
+  selected in the flow itself, or the journey simply does not appear on the sign-in page **[TBC-H]**.
+- **Associate the SPA application with that user flow.** A registered application that is not
+  associated with a user flow has no journey to send users to, and sign-in fails even though every
+  registration, provider and configuration value is correct. See Microsoft's
+  [Add your application to the user flow](https://learn.microsoft.com/en-us/entra/external-id/customers/how-to-user-flow-add-application)
+  **[TBC-H]**. If the API application also needs an association, record that at the same time.
+- Configure, inside that flow, the local email/password sign-up journey, its email verification, and
+  the password reset and recovery experience.
 - Configure MFA and anti-abuse controls to whatever § 13 found is available.
 - Set the production application settings `ExternalId__Instance`, `ExternalId__TenantId`,
   `ExternalId__ClientId` (identifiers, not secrets — no Key Vault reference needed) and the SPA's
   build-time/configuration equivalents.
 - Decide and record who administers the External ID tenant, and keep that separate from the
   `PlatformAdmin` pair (§ 8).
+
+**Staging verification of the user flow association, before production activation.** Configuring a
+provider is not the same as a user being able to use it, so the setup above is not finished until a
+human has confirmed **in staging** that the associated application actually exposes and completes
+**every** supported journey. For each of Microsoft-federated (journey B), Google (journey C) and
+local email + password (journey D): the journey is offered on the sign-in page the SPA reaches
+through the associated user flow; a new user can complete it end to end, including the email
+verification and the password-reset entry point for D; the SPA returns to `/auth` and acquires an API
+access token for `access_as_user`; and the API accepts that token and resolves the expected
+`(tid, oid)` with no membership — `403` on every business endpoint, as § 14.1 phase 3 requires. A
+journey that is configured but not offered, or offered but not completable, is a failed phase, not a
+detail to finish in production. The result is recorded with § 13's checklist, and #714 owns the
+consolidated run across both issuers (§ 16).
 
 ### 14.3 Secrets handling
 
@@ -620,11 +717,11 @@ for people are identical to § 15.1.
 | --- | --- | --- |
 | **#708** (parent) | Proceed; **remove #713 from the launch prerequisites** | Record Option C as the approved rollout and this file as the design of record |
 | **#709** (this) | Complete on merge; § 13's checklist is a separate human step before #710 | Design, decision table, threat model, rollout, rollback. No code |
-| **#710** (identity foundation and API token validation) | Ready **after** § 13 is recorded, and only if the GUID assumption is confirmed | The `ExternalId` configuration section; the second named bearer scheme and the issuer-selecting policy scheme; explicit per-issuer issuer/audience/tenant binding; empty-configuration fail-closed; T1/T2/T3/T10 tests; the composition tests extended so the `E2ETest` host still registers the synthetic scheme and nothing else. **No change to `ActorIdentity` or `EntraActorIdentityAccessor`**, and no schema change |
+| **#710** (identity foundation and API token validation) | Ready **after** § 13 is recorded, and only if the GUID assumption is confirmed | The `ExternalId` configuration section; the second named bearer scheme and the issuer-selecting policy scheme, with the existing multi-tenant workforce validator and its issuer-to-`tid` binding left exactly as it is; per-scheme issuer, audience and tenant-binding rules (§ 5.1); empty-configuration fail-closed; **the complete § 5.4 regression suite, including two different workforce tenants and every issuer/tenant/audience mismatch**, which covers T1/T2/T3/T10; the composition tests extended so the `E2ETest` host still registers the synthetic scheme and nothing else. **No change to `ActorIdentity` or `EntraActorIdentityAccessor`**, and no schema change |
 | **#711** (Google sign-in) | After #710 | SPA authority selection, the second MSAL instance with its own cache, Google journey end to end, the welcome-screen wording of § 12, invite continuation re-verified |
 | **#712** (email/password) | After #710 | The same for the local journey, including the provider-hosted reset/recovery entry point. **No password, hash, reset token or recovery code in this repository** |
 | **#713** (linking/migration) | **Deferred — not required.** A human records that status; it is removed from the launch prerequisites and must not be given a readiness label unless a human first reopens the linking decision | — |
-| **#714** (security, staging, rollout validation) | Last | The provider/account-state matrix across both issuers; **identity separation in place of linking validation**, as #713 directs; T6, T8, T9; two-business isolation with identities from both issuers; the § 15 rollback rehearsal; human staging sign-off |
+| **#714** (security, staging, rollout validation) | Last | The provider/account-state matrix across both issuers; **identity separation in place of linking validation**, as #713 directs; T6, T8, T9; two-business isolation with identities from both issuers; **§ 14.2's staging verification that the associated application exposes and completes each supported journey**; the § 15 rollback rehearsal; human staging sign-off |
 
 ## 17. Known limitations of this document
 
