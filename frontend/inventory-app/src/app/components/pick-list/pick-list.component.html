@@ -26,40 +26,48 @@
         (selectedIdsChange)="onStagedProductIdsChange($event)"
       ></app-multi-select-dropdown>
 
-      <app-multi-select-dropdown
-        label="Machines"
-        itemLabelSingular="machine"
-        itemLabelPlural="machines"
-        [options]="machineOptions()"
-        [selectedIds]="stagedMachineIds"
-        (selectedIdsChange)="onStagedMachineIdsChange($event)"
-      ></app-multi-select-dropdown>
+      @if (machineSelectionShown) {
+        <app-multi-select-dropdown
+          label="Machines"
+          itemLabelSingular="machine"
+          itemLabelPlural="machines"
+          [options]="machineOptions()"
+          [selectedIds]="stagedMachineIds"
+          (selectedIdsChange)="onStagedMachineIdsChange($event)"
+        ></app-multi-select-dropdown>
+      }
 
       <button type="button" class="btn btn-primary" (click)="applyFilters()">Apply</button>
       <button type="button" class="btn btn-secondary" (click)="resetAll()">Reset</button>
     </div>
   </section>
 
-  <section class="card">
-    <div class="card-header">
-      <h2 class="card-title">Selected Machines ({{ appliedMachineIds.length }})</h2>
-    </div>
-    <div class="card-body flex flex-wrap gap-2">
-      @for (machineId of appliedMachineIds; track machineId) {
-        <span class="inline-flex items-center gap-2 rounded-md-badge bg-md-gray-100 px-3 py-1 text-md-body text-md-gray-600">
-          {{ machineLabel(machineId) }}
-          <button type="button" class="value-muted hover:text-md-danger-text" [attr.aria-label]="'Remove ' + machineLabel(machineId)" (click)="removeMachine(machineId)">&times;</button>
-        </span>
-      }
-      @if (appliedMachineIds.length === 0) {
-        <span class="text-md-body value-muted">No machines selected yet.</span>
-      }
-    </div>
-  </section>
+  @if (machineSelectionShown) {
+    <section class="card">
+      <div class="card-header">
+        <h2 class="card-title">Selected Machines ({{ appliedMachineIds.length }})</h2>
+      </div>
+      <div class="card-body flex flex-wrap gap-2">
+        @for (machineId of appliedMachineIds; track machineId) {
+          <span class="inline-flex items-center gap-2 rounded-md-badge bg-md-gray-100 px-3 py-1 text-md-body text-md-gray-600">
+            {{ machineLabel(machineId) }}
+            <button type="button" class="value-muted hover:text-md-danger-text" [attr.aria-label]="'Remove ' + machineLabel(machineId)" (click)="removeMachine(machineId)">&times;</button>
+          </span>
+        }
+        @if (appliedMachineIds.length === 0) {
+          <span class="text-md-body value-muted">No machines selected yet.</span>
+        }
+      </div>
+    </section>
+  }
 
   <section class="card">
     <div class="card-body">
-    @if (appliedMachineIds.length === 0) {
+    @if (machinesUnavailable) {
+      <p data-testid="pick-list-provider-unavailable" class="text-md-body value-muted">{{ machinesUnavailable }}</p>
+    } @else if (machinesError) {
+      <p data-testid="pick-list-machines-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
+    } @else if (appliedMachineIds.length === 0) {
       <p class="text-md-body value-muted">Select at least one machine to build a pick list.</p>
     } @else if (loadState.loadFailed) {
       <p class="text-md-body text-md-danger-text">Failed to load the pick list. Change your selection or click Apply to try again.</p>

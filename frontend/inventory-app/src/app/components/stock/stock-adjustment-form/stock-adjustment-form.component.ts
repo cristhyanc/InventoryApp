@@ -32,7 +32,14 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
   /** The product the adjustment is recorded against. */
   @Input({ required: true }) productId!: number;
 
-  /** The machines an adjustment may be attributed to; the page already loads them for its filters. */
+  /**
+   * The machines an adjustment may be attributed to; the page already loads them for its filters.
+   *
+   * An **empty** list is "no machine list is available" (issue #728): the page passes `[]` both for
+   * a business whose provider cannot list machines and for a machine read that failed, and in
+   * either case there is nothing to attribute an adjustment to. The field is hidden rather than
+   * offering "— None —" alone, and {@link machineFieldShown} is the one place that is decided.
+   */
   @Input() machines: Machine[] = [];
 
   /** Raised after the existing adjustment endpoint accepted a movement, so the page can reload. */
@@ -88,6 +95,16 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     if (changes['productId'] && !changes['productId'].firstChange) {
       this.reset();
     }
+    // A machine the field can no longer offer must not stay staged on the form: the list going
+    // away means the page can no longer list machines at all.
+    if (changes['machines'] && !this.machineFieldShown) {
+      this.form.machineId = null;
+    }
+  }
+
+  /** Whether a machine may be attributed at all; see {@link machines}. */
+  get machineFieldShown(): boolean {
+    return this.machines.length > 0;
   }
 
   get requiresRestockCost(): boolean {

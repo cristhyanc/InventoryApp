@@ -3,6 +3,7 @@ import { of } from 'rxjs';
 import { TransactionSalesReportComponent } from './transaction-sales-report.component';
 import { ReportingService, TransactionSalesReport, TransactionSalesRow } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
+import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 
 function row(overrides: Partial<TransactionSalesRow> = {}): TransactionSalesRow {
@@ -48,7 +49,8 @@ async function render(rows: TransactionSalesRow[]) {
     imports: [TransactionSalesReportComponent],
     providers: [
       { provide: ReportingService, useValue: { transactions: jest.fn(() => of(report(rows))) } },
-      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } }
+      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
+      provideNayaxConnectionStatus()
     ]
   }).compileComponents();
 

@@ -8,8 +8,26 @@ import { MachineService } from '../../services/machine.service';
 import { Supplier, Machine } from '../../models/models';
 import { ObjectUrlCache } from '../shared/object-url-cache';
 import { IconComponent } from '../shared/icon.component';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
+import { loadProviderList } from '../../provider/provider-list-load';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
+/**
+ * Operating Expenses: the manual expenses a business records itself.
+ *
+ * **Nothing on this page needs Nayax to work, and without Nayax it stops mentioning it** (issue
+ * #728, decision P9 of issue #329). Two things depend on the provider, for two different reasons:
+ *
+ * - The **machine** field attributes an expense to one machine, so it needs a machine list. It is
+ *   loaded through `loadProviderList`, which keeps "the provider cannot list machines", "the
+ *   machine read failed" and "this business has no machines" apart; the field is hidden for the
+ *   first and the third, and the second reports itself where the field was.
+ * - The **"Nayax monthly fee"** category and the Nayax wording in the page subtitle need only Nayax
+ *   to be part of this business. Without it the category is not offered for a **new** expense and
+ *   the subtitle drops the Nayax sentence - but an expense already recorded under it keeps it, in
+ *   the table, in the filter and on the edit form, because a recorded expense is a fact about the
+ *   past and this page must never quietly reclassify one.
+ */
 @Component({
   selector: 'app-operating-expense',
   standalone: true,
@@ -19,7 +37,7 @@ import { SupportSessionService } from '../../support-session/support-session.ser
       <header class="page-header">
         <div>
           <h1 class="page-title">Operating Expenses</h1>
-          <p class="page-subtitle">Manual expenses only. Nayax processing, commissions, delivery and packaging remain separately sourced.</p>
+          <p class="page-subtitle" data-testid="expenses-subtitle">{{ subtitle }}</p>
         </div>
         <div class="page-actions">
           @if (!sessionActive) {
@@ -79,7 +97,7 @@ import { SupportSessionService } from '../../support-session/support-session.ser
               <label class="field">
                 <span class="field-label">Category</span>
                 <select [(ngModel)]="form.category">
-                  @for (category of categories; track category) {
+                  @for (category of formCategories; track category) {
                     <option [ngValue]="category">{{ categoryLabel(category) }}</option>
                   }
                 </select>
@@ -109,15 +127,22 @@ import { SupportSessionService } from '../../support-session/support-session.ser
                   }
                 </select>
               </label>
-              <label class="field">
-                <span class="field-label">Machine (optional)</span>
-                <select [(ngModel)]="form.machineId">
-                  <option [ngValue]="null">None</option>
-                  @for (machine of machines; track machine.machineID) {
-                    <option [ngValue]="machine.machineID">{{ machine.machineName || machine.machineNumber || machine.machineID }}</option>
-                  }
-                </select>
-              </label>
+              @if (machinesError) {
+                <div class="field">
+                  <span class="field-label">Machine (optional)</span>
+                  <p data-testid="machine-field-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
+                </div>
+              } @else if (machineFieldShown) {
+                <label class="field">
+                  <span class="field-label">Machine (optional)</span>
+                  <select [(ngModel)]="form.machineId">
+                    <option [ngValue]="null">None</option>
+                    @for (machine of machines; track machine.machineID) {
+                      <option [ngValue]="machine.machineID">{{ machine.machineName || machine.machineNumber || machine.machineID }}</option>
+                    }
+                  </select>
+                </label>
+              }
               <label class="field">
                 <span class="field-label">Supporting Document</span>
                 <span class="field-hint">Receipt, invoice or other supporting document</span>
@@ -222,6 +247,10 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
    * `SupportSessionService.active$`.
    */
   sessionActive = false;
+  /** Set when the machine list could not be read for a reason that is not an availability answer. */
+  machinesError = '';
+  /** Whether Nayax is part of this business at all; the Nayax fee category and subtitle need it. */
+  providerRecordsAvailable = true;
   // Supporting documents are protected by the API, so they are fetched through HttpClient
   // (which attaches the bearer token) and opened from a temporary object URL.
   private readonly objectUrls = new ObjectUrlCache();
@@ -230,11 +259,47 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
     public service: OperatingExpenseService,
     private supplierService: SupplierService,
     private machineService: MachineService,
+    private provider: ProviderAvailabilityService,
     supportSession: SupportSessionService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
   }
-  ngOnInit(): void { this.load(); this.supplierService.getAll().subscribe(x => this.suppliers = x); this.machineService.getAll().subscribe(x => this.machines = x); }
+  ngOnInit(): void {
+    this.load();
+    this.supplierService.getAll().subscribe(x => this.suppliers = x);
+    loadProviderList(this.provider, 'liveFleet', () => this.machineService.getAll()).subscribe(outcome => {
+      this.machines = outcome.kind === 'listed' ? outcome.items : [];
+      this.machinesError = outcome.kind === 'failed'
+        ? 'The machine list could not be loaded, so an expense cannot be attributed to a machine.'
+        : '';
+    });
+    this.provider.feature('providerRecords').subscribe(available => (this.providerRecordsAvailable = available));
+  }
+
+  /** The page's own wording: without Nayax it describes only what this business does record. */
+  get subtitle(): string {
+    return this.providerRecordsAvailable
+      ? 'Manual expenses only. Nayax processing, commissions, delivery and packaging remain separately sourced.'
+      : 'Manual expenses only. Commissions, delivery and packaging remain separately sourced.';
+  }
+
+  /**
+   * The categories the form offers. Without a provider the Nayax monthly fee is not one of them -
+   * there is no Nayax account to be billed by - unless the expense being edited already carries it,
+   * because dropping the category an existing expense is recorded under would silently reclassify
+   * it the next time somebody saved the form.
+   */
+  get formCategories(): OperatingExpenseCategory[] {
+    if (this.providerRecordsAvailable || this.form.category === OperatingExpenseCategory.NayaxMonthlyFee) {
+      return this.categories;
+    }
+    return this.categories.filter(category => category !== OperatingExpenseCategory.NayaxMonthlyFee);
+  }
+
+  /** Whether an expense may be attributed to a machine at all: only when machines can be listed. */
+  get machineFieldShown(): boolean {
+    return this.machines.length > 0;
+  }
   ngOnDestroy(): void { this.objectUrls.releaseAll(); this.sessionActiveSubscription.unsubscribe(); }
   viewAttachment(expense: OperatingExpense): void {
     this.service.getAttachment(expense.id).subscribe({

@@ -3,12 +3,13 @@ import { of } from 'rxjs';
 import { DailyReportComponent } from './daily-report.component';
 import { ReportingService } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
+import { providerAvailabilityDouble } from '../../provider/provider-availability.spec-helpers';
 
 function createComponent(): DailyReportComponent {
   const route = {} as unknown as ActivatedRoute;
   const reports = {} as unknown as ReportingService;
   const machines = { getAll: () => of([]) } as unknown as MachineService;
-  return new DailyReportComponent(route, reports, machines);
+  return new DailyReportComponent(route, reports, machines, providerAvailabilityDouble());
 }
 
 describe('DailyReportComponent reconciliationStatusClass (issue #419 Material restyle)', () => {

@@ -8,6 +8,7 @@ import {
   BookkeepingReport, GstReport, ReportAvailability, ReportProviderAvailability, ReportingService,
 } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
+import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 
 /**
  * Issue #730 (parent #329 decision P9): both reports show the four availability states beside the
@@ -80,7 +81,8 @@ async function renderBookkeeping(value: BookkeepingReport) {
     providers: [
       { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: new Map() } } },
       { provide: ReportingService, useValue: { bookkeeping: jest.fn(() => of(value)) } },
-      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } }
+      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
+      provideNayaxConnectionStatus()
     ]
   }).compileComponents();
 
@@ -241,7 +243,8 @@ async function renderGst(value: GstReport) {
     providers: [
       { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: new Map() } } },
       { provide: ReportingService, useValue: { gst: jest.fn(() => of(value)) } },
-      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } }
+      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
+      provideNayaxConnectionStatus()
     ]
   }).compileComponents();
 

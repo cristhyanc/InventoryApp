@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { ActivatedRoute } from '@angular/router';
 import { Observable } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { ReportingFilter, ReportingService, MachineReport } from '../../services/reporting.service';
 import { ReportPageBase } from './report-page.base';
 import { ReportFiltersComponent } from './report-filters.component';
@@ -17,7 +18,7 @@ import { IconComponent } from '../shared/icon.component';
       <button type="button" class="btn btn-sm btn-secondary" (click)="export('xlsx','machine-profitability')"><app-icon name="download" [size]="18" />Export XLSX</button>
     </div>
   </header>
-  <app-report-filters [from]="from" [to]="to" [machineId]="machineId" [machines]="machines" [period]="period" (fromChange)="from=$event" (toChange)="to=$event" (machineChange)="machineId=$event" (periodChange)="selectPeriod($event)" (apply)="load()" />
+  <app-report-filters [from]="from" [to]="to" [machineId]="machineId" [machines]="machines" [machinesError]="machinesError" [period]="period" (fromChange)="from=$event" (toChange)="to=$event" (machineChange)="machineId=$event" (periodChange)="selectPeriod($event)" (apply)="load()" />
   @if (loading) { <div class="card"><div class="card-body text-center"><span class="value-muted">Loading report...</span></div></div> }
   @else if (error) { <div class="alert alert-danger">{{ error }}</div> }
   @else if (report) {
@@ -27,6 +28,6 @@ import { IconComponent } from '../shared/icon.component';
 </div>
 ` })
 export class MachineReportComponent extends ReportPageBase<MachineReport> {
-  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService) { super(route, reports, machines); }
+  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, provider: ProviderAvailabilityService) { super(route, reports, machines, provider); }
   request(filter: ReportingFilter): Observable<MachineReport> { return this.reports.machines(filter); }
 }

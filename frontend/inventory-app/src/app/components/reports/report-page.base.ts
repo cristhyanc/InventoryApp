@@ -4,8 +4,14 @@ import { Observable } from 'rxjs';
 import { Machine } from '../../models/models';
 import { MachineService } from '../../services/machine.service';
 import { ReportAvailability } from '../../features/reports/shared/models/reporting.models';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
+import { loadProviderList } from '../../provider/provider-list-load';
 import { ReportingFilter, ReportingService } from '../../services/reporting.service';
 import { availabilityBadge, money, moneyOrState, moneyOrUnavailable, percentOrState, percentOrUnavailable } from './report-formatting';
+
+/** The one sentence every report page shows when its machine filter could not be read. */
+export const REPORT_MACHINE_FILTER_ERROR =
+  'The machine list could not be loaded, so this report cannot be narrowed to one machine.';
 
 @Directive()
 export abstract class ReportPageBase<T> implements OnInit {
@@ -15,16 +21,29 @@ export abstract class ReportPageBase<T> implements OnInit {
   to = this.isoDate(new Date());
   machineId: number | null = null;
   machines: Machine[] = [];
+
+  /**
+   * Set when the machine list could not be read for a reason that is not an availability answer
+   * (issue #728). The filter is replaced by this sentence rather than silently reporting on the
+   * whole business, which a machine filter nobody could populate would otherwise do.
+   */
+  machinesError = '';
+
   period = 'thisMonth';
   report: T | null = null;
 
   protected constructor(
     protected route: ActivatedRoute,
     protected reports: ReportingService,
-    protected machineService: MachineService) {}
+    protected machineService: MachineService,
+    /** The shared provider-availability signal (issue #728). */
+    protected provider: ProviderAvailabilityService) {}
 
   ngOnInit(): void {
-    this.machineService.getAll().subscribe({ next: machines => this.machines = machines ?? [], error: () => this.machines = [] });
+    loadProviderList(this.provider, 'liveFleet', () => this.machineService.getAll()).subscribe(outcome => {
+      this.machines = outcome.kind === 'listed' ? outcome.items : [];
+      this.machinesError = outcome.kind === 'failed' ? REPORT_MACHINE_FILTER_ERROR : '';
+    });
     this.load();
   }
 

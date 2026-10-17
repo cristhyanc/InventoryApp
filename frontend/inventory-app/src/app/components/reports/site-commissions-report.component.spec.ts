@@ -3,6 +3,7 @@ import { Observable, of } from 'rxjs';
 import { SiteCommissionsReportComponent } from './site-commissions-report.component';
 import { ReportingService, SiteCommissionReport, SiteCommissionRow } from '../../services/reporting.service';
 import { SiteService } from '../../services/site.service';
+import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
 function row(overrides: Partial<SiteCommissionRow> = {}): SiteCommissionRow {
@@ -47,7 +48,8 @@ async function render(overrides: { sessionActive?: Observable<boolean>; recordCo
         }
       },
       { provide: SiteService, useValue: { getAll: jest.fn(() => of([])) } },
-      { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } }
+      { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
+      provideNayaxConnectionStatus()
     ]
   }).compileComponents();
 

@@ -13,6 +13,8 @@ import {
   StockHistoryPage
 } from '../../models/models';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
+import { loadProviderList } from '../../provider/provider-list-load';
 import { StockAdjustmentFormComponent } from './stock-adjustment-form/stock-adjustment-form.component';
 
 /**
@@ -30,6 +32,18 @@ import { StockAdjustmentFormComponent } from './stock-adjustment-form/stock-adju
  * delegates the manual-adjustment workflow to {@link StockAdjustmentFormComponent}. It applies no
  * inventory or costing rule of its own - date interpretation, ordering, bounding and every stock
  * mutation stay on the backend.
+ *
+ * **Two of its filters depend on the business having a Nayax connection** (issue #728,
+ * decision P9 of issue #329), and each depends on a different thing:
+ *
+ * - The **machine** filter needs a machine list, which today only a live fleet read can produce.
+ *   It is loaded through `loadProviderList`, so a refused read hides the filter, a failed one
+ *   reports its failure where the filter was, and neither is presented as "all machines". It stays
+ *   hidden until machines exist - which is what issue #746 (G2b) is going to change by listing
+ *   locally recorded machines.
+ * - The **"Nayax Sync Restock" source** option needs only Nayax to be part of this business: the
+ *   movements it selects are already recorded locally. A connection that merely needs attention
+ *   keeps it, and the table keeps labelling such a movement whatever the filter offers.
  */
 @Component({
   selector: 'app-stock-history-page',
@@ -71,16 +85,23 @@ export class StockHistoryPageComponent implements OnInit {
     { value: StockAdjustmentReason.MachineRefill, label: 'Machine refill' }
   ];
 
-  sourceOptions = [
+  private readonly allSourceOptions = [
     { value: StockAdjustmentSource.Manual, label: 'Manual' },
     { value: StockAdjustmentSource.Nayax, label: 'Nayax Sync Restock' }
   ];
+
+  /** Set when the machine list could not be read for a reason that is not an availability answer. */
+  machinesError = '';
+
+  /** Whether Nayax is part of this business at all; only the source filter depends on it. */
+  providerRecordsAvailable = true;
 
   constructor(
     private route: ActivatedRoute,
     private stockService: StockService,
     private productService: ProductService,
-    private machineService: MachineService
+    private machineService: MachineService,
+    private provider: ProviderAvailabilityService
   ) {}
 
   ngOnInit(): void {
@@ -89,11 +110,35 @@ export class StockHistoryPageComponent implements OnInit {
       next: (products) => (this.products = products || []),
       error: () => (this.products = [])
     });
-    this.machineService.getAll().subscribe({
-      next: (machines) => (this.machines = machines || []),
-      error: () => (this.machines = [])
-    });
+    this.loadMachines();
+    this.provider
+      .feature('providerRecords')
+      .subscribe((available) => (this.providerRecordsAvailable = available));
     this.load();
+  }
+
+  /** The source filter offers the Nayax source only while Nayax is part of this business. */
+  get sourceOptions(): { value: StockAdjustmentSource; label: string }[] {
+    return this.providerRecordsAvailable
+      ? this.allSourceOptions
+      : this.allSourceOptions.filter((option) => option.value !== StockAdjustmentSource.Nayax);
+  }
+
+  /**
+   * Whether the machine filter is offered at all: only once there are machines to filter by. A
+   * failed read is reported in its place instead ({@link machinesError}), and a business with no
+   * provider - and so no machine list - simply has no machine filter.
+   */
+  get machineFilterShown(): boolean {
+    return this.machinesError === '' && this.machines.length > 0;
+  }
+
+  private loadMachines(): void {
+    loadProviderList(this.provider, 'liveFleet', () => this.machineService.getAll()).subscribe((outcome) => {
+      this.machines = outcome.kind === 'listed' ? outcome.items : [];
+      this.machinesError =
+        outcome.kind === 'failed' ? 'The machine list could not be loaded, so machines cannot be filtered.' : '';
+    });
   }
 
   /**
