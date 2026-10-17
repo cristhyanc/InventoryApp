@@ -3,8 +3,7 @@ import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { ConfigService } from './config.service';
 import {
-  NayaxProcessingFeeResult, ReportAvailability, ReportAvailabilityState, ReportProviderAvailability,
-  ReportQuality, ReportingFilter,
+  NayaxProcessingFeeResult, ReportQuality, ReportingFilter,
 } from '../features/reports/shared/models/reporting.models';
 import { BookkeepingReport } from '../features/reports/bookkeeping/models/bookkeeping-report.model';
 import { DashboardReport } from '../features/reports/dashboard/models/dashboard-report.model';
@@ -20,9 +19,11 @@ import {
   TransactionSalesRow, TransactionSalesTotals,
 } from '../features/reports/transactions/models/transaction-sales-report.model';
 
+export type {
+  ReportAvailability, ReportAvailabilityState, ReportProviderAvailability,
+} from '../features/reports/shared/models/reporting.models';
 export {
   ReportingFilter, ReportQuality, NayaxProcessingFeeResult,
-  ReportAvailabilityState, ReportAvailability, ReportProviderAvailability,
   BookkeepingReport, DashboardReport, DailyRow, DailyTotals, DailyReport,
   ReconciliationPeriod, ReconciliationTotals, ReconciliationReport,
   MachineRow, MachineReport, ProductRow, ProductReport, GstReport,
