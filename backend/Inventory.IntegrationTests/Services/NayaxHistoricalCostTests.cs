@@ -10,6 +10,7 @@ using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Application.SalesSync;
+using InventoryApi.Tests.Application.Providers;
 using InventoryApi.Tests.Application.SalesSync;
 using Inventory.Application.Commissions;
 using Inventory.Application.Imports;
@@ -448,7 +449,8 @@ public class NayaxHistoricalCostTests
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db),
-            new Mock<IRebuildProductCost>().Object);
+            new Mock<IRebuildProductCost>().Object,
+            new FakeProviderDataCoverageStore());
 
     private static NayaxSales Sale(long id, long productId, decimal? nayaxCost, string paymentMethod) =>
         new()

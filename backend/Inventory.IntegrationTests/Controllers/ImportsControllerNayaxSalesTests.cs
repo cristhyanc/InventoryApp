@@ -4,6 +4,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Imports;
 using Inventory.Application.Time;
 using InventoryApi.Controllers;
+using InventoryApi.Tests.Application.Providers;
 using InventoryApi.Tests.Swagger;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -128,9 +129,12 @@ public class ImportsControllerNayaxSalesTests
                 Mock.Of<Inventory.Application.Nayax.INayaxLynxClient>(),
                 Mock.Of<INayaxProductCatalogImportStore>(),
                 Mock.Of<IClock>()),
-            new ImportNayaxSales(reader, store, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>()),
+            new ImportNayaxSales(
+                reader, store, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>(),
+                new FakeProviderDataCoverageStore()),
             new ImportPendingReimbursementXmlFiles(
                 Mock.Of<IPendingReimbursementXmlSource>(),
                 Mock.Of<IImportedReimbursementStore>(),
-                Mock.Of<IClock>()));
+                Mock.Of<IClock>(),
+                new FakeProviderDataCoverageStore()));
 }

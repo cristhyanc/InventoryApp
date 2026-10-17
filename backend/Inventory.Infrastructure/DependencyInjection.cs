@@ -22,6 +22,7 @@ using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.Products;
+using Inventory.Application.Providers;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
@@ -237,6 +238,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
         services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
         services.AddScoped<INayaxSalesImportStore, EfNayaxSalesImportStore>();
+        services.AddScoped<IProviderDataCoverageStore, EfProviderDataCoverageStore>();
         services.AddScoped<IDashboardSummarySalesFactsProvider, EfDashboardSummarySalesFactsProvider>();
 
         return services;

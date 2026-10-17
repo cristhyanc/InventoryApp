@@ -1394,6 +1394,39 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("ProductExternalIds");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderDataCoverage", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("FromUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Source")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("ToUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "Provider", "Source", "FromUtc");
+
+                    b.ToTable("ProviderDataCoverages");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.Purchase", b =>
                 {
                     b.Property<int>("Id")

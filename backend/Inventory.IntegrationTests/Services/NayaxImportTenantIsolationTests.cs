@@ -3,6 +3,7 @@ using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Providers;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -174,6 +175,7 @@ public sealed class NayaxImportTenantIsolationTests : IDisposable
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db, rebuild),
-            rebuild);
+            rebuild,
+            new FakeProviderDataCoverageStore());
     }
 }

@@ -8,6 +8,7 @@ using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
+using InventoryApi.Tests.Application.Providers;
 using InventoryApi.Tests.Application.Tenancy;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
@@ -430,7 +431,8 @@ public class NayaxSaleTimestampRepairReconciliationTests : IDisposable
                 new ClosedXmlNayaxSalesWorkbookReader(),
                 new EfNayaxSalesImportStore(db),
                 TestCostingUseCases.CostSale(db, rebuild),
-                rebuild)
+                rebuild,
+                new FakeProviderDataCoverageStore())
             .Handle(ExportCovering(_cohorts.Where(cohort => cohort.StoredUtc is null)));
 
         Assert.Equal(new NayaxSalesImportResult(38, 0, 0), result);

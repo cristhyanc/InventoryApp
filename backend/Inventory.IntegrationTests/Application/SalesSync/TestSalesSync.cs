@@ -1,6 +1,7 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.SalesSync;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Providers;
 using InventoryApi.Tests.Application.Time;
 
 namespace InventoryApi.Tests.Application.SalesSync;
@@ -24,10 +25,16 @@ internal static class TestSalesSync
     internal static SyncLatestNayaxSales UseCase(
         INayaxLynxClient nayax,
         ILatestNayaxSalesStore store,
-        FakeClock? clock = null) =>
-        new(
+        FakeClock? clock = null,
+        FakeProviderDataCoverageStore? coverage = null)
+    {
+        var sharedClock = clock ?? new FakeClock(FixedNow);
+        return new SyncLatestNayaxSales(
             nayax,
             store,
-            new NayaxSalesSyncRateLimiter(clock ?? new FakeClock(FixedNow)),
-            new FakeCurrentBusinessProvider(BusinessId));
+            new NayaxSalesSyncRateLimiter(sharedClock),
+            new FakeCurrentBusinessProvider(BusinessId),
+            coverage ?? new FakeProviderDataCoverageStore(),
+            sharedClock);
+    }
 }

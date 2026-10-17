@@ -6,6 +6,7 @@ using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Providers;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -344,7 +345,8 @@ public class ImportNayaxSalesTests
                     reader.Object,
                     new EfNayaxSalesImportStore(db),
                     TestCostingUseCases.CostSale(db),
-                    Mock.Of<IRebuildProductCost>())
+                    Mock.Of<IRebuildProductCost>(),
+                    new FakeProviderDataCoverageStore())
                 .Handle(new NayaxSalesFileInput(fileName, () => new MemoryStream())));
 
         Assert.Equal("Only .xlsx, .xls, or .csv files are supported.", exception.Message);
@@ -365,7 +367,8 @@ public class ImportNayaxSalesTests
                 reader.Object,
                 new EfNayaxSalesImportStore(db),
                 TestCostingUseCases.CostSale(db),
-                Mock.Of<IRebuildProductCost>())
+                Mock.Of<IRebuildProductCost>(),
+                new FakeProviderDataCoverageStore())
             .Handle(new NayaxSalesFileInput(fileName, () => new MemoryStream()));
 
         Assert.Equal(new NayaxSalesImportResult(0, 0, 0), result);
@@ -384,7 +387,8 @@ public class ImportNayaxSalesTests
         reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>())).Returns([]);
 
         var result = await new ImportNayaxSales(
-                reader.Object, store.Object, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>())
+                reader.Object, store.Object, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>(),
+                new FakeProviderDataCoverageStore())
             .Handle(Csv("TransactionID,MachineID,MachineAuthorizationTime"));
 
         Assert.Equal(new NayaxSalesImportResult(0, 0, 0), result);
@@ -405,7 +409,8 @@ public class ImportNayaxSalesTests
             .Returns([new NayaxSalesImportRow(0, 0, null, null, null, null, 0m, null, null, null)]);
 
         var result = await new ImportNayaxSales(
-                reader.Object, store.Object, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>())
+                reader.Object, store.Object, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>(),
+                new FakeProviderDataCoverageStore())
             .Handle(Csv("ignored"));
 
         Assert.Equal(new NayaxSalesImportResult(0, 0, 1), result);
@@ -432,14 +437,16 @@ public class ImportNayaxSalesTests
     /// The use case over its real workbook reader and its real EF store, with the real costing
     /// use cases over the same context - the wiring the production container builds.
     /// </summary>
-    private static ImportNayaxSales CreateSalesImport(AppDbContext db, IRebuildProductCost? rebuild = null)
+    private static ImportNayaxSales CreateSalesImport(
+        AppDbContext db, IRebuildProductCost? rebuild = null, FakeProviderDataCoverageStore? coverage = null)
     {
         var costRebuild = rebuild ?? TestCostingUseCases.Rebuild(db);
         return new ImportNayaxSales(
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db, costRebuild),
-            costRebuild);
+            costRebuild,
+            coverage ?? new FakeProviderDataCoverageStore());
     }
 
     private static NayaxSalesFileInput Csv(string content) =>

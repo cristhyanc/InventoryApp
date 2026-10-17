@@ -1,5 +1,6 @@
 using Inventory.Application.Imports;
 using Inventory.Application.Time;
+using InventoryApi.Tests.Application.Providers;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Imports;
@@ -147,7 +148,7 @@ public class ImportPendingReimbursementXmlFilesTests
         source.Add("august.xml", File("hash-a", reimbursements: 1));
         var store = new FakeStore();
 
-        await new ImportPendingReimbursementXmlFiles(source, store, new FixedClock(ImportedAt))
+        await new ImportPendingReimbursementXmlFiles(source, store, new FixedClock(ImportedAt), new FakeProviderDataCoverageStore())
             .Handle(cancellation.Token);
 
         Assert.Equal(cancellation.Token, source.ObservedToken);
@@ -155,7 +156,7 @@ public class ImportPendingReimbursementXmlFilesTests
     }
 
     private static Task<ImportedFileImportResult> Import(FakeSource source, FakeStore store) =>
-        new ImportPendingReimbursementXmlFiles(source, store, new FixedClock(ImportedAt))
+        new ImportPendingReimbursementXmlFiles(source, store, new FixedClock(ImportedAt), new FakeProviderDataCoverageStore())
             .Handle(CancellationToken.None);
 
     private static PendingReimbursementXmlFile File(string hash, int reimbursements) =>

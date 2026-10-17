@@ -5,6 +5,7 @@ using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Providers;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -41,7 +42,8 @@ public class NayaxTransactionStatusTests
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db),
-            Mock.Of<IRebuildProductCost>());
+            Mock.Of<IRebuildProductCost>(),
+            new FakeProviderDataCoverageStore());
 
         await import.Handle(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,55,10,5,2/9/2026 2:30:00 PM"));
         await import.Handle(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,12,10,5,2/9/2026 2:30:00 PM"));
