@@ -7,7 +7,8 @@ import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
-import { Product, Category, Supplier } from '../../models/models';
+import { Product, Category, ReorderMode, Supplier } from '../../models/models';
+import { NayaxUnavailability, storageOnlyReorderLabel } from '../../provider/nayax-availability';
 import { ListLoadState } from '../shared/list-load-state';
 import { createFilterTrigger$ } from '../shared/filter-request-trigger';
 import { SortDirection, SortValue, compareSortValues, nextSortState, sortAriaState, sortColumnLabel } from '../shared/sortable-column';
@@ -64,6 +65,16 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
    */
   sessionActive = false;
 
+  /**
+   * Which facts the listed alerts were calculated from, and - in storage-only mode - why the
+   * machines are missing from them, as `GET /api/products/alerts/low-stock` published them beside
+   * the rows (issue #726, presented by issue #727). Nayax is an optional add-on, so a business with
+   * no usable connection gets this page in full, calculated from its own storage data, and labelled
+   * so a storage-only figure is never read as a machine-aware one.
+   */
+  reorderMode: ReorderMode | null = null;
+  machineNeedUnavailableReason: NayaxUnavailability | null = null;
+
   private readonly search$ = new Subject<string>();
   private readonly immediateFilter$ = new Subject<void>();
   private readonly destroy$ = new Subject<void>();
@@ -108,9 +119,11 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
 
     const token = this.loadState.start();
     return this.productService.getLowStock(filters).pipe(
-      tap((products) => {
+      tap((listing) => {
         if (this.loadState.isCurrent(token)) {
-          this.products = products;
+          this.products = listing.products;
+          this.reorderMode = listing.mode;
+          this.machineNeedUnavailableReason = listing.machineNeedUnavailableReason;
         }
         this.loadState.succeed(token);
       }),
@@ -120,6 +133,26 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
         return EMPTY;
       })
     );
+  }
+
+  /**
+   * The label a storage-only list carries, or `null` in machine-aware mode and for a listing that
+   * published no mode at all (issue #727). It is shown for an empty list too: "nothing needs
+   * ordering" means something different when the machines' current need was never read.
+   */
+  get storageOnlyNote(): string | null {
+    return this.reorderMode === 'StorageOnly'
+      ? storageOnlyReorderLabel(this.machineNeedUnavailableReason)
+      : null;
+  }
+
+  /**
+   * Whether the Machine need column may be shown. In storage-only mode it may not:
+   * `machineReplenishmentNeed` is `0` there because nobody read the machines, and a column of
+   * zeroes would state that the machines need nothing.
+   */
+  get isMachineNeedShown(): boolean {
+    return this.reorderMode !== 'StorageOnly';
   }
 
   onSearchChange(value: string): void {

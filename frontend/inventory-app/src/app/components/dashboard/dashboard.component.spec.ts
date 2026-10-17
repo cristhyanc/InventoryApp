@@ -3,7 +3,15 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
 import { Observable, Subject, of, throwError } from 'rxjs';
 import { DashboardComponent } from './dashboard.component';
-import { DashboardSalesThisWeek, DashboardSummary, Machine, Product, Site } from '../../models/models';
+import {
+  DashboardOrderingSummary,
+  DashboardSalesThisWeek,
+  DashboardSummary,
+  Machine,
+  Product,
+  ReorderAlertListing,
+  Site
+} from '../../models/models';
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
@@ -46,7 +54,8 @@ const SUMMARY: DashboardSummary = {
   },
   needsOrdering: {
     productsNeedingOrdering: 4,
-    productsEvaluated: 50
+    productsEvaluated: 50,
+    mode: 'MachineAware'
   },
   inventory: {
     inventoryValueAtCost: 1234.56,
@@ -57,19 +66,28 @@ const SUMMARY: DashboardSummary = {
   }
 };
 
+/**
+ * The reorder-alert listing these tests are about: the rows, in the machine-aware mode a business
+ * with a usable provider gets (issue #726's metadata, presented by #727). The storage-only mode and
+ * its label are `dashboard.component.provider-optional.spec.ts`'s.
+ */
+function machineAwareAlerts(products: Product[]): ReorderAlertListing {
+  return { products, mode: 'MachineAware', machineNeedUnavailableReason: null };
+}
+
 function createComponent(
   summary$: Observable<DashboardSummary>,
   overrides: {
     syncLatest?: () => Observable<void>;
     getAllMachines?: () => Observable<Machine[]>;
     getAllSites?: () => Observable<Site[]>;
-    getLowStock?: () => Observable<Product[]>;
+    getLowStock?: () => Observable<ReorderAlertListing>;
     sessionActive?: Observable<boolean>;
     canViewFinancials?: boolean;
   } = {}
 ): DashboardComponent {
   const productService = {
-    getLowStock: overrides.getLowStock ?? (() => of([]))
+    getLowStock: overrides.getLowStock ?? (() => of(machineAwareAlerts([])))
   } as unknown as ProductService;
   const machineService = { getAll: overrides.getAllMachines ?? (() => of([])) } as unknown as MachineService;
   const siteService = { getAll: overrides.getAllSites ?? (() => of([])) } as unknown as SiteService;
@@ -288,7 +306,7 @@ describe('DashboardComponent needs ordering supporting detail', () => {
 
   it('reports every product adequately stocked distinctly from zero products', () => {
     const component = createComponent(of(SUMMARY));
-    const ordering = { productsNeedingOrdering: 0, productsEvaluated: 50 };
+    const ordering: DashboardOrderingSummary = { productsNeedingOrdering: 0, productsEvaluated: 50, mode: 'MachineAware' };
 
     expect(component.orderingFooterText(ordering)).toBe('All 50 products adequately stocked');
     expect(component.orderingFooterClass(ordering)).toBe('value-positive');
@@ -296,7 +314,7 @@ describe('DashboardComponent needs ordering supporting detail', () => {
 
   it('reports an empty catalogue distinctly', () => {
     const component = createComponent(of(SUMMARY));
-    const ordering = { productsNeedingOrdering: 0, productsEvaluated: 0 };
+    const ordering: DashboardOrderingSummary = { productsNeedingOrdering: 0, productsEvaluated: 0, mode: 'MachineAware' };
 
     expect(component.orderingFooterText(ordering)).toBe('No products in the catalogue yet');
     expect(component.orderingFooterClass(ordering)).toBe('value-muted');
@@ -457,7 +475,7 @@ async function renderDashboard(
     imports: [DashboardComponent],
     providers: [
       provideRouter([]),
-      { provide: ProductService, useValue: { getLowStock: () => of(overrides.products ?? []) } },
+      { provide: ProductService, useValue: { getLowStock: () => of(machineAwareAlerts(overrides.products ?? [])) } },
       { provide: MachineService, useValue: { getAll: () => of(overrides.machines ?? []) } },
       { provide: SiteService, useValue: { getAll: () => of(overrides.sites ?? []) } },
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } },

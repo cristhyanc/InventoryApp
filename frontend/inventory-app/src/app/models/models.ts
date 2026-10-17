@@ -1,3 +1,5 @@
+import { NayaxUnavailability } from '../provider/nayax-availability';
+
 export enum StockAdjustmentReason {
   Restock = 0,
   Sale = 1,
@@ -86,6 +88,24 @@ export interface Product {
 }
 
 /**
+ * One reorder-alert listing from `GET /api/products/alerts/low-stock`: the rows, plus the metadata
+ * the endpoint publishes beside them as the `X-Reorder-Mode` and
+ * `X-Reorder-Machine-Need-Unavailable-Reason` response headers (issue #726).
+ *
+ * The metadata belongs to the whole answer rather than to any row, which is exactly why an
+ * **empty** listing still has it: "nothing alerts, machines included" and "nothing alerts on
+ * storage stock, the machines were never read" are different answers. Both fields are `null` for a
+ * response that carried no such header - an older API, or a gateway that did not forward it - and a
+ * screen then shows the rows without claiming a mode (see
+ * `provider/nayax-availability.ts`).
+ */
+export interface ReorderAlertListing {
+  products: Product[];
+  mode: ReorderMode | null;
+  machineNeedUnavailableReason: NayaxUnavailability | null;
+}
+
+/**
  * The Dashboard "Inventory Value" tile's authoritative source: the business-owned perpetual
  * inventory value (cost basis), never retail UnitPrice. `totalInventoryValue` is `null` whenever
  * `isComplete` is `false` - a product with unknown cost must never be presented as a real `$0.00`.
@@ -150,13 +170,30 @@ export interface DashboardRefillSummary {
 }
 
 /**
+ * Which facts a reorder figure accounted for, as `Inventory.Application.Reorder.ReorderModes`
+ * publishes the code (issue #726). `MachineAware` accounted for storage stock, the low-stock
+ * threshold, the restock target, outstanding supplier orders **and** the machines' current
+ * replenishment need; `StorageOnly` accounted for the four local facts with the machines' need
+ * taken as `0`, for a business whose Nayax connection is unusable or whose Nayax account has not
+ * granted the fleet reads.
+ *
+ * A mode is never inferred from a `machineReplenishmentNeed` that happens to be `0`: that `0` means
+ * "the machines need nothing" in one mode and "the machines were never read" in the other.
+ */
+export type ReorderMode = 'StorageOnly' | 'MachineAware';
+
+/**
  * The "Needs ordering" card: the distinct catalogue products the authoritative reorder policy says
  * must be purchased - the same set `GET /api/products/alerts/low-stock` lists for the unnarrowed
  * catalogue. `productsEvaluated` is the whole business-owned catalogue the count was taken over.
+ *
+ * `mode` is which facts that count accounted for and is always present (it is `required` on the
+ * published DTO), so a storage-only count is never read as a machine-aware one.
  */
 export interface DashboardOrderingSummary {
   productsNeedingOrdering: number;
   productsEvaluated: number;
+  mode: ReorderMode;
 }
 
 /**
