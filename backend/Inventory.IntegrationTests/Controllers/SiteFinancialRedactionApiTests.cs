@@ -6,6 +6,7 @@ using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -314,6 +315,16 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
                 LowStockThreshold = 5,
                 RestockTo = 24,
                 AverageUnitCost = AverageUnitCost,
+            });
+
+            // The product's Nayax link (issue #732), without which the machine selection resolves to
+            // no local product at all (issue #733). Every imported product has one in production.
+            db.ProductExternalIds.Add(new ProductExternalId
+            {
+                BusinessId = BusinessId,
+                Provider = ExternalProvider.Nayax,
+                ExternalId = NayaxExternalId.From(ProductId),
+                ProductId = ProductId,
             });
 
             // The effective-dated configuration behind the estimate, so a caller who may see it is

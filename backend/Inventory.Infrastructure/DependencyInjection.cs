@@ -230,6 +230,9 @@ public static class InfrastructureServiceCollectionExtensions
         // What the machine itself reports it is holding (issue #56). Scoped because reading it spends
         // the current business's own Nayax credentials, which are resolved per request.
         services.AddScoped<IMachineStockObservationSource, NayaxMachineStockObservationSource>();
+        // How a Nayax product id becomes a local product id (issue #733): the ProductExternalIds
+        // link table, read by every feature that matches live Nayax machine data to the catalogue.
+        services.AddScoped<INayaxProductLinkStore, EfNayaxProductLinkStore>();
         services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
         services.AddScoped<IPickListStorageStockStore, EfPickListStorageStockStore>();
         services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();

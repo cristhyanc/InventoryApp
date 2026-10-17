@@ -1,6 +1,7 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.PickList;
 using InventoryApi.Controllers;
+using InventoryApi.Tests.Application.Nayax;
 using Moq;
 using Xunit;
 
@@ -20,7 +21,8 @@ public class PickListControllerTests
     public async Task Get_ReturnsBadRequest_WhenNoMachineIdsAreGiven()
     {
         var nayax = new Mock<INayaxLynxClient>(MockBehavior.Strict);
-        var controller = new PickListController(new GetPickList(nayax.Object, EmptyStorage().Object));
+        var controller = new PickListController(new GetPickList(
+            nayax.Object, EmptyStorage().Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()));
 
         var result = await controller.Get([], CancellationToken.None);
 
@@ -39,7 +41,8 @@ public class PickListControllerTests
             {
                 [100] = new PickListStorageProduct(100, "Coke Zero", 50),
             });
-        var controller = new PickListController(new GetPickList(nayax.Object, storage.Object));
+        var controller = new PickListController(new GetPickList(
+            nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()));
 
         var result = await controller.Get([1], CancellationToken.None);
 

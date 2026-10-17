@@ -12,6 +12,7 @@ using InventoryApi.Controllers;
 using InventoryApi.DTOs;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.AspNetCore.Mvc;
@@ -57,8 +58,10 @@ public class MachinesControllerTests
             new ListMachineProducts(
                 nayaxClient,
                 catalog ?? Mock.Of<IProductCatalogStore>(),
+                FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
                 new ResolveMachineProductPricing(NoAgreementSiteFacts(), Time.Calendar)),
-            new SyncMachineStockFromNayax(nayaxClient, store),
+            new SyncMachineStockFromNayax(
+                nayaxClient, store, FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
             new ApplyMachineStockSync(store),
             new ResolveMachineStockDuplicate(store),
             new ResolveMachineStockEventsAsAlreadyRecorded(store),

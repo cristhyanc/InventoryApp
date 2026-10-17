@@ -3,6 +3,7 @@ using Inventory.Application;
 using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
 using Inventory.Infrastructure.Nayax;
+using InventoryApi.Tests.Application.Nayax;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Xunit;
@@ -26,6 +27,15 @@ public class CalculateReorderNeedsTests
         return store;
     }
 
+    /// <summary>
+    /// The Nayax links issue #732's backfill recorded for data that predates the link table: every
+    /// Nayax product id names the local product with the same id. The cases below were written
+    /// against exactly that state, so they keep asserting the same figures;
+    /// <see cref="CalculateReorderNeedsNayaxLinkTests"/> is where the lookup itself is pinned.
+    /// </summary>
+    private static INayaxProductLinkStore IdentityLinks() =>
+        FakeNayaxProductLinkStore.EveryIdLinkedToItself();
+
     private static Mock<INayaxLynxClient> NayaxWithMachines(params long[] machineIds)
     {
         var nayax = new Mock<INayaxLynxClient>();
@@ -38,7 +48,7 @@ public class CalculateReorderNeedsTests
     /// Guards the DI wiring itself: <see cref="CalculateReorderNeeds"/> has a second public
     /// constructor (for the concurrency-bound test above) whose extra <c>int</c> parameter is never
     /// registered as a service. If the DI container ever treated that as ambiguous rather than falling
-    /// back to the two-argument constructor, every consumer resolved through
+    /// back to the three-argument constructor, every consumer resolved through
     /// <c>AddApplicationServices</c> - including <c>ListLowStockProducts</c>, which
     /// <c>ProductsController</c> depends on - would fail at startup.
     /// </summary>
@@ -49,6 +59,7 @@ public class CalculateReorderNeedsTests
         services.AddApplicationServices();
         services.AddScoped(_ => new Mock<INayaxLynxClient>().Object);
         services.AddScoped(_ => EmptyOutstandingStore().Object);
+        services.AddScoped(_ => IdentityLinks());
 
         using var provider = services.BuildServiceProvider();
 
@@ -66,7 +77,7 @@ public class CalculateReorderNeedsTests
         nayax.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MissingStockByMDB = 5 } });
 
-        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object).Handle(CancellationToken.None);
+        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object, IdentityLinks()).Handle(CancellationToken.None);
 
         Assert.Equal(8, result.MachineReplenishmentNeedByProductId[100]);
     }
@@ -82,7 +93,7 @@ public class CalculateReorderNeedsTests
                 new() { NayaxProductID = 100, MissingStockByMDB = 4 },
             });
 
-        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object).Handle(CancellationToken.None);
+        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object, IdentityLinks()).Handle(CancellationToken.None);
 
         Assert.Equal(6, result.MachineReplenishmentNeedByProductId[100]);
     }
@@ -98,7 +109,7 @@ public class CalculateReorderNeedsTests
                 new() { NayaxProductID = 100, MissingStockByMDB = 2 },
             });
 
-        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object).Handle(CancellationToken.None);
+        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object, IdentityLinks()).Handle(CancellationToken.None);
 
         Assert.Single(result.MachineReplenishmentNeedByProductId);
         Assert.Equal(2, result.MachineReplenishmentNeedByProductId[100]);
@@ -126,7 +137,7 @@ public class CalculateReorderNeedsTests
                 new() { NayaxProductID = null, MachineID = 999, PAR = 5, MissingStockByMDB = 5 },
             });
 
-        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object)
+        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object, IdentityLinks())
             .Handle(CancellationToken.None);
 
         Assert.Equal([1L, 2L], result.MachineIds);
@@ -153,7 +164,7 @@ public class CalculateReorderNeedsTests
         nayax.Setup(x => x.GetMachineProductsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>());
 
-        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object)
+        var result = await new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object, IdentityLinks())
             .Handle(CancellationToken.None);
 
         Assert.Equal([1L, 2L], result.MachineIds);
@@ -168,7 +179,7 @@ public class CalculateReorderNeedsTests
         store.Setup(x => x.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<long, decimal> { [7] = 12m });
 
-        var result = await new CalculateReorderNeeds(nayax.Object, store.Object).Handle(CancellationToken.None);
+        var result = await new CalculateReorderNeeds(nayax.Object, store.Object, IdentityLinks()).Handle(CancellationToken.None);
 
         Assert.Equal(12m, result.OnOrderQuantityByProductId[7]);
     }
@@ -185,7 +196,7 @@ public class CalculateReorderNeedsTests
         var store = new Mock<IOutstandingSupplierOrderQuantityStore>(MockBehavior.Strict);
 
         await Assert.ThrowsAsync<NayaxUpstreamException>(
-            () => new CalculateReorderNeeds(nayax.Object, store.Object).Handle(CancellationToken.None));
+            () => new CalculateReorderNeeds(nayax.Object, store.Object, IdentityLinks()).Handle(CancellationToken.None));
 
         store.Verify(
             x => x.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()), Times.Never);
@@ -205,7 +216,7 @@ public class CalculateReorderNeedsTests
             });
 
         await Assert.ThrowsAsync<OperationCanceledException>(
-            () => new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object).Handle(cts.Token));
+            () => new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object, IdentityLinks()).Handle(cts.Token));
     }
 
     /// <summary>
@@ -229,7 +240,8 @@ public class CalculateReorderNeedsTests
         nayax.Setup(x => x.GetMachineProductsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
             .Returns<long, CancellationToken>((_, ct) => tracker.GetMachineProductsAsync(ct));
 
-        var useCase = new CalculateReorderNeeds(nayax.Object, EmptyOutstandingStore().Object, expectedMaxConcurrency);
+        var useCase = new CalculateReorderNeeds(
+            nayax.Object, EmptyOutstandingStore().Object, IdentityLinks(), expectedMaxConcurrency);
         // The use case runs off xUnit's test synchronization context, as it does under ASP.NET Core.
         // Its continuations would otherwise queue for one of xUnit's few test threads, and in the
         // integration test assembly those are often busy with long synchronous SQLite tests, so the

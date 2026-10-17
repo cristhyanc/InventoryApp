@@ -2,6 +2,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
 using InventoryApi.Adapters.Mapping;
+using InventoryApi.Tests.Application.Nayax;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -178,7 +179,9 @@ public class ProductUseCaseTests
     {
         using var db = CreateDbContext("prod_test");
         var calculateReorderNeeds = new CalculateReorderNeeds(
-            new Mock<INayaxLynxClient>().Object, new EfOutstandingSupplierOrderQuantityStore(db));
+            new Mock<INayaxLynxClient>().Object,
+            new EfOutstandingSupplierOrderQuantityStore(db),
+            FakeNayaxProductLinkStore.EveryIdLinkedToItself());
         var useCases = CreateUseCases(db, calculateReorderNeeds);
 
         var created = await useCases.Create.Handle(
@@ -333,7 +336,10 @@ public class ProductUseCaseTests
             });
         nayaxMock.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 1, MissingStockByMDB = 4 } });
-        var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
+        var calculateReorderNeeds = new CalculateReorderNeeds(
+            nayaxMock.Object,
+            new EfOutstandingSupplierOrderQuantityStore(db),
+            FakeNayaxProductLinkStore.EveryIdLinkedToItself());
         var useCases = CreateUseCases(db, calculateReorderNeeds);
 
         var alerts = await useCases.LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
@@ -453,7 +459,10 @@ public class ProductUseCaseTests
         var nayaxMock = new Mock<INayaxLynxClient>();
         nayaxMock.Setup(client => client.GetMachinesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
-        var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
+        var calculateReorderNeeds = new CalculateReorderNeeds(
+            nayaxMock.Object,
+            new EfOutstandingSupplierOrderQuantityStore(db),
+            FakeNayaxProductLinkStore.EveryIdLinkedToItself());
         return CreateUseCases(db, calculateReorderNeeds);
     }
 

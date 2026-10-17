@@ -1,6 +1,7 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
+using InventoryApi.Tests.Application.Nayax;
 using Moq;
 using Xunit;
 
@@ -33,7 +34,8 @@ public class ProductReadUseCaseTests
         outstanding.Setup(store => store.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(onOrderQuantity ?? new Dictionary<long, decimal>());
 
-        return new CalculateReorderNeeds(nayax.Object, outstanding.Object);
+        return new CalculateReorderNeeds(
+            nayax.Object, outstanding.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself());
     }
 
     private static (ListProducts List, ListLowStockProducts LowStock, GetProduct Get) UseCases(

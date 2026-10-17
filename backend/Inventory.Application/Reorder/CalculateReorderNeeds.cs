@@ -13,6 +13,13 @@ namespace Inventory.Application.Reorder;
 /// are keyed by product ID over the whole catalogue/machine fleet, so a caller looks up only the
 /// products it cares about.
 ///
+/// The product ID in both of them is the <em>local</em> one, resolved from the selection's
+/// <c>NayaxProductID</c> through <see cref="INayaxProductLinkStore"/> (issue #733) rather than used
+/// as a local id directly. A selection whose Nayax product this business holds no link for carries
+/// no product id at all, which is the same thing a selection with no <c>NayaxProductID</c> already
+/// carries and is treated identically everywhere downstream: it is not summed into any product's
+/// replenishment need and the Domain refill rules skip it as unmapped.
+///
 /// Issue #459 additionally keeps the individual machine selections that read returned
 /// (<see cref="ReorderNeedsResult.MachineSelections"/>) and the machines it covered
 /// (<see cref="ReorderNeedsResult.MachineIds"/>). Nothing about the reorder aggregation changes: they
@@ -40,26 +47,34 @@ public sealed class CalculateReorderNeeds
 
     private readonly INayaxLynxClient _nayax;
     private readonly IOutstandingSupplierOrderQuantityStore _outstandingOrders;
+    private readonly INayaxProductLinkStore _productLinks;
     private readonly int _maxConcurrentMachineRequests;
 
-    public CalculateReorderNeeds(INayaxLynxClient nayax, IOutstandingSupplierOrderQuantityStore outstandingOrders)
-        : this(nayax, outstandingOrders, MaxConcurrentMachineRequests)
+    public CalculateReorderNeeds(
+        INayaxLynxClient nayax,
+        IOutstandingSupplierOrderQuantityStore outstandingOrders,
+        INayaxProductLinkStore productLinks)
+        : this(nayax, outstandingOrders, productLinks, MaxConcurrentMachineRequests)
     {
     }
 
     /// <summary>
     /// Overload for a caller that needs a specific concurrency bound (tests proving the limit is
-    /// respected). DI resolves the two-argument constructor above, since this one's
+    /// respected). DI resolves the three-argument constructor above, since this one's
     /// <paramref name="maxConcurrentMachineRequests"/> has no registered service to satisfy it.
     /// </summary>
     public CalculateReorderNeeds(
-        INayaxLynxClient nayax, IOutstandingSupplierOrderQuantityStore outstandingOrders, int maxConcurrentMachineRequests)
+        INayaxLynxClient nayax,
+        IOutstandingSupplierOrderQuantityStore outstandingOrders,
+        INayaxProductLinkStore productLinks,
+        int maxConcurrentMachineRequests)
     {
         if (maxConcurrentMachineRequests < 1)
             throw new ArgumentOutOfRangeException(nameof(maxConcurrentMachineRequests), "Must be at least 1.");
 
         _nayax = nayax;
         _outstandingOrders = outstandingOrders;
+        _productLinks = productLinks;
         _maxConcurrentMachineRequests = maxConcurrentMachineRequests;
     }
 
@@ -67,13 +82,12 @@ public sealed class CalculateReorderNeeds
     {
         var machines = await _nayax.GetMachinesAsync(cancellationToken);
 
-        var machineReplenishmentNeedByProductId = new ConcurrentDictionary<long, int>();
-
-        // The individual selections behind those per-product totals, kept from the same read so a
-        // caller that needs the machines' current stock levels - the home Dashboard's refill card
+        // The individual selections behind the per-product totals below, kept from the same read so
+        // a caller that needs the machines' current stock levels - the home Dashboard's refill card
         // (issue #459) - does not fan out across the fleet a second time. A concurrent collection,
-        // because the fan-out below writes to it from several machine requests at once.
-        var selections = new ConcurrentBag<MachineSelectionStock>();
+        // because the fan-out below writes to it from several machine requests at once. They still
+        // carry the remote identity at this point: nothing local has been resolved yet.
+        var fleetSelections = new ConcurrentBag<FleetSelection>();
 
         await Parallel.ForEachAsync(
             machines,
@@ -89,33 +103,67 @@ public sealed class CalculateReorderNeeds
                 {
                     // The machine the request was made for, not the payload's own nullable MachineID
                     // field, so a selection is always attributable to a machine.
-                    selections.Add(new MachineSelectionStock(
+                    fleetSelections.Add(new FleetSelection(
                         machine.MachineID,
                         machineProduct.NayaxProductID,
                         machineProduct.PAR ?? 0,
                         machineProduct.MissingStockByMDB ?? 0,
                         machineProduct.VendOutAlertThreshold ?? 0));
-
-                    if (machineProduct.NayaxProductID is not long productId)
-                        continue;
-
-                    var missingStock = machineProduct.MissingStockByMDB ?? 0;
-                    machineReplenishmentNeedByProductId.AddOrUpdate(
-                        productId, missingStock, (_, existing) => existing + missingStock);
                 }
             });
+
+        // Read after the fan-out has completed, never beside it: this and the outstanding-order read
+        // below land on the request's own scoped AppDbContext, which supports one operation at a time.
+        var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
+            fleetSelections
+                .Where(selection => selection.NayaxProductId.HasValue)
+                .Select(selection => selection.NayaxProductId!.Value)
+                .Distinct()
+                .ToList(),
+            cancellationToken);
+
+        // Ordered, so the same fleet always produces the same result whatever order the concurrent
+        // requests happened to complete in.
+        var selections = fleetSelections
+            .Select(selection => new MachineSelectionStock(
+                selection.MachineId,
+                LocalProductId(selection.NayaxProductId, localProductIdByNayaxId),
+                selection.Par,
+                selection.MissingStockByMdb,
+                selection.VendOutAlertThreshold))
+            .OrderBy(selection => selection.MachineId)
+            .ThenBy(selection => selection.ProductId)
+            .ToList();
+
+        // Summed over the resolved selections, so a selection naming a Nayax product this business
+        // has no link for contributes to no product's replenishment need - exactly as a selection
+        // with no NayaxProductID already contributed to none.
+        var machineReplenishmentNeedByProductId = selections
+            .Where(selection => selection.ProductId.HasValue)
+            .GroupBy(selection => selection.ProductId!.Value)
+            .ToDictionary(group => group.Key, group => group.Sum(selection => selection.MissingStockByMdb));
 
         var onOrderQuantityByProductId = await _outstandingOrders.GetOutstandingQuantitiesByProductAsync(cancellationToken);
 
         return new ReorderNeedsResult(machineReplenishmentNeedByProductId, onOrderQuantityByProductId)
         {
             MachineIds = machines.Select(machine => machine.MachineID).Distinct().Order().ToList(),
-            // Ordered, so the same fleet always produces the same result whatever order the
-            // concurrent requests happened to complete in.
-            MachineSelections = selections
-                .OrderBy(selection => selection.MachineId)
-                .ThenBy(selection => selection.ProductId)
-                .ToList(),
+            MachineSelections = selections,
         };
     }
+
+    private static long? LocalProductId(
+        long? nayaxProductId, IReadOnlyDictionary<long, long> localProductIdByNayaxId) =>
+        nayaxProductId is long id && localProductIdByNayaxId.TryGetValue(id, out var localProductId)
+            ? localProductId
+            : null;
+
+    /// <summary>
+    /// One machine selection as the live fleet read returned it, before any local identity is
+    /// attached. Private, and separate from <see cref="MachineSelectionStock"/>, so a remote
+    /// <c>NayaxProductID</c> can never leave this use case in a field callers read as a local
+    /// product id.
+    /// </summary>
+    private readonly record struct FleetSelection(
+        long MachineId, long? NayaxProductId, int Par, int MissingStockByMdb, int VendOutAlertThreshold);
 }

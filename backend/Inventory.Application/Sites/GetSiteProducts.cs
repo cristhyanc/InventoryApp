@@ -11,6 +11,12 @@ namespace Inventory.Application.Sites;
 /// mappings into one row per catalogue product with an estimated card-sale profit. Mirrors the former
 /// <c>InventoryApi.Services.SiteService.GetProducts</c> exactly (issue #241).
 ///
+/// <para>Each mapping's <c>NayaxProductID</c> is resolved to a local product through
+/// <see cref="INayaxProductLinkStore"/> (issue #733) before any row is built, so the rows, the MDB
+/// code lists and the cost-basis lookup all carry local product ids. A mapping this business holds
+/// no Nayax link for is dropped before the pricing rule sees it, which is where a mapping with no
+/// catalogue cost basis was already dropped.</para>
+///
 /// <para><b>The estimated profit depends on what the request may see (issue #697).</b> The endpoint
 /// requires <c>Inventory.Operate</c> and every role keeps reaching it - the page is how stock and
 /// pricing per site are read - but the estimate additionally needs <c>Dashboard.ViewFinancials</c>.
@@ -31,17 +37,20 @@ public sealed class GetSiteProducts
 {
     private readonly INayaxLynxClient _nayax;
     private readonly ISiteFactsStore _facts;
+    private readonly INayaxProductLinkStore _productLinks;
     private readonly IBusinessCalendar _businessCalendar;
     private readonly CurrentCapabilities _capabilities;
 
     public GetSiteProducts(
         INayaxLynxClient nayax,
         ISiteFactsStore facts,
+        INayaxProductLinkStore productLinks,
         IBusinessCalendar businessCalendar,
         CurrentCapabilities capabilities)
     {
         _nayax = nayax;
         _facts = facts;
+        _productLinks = productLinks;
         _businessCalendar = businessCalendar;
         _capabilities = capabilities;
     }
@@ -79,6 +88,25 @@ public sealed class GetSiteProducts
 
         var machineProducts = machineProductsByMachine.SelectMany(entry => entry.Products).ToList();
 
+        // Read after the fan-out has completed and before the facts reads below, because all of them
+        // land on the request's own scoped AppDbContext, which supports one operation at a time.
+        var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
+            machineProducts.Select(mp => mp.NayaxProductID!.Value).Distinct().ToList(), cancellationToken);
+
+        // Each selection paired with the local product it names. A selection whose Nayax product
+        // this business holds no link for names no product of ours and is dropped here, in the same
+        // order the mappings were read, so the per-product averages and sums are unchanged.
+        var linkedSelections = machineProductsByMachine
+            .SelectMany(entry => entry.Products.Select(mp => (entry.Machine, Product: mp)))
+            .Select(pair => (
+                pair.Machine,
+                pair.Product,
+                LocalProductId: localProductIdByNayaxId.TryGetValue(pair.Product.NayaxProductID!.Value, out var localId)
+                    ? localId
+                    : (long?)null))
+            .Where(pair => pair.LocalProductId.HasValue)
+            .ToList();
+
         // The effective-dated commission and Nayax fee configuration is selected by the business
         // date (issue #310), not the host's local date, exactly as ResolveMachineProductPricing
         // selects it for the machine product listing that shares this port.
@@ -108,18 +136,17 @@ public sealed class GetSiteProducts
             ? await _facts.ResolveEffectiveFeeExGstAsync(today, cancellationToken)
             : null;
 
-        var priceFacts = machineProducts.Select(mp => new SiteProductPriceFact(
-            mp.NayaxProductID!.Value,
-            mp.RetailPrice,
-            mp.RetailPrice.HasValue && commission is not null
-                ? commission.CommissionAmountByRetailPrice.GetValueOrDefault(mp.RetailPrice.Value)
+        var priceFacts = linkedSelections.Select(pair => new SiteProductPriceFact(
+            pair.LocalProductId!.Value,
+            pair.Product.RetailPrice,
+            pair.Product.RetailPrice.HasValue && commission is not null
+                ? commission.CommissionAmountByRetailPrice.GetValueOrDefault(pair.Product.RetailPrice.Value)
                 : 0m,
-            mp.PAR ?? 0,
-            mp.MissingStockByMDB ?? 0));
+            pair.Product.PAR ?? 0,
+            pair.Product.MissingStockByMDB ?? 0));
 
-        var machineMdbCodesByProduct = machineProductsByMachine
-            .SelectMany(entry => entry.Products.Select(mp => (entry.Machine, Product: mp)))
-            .GroupBy(pair => pair.Product.NayaxProductID!.Value)
+        var machineMdbCodesByProduct = linkedSelections
+            .GroupBy(pair => pair.LocalProductId!.Value)
             .ToDictionary(
                 group => group.Key,
                 group => (IReadOnlyList<SiteProductMachineMdbCode>)group

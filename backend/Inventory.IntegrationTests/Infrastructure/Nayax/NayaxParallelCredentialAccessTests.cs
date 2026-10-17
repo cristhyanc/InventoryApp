@@ -7,6 +7,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
 using Inventory.Application.Sites;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -56,6 +57,14 @@ public class NayaxParallelCredentialAccessTests
     private const string ReplacementTokenA = "fake-replacement-token-for-business-a";
     private const string ActiveKeyId = "2026-10";
     private const long ProductId = 100;
+
+    /// <summary>
+    /// The local product the Nayax product id above is linked to (issue #733). Deliberately not the
+    /// same number: a resolved need attributed to it could not have come from reading the remote id
+    /// as a local one.
+    /// </summary>
+    private const long LocalProductId = 4100;
+
     private const long SiteId = 7;
 
     /// <summary>Four machines, so the bounded fan-out really does fan out.</summary>
@@ -76,11 +85,17 @@ public class NayaxParallelCredentialAccessTests
     {
         await using var fixture = await RequestFixture.CreateAsync();
         await fixture.ConnectAsync(fixture.BusinessA, OperatorA, TokenA, NayaxConnectionStatus.Ready);
+        // The local product the machines' Nayax product id names, through the real link table: a
+        // local id deliberately different from the remote one, so the resolved need is attributed to
+        // the product the link points at (issue #733).
+        await fixture.AddProductAsync(fixture.BusinessA, LocalProductId, "Chips");
+        await fixture.LinkNayaxProductAsync(fixture.BusinessA, ProductId, LocalProductId);
         await using var request = fixture.Request(fixture.BusinessA);
         var handler = new FanOutHandler(Respond.Catalogue, concurrentMachineProductRequests: MachineIds.Length);
         var useCase = new CalculateReorderNeeds(
             request.ClientFor(handler),
             new EfOutstandingSupplierOrderQuantityStore(request.Db),
+            new EfNayaxProductLinkStore(request.Db),
             MachineIds.Length);
 
         var result = await useCase.Handle(CancellationToken.None);
@@ -88,7 +103,8 @@ public class NayaxParallelCredentialAccessTests
         Assert.Equal(MachineIds, result.MachineIds);
         Assert.Equal(
             MachineIds.Length * 2,
-            result.MachineReplenishmentNeedByProductId.GetValueOrDefault(ProductId));
+            result.MachineReplenishmentNeedByProductId.GetValueOrDefault(LocalProductId));
+        Assert.False(result.MachineReplenishmentNeedByProductId.ContainsKey(ProductId));
         Assert.Equal(1, request.Commands.MaxConcurrentCommands);
         Assert.Equal(MachineIds.Length, handler.MaxConcurrentRequests);
 
@@ -195,6 +211,7 @@ public class NayaxParallelCredentialAccessTests
         var resultA = await new CalculateReorderNeeds(
                 requestA.ClientFor(handlerA),
                 new EfOutstandingSupplierOrderQuantityStore(requestA.Db),
+                new EfNayaxProductLinkStore(requestA.Db),
                 MachineIds.Length)
             .Handle(CancellationToken.None);
 
@@ -282,12 +299,14 @@ public class NayaxParallelCredentialAccessTests
         var time = new FixedSydneyTime(Now);
         await using var fixture = await RequestFixture.CreateAsync();
         await fixture.ConnectAsync(fixture.BusinessA, OperatorA, TokenA, NayaxConnectionStatus.Ready);
-        await fixture.AddProductAsync(fixture.BusinessA, ProductId, "Chips");
+        await fixture.AddProductAsync(fixture.BusinessA, LocalProductId, "Chips");
+        await fixture.LinkNayaxProductAsync(fixture.BusinessA, ProductId, LocalProductId);
         await using var request = fixture.Request(fixture.BusinessA);
         var handler = new FanOutHandler(Respond.Catalogue, concurrentMachineProductRequests: MachineIds.Length);
         var useCase = new GetSiteSummaries(
             request.ClientFor(handler),
             new EfSiteFactsStore(request.Db),
+            new EfNayaxProductLinkStore(request.Db),
             new SiteNameResolver(),
             time.Clock,
             time.Calendar,
@@ -409,6 +428,23 @@ public class NayaxParallelCredentialAccessTests
         {
             await using var db = TestAppDbContext.For(_setupOptions, businessId);
             db.Products.Add(new Product { Id = productId, Name = name, IsActive = true });
+            await db.SaveChangesAsync();
+        }
+
+        /// <summary>
+        /// Records the Nayax link (issue #732) that makes <paramref name="nayaxProductId"/> name the
+        /// local product <paramref name="productId"/>, so the fan-outs below resolve a product the
+        /// way a real request does - through the link table, on the request's own context.
+        /// </summary>
+        public async Task LinkNayaxProductAsync(int businessId, long nayaxProductId, long productId)
+        {
+            await using var db = TestAppDbContext.For(_setupOptions, businessId);
+            db.ProductExternalIds.Add(new ProductExternalId
+            {
+                Provider = ExternalProvider.Nayax,
+                ExternalId = NayaxExternalId.From(nayaxProductId),
+                ProductId = productId,
+            });
             await db.SaveChangesAsync();
         }
 

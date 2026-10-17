@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -243,6 +244,16 @@ public sealed class DashboardSummaryRedactionApiTests : IClassFixture<DashboardS
                 LowStockThreshold = 5,
                 RestockTo = 24,
                 InventoryValue = InventoryValueAtCost,
+            });
+
+            // The product's Nayax link (issue #732), without which the machine selection resolves to
+            // no local product at all (issue #733). Every imported product has one in production.
+            db.ProductExternalIds.Add(new ProductExternalId
+            {
+                BusinessId = BusinessId,
+                Provider = ExternalProvider.Nayax,
+                ExternalId = NayaxExternalId.From(ProductId),
+                ProductId = ProductId,
             });
 
             // A completed sale a few hours ago, so a caller who may see the week's revenue has a

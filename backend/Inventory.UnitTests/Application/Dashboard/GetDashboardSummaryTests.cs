@@ -9,6 +9,7 @@ using Inventory.Domain.Reporting.Dashboard;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Products;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
@@ -76,7 +77,7 @@ public class GetDashboardSummaryTests
             MemberScope(),
             salesFacts,
             catalog,
-            new CalculateReorderNeeds(nayax, outstandingOrders));
+            new CalculateReorderNeeds(nayax, outstandingOrders, FakeNayaxProductLinkStore.EveryIdLinkedToItself()));
 
     private static BusinessScope MemberScope()
     {
@@ -296,7 +297,8 @@ public class GetDashboardSummaryTests
 
         var expected = await new ListLowStockProducts(
                 new FakeProductCatalogStore(products),
-                new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object))
+                new CalculateReorderNeeds(
+                    nayax.Object, outstandingOrders.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()))
             .Handle(ProductCatalogFilter.None, CancellationToken.None);
 
         Assert.Equal(expected.Count, summary.NeedsOrdering.ProductsNeedingOrdering);

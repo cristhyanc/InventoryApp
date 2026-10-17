@@ -81,9 +81,14 @@ public interface IMachineStockEventStore
     /// <summary>The Nayax <c>EventLogID</c>s already imported for this machine; the basis of idempotency.</summary>
     Task<IReadOnlyList<long>> GetImportedNayaxEventLogIdsAsync(long machineId, CancellationToken cancellationToken);
 
-    /// <summary>The local products for the given Nayax product identifiers, keyed by that identifier.</summary>
+    /// <summary>
+    /// The local products with the given local product ids, keyed by that id. Since issue #733 the
+    /// caller resolves a Nayax product id to a local one through
+    /// <see cref="Inventory.Application.Nayax.INayaxProductLinkStore"/> first: a remote identifier
+    /// never reaches a persistence port as if it were a local key.
+    /// </summary>
     Task<IReadOnlyDictionary<long, NayaxStockSyncProduct>> GetStorageProductsAsync(
-        IReadOnlyCollection<long> nayaxProductIds, CancellationToken cancellationToken);
+        IReadOnlyCollection<long> productIds, CancellationToken cancellationToken);
 
     Task ImportAsync(IReadOnlyList<MachineStockEventImport> events, CancellationToken cancellationToken);
 

@@ -1,5 +1,6 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Products;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Time;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
@@ -26,6 +27,7 @@ public class MachineProfitabilityTests
         new(
             nayax,
             new EfProductCatalogStore(db),
+            FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
             new ResolveMachineProductPricing(new EfSiteFactsStore(db), Time.Calendar));
 
     private static GetMachineDashboard MachineDashboard(AppDbContext db, INayaxLynxClient nayax) =>

@@ -10,18 +10,29 @@ namespace Inventory.Application.Machines;
 /// the former <c>InventoryApi.Services.MachineService.GetMachineProducts</c> exactly (issue #240): the
 /// same two Nayax calls in the same order with the same arguments, a Nayax mapping with no matching
 /// local product is dropped, and the result is ordered by MDB code.
+///
+/// The match itself goes through the Nayax link table (issue #733): a mapping's
+/// <c>NayaxProductID</c> is resolved to a local product id by
+/// <see cref="INayaxProductLinkStore"/> and only then looked up in the catalogue, instead of being
+/// compared with <c>Product.Id</c>. A mapping this business holds no link for is dropped, exactly as
+/// an unmatched one already was.
 /// </summary>
 public sealed class ListMachineProducts
 {
     private readonly INayaxLynxClient _nayax;
     private readonly IProductCatalogStore _catalog;
+    private readonly INayaxProductLinkStore _productLinks;
     private readonly ResolveMachineProductPricing _resolvePricing;
 
     public ListMachineProducts(
-        INayaxLynxClient nayax, IProductCatalogStore catalog, ResolveMachineProductPricing resolvePricing)
+        INayaxLynxClient nayax,
+        IProductCatalogStore catalog,
+        INayaxProductLinkStore productLinks,
+        ResolveMachineProductPricing resolvePricing)
     {
         _nayax = nayax;
         _catalog = catalog;
+        _productLinks = productLinks;
         _resolvePricing = resolvePricing;
     }
 
@@ -30,11 +41,19 @@ public sealed class ListMachineProducts
         var machine = await _nayax.GetMachineAsync(machineId, cancellationToken);
         var nayaxMachineProducts = await _nayax.GetMachineProductsAsync(machineId, cancellationToken);
         var catalogue = await _catalog.ListUnorderedAsync(ProductCatalogFilter.None, cancellationToken);
+        var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
+            nayaxMachineProducts
+                .Where(machineProduct => machineProduct.NayaxProductID.HasValue)
+                .Select(machineProduct => machineProduct.NayaxProductID!.Value)
+                .Distinct()
+                .ToList(),
+            cancellationToken);
+        var catalogueById = catalogue.ToDictionary(product => product.Id);
 
         var rows = nayaxMachineProducts
             .Select(machineProduct =>
             {
-                var source = catalogue.FirstOrDefault(product => product.Id == machineProduct.NayaxProductID);
+                var source = LocalProduct(machineProduct.NayaxProductID, localProductIdByNayaxId, catalogueById);
                 return source is null
                     ? null
                     : new MachineProductRecord
@@ -67,4 +86,17 @@ public sealed class ListMachineProducts
             .OrderBy(row => row.MdbCode)
             .ToList();
     }
+
+    /// <summary>
+    /// The catalogue product one machine mapping names, or <see langword="null"/> when it names no
+    /// Nayax product, when this business holds no link for the one it names, or when the linked
+    /// product is outside the catalogue this request read.
+    /// </summary>
+    private static ProductRecord? LocalProduct(
+        long? nayaxProductId,
+        IReadOnlyDictionary<long, long> localProductIdByNayaxId,
+        IReadOnlyDictionary<long, ProductRecord> catalogueById) =>
+        nayaxProductId is long id && localProductIdByNayaxId.TryGetValue(id, out var localProductId)
+            ? catalogueById.GetValueOrDefault(localProductId)
+            : null;
 }

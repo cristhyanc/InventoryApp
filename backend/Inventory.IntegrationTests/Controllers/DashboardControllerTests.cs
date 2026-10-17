@@ -7,6 +7,7 @@ using Inventory.Application.Reorder;
 using InventoryApi.Controllers;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Moq;
@@ -58,7 +59,8 @@ public class DashboardControllerTests
             TestAppDbContext.ScopeFor(businessId: 1),
             salesFacts.Object,
             catalog.Object,
-            new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object)));
+            new CalculateReorderNeeds(
+                nayax.Object, outstandingOrders.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself())));
     }
 
     private static ProductRecord Product(long id, string name, int quantityInStock, decimal? inventoryValue) => new()

@@ -1,14 +1,22 @@
 namespace Inventory.Application.Reorder;
 
 /// <summary>
-/// One machine selection exactly as the live fleet read returned it: one mapping of a Nayax
-/// catalogue product onto one machine, carrying the PAR, missing-stock and vend-out-alert-threshold
-/// fields of the <c>machineProducts</c> contract. <see cref="MachineId"/> is the machine the request
-/// was made for, not the payload's own nullable <c>MachineID</c> field, so a selection can always be
+/// One machine selection as the live fleet read returned it: one mapping of a Nayax catalogue
+/// product onto one machine, carrying the PAR, missing-stock and vend-out-alert-threshold fields of
+/// the <c>machineProducts</c> contract. <see cref="MachineId"/> is the machine the request was made
+/// for, not the payload's own nullable <c>MachineID</c> field, so a selection can always be
 /// attributed to a machine.
 ///
-/// This is the raw read, with no catalogue knowledge attached: whether the product is known locally
-/// and active is resolved by the caller, which is what turns these into the Domain
+/// <see cref="ProductId"/> is the <em>local</em> product the selection's <c>NayaxProductID</c>
+/// resolved to through the Nayax link table (issue #733), and is <see langword="null"/> both when
+/// the selection names no Nayax product and when this business holds no link for the one it names.
+/// Those two cases mean the same thing - this selection maps to no product of ours - and are
+/// handled identically: the Domain
+/// <see cref="Inventory.Domain.Machines.MachineRefillAlertPolicy"/> skips a selection with no
+/// product id as unmapped.
+///
+/// Apart from that identity, this is the raw read with no catalogue knowledge attached: whether the
+/// product is active is resolved by the caller, which is what turns these into the Domain
 /// <see cref="Inventory.Domain.Machines.MachineSelectionStockFact"/> the refill rules take.
 /// </summary>
 public readonly record struct MachineSelectionStock(
@@ -20,8 +28,9 @@ public readonly record struct MachineSelectionStock(
 
 /// <summary>
 /// The per-product facts <see cref="CalculateReorderNeeds"/> aggregates across the machine fleet and
-/// outstanding supplier orders (issue #47). Keyed by the catalogue's own product ID (the same ID
-/// Nayax reports back as <c>NayaxProductID</c>) so a caller can look a product up without this use
+/// outstanding supplier orders (issue #47). Both dictionaries are keyed by the catalogue's own
+/// product ID - for the fleet totals, the one the selection's <c>NayaxProductID</c> resolved to
+/// through the Nayax link table (issue #733) - so a caller can look a product up without this use
 /// case needing to know which products a particular search/category/supplier filter selected.
 /// </summary>
 public sealed record ReorderNeedsResult(
