@@ -32,93 +32,8 @@ namespace Inventory.Infrastructure.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.CreateTable(
-                name: "CategoryExternalIds",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "INTEGER", nullable: false)
-                        .Annotation("Sqlite:Autoincrement", true),
-                    BusinessId = table.Column<int>(type: "INTEGER", nullable: false),
-                    Provider = table.Column<int>(type: "INTEGER", nullable: false),
-                    ExternalId = table.Column<string>(type: "TEXT", maxLength: 128, nullable: false),
-                    CategoryId = table.Column<long>(type: "INTEGER", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_CategoryExternalIds", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_CategoryExternalIds_Categories_BusinessId_CategoryId",
-                        columns: x => new { x.BusinessId, x.CategoryId },
-                        principalTable: "Categories",
-                        principalColumns: new[] { "BusinessId", "Id" },
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "ProductExternalIds",
-                columns: table => new
-                {
-                    Id = table.Column<int>(type: "INTEGER", nullable: false)
-                        .Annotation("Sqlite:Autoincrement", true),
-                    BusinessId = table.Column<int>(type: "INTEGER", nullable: false),
-                    Provider = table.Column<int>(type: "INTEGER", nullable: false),
-                    ExternalId = table.Column<string>(type: "TEXT", maxLength: 128, nullable: false),
-                    ProductId = table.Column<long>(type: "INTEGER", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_ProductExternalIds", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_ProductExternalIds_Products_BusinessId_ProductId",
-                        columns: x => new { x.BusinessId, x.ProductId },
-                        principalTable: "Products",
-                        principalColumns: new[] { "BusinessId", "Id" },
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_CategoryExternalIds_BusinessId",
-                table: "CategoryExternalIds",
-                column: "BusinessId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_CategoryExternalIds_BusinessId_CategoryId",
-                table: "CategoryExternalIds",
-                columns: new[] { "BusinessId", "CategoryId" });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_CategoryExternalIds_BusinessId_Provider_CategoryId",
-                table: "CategoryExternalIds",
-                columns: new[] { "BusinessId", "Provider", "CategoryId" },
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_CategoryExternalIds_BusinessId_Provider_ExternalId",
-                table: "CategoryExternalIds",
-                columns: new[] { "BusinessId", "Provider", "ExternalId" },
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_ProductExternalIds_BusinessId",
-                table: "ProductExternalIds",
-                column: "BusinessId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_ProductExternalIds_BusinessId_ProductId",
-                table: "ProductExternalIds",
-                columns: new[] { "BusinessId", "ProductId" });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_ProductExternalIds_BusinessId_Provider_ExternalId",
-                table: "ProductExternalIds",
-                columns: new[] { "BusinessId", "Provider", "ExternalId" },
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_ProductExternalIds_BusinessId_Provider_ProductId",
-                table: "ProductExternalIds",
-                columns: new[] { "BusinessId", "Provider", "ProductId" },
-                unique: true);
+            CreateLinkTable(migrationBuilder, "CategoryExternalIds", "CategoryId", "Categories");
+            CreateLinkTable(migrationBuilder, "ProductExternalIds", "ProductId", "Products");
 
             // The backfill. Every product and category that exists arrived through the Nayax
             // catalogue import, which writes the remote identifier as the local primary key, so the
@@ -157,6 +72,59 @@ namespace Inventory.Infrastructure.Migrations
 
             migrationBuilder.DropTable(
                 name: "ProductExternalIds");
+        }
+
+        /// <summary>
+        /// Creates one provider link table and its four indexes. The product and category tables
+        /// are the same shape and differ only in the local id column and the table it points at, so
+        /// both are written by this one method rather than by two copies of the same operations.
+        /// </summary>
+        private static void CreateLinkTable(
+            MigrationBuilder migrationBuilder, string linkTable, string localIdColumn, string localTable)
+        {
+            migrationBuilder.CreateTable(
+                name: linkTable,
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "INTEGER", nullable: false)
+                        .Annotation("Sqlite:Autoincrement", true),
+                    BusinessId = table.Column<int>(type: "INTEGER", nullable: false),
+                    Provider = table.Column<int>(type: "INTEGER", nullable: false),
+                    ExternalId = table.Column<string>(type: "TEXT", maxLength: 128, nullable: false),
+                    LocalId = table.Column<long>(name: localIdColumn, type: "INTEGER", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey($"PK_{linkTable}", x => x.Id);
+                    table.ForeignKey(
+                        name: $"FK_{linkTable}_{localTable}_BusinessId_{localIdColumn}",
+                        columns: x => new { x.BusinessId, x.LocalId },
+                        principalTable: localTable,
+                        principalColumns: new[] { "BusinessId", "Id" },
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateIndex(
+                name: $"IX_{linkTable}_BusinessId",
+                table: linkTable,
+                column: "BusinessId");
+
+            migrationBuilder.CreateIndex(
+                name: $"IX_{linkTable}_BusinessId_{localIdColumn}",
+                table: linkTable,
+                columns: new[] { "BusinessId", localIdColumn });
+
+            migrationBuilder.CreateIndex(
+                name: $"IX_{linkTable}_BusinessId_Provider_{localIdColumn}",
+                table: linkTable,
+                columns: new[] { "BusinessId", "Provider", localIdColumn },
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: $"IX_{linkTable}_BusinessId_Provider_ExternalId",
+                table: linkTable,
+                columns: new[] { "BusinessId", "Provider", "ExternalId" },
+                unique: true);
         }
     }
 }
