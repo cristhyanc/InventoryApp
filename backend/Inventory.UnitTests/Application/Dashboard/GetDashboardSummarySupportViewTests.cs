@@ -6,6 +6,7 @@ using Inventory.Application.Tenancy;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Products;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
@@ -159,7 +160,10 @@ public class GetDashboardSummarySupportViewTests
             businessScope,
             salesFacts ?? SalesFacts(),
             catalog ?? Catalog(),
-            new CalculateReorderNeeds((fleet ?? EmptyFleet()).Object, outstandingOrders.Object));
+            new CalculateReorderNeeds(
+                (fleet ?? EmptyFleet()).Object,
+                outstandingOrders.Object,
+                FakeNayaxProductLinkStore.EveryIdLinkedToItself()));
     }
 
     /// <summary>

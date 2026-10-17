@@ -4,6 +4,7 @@ using Inventory.Application.Sites;
 using Inventory.Application.Time;
 using Inventory.Domain.Sites;
 using InventoryApi.Tests.Application.Access;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
 
@@ -34,6 +35,13 @@ public class GetSiteProductsTests
     private static readonly IBusinessCalendar Calendar = new FakeBusinessCalendar(new DateTime(2026, 3, 12));
 
     /// <summary>
+    /// The links issue #732's backfill recorded for pre-existing data: every Nayax product id names
+    /// the local product with the same id, which is what these cases were written against.
+    /// <see cref="GetSiteProductLinkResolutionTests"/> is where the lookup itself is pinned.
+    /// </summary>
+    private static INayaxProductLinkStore IdentityLinks() => FakeNayaxProductLinkStore.EveryIdLinkedToItself();
+
+    /// <summary>
     /// The three reads used to be started together and awaited with <c>Task.WhenAll</c>. The recorder
     /// yields inside each call, so an overlapping implementation produces an interleaved trace and a
     /// concurrency count above one, which SQLite's synchronous async implementation would otherwise hide
@@ -44,7 +52,7 @@ public class GetSiteProductsTests
     {
         var facts = new RecordingSiteFactsStore(
             costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
-        var useCase = new GetSiteProducts(Fleet(), facts, Calendar, TestCurrentCapabilities.Owner);
+        var useCase = new GetSiteProducts(Fleet(), facts, IdentityLinks(), Calendar, TestCurrentCapabilities.Owner);
 
         await useCase.Handle(SiteId, CancellationToken.None);
 
@@ -60,7 +68,7 @@ public class GetSiteProductsTests
     {
         var facts = new RecordingSiteFactsStore(
             costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
-        var useCase = new GetSiteProducts(Fleet(), facts, Calendar, TestCurrentCapabilities.Owner);
+        var useCase = new GetSiteProducts(Fleet(), facts, IdentityLinks(), Calendar, TestCurrentCapabilities.Owner);
 
         var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
 
@@ -94,7 +102,7 @@ public class GetSiteProductsTests
             expectedConcurrentMachineProductCalls: 2);
         var facts = new RecordingSiteFactsStore(
             costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
-        var useCase = new GetSiteProducts(nayax, facts, Calendar, TestCurrentCapabilities.Owner);
+        var useCase = new GetSiteProducts(nayax, facts, IdentityLinks(), Calendar, TestCurrentCapabilities.Owner);
 
         var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
 
@@ -127,7 +135,7 @@ public class GetSiteProductsTests
                 [time.NowUtc.Date] = new(new Dictionary<decimal, decimal> { [5m] = 1.5m }, 0.50m),
             },
             CostBasis);
-        var useCase = new GetSiteProducts(Fleet(), facts, time.Calendar, TestCurrentCapabilities.Owner);
+        var useCase = new GetSiteProducts(Fleet(), facts, IdentityLinks(), time.Calendar, TestCurrentCapabilities.Owner);
 
         var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
 
@@ -160,7 +168,7 @@ public class GetSiteProductsTests
             });
         var facts = new RecordingSiteFactsStore(
             costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
-        var useCase = new GetSiteProducts(nayax, facts, Calendar, TestCurrentCapabilities.Owner);
+        var useCase = new GetSiteProducts(nayax, facts, IdentityLinks(), Calendar, TestCurrentCapabilities.Owner);
 
         var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
 
@@ -186,7 +194,7 @@ public class GetSiteProductsTests
             });
         var facts = new RecordingSiteFactsStore(
             costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
-        var useCase = new GetSiteProducts(nayax, facts, Calendar, TestCurrentCapabilities.Owner);
+        var useCase = new GetSiteProducts(nayax, facts, IdentityLinks(), Calendar, TestCurrentCapabilities.Owner);
 
         var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
 
@@ -216,7 +224,7 @@ public class GetSiteProductsTests
             });
         var facts = new RecordingSiteFactsStore(
             costBasis: CostBasis, commissionByPrice: CommissionByPrice, feeExGst: 0.20m);
-        var useCase = new GetSiteProducts(nayax, facts, Calendar, TestCurrentCapabilities.Owner);
+        var useCase = new GetSiteProducts(nayax, facts, IdentityLinks(), Calendar, TestCurrentCapabilities.Owner);
 
         var product = Assert.Single(await useCase.Handle(SiteId, CancellationToken.None));
 

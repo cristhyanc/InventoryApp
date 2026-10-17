@@ -1,6 +1,7 @@
 using Inventory.Application.Sites;
 using Inventory.Infrastructure.Sites;
 using InventoryApi.Tests.Application.Access;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Time;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
@@ -65,7 +66,12 @@ public class SiteServiceTests
             });
 
         var service = new GetSiteSummaries(
-            nayax.Object, new EfSiteFactsStore(db), new SiteNameResolver(), Time.Clock, Time.Calendar,
+            nayax.Object,
+            new EfSiteFactsStore(db),
+            FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
+            new SiteNameResolver(),
+            Time.Clock,
+            Time.Calendar,
             TestCurrentCapabilities.Owner);
         var summary = Assert.Single(await service.Handle(CancellationToken.None));
 
@@ -110,7 +116,12 @@ public class SiteServiceTests
             {
                 new() { MachineID = 10, NayaxProductID = 1, RetailPrice = 5m }
             });
-        var service = new GetSiteProducts(nayax.Object, new EfSiteFactsStore(db), Time.Calendar, TestCurrentCapabilities.Owner);
+        var service = new GetSiteProducts(
+            nayax.Object,
+            new EfSiteFactsStore(db),
+            FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
+            Time.Calendar,
+            TestCurrentCapabilities.Owner);
 
         var first = Assert.Single(await service.Handle(42, CancellationToken.None));
         rate.FeeExGst = .25m;
@@ -141,7 +152,12 @@ public class SiteServiceTests
         nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([new NayaxMachine { MachineID = 10, CustomerID = 42 }]);
         nayax.Setup(x => x.GetMachineProductsAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync([new NayaxMachineProduct { MachineID = 10, NayaxProductID = 1, RetailPrice = 5m }]);
 
-        var service = new GetSiteProducts(nayax.Object, new EfSiteFactsStore(db), Time.Calendar, TestCurrentCapabilities.Owner);
+        var service = new GetSiteProducts(
+            nayax.Object,
+            new EfSiteFactsStore(db),
+            FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
+            Time.Calendar,
+            TestCurrentCapabilities.Owner);
         var product = Assert.Single(await service.Handle(42, CancellationToken.None));
 
         Assert.Equal(overlapping ? null : 2.78m, product.EstimatedCardProfit);

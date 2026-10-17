@@ -13,6 +13,7 @@ using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.SupportSessions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -43,7 +44,10 @@ public class ProductsControllerTests
         // outstanding supplier orders only, which is what these tests exercise.
         nayaxMock.Setup(client => client.GetMachinesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
-        var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
+        var calculateReorderNeeds = new CalculateReorderNeeds(
+            nayaxMock.Object,
+            new EfOutstandingSupplierOrderQuantityStore(db),
+            FakeNayaxProductLinkStore.EveryIdLinkedToItself());
         var getInventoryValuationSummary = new GetInventoryValuationSummary(new EfInventoryValuationFactsProvider(db));
         var getProductPriceComparison = new GetProductPriceComparison(new EfProductPurchasePriceHistoryProvider(db));
         var store = productStore ?? new EfProductStore(db, TestCostingUseCases.Rebuild(db));

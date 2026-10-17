@@ -4,6 +4,7 @@ using Inventory.Application.MachineStockSync;
 using Inventory.Application.Nayax;
 using Inventory.Application.Stock;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
@@ -66,7 +67,9 @@ public class MachineStockSyncTests
     {
         var store = new EfMachineStockEventStore(
             db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db));
-        return (new SyncMachineStockFromNayax(nayax, store), new ApplyMachineStockSync(store));
+        return (
+            new SyncMachineStockFromNayax(nayax, store, new EfNayaxProductLinkStore(db)),
+            new ApplyMachineStockSync(store));
     }
 
     private static ResolveMachineStockDuplicate ResolveUseCase(
@@ -102,6 +105,18 @@ public class MachineStockSyncTests
             AverageUnitCost = unitCost
         };
         db.Products.Add(product);
+
+        // The product's Nayax link (issue #732), recorded as the backfill did for data that already
+        // existed: the Nayax product id and the local id are the same number here, so these cases
+        // keep asserting the same matches while the use case resolves them through the link table
+        // (issue #733) rather than by comparing the remote id with Product.Id.
+        db.ProductExternalIds.Add(new ProductExternalId
+        {
+            Provider = ExternalProvider.Nayax,
+            ExternalId = NayaxExternalId.From(id),
+            ProductId = id,
+        });
+
         db.StockAdjustments.Add(new StockAdjustment
         {
             ProductId = id,

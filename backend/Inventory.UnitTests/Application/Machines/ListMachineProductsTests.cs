@@ -1,6 +1,7 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Products;
 using InventoryApi.Tests.Application.Time;
 using Moq;
@@ -29,10 +30,14 @@ public class ListMachineProductsTests
     }
 
     private static ListMachineProducts UseCase(
-        Mock<INayaxLynxClient> nayax, FakeProductCatalogStore catalog, decimal? feeExGst = 0.2m) =>
+        Mock<INayaxLynxClient> nayax,
+        FakeProductCatalogStore catalog,
+        decimal? feeExGst = 0.2m,
+        INayaxProductLinkStore? productLinks = null) =>
         new(
             nayax.Object,
             catalog,
+            productLinks ?? FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
             new ResolveMachineProductPricing(
                 new FakeSiteFactsStore(new Dictionary<decimal, decimal>(), feeExGst),
                 new FakeBusinessCalendar(new DateTime(2026, 3, 12))));
@@ -93,6 +98,42 @@ public class ListMachineProductsTests
         var row = Assert.Single(await UseCase(nayax, catalog).Handle(1, CancellationToken.None));
 
         Assert.Equal(200, row.Product.Id);
+    }
+
+    /// <summary>
+    /// The identity itself comes from the Nayax link table (issue #733): the machine slot reports a
+    /// Nayax product id, and the row it produces is the local product that id is linked to - here a
+    /// product with a different local key, which no comparison of the two numbers could have found.
+    /// </summary>
+    [Fact]
+    public async Task Handle_MatchesTheSlotToTheProductItsNayaxLinkNames()
+    {
+        var catalog = new FakeProductCatalogStore(FakeProductCatalogStore.Product(4200, "Coke"));
+        var nayax = NayaxClient(siteId: 91, new NayaxMachineProduct { NayaxProductID = 200, MDBCode = 1 });
+
+        var row = Assert.Single(await UseCase(
+                nayax, catalog, productLinks: FakeNayaxProductLinkStore.Linking((200, 4200)))
+            .Handle(1, CancellationToken.None));
+
+        Assert.Equal(4200, row.Product.Id);
+        Assert.Equal("Coke", row.Product.Name);
+    }
+
+    /// <summary>
+    /// A local product numbered like somebody's Nayax product is not that product: with no link, the
+    /// slot is dropped, exactly as an unmatched slot already was.
+    /// </summary>
+    [Fact]
+    public async Task Handle_DropsASlotWhoseNayaxProductIsNotLinked_EvenWhenAProductHasThatId()
+    {
+        var catalog = new FakeProductCatalogStore(
+            FakeProductCatalogStore.Product(200, "Unrelated product numbered 200"));
+        var nayax = NayaxClient(siteId: 91, new NayaxMachineProduct { NayaxProductID = 200, MDBCode = 1 });
+
+        var rows = await UseCase(nayax, catalog, productLinks: FakeNayaxProductLinkStore.Linking((999, 4999)))
+            .Handle(1, CancellationToken.None);
+
+        Assert.Empty(rows);
     }
 
     [Fact]

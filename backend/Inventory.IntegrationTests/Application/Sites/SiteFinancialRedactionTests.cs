@@ -7,6 +7,7 @@ using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Sites;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Xunit;
@@ -124,7 +125,7 @@ public class SiteFinancialRedactionTests
     public async Task A_support_session_is_given_the_site_revenue_without_a_role()
     {
         var site = Assert.Single(await new GetSiteSummaries(
-                Fleet(), Facts(), new SiteNameResolver(), Time.Clock, Time.Calendar, SupportSession())
+                Fleet(), Facts(), IdentityLinks(), new SiteNameResolver(), Time.Clock, Time.Calendar, SupportSession())
             .Handle(CancellationToken.None));
 
         Assert.Equal(9m, site.TodayRevenue);
@@ -143,7 +144,7 @@ public class SiteFinancialRedactionTests
 
         await Assert.ThrowsAsync<BusinessAccessDeniedException>(
             () => new GetSiteSummaries(
-                    Fleet(), facts, new SiteNameResolver(), Time.Clock, Time.Calendar, Denied())
+                    Fleet(), facts, IdentityLinks(), new SiteNameResolver(), Time.Clock, Time.Calendar, Denied())
                 .Handle(CancellationToken.None));
 
         Assert.Empty(facts.Trace);
@@ -232,7 +233,7 @@ public class SiteFinancialRedactionTests
     public async Task A_support_session_is_given_the_estimate_without_a_role()
     {
         var product = Assert.Single(
-            await new GetSiteProducts(Fleet(), Facts(), Time.Calendar, SupportSession())
+            await new GetSiteProducts(Fleet(), Facts(), IdentityLinks(), Time.Calendar, SupportSession())
                 .Handle(SiteId, CancellationToken.None));
 
         Assert.Equal(2.28m, product.EstimatedCardProfit);
@@ -244,7 +245,7 @@ public class SiteFinancialRedactionTests
         var facts = Facts();
 
         await Assert.ThrowsAsync<BusinessAccessDeniedException>(
-            () => new GetSiteProducts(Fleet(), facts, Time.Calendar, Denied())
+            () => new GetSiteProducts(Fleet(), facts, IdentityLinks(), Time.Calendar, Denied())
                 .Handle(SiteId, CancellationToken.None));
 
         Assert.Empty(facts.Trace);
@@ -252,12 +253,12 @@ public class SiteFinancialRedactionTests
 
     private static Task<IReadOnlyList<SiteSummary>> Summaries(BusinessRole role, ISiteFactsStore facts) =>
         new GetSiteSummaries(
-                Fleet(), facts, new SiteNameResolver(), Time.Clock, Time.Calendar,
+                Fleet(), facts, IdentityLinks(), new SiteNameResolver(), Time.Clock, Time.Calendar,
                 TestCurrentCapabilities.ForRole(role))
             .Handle(CancellationToken.None);
 
     private static Task<IReadOnlyList<SiteProductRecord>> Products(BusinessRole role, ISiteFactsStore facts) =>
-        new GetSiteProducts(Fleet(), facts, Time.Calendar, TestCurrentCapabilities.ForRole(role))
+        new GetSiteProducts(Fleet(), facts, IdentityLinks(), Time.Calendar, TestCurrentCapabilities.ForRole(role))
             .Handle(SiteId, CancellationToken.None);
 
     /// <summary>A request inside an active support session for the same business.</summary>
@@ -279,6 +280,12 @@ public class SiteFinancialRedactionTests
     /// catalogue product with a cost basis, a commission amount and a fee rate, and completed sales
     /// placed in the periods the fixed clock resolves.
     /// </summary>
+    /// <summary>
+    /// The links issue #732's backfill recorded for pre-existing data: every Nayax product id names
+    /// the local product with the same id. These cases are about redaction, not about the lookup.
+    /// </summary>
+    private static INayaxProductLinkStore IdentityLinks() => FakeNayaxProductLinkStore.EveryIdLinkedToItself();
+
     private static RecordingSiteFactsStore Facts() =>
         new(
             productActivity: ActiveProducts,

@@ -43,11 +43,11 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
             .ToListAsync(cancellationToken);
 
     public async Task<IReadOnlyDictionary<long, NayaxStockSyncProduct>> GetStorageProductsAsync(
-        IReadOnlyCollection<long> nayaxProductIds, CancellationToken cancellationToken)
+        IReadOnlyCollection<long> productIds, CancellationToken cancellationToken)
     {
         var products = await _db.Products
             .AsNoTracking()
-            .Where(p => nayaxProductIds.Contains(p.Id))
+            .Where(p => productIds.Contains(p.Id))
             .Select(p => new { p.Id, p.Name, p.QuantityInStock })
             .ToListAsync(cancellationToken);
 

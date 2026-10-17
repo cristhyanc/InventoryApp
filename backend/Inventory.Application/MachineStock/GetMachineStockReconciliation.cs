@@ -66,6 +66,9 @@ public sealed class GetMachineStockReconciliation
         // An observed slot whose product is not in this business's catalogue is dropped rather than
         // reported: the catalogue read is tenant-scoped, so "not found" is the ownership boundary and
         // an unmapped machine selection at the same time - the same exclusion the Pick List applies.
+        // A slot whose Nayax product this business holds no link for never arrives at all: since
+        // issue #733 the observation source resolves that identity through the link table and drops
+        // what it cannot resolve, rather than offering a remote id as a local product id.
         // The second check is the same rule for a projected row; the store resolves a name for every
         // product it returns facts about, so it only ever excludes a row there is nothing to label.
         var rows = MachineStockReconciliationPolicy

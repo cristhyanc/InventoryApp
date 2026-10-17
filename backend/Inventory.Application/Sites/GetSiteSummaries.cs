@@ -19,6 +19,14 @@ namespace Inventory.Application.Sites;
 /// business day rather than the host's local clock (issue #310; see
 /// <see cref="MachineDashboardWindow"/>, shared with the machine dashboard).
 ///
+/// <para>A mapping's <c>NayaxProductID</c> is resolved to a local product through
+/// <see cref="INayaxProductLinkStore"/> (issue #733) before the stock facts are built, instead of
+/// being looked up in the local catalogue's activity as if it were a local id. A mapping this
+/// business holds no link for carries no product id, which is what a mapping with no
+/// <c>NayaxProductID</c> already carried: it still counts toward the site's physical stock
+/// percentage, exactly as an unmapped mapping always has, and is not counted as a low or empty
+/// product alert.</para>
+///
 /// <para><b>The revenue figures depend on what the request may see (issue #697).</b> Sites is part of
 /// the day-to-day inventory work, so the endpoint requires <c>Inventory.Operate</c> and every role
 /// keeps reaching it; the three revenue figures additionally need
@@ -39,6 +47,7 @@ public sealed class GetSiteSummaries
 {
     private readonly INayaxLynxClient _nayax;
     private readonly ISiteFactsStore _facts;
+    private readonly INayaxProductLinkStore _productLinks;
     private readonly ISiteNameResolver _siteNames;
     private readonly IClock _clock;
     private readonly IBusinessCalendar _businessCalendar;
@@ -47,6 +56,7 @@ public sealed class GetSiteSummaries
     public GetSiteSummaries(
         INayaxLynxClient nayax,
         ISiteFactsStore facts,
+        INayaxProductLinkStore productLinks,
         ISiteNameResolver siteNames,
         IClock clock,
         IBusinessCalendar businessCalendar,
@@ -54,6 +64,7 @@ public sealed class GetSiteSummaries
     {
         _nayax = nayax;
         _facts = facts;
+        _productLinks = productLinks;
         _siteNames = siteNames;
         _clock = clock;
         _businessCalendar = businessCalendar;
@@ -107,6 +118,25 @@ public sealed class GetSiteSummaries
         // is left unobserved when another one fails first.
         await Task.WhenAll(pending.Select(site => site.MachineProducts));
 
+        var sitesWithProducts = new List<(long SiteId, List<NayaxMachine> Machines, List<NayaxMachineProduct> Products)>(
+            pending.Count);
+        foreach (var site in pending)
+        {
+            sitesWithProducts.Add((site.SiteId, site.Machines, (await site.MachineProducts).SelectMany(items => items).ToList()));
+        }
+
+        // One link read for the whole fleet, awaited after the fan-out and before the completed-sales
+        // read below: they land on the request's own scoped AppDbContext, which supports one
+        // operation at a time.
+        var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
+            sitesWithProducts
+                .SelectMany(site => site.Products)
+                .Where(mp => mp.NayaxProductID.HasValue)
+                .Select(mp => mp.NayaxProductID!.Value)
+                .Distinct()
+                .ToList(),
+            cancellationToken);
+
         // One scoped read covers every site's machines over the same 16-day lookback the former
         // per-site reads each requested, instead of one overlapping read per site; the facts carry
         // their machine id, so each site's own sales are selected from the result in memory. The
@@ -118,20 +148,23 @@ public sealed class GetSiteSummaries
         // exists and revenue that was never calculated.
         var salesByMachine = mayViewFinancials
             ? (await _facts.GetRecentCompletedSalesAsync(
-                    pending.SelectMany(site => site.Machines).Select(machine => machine.MachineID).Distinct().ToList(),
+                    sitesWithProducts.SelectMany(site => site.Machines).Select(machine => machine.MachineID).Distinct().ToList(),
                     window.NowUtc.AddDays(-16),
                     cancellationToken))
                 .GroupBy(sale => sale.MachineId)
                 .ToDictionary(group => group.Key, group => group.ToList())
             : null;
 
-        var summaries = new List<SiteSummary>(pending.Count);
-        foreach (var site in pending)
-        {
-            var machineProducts = (await site.MachineProducts).SelectMany(items => items).ToList();
-            summaries.Add(BuildSummary(
-                site.SiteId, site.Machines, machineProducts, SalesFor(site.Machines, salesByMachine), productActivity, window));
-        }
+        var summaries = sitesWithProducts
+            .Select(site => BuildSummary(
+                site.SiteId,
+                site.Machines,
+                site.Products,
+                SalesFor(site.Machines, salesByMachine),
+                localProductIdByNayaxId,
+                productActivity,
+                window))
+            .ToList();
 
         return summaries.OrderBy(summary => summary.SiteName).ToList();
     }
@@ -156,16 +189,25 @@ public sealed class GetSiteSummaries
         List<NayaxMachine> machines,
         IReadOnlyList<NayaxMachineProduct> machineProducts,
         IReadOnlyList<SiteCompletedSaleFact>? sales,
+        IReadOnlyDictionary<long, long> localProductIdByNayaxId,
         IReadOnlyDictionary<long, bool> productActivity,
         MachineDashboardWindow window)
     {
         var stockFacts = machineProducts
-            .Select(mp => new SiteMachineProductStockFact(
-                mp.NayaxProductID,
-                mp.NayaxProductID.HasValue && productActivity.GetValueOrDefault(mp.NayaxProductID.Value),
-                mp.PAR ?? 0,
-                mp.MissingStockByMDB ?? 0,
-                mp.VendOutAlertThreshold ?? 0))
+            .Select(mp =>
+            {
+                var productId = mp.NayaxProductID is long nayaxProductId
+                    && localProductIdByNayaxId.TryGetValue(nayaxProductId, out var localProductId)
+                        ? localProductId
+                        : (long?)null;
+
+                return new SiteMachineProductStockFact(
+                    productId,
+                    productId.HasValue && productActivity.GetValueOrDefault(productId.Value),
+                    mp.PAR ?? 0,
+                    mp.MissingStockByMDB ?? 0,
+                    mp.VendOutAlertThreshold ?? 0);
+            })
             .ToList();
         var (lowProductCount, emptyProductCount) = SiteStockPolicy.CalculateAlertCounts(stockFacts);
 

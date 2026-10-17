@@ -11,16 +11,26 @@ namespace Inventory.Application.MachineStockSync;
 /// imported facts through <see cref="IMachineStockEventStore"/>, and returns a reconciliation
 /// preview. It never changes storage inventory itself, never writes to Nayax, and never redefines
 /// Nayax PAR as physical capacity.
+///
+/// The machine's MDB map still comes from the live machine-products read, but the
+/// <c>NayaxProductID</c> each position reports is resolved to a local product through
+/// <see cref="INayaxProductLinkStore"/> (issue #733) rather than used as a local product id. A
+/// position whose Nayax product this business holds no link for resolves to no local product, which
+/// is the state <c>NayaxMachineStockMatchPolicy</c> already reports as Needs Review ("no local
+/// product is mapped to Nayax product ..."), so such an event still never moves inventory.
 /// </summary>
 public sealed class SyncMachineStockFromNayax
 {
     private readonly INayaxLynxClient _nayax;
     private readonly IMachineStockEventStore _store;
+    private readonly INayaxProductLinkStore _productLinks;
 
-    public SyncMachineStockFromNayax(INayaxLynxClient nayax, IMachineStockEventStore store)
+    public SyncMachineStockFromNayax(
+        INayaxLynxClient nayax, IMachineStockEventStore store, INayaxProductLinkStore productLinks)
     {
         _nayax = nayax;
         _store = store;
+        _productLinks = productLinks;
     }
 
     /// <summary>
@@ -56,8 +66,20 @@ public sealed class SyncMachineStockFromNayax
                 .GroupBy(product => product.MDBCode!.Value)
                 .ToDictionary(group => group.Key, group => group.First().NayaxProductID!.Value);
 
-            var localProducts = await _store.GetStorageProductsAsync(
-                nayaxProductIdByMdb.Values.Distinct().ToArray(), cancellationToken);
+            // The Nayax ids the machine reported, resolved to the local products they name through
+            // the link table; the storage read that follows is given local product ids only.
+            var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
+                nayaxProductIdByMdb.Values.Distinct().ToList(), cancellationToken);
+            var storageProducts = await _store.GetStorageProductsAsync(
+                localProductIdByNayaxId.Values.Distinct().ToList(), cancellationToken);
+
+            // Re-keyed by Nayax id for the Domain policy, which resolves MDB -> Nayax product ->
+            // local product. A Nayax id with no link, or whose linked product the storage read did
+            // not return, is simply absent, which is the policy's "no local product is mapped"
+            // branch.
+            var localProducts = localProductIdByNayaxId
+                .Where(link => storageProducts.ContainsKey(link.Value))
+                .ToDictionary(link => link.Key, link => storageProducts[link.Value]);
 
             await _store.ImportAsync(
                 newAlerts.Select(alert => ToImport(machineId, alert, nayaxProductIdByMdb, localProducts)).ToList(),

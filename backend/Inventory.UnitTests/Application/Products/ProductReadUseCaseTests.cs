@@ -2,6 +2,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
 using Inventory.Domain.Nayax;
+using InventoryApi.Tests.Application.Nayax;
 using Moq;
 using Xunit;
 
@@ -34,7 +35,8 @@ public class ProductReadUseCaseTests
         outstanding.Setup(store => store.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(onOrderQuantity ?? new Dictionary<long, decimal>());
 
-        return new CalculateReorderNeeds(nayax.Object, outstanding.Object);
+        return new CalculateReorderNeeds(
+            nayax.Object, outstanding.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself());
     }
 
     /// <summary>
@@ -53,7 +55,8 @@ public class ProductReadUseCaseTests
         outstanding.Setup(store => store.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(onOrderQuantity);
 
-        return new CalculateReorderNeeds(nayax.Object, outstanding.Object);
+        return new CalculateReorderNeeds(
+            nayax.Object, outstanding.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself());
     }
 
     private static (ListProducts List, ListLowStockProducts LowStock, GetProduct Get) UseCases(
@@ -233,7 +236,8 @@ public class ProductReadUseCaseTests
         var catalog = new FakeProductCatalogStore(
             FakeProductCatalogStore.Product(1, "Coke", quantityInStock: 2, lowStockThreshold: 10, restockTo: 17));
 
-        var listing = await UseCases(catalog, new CalculateReorderNeeds(nayax.Object, outstanding.Object))
+        var listing = await UseCases(catalog, new CalculateReorderNeeds(
+            nayax.Object, outstanding.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()))
             .LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
 
         Assert.Equal(ReorderMode.StorageOnly, listing.Mode);

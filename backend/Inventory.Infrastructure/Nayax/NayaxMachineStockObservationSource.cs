@@ -21,15 +21,25 @@ namespace Inventory.Infrastructure.Nayax;
 ///
 /// A slot with no Nayax product id is dropped, because nothing can be reconciled against an
 /// unidentified selection.
+///
+/// Translating the identity is part of that translation: a slot's <c>NayaxProductID</c> is resolved
+/// to a local product id through <see cref="INayaxProductLinkStore"/> (issue #733), because
+/// <see cref="MachineStockObservationSlot.ProductId"/> is the local product the ledger's refills,
+/// sales, counts and names are keyed by. A slot whose Nayax product this business holds no link for
+/// is dropped for the same reason an unidentified one is - it names no product of ours - which is
+/// exactly what already happened to a slot whose product was not in the caller's catalogue.
 /// </summary>
 public sealed class NayaxMachineStockObservationSource : IMachineStockObservationSource
 {
     private readonly INayaxLynxClient _nayax;
+    private readonly INayaxProductLinkStore _productLinks;
     private readonly IClock _clock;
 
-    public NayaxMachineStockObservationSource(INayaxLynxClient nayax, IClock clock)
+    public NayaxMachineStockObservationSource(
+        INayaxLynxClient nayax, INayaxProductLinkStore productLinks, IClock clock)
     {
         _nayax = nayax;
+        _productLinks = productLinks;
         _clock = clock;
     }
 
@@ -39,12 +49,16 @@ public sealed class NayaxMachineStockObservationSource : IMachineStockObservatio
         var slots = await _nayax.GetMachineProductsAsync(machineId, cancellationToken);
         var observedAtUtc = _clock.UtcNow;
 
+        var identifiedSlots = slots.Where(slot => slot.NayaxProductID.HasValue).ToList();
+        var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
+            identifiedSlots.Select(slot => slot.NayaxProductID!.Value).Distinct().ToList(), cancellationToken);
+
         return new MachineStockObservation(
             observedAtUtc,
-            slots
-                .Where(slot => slot.NayaxProductID.HasValue)
+            identifiedSlots
+                .Where(slot => localProductIdByNayaxId.ContainsKey(slot.NayaxProductID!.Value))
                 .Select(slot => new MachineStockObservationSlot(
-                    slot.NayaxProductID!.Value, slot.PAR, slot.MissingStockByMDB))
+                    localProductIdByNayaxId[slot.NayaxProductID!.Value], slot.PAR, slot.MissingStockByMDB))
                 .ToList());
     }
 }

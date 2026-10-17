@@ -7714,7 +7714,10 @@ production coupling to Nayax for this endpoint: it fetches the current machine f
 bounded parallelism (`Parallel.ForEachAsync`, `MaxDegreeOfParallelism =
 CalculateReorderNeeds.MaxConcurrentMachineRequests`, currently 4 - a fixed engineering constant chosen
 for headroom against Nayax rate limits given the small current machine fleet, not environment
-configuration), summing `MissingStockByMDB` per product ID exactly as the sequential loop did.
+configuration), summing `MissingStockByMDB` per product ID exactly as the sequential loop did. That
+product ID is the local one, resolved from each selection's `NayaxProductID` through the Nayax link
+table since issue #733 (see
+[Resolving a Nayax product id](#resolving-a-nayax-product-id-to-a-local-product-issue-733)).
 `Inventory.Application.Reorder.IOutstandingSupplierOrderQuantityStore` is the narrow port for the
 outstanding (not cancelled, not fully received) supplier-order quantity per product the use case also
 returns; `Inventory.Infrastructure.Persistence.EfOutstandingSupplierOrderQuantityStore` is its EF
@@ -7768,9 +7771,13 @@ already does for `MissingStockByMDB`), and looks up each product's physical stor
 the narrow `IPickListStorageStockStore` port (`Inventory.Infrastructure.Persistence.EfPickListStorageStockStore`,
 an `AppDbContext` adapter following the same pattern as
 `EfOutstandingSupplierOrderQuantityStore`, scoped by the same central tenant query filter as every
-other `_db.Products` read - it adds no per-call business filter of its own). A product with no
-matching row in that tenant-scoped lookup is excluded from the result rather than assigned a
-fabricated zero storage quantity, so the tenant boundary can never be papered over as a data gap.
+other `_db.Products` read - it adds no per-call business filter of its own). Since issue #733 that
+lookup is given local product ids, resolved from each selection's `NayaxProductID` through the Nayax
+link table (see
+[Resolving a Nayax product id](#resolving-a-nayax-product-id-to-a-local-product-issue-733)). A
+selection with no Nayax link, or whose product has no matching row in that tenant-scoped lookup, is
+excluded from the result rather than assigned a fabricated zero storage quantity, so the tenant
+boundary can never be papered over as a data gap.
 
 The projection returns, per product: its physical `QuantityInStock` (untouched), the total quantity
 to pick across the selected machines, and a storage-shortage quantity (`max(0, total to pick -
@@ -8341,8 +8348,10 @@ session's Nayax refusal (issue #551) applies here exactly as it does to every ot
 Tenant isolation is the central query filter's: the adapter adds no `BusinessId` predicate, which is
 also what makes the observed product ids safe to pass into it - a machine id is a remote Nayax
 identity, so two businesses can be told about the same machine number, and an observed slot resolves
-to a product only if the caller's own catalogue holds it. Unresolvable slots are dropped, the same
-exclusion the Pick List applies.
+to a product only if the caller's own catalogue holds it. Since issue #733 the slot's product id is
+the local one its `NayaxProductID` is linked to, resolved in the observation adapter (see
+[Resolving a Nayax product id](#resolving-a-nayax-product-id-to-a-local-product-issue-733)).
+Unresolvable slots are dropped, the same exclusion the Pick List applies.
 
 **Not in this slice.** There is no Angular page yet (the API is the exposure), no back-dated count,
 no machine-level write-off, and no automatic correction of a discrepancy - by design, since
@@ -8652,8 +8661,10 @@ import below writes the remote identifier as the local primary key. A local key 
 issues is global rather than per business, cannot be chosen at all by a business with no provider
 connected, and has room for exactly one provider's answer. Issue #732 (child A1 of #329, decision
 P1) adds the place a provider id belongs instead — and does only that. No existing id, foreign key
-or behaviour changes, and nothing reads a link yet: resolving through one is #733 (A2), #745 (A2b),
-#747 (A2c) and #734 (A3), and database-generated ids for new rows are #735 (A4).
+or behaviour changes, and that slice read no link: the live-machine features resolve through one in
+#733 (A2, below), and imports, sales sync and catalogue reconciliation (#745, A2b), costing and
+timestamp repair (#747, A2c) and the reporting queries (#734, A3) still read `Product.Id` as a Nayax
+id. Database-generated ids for new rows are #735 (A4).
 
 **Two tables, one shape.** `ProductExternalIds` and `CategoryExternalIds` each carry `BusinessId`,
 `Provider`, `ExternalId` and the local row's id behind their own surrogate key. Both are ordinary
@@ -8709,6 +8720,57 @@ run them against a parent key that did not exist yet.
 **The import keeps the links true.** `EfNayaxProductCatalogImportStore` writes a Nayax link for
 every product and category in the snapshot that has none, and leaves an existing link exactly as it
 is; it still sets `Id` from the Nayax id, which #735 (A4) changes.
+
+### Resolving a Nayax product id to a local product (issue #733)
+
+Every feature that reads a machine's live selections gets `NayaxProductID` values back — the Lynx
+contract's "unique identifier of the product in the Nayax system" (`GET
+/v1/machines/{MachineID}/machineProducts`, `integer<int64>`, nullable). They used to be compared
+with `Product.Id` directly, which worked only because the local key *was* the Nayax id. Issue #733
+(child A2 of #329) makes those features read the `ProductExternalIds` link table instead. It is a
+lookup change and nothing else: no endpoint, response shape, calculation or stored value changes,
+and because the #732 backfill recorded one link per existing product mapping each Nayax id to the
+local row with the same id, a business whose data predates the link table sees identical results.
+
+**One narrow port, read at the edge.** `Inventory.Application.Nayax.INayaxProductLinkStore` answers
+one question — the local product id for each of these Nayax product ids, keyed by the Nayax id —
+and `Inventory.Infrastructure.Persistence.EfNayaxProductLinkStore` implements it over
+`ProductExternalIds` alone, selecting on `Provider = Nayax` and the exact `ExternalId` text that
+`NayaxExternalId.From` produces. It never joins `Products`: the link already carries the local id,
+and the composite foreign key behind it is what guarantees that row exists in the same business. The
+read is scoped by the ordinary tenant query filters, so one business's link is never an answer to
+another's question, and a stored `ExternalId` that the one Nayax conversion could not have written
+matches nothing rather than being read as the number inside it.
+
+The translation happens where Nayax data enters the application, so every persistence port
+downstream of it speaks local product ids only — `IMachineStockEventStore.GetStorageProductsAsync`
+changed from taking Nayax ids to taking local ones for exactly that reason. The six paths:
+
+| Path | Where the id is resolved | What an unlinked Nayax id means |
+| --- | --- | --- |
+| Reorder (`CalculateReorderNeeds`) | after the fleet fan-out, before the outstanding-order read | the selection carries no product id, the same state a selection with no `NayaxProductID` already carried; it is summed into no product's replenishment need and the Domain refill rules skip it as unmapped |
+| Pick List (`GetPickList`) | after the fan-out, before the storage read | the selection is excluded from the result, as one with no local catalogue row already was |
+| Machine products (`ListMachineProducts`) | after the catalogue read, before the slots are matched | the slot is dropped, as an unmatched slot already was |
+| Site products (`GetSiteProducts`) | after the fan-out, before the facts reads | no row is produced, as a selection with no catalogue cost basis already produced none |
+| Site summaries (`GetSiteSummaries`) | after the fan-out, before the completed-sales read | the stock fact carries no product id: it still counts toward the site's physical stock percentage, exactly as an unmapped selection always has, and raises no low/empty product alert |
+| Sync Restock (`SyncMachineStockFromNayax`) | after the machine-products read, before the storage read | the MDB position resolves to no local product, which is `NayaxMachineStockMatchPolicy`'s existing "no local product is mapped to Nayax product …" Needs Review branch, so no inventory ever moves for it |
+| Machine stock (`NayaxMachineStockObservationSource`) | in the adapter that translates the slots | the slot is dropped, as one whose product was not in the caller's catalogue already was |
+
+In every case an unlinked id is treated as an unknown product, never matched to the local product
+whose id happens to be the same number. That is the point of the change: in a business created after
+#735, a local key and a Nayax id that coincide are a coincidence.
+
+**Each link read is awaited on its own.** All of these use cases run a concurrent Nayax fan-out and
+then one or more reads on the request's scoped `AppDbContext`, which supports a single operation at
+a time, and since issue #520 each remote call resolves the business's credentials through that same
+context (issue #667). The link read is therefore awaited after the fan-out has completed and in
+sequence with the other database reads, never beside them;
+`NayaxParallelCredentialAccessTests` pins that for the reorder and site-dashboard fan-outs over the
+real adapters, with the link resolved through the real link table.
+
+**No Nayax group id is resolved here.** None of these paths reads a `ProductGroupID`: a category is
+reached through the local `Product.CategoryId`. `CategoryExternalIds` therefore has no reader yet —
+the catalogue import that writes a product group is #745 (A2b).
 
 ### Nayax product catalogue import (issue #300)
 
@@ -8876,8 +8938,10 @@ that meaning.
    reads the machine's MDB positions from the same live `INayaxLynxClient.GetMachineProductsAsync`
    projection `Inventory.Application.Machines.ListMachineProducts` already uses, and the deterministic Domain rule
    `Inventory.Domain.Nayax.NayaxMachineStockMatchPolicy` resolves the parsed MDB to its
-   `NayaxProductID` and then to the local product by that id (`Product.Id` is the Nayax product
-   identifier catalog-wide, as elsewhere in this document). The alert's product name is only a
+   `NayaxProductID` and then to the local product that Nayax id is linked to — through
+   `ProductExternalIds`, since issue #733 (see
+   [Resolving a Nayax product id](#resolving-a-nayax-product-id-to-a-local-product-issue-733)),
+   rather than by reading the remote id as `Product.Id`. The alert's product name is only a
    tolerant validation check, normalised through the same authoritative
    `Inventory.Domain.Reporting.ProductMatching.ProductMatcher.NormalizeName` used for
    sale-to-product matching. An unknown MDB or a material name mismatch is `NeedsReview` and never

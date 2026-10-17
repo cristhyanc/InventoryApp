@@ -2,6 +2,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Reorder;
 using Inventory.Application.SupportSessions;
 using Inventory.Domain.Nayax;
+using InventoryApi.Tests.Application.Nayax;
 using Moq;
 using Xunit;
 
@@ -138,7 +139,8 @@ public class CalculateReorderNeedsProviderOptionalTests
         outstanding.Setup(store => store.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Dictionary<long, decimal> { [OutstandingOrderProductId] = OutstandingOrderQuantity });
 
-        return new CalculateReorderNeeds(fleet.Object, outstanding.Object).Handle(CancellationToken.None);
+        return new CalculateReorderNeeds(
+            fleet.Object, outstanding.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle(CancellationToken.None);
     }
 
     private static Mock<INayaxLynxClient> FleetOf(params long[] machineIds)

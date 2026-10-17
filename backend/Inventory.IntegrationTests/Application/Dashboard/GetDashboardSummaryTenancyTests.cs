@@ -10,6 +10,7 @@ using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
@@ -147,7 +148,10 @@ public class GetDashboardSummaryTenancyTests : IDisposable
             TestAppDbContext.ScopeFor(scopedBusinessId),
             new EfDashboardSummarySalesFactsProvider(db),
             new EfProductCatalogStore(db),
-            new CalculateReorderNeeds((fleet ?? SharedOperatorFleet()).Object, outstandingOrders.Object));
+            new CalculateReorderNeeds(
+                (fleet ?? SharedOperatorFleet()).Object,
+                outstandingOrders.Object,
+                FakeNayaxProductLinkStore.EveryIdLinkedToItself()));
     }
 
     private async Task<DashboardSummaryDto> SummaryFor(int businessId)

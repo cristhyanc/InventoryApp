@@ -6,6 +6,7 @@ using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -458,6 +459,16 @@ public sealed class MachineAndProductFinancialRedactionApiTests
                 IsActive = true,
                 CreatedAt = CreatedAt,
                 UpdatedAt = CreatedAt,
+            });
+
+            // The product's Nayax link (issue #732), without which the machine slot resolves to no
+            // local product at all (issue #733). Every imported product has one in production.
+            db.ProductExternalIds.Add(new ProductExternalId
+            {
+                BusinessId = BusinessId,
+                Provider = ExternalProvider.Nayax,
+                ExternalId = NayaxExternalId.From(ProductId),
+                ProductId = ProductId,
             });
 
             // An effective processing fee rate, so the costed machine's direct profit is a real
