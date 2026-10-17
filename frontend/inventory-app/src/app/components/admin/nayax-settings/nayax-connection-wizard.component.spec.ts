@@ -1,8 +1,9 @@
 import { TestBed } from '@angular/core/testing';
 import { NgModel } from '@angular/forms';
 import { By } from '@angular/platform-browser';
-import { Observable, Subject, of, throwError } from 'rxjs';
+import { Observable, Subject, firstValueFrom, of, throwError } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
+import { ProviderAvailabilityService } from '../../../provider/provider-availability.service';
 import {
   NayaxConnectionRetestResult,
   NayaxConnectionService,
@@ -130,6 +131,46 @@ async function render(
 
   return { fixture, host, component, connections, toast, enterOperatorId, pasteToken, runTestWith };
 }
+
+/**
+ * The wizard is the one screen where the connection changes, so it is the one screen that has to
+ * refresh the application-wide availability signal (issue #728). Every other screen then reflects
+ * the new connection without probing for it, and without a stale answer from earlier in the session.
+ */
+describe('NayaxConnectionWizardComponent refreshes the shared provider signal (issue #728)', () => {
+  it('publishes the state a save established, without reading the status again', async () => {
+    const { component, fixture, connections, runTestWith } = await render({ status: () => of(state()) });
+    const provider = TestBed.inject(ProviderAvailabilityService);
+    expect(await firstValueFrom(provider.load())).toEqual({ status: 'NotConfigured', connection: 'notConnected' });
+
+    runTestWith();
+    component.goTo(6);
+    fixture.detectChanges();
+    component.saveConnection();
+
+    expect(connections.save).toHaveBeenCalledTimes(1);
+    expect(await firstValueFrom(provider.load())).toEqual({ status: 'Ready', connection: 'usable' });
+    expect(connections.status).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes the state a re-test established', async () => {
+    const { component, connections } = await render({ status: () => of(state()) });
+    const provider = TestBed.inject(ProviderAvailabilityService);
+
+    component.retest();
+
+    expect(connections.retest).toHaveBeenCalledTimes(1);
+    expect(await firstValueFrom(provider.load())).toEqual({ status: 'Ready', connection: 'usable' });
+    expect(connections.status).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes nothing when the status read itself failed, leaving the answer unknown', async () => {
+    await render({ status: () => throwError(() => new Error('boom')) });
+    const provider = TestBed.inject(ProviderAvailabilityService);
+
+    expect(await firstValueFrom(provider.load())).toEqual({ status: null, connection: 'unknown' });
+  });
+});
 
 /**
  * The Owner-only Nayax connection wizard (issue #538) over the endpoints of issues #536 and #537.
