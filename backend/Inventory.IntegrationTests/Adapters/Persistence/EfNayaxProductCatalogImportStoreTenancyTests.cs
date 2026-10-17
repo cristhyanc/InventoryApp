@@ -75,6 +75,14 @@ public class EfNayaxProductCatalogImportStoreTenancyTests : IDisposable
         Assert.Equal(BusinessB, other.BusinessId);
         Assert.Equal("B cola", other.Name);
         Assert.Equal(2m, other.UnitPrice);
+
+        // The provider links the import writes are stamped the same way and are equally confined
+        // (issue #732): business B's catalogue gains none, so another business's import can neither
+        // claim B's rows nor record a Nayax id inside B.
+        var productLink = await verify.ProductExternalIds.SingleAsync();
+        Assert.Equal((BusinessA, "100", 100L), (productLink.BusinessId, productLink.ExternalId, productLink.ProductId));
+        var categoryLink = await verify.CategoryExternalIds.SingleAsync();
+        Assert.Equal((BusinessA, "10", 10L), (categoryLink.BusinessId, categoryLink.ExternalId, categoryLink.CategoryId));
     }
 
     /// <summary>

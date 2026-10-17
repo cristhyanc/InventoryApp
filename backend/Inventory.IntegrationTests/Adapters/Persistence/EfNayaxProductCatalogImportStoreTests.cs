@@ -1,4 +1,5 @@
 using Inventory.Application.Imports;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
@@ -209,6 +210,76 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
         var product = await verify.Products.SingleAsync();
         Assert.Equal("Chips", product.Name);
         Assert.Equal(3.50m, product.UnitPrice);
+    }
+
+    /// <summary>
+    /// The import is the one writer of a Nayax link outside the backfill (issue #732): a row it
+    /// creates must arrive already linked, or the catalogue would grow rows the later lookups
+    /// (#733, #745, #747, #734) cannot resolve even though the id is sitting in the snapshot.
+    /// </summary>
+    [Fact]
+    public async Task A_created_product_and_category_arrive_with_their_nayax_link()
+    {
+        await Apply(new NayaxProductCatalogImport(
+            [new ImportedProductCategory(10, "Snacks", "Snacks")],
+            [new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10)],
+            ImportedAt));
+
+        using var verify = TestAppDbContext.For(_options, 1);
+        var productLink = await verify.ProductExternalIds.SingleAsync();
+        Assert.Equal(
+            (1, ExternalProvider.Nayax, "100", 100L),
+            (productLink.BusinessId, productLink.Provider, productLink.ExternalId, productLink.ProductId));
+
+        var categoryLink = await verify.CategoryExternalIds.SingleAsync();
+        Assert.Equal(
+            (1, ExternalProvider.Nayax, "10", 10L),
+            (categoryLink.BusinessId, categoryLink.Provider, categoryLink.ExternalId, categoryLink.CategoryId));
+    }
+
+    /// <summary>
+    /// A row that predates the link tables and was never backfilled - a product restored from an
+    /// older backup, say - is linked by the next import rather than left behind.
+    /// </summary>
+    [Fact]
+    public async Task An_updated_row_that_has_no_link_yet_gets_one()
+    {
+        using (var seed = TestAppDbContext.For(_options, 1))
+        {
+            seed.Categories.Add(new Category { Id = 10, Name = "Snacks" });
+            seed.Products.Add(new Product { Id = 100, Name = "Old name" });
+            await seed.SaveChangesAsync();
+        }
+
+        await Apply(new NayaxProductCatalogImport(
+            [new ImportedProductCategory(10, "Snacks", "Snacks")],
+            [new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10)],
+            ImportedAt));
+
+        using var verify = TestAppDbContext.For(_options, 1);
+        Assert.Equal("100", (await verify.ProductExternalIds.SingleAsync()).ExternalId);
+        Assert.Equal("10", (await verify.CategoryExternalIds.SingleAsync()).ExternalId);
+    }
+
+    /// <summary>
+    /// Repeating an import is the normal operator action, and the link is kept rather than
+    /// rewritten: a second row would break the one-link-per-product rule, and rewriting the one
+    /// that exists would be a write with nothing to change.
+    /// </summary>
+    [Fact]
+    public async Task A_repeated_import_keeps_the_existing_link()
+    {
+        var import = new NayaxProductCatalogImport(
+            [new ImportedProductCategory(10, "Snacks", "Snacks")],
+            [new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10)],
+            ImportedAt);
+
+        await Apply(import);
+        await Apply(import);
+
+        using var verify = TestAppDbContext.For(_options, 1);
+        Assert.Equal(100L, (await verify.ProductExternalIds.SingleAsync()).ProductId);
+        Assert.Equal(10L, (await verify.CategoryExternalIds.SingleAsync()).CategoryId);
     }
 
     private async Task Apply(NayaxProductCatalogImport import)
