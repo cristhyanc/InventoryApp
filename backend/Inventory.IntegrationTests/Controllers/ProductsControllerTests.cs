@@ -15,6 +15,7 @@ using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.SupportSessions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -68,7 +69,14 @@ public class ProductsControllerTests
             new CurrentCapabilities(
                 new FakeSupportSessionAccessor(),
                 new FakeCurrentBusinessProvider(businessId: 1),
-                new FakeRolePreviewAccessor()));
+                new FakeRolePreviewAccessor()))
+        {
+            // The catalogue actions publish the reorder-listing metadata headers (issue #726), so a
+            // directly constructed controller needs a response to write them to. The headers
+            // themselves are asserted through the real pipeline in
+            // InventoryApi.Tests.Controllers.LowStockReorderMetadataApiTests.
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() },
+        };
     }
 
     private static ProductResponse SingleProduct(ActionResult<IEnumerable<ProductResponse>> result) =>

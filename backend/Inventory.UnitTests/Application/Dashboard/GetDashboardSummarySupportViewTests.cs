@@ -111,7 +111,7 @@ public class GetDashboardSummarySupportViewTests
         var summary = await UseCase(MemberScope(), fleet).Handle(CancellationToken.None);
 
         var full = Assert.IsType<DashboardSummaryDto>(summary);
-        Assert.Equal(0, full.NeedsRefill.MachinesEvaluated);
+        Assert.Equal(0, Assert.IsType<DashboardRefillSummaryDto>(full.NeedsRefill).MachinesEvaluated);
         Assert.Equal(1, full.NeedsOrdering.ProductsEvaluated);
         fleet.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }

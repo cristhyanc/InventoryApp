@@ -223,7 +223,7 @@ public class GetDashboardSummaryTests
             (2, [Selection(100, par: 10, missing: 9, threshold: 2)]),
             (3, [Selection(100, par: 10, missing: 0, threshold: 2)]));
 
-        var refill = (await UseCase(catalog: catalog, nayax: nayax).FullSummary()).NeedsRefill;
+        var refill = (await UseCase(catalog: catalog, nayax: nayax).FullSummary()).RefillCard();
 
         Assert.Equal(2, refill.MachinesNeedingRefill);
         Assert.Equal(1, refill.MachinesWithEmptySelections);
@@ -245,7 +245,7 @@ public class GetDashboardSummaryTests
         var catalog = new FakeProductCatalogStore(Product(100, "Coke"));
         var nayax = Fleet((1, [Selection(100, 10, 0, 2), Selection(999, par: 10, missing: 10, threshold: 2)]));
 
-        var refill = (await UseCase(catalog: catalog, nayax: nayax).FullSummary()).NeedsRefill;
+        var refill = (await UseCase(catalog: catalog, nayax: nayax).FullSummary()).RefillCard();
 
         Assert.Equal(0, refill.MachinesNeedingRefill);
         Assert.Equal(1, refill.SelectionsEvaluated);
@@ -257,7 +257,7 @@ public class GetDashboardSummaryTests
         var catalog = new FakeProductCatalogStore(Product(100, "Discontinued", isActive: false));
         var nayax = Fleet((1, [Selection(100, par: 10, missing: 10, threshold: 2)]));
 
-        var refill = (await UseCase(catalog: catalog, nayax: nayax).FullSummary()).NeedsRefill;
+        var refill = (await UseCase(catalog: catalog, nayax: nayax).FullSummary()).RefillCard();
 
         Assert.Equal(0, refill.MachinesNeedingRefill);
         Assert.Equal(0, refill.SelectionsEvaluated);
@@ -267,7 +267,7 @@ public class GetDashboardSummaryTests
     [Fact]
     public async Task An_empty_fleet_reports_zero_machines_evaluated_rather_than_a_silent_zero()
     {
-        var refill = (await UseCase().FullSummary()).NeedsRefill;
+        var refill = (await UseCase().FullSummary()).RefillCard();
 
         Assert.Equal(0, refill.MachinesNeedingRefill);
         Assert.Equal(0, refill.MachinesEvaluated);
@@ -301,7 +301,7 @@ public class GetDashboardSummaryTests
                     nayax.Object, outstandingOrders.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()))
             .Handle(ProductCatalogFilter.None, CancellationToken.None);
 
-        Assert.Equal(expected.Count, summary.NeedsOrdering.ProductsNeedingOrdering);
+        Assert.Equal(expected.Products.Count, summary.NeedsOrdering.ProductsNeedingOrdering);
         Assert.Equal(1, summary.NeedsOrdering.ProductsNeedingOrdering);
         Assert.Equal(3, summary.NeedsOrdering.ProductsEvaluated);
     }
@@ -453,9 +453,16 @@ public class GetDashboardSummaryTests
 /// <see cref="DashboardSummaryDto"/>; asserting that where the result is read means a test about a
 /// figure fails saying which shape it got, rather than failing to compile against the published
 /// union (issue #527).
+///
+/// <see cref="RefillCard"/> is the same idea one level down (issue #726): every fleet in this file
+/// really is read, so the refill section must be the card and not the withheld shape the
+/// storage-only mode publishes.
 /// </summary>
 internal static class GetDashboardSummaryTestExtensions
 {
     public static async Task<DashboardSummaryDto> FullSummary(this GetDashboardSummary useCase) =>
         Assert.IsType<DashboardSummaryDto>(await useCase.Handle(CancellationToken.None));
+
+    public static DashboardRefillSummaryDto RefillCard(this DashboardSummaryDto summary) =>
+        Assert.IsType<DashboardRefillSummaryDto>(summary.NeedsRefill);
 }

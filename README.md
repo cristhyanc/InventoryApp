@@ -4,7 +4,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date).
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
 - Nayax product and transaction imports with explicit payment/status handling.
@@ -218,6 +218,8 @@ The application requires a Microsoft Entra sign-in. Click **Sign in** in the hea
 ## Authentication configuration
 
 Authentication uses Microsoft Entra ID (Azure AD): ASP.NET Core / `Microsoft.Identity.Web` validates bearer tokens on the API, and the Angular SPA signs users in with MSAL (`@azure/msal-angular`, `@azure/msal-browser`). See [docs/architecture.md](docs/architecture.md#authentication-and-authorization) for the full boundary description.
+
+**Planned, not implemented:** [docs/identity-provider-decision.md](docs/identity-provider-decision.md) holds the proposed design for signing in with Google or a verified email address and password through Microsoft Entra External ID, beside the workforce Microsoft sign-in (issue #709). It is a design awaiting human confirmation of several provider details and describes nothing the application does today — everything below is current behaviour.
 
 Non-secret configuration already committed to the repository:
 
@@ -1050,6 +1052,33 @@ again, so the status always describes the token actually stored.
 
 Tests and re-tests share one allowance for the whole business (five runs per ten minutes); past it
 the page asks you to wait a few minutes, and no call reaches Nayax.
+
+### Reorder alerts without Nayax
+
+Nayax is an optional add-on. A business with no connected Nayax account — or one whose connection
+needs attention, or whose Nayax account has not granted the machine permissions — still gets its
+reorder alerts and its ordering figures, calculated from the data this application owns (issue
+#726):
+
+- **Needs ordering and the reorder-alert list** are answered in **storage-only** mode: storage
+  stock, each product's low-stock threshold and restock target, and the quantity already on an
+  outstanding supplier order, with the machines' current need counted as **zero**. The formula is
+  unchanged — it is the same calculation with one input missing. Both the dashboard's Needs ordering
+  card and the reorder-alert list state the mode they were produced in (`StorageOnly` or
+  `MachineAware`), and in storage-only mode the reason the machines are missing, so a figure that did
+  not account for the machines is never read as one that did.
+- **Needs refill** is reported as unavailable with the reason (`NayaxNotConnected` when the
+  connection is unusable, `PermissionNotGranted` when Nayax has not granted the machine reads),
+  because every figure on that card is a figure about machines. It is never shown as "no machine
+  needs refilling", which would be a false statement about a fleet nobody read.
+- **Everything else on the dashboard is unaffected**: the week's sales, the inventory valuation and
+  the product and storage counts are the business's own data and are reported as usual.
+- **A real Nayax outage is still an error.** Only "no usable connection" and "this permission was
+  not granted" produce storage-only figures; a Nayax request that fails in transport, or a fleet
+  only half read, surfaces as an error rather than as a business whose machines need nothing.
+
+The screens that present these states are issue #727; until it ships, the dashboard shows the
+unavailable refill card with the support-view wording.
 
 ## Business settings (Admin page)
 

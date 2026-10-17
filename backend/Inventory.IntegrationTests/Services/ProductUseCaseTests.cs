@@ -65,7 +65,7 @@ public class ProductUseCaseTests
 
         var products = await useCases.List.Handle(ProductCatalogFilter.None, null, CancellationToken.None);
 
-        var product = Assert.Single(products);
+        var product = Assert.Single(products.Products);
         Assert.Single(product.StockAdjustments);
     }
 
@@ -344,7 +344,7 @@ public class ProductUseCaseTests
 
         var alerts = await useCases.LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
 
-        var coke = Assert.Single(alerts);
+        var coke = Assert.Single(alerts.Products);
         Assert.Equal("Coke", coke.Name);
         Assert.Equal(7, coke.MachineReplenishmentNeed);
     }
@@ -451,8 +451,8 @@ public class ProductUseCaseTests
         Assert.Equal(16m, product.NeedToOrder);
     }
 
-    private static Task<IReadOnlyList<ProductRecord>> LowStock(AppDbContext db) =>
-        CreateUseCases(db).LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
+    private static async Task<IReadOnlyList<ProductRecord>> LowStock(AppDbContext db) =>
+        (await CreateUseCases(db).LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None)).Products;
 
     private static ProductUseCases CreateUseCases(AppDbContext db)
     {

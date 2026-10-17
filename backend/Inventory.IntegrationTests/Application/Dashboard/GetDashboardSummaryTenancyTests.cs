@@ -167,6 +167,13 @@ public class GetDashboardSummaryTenancyTests : IDisposable
         return Assert.IsType<DashboardSummaryDto>(summary);
     }
 
+    /// <summary>
+    /// The refill section as the card it must be here (issue #726): every fleet in this file really
+    /// is read, so a withheld section would be a defect rather than the storage-only mode.
+    /// </summary>
+    private static DashboardRefillSummaryDto RefillCard(DashboardSummaryDto summary) =>
+        Assert.IsType<DashboardRefillSummaryDto>(summary.NeedsRefill);
+
     [Fact]
     public async Task Each_business_sees_only_its_own_week_to_date_revenue()
     {
@@ -197,8 +204,8 @@ public class GetDashboardSummaryTenancyTests : IDisposable
     [Fact]
     public async Task A_machine_stocked_with_another_businesses_product_never_counts_toward_this_businesses_refill()
     {
-        var businessA = (await SummaryFor(BusinessA)).NeedsRefill;
-        var businessB = (await SummaryFor(BusinessB)).NeedsRefill;
+        var businessA = RefillCard(await SummaryFor(BusinessA));
+        var businessB = RefillCard(await SummaryFor(BusinessB));
 
         Assert.Equal(1, businessA.MachinesNeedingRefill);
         Assert.Equal(1, businessA.EmptySelectionCount);
@@ -247,8 +254,8 @@ public class GetDashboardSummaryTenancyTests : IDisposable
 
         Assert.Equal(0m, summary.SalesThisWeek.Sales);
         Assert.False(summary.SalesThisWeek.IsComparisonAvailable);
-        Assert.Equal(0, summary.NeedsRefill.MachinesNeedingRefill);
-        Assert.Equal(0, summary.NeedsRefill.SelectionsEvaluated);
+        Assert.Equal(0, RefillCard(summary).MachinesNeedingRefill);
+        Assert.Equal(0, RefillCard(summary).SelectionsEvaluated);
         Assert.Equal(0, summary.NeedsOrdering.ProductsNeedingOrdering);
         Assert.Equal(0, summary.NeedsOrdering.ProductsEvaluated);
         Assert.Equal(0, summary.Inventory.ProductCount);

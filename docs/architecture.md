@@ -1430,6 +1430,7 @@ Authentication/authorization is an `InventoryApi`/frontend boundary concern (iss
 - **Backend.** `Program.cs` calls `AddInventoryApiAuthentication(...)`, which registers `AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAd"))` for every environment except the dedicated end-to-end testing host (see [End-to-end testing authentication](#end-to-end-testing-authentication-issue-46) below), and calls `UseAuthentication()` before `UseAuthorization()`. Every controller carries `[Authorize]` plus `[RequiredScope("access_as_user")]` (`Microsoft.Identity.Web.Resource`), so a request without a bearer token is rejected `401 Unauthorized` and a request whose token lacks the delegated `access_as_user` scope is rejected `403 Forbidden`, both by ASP.NET Core's authentication/authorization middleware before any controller action runs. Every business endpoint additionally declares the capability their caller's role must grant, enforced by the same middleware — see [Capability authorization](#capability-authorization-issue-525) and [Capability authorization on the Manager and Owner endpoints](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526); the only endpoints that declare none are `GET /api/me/access`, `GET /api/me/account-state` and the platform diagnostics surface, each for its own recorded reason — and `UseAuthorization()` deliberately runs before `BusinessScopeMiddleware`, which is why the capability handler resolves membership itself rather than waiting for the scope that middleware publishes. The non-secret `AzureAd` configuration (`Instance`, `TenantId`, `ClientId`, `Scopes`) lives in `appsettings.json`; the `ClientId` is the API app registration's public application ID, used only to validate the token audience, never a client secret. `Microsoft.Identity.Web`/`Microsoft.AspNetCore.Authorization`/JWT types are used only in `InventoryApi` (`Program.cs` and controllers) and must never appear in `Inventory.Domain` or `Inventory.Application`; if a use case ever needs the caller's identity, define a narrow neutral Application port instead of exposing Microsoft identity-provider types across that boundary.
 - **Frontend.** The Angular SPA authenticates through MSAL (`@azure/msal-angular`, `@azure/msal-browser`). `frontend/inventory-app/src/app/auth-config.ts` defines the SPA/API Entra application IDs, the delegated `access_as_user` scope (`loginRequest`), and `buildProtectedResourceMap(apiBaseUrl)`, which keys MSAL's protected-resource map off `ConfigService.apiBaseUrl` rather than a hard-coded host. `src/app/auth/browser-auth-providers.ts` wires `MsalInterceptor` (attaches `Authorization: Bearer <token>` to matching requests), `MsalGuard` (redirect-based route protection), and `MSAL_INTERCEPTOR_CONFIG` (built from that dynamic map), and `app.config.ts` spreads those providers into the application config, so the bearer token is attached correctly whether `ConfigService.apiBaseUrl` resolves to the local dev proxy (`/api`) or the deployed Azure API's absolute URL — see [Runtime configuration and API contracts](#runtime-configuration-and-api-contracts). `app.routes.ts` applies `MsalGuard` to every application route except the public `/auth` callback route (`AuthCallbackComponent`), which must stay reachable without authentication so the Entra redirect can complete. `AppComponent` drives sign-in/sign-out (`MsalService.loginRedirect`/`logoutRedirect`) and reflects the active account in the header.
 - **Protected documents.** Static-file middleware does not run controller authorization, so an uploaded document under `wwwroot` would be downloadable by anyone who knew its generated file name no matter what `[Authorize]` says. `Program.cs` therefore registers no static-file middleware at all — the API serves no public assets, since the Angular application is a separate Azure Static Web App — and `Inventory.Infrastructure.Documents.FileSystemDocumentStorage` stores purchase documents and operating-expense supporting documents under `{ContentRoot}/protected-files/{category}/`, outside the web root. The only way to read one is `GET /api/purchases/{id}/file` or `GET /api/operating-expenses/{id}/attachment` — the sole, canonical OperatingExpense attachment route; the legacy `GET /api/operating-expenses/{id}/receipt` alias was removed (issue #61) once verification confirmed no in-repository or external caller used it, with no deprecation period. Documents uploaded before this rule still sit in `wwwroot/{category}` and stay readable and deletable through the same endpoints (the adapter falls back to that location) but no longer have an anonymous URL. Because these endpoints require a bearer token, the frontend must fetch them through `HttpClient` (`PurchaseService.getFile`, `OperatingExpenseService.getAttachment`, both `responseType: 'blob'`) and render them from an object URL; an `<a href>`/`<img src>` pointing straight at the endpoint is a plain browser request that carries no token and gets `401`.
+- **Planned, not implemented: customer identity through Microsoft Entra External ID.** [docs/identity-provider-decision.md](identity-provider-decision.md) holds the proposed design for Google and verified email/password sign-in beside the workforce Microsoft sign-in described here (issue #709, under #708). **Nothing in it is current behaviour**: the API registers one real bearer scheme against the `AzureAd` section, and the actor is the workforce Entra `(tid, oid)` pair, exactly as the bullets above describe. That document is the human decision gate for the downstream implementation tasks, and several of its statements about the provider are explicitly awaiting human confirmation.
 - **Authentication is not ownership.** Accepting users from multiple Microsoft Entra tenants (`TenantId: "common"`) establishes *who* the caller is. *Whose data they may see* is decided separately by business ownership, described below, and *what they may do with it* by their membership role's capabilities — see [Membership roles and capabilities](#membership-roles-and-capabilities-issue-521) and [Capability authorization](#capability-authorization-issue-525).
 
 #### End-to-end testing authentication (issue #46)
@@ -1608,6 +1609,8 @@ Everything above decides whether a request is answered at all. `Dashboard.ViewFi
 | Role does not (Operator) | `RedactedDashboardSummaryDto` | `asOfUtc`, `businessDate`, `needsRefill`, `needsOrdering`, `inventory` | `isInventoryValueComplete`, `productsWithUnknownCost`, `productCount`, `unitsInStorage` |
 
 Nothing else differs: `asOfUtc`, `businessDate`, the refill and ordering cards and every remaining inventory figure are value-for-value what the same request produces for a Manager, and a Manager's and an Owner's response is byte-for-byte what it was before — no property added, renamed, retyped or removed.
+
+Both shapes gained a third section state later, and neither is a role decision: a support session replaces the refill and ordering cards with `{ "available": false, "reason": "SupportView" }` (issue #552), and a business with no usable Nayax connection has its refill card replaced the same way while its ordering card carries a storage-only `mode` (issue #726, see [Provider-optional reorder and dashboard summary](#provider-optional-reorder-and-dashboard-summary-issue-726)). Redaction and provider availability are independent: one withholds money, the other withholds the machines.
 
 **A redacted figure is absent, not `null` and not `0`.** That is why this is two types rather than one type with nullable properties and a "redacted" flag. `null` is *already* a meaningful answer for `inventoryValueAtCost` — "the valuation is incomplete, because some product's cost is unknown" ([Inventory Value tile](#dashboard-inventory-value-tile-issue-42)) — so reusing it for "you may not see this" would make an incomplete valuation and a withheld one indistinguishable. `0` would read as a known zero week, which is a financial statement about the business and a false one. A property the returned type does not have, finally, cannot be reintroduced by a later change to a serializer option, a converter or an attribute, and there is no flag anybody can forget to read. MVC serializes the object the action returned, so the absence is the type's shape rather than a serialization setting.
 
@@ -4057,6 +4060,12 @@ caller was not given, and the footer carries the one sentence - `support-session
 `NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE`, the same constant the interceptor above shows for a
 direct refusal, so the error and the degraded card are never two different sentences for the one
 reason.
+
+Issue #726 added a second and third `reason` to the same shape (`NayaxNotConnected`,
+`PermissionNotGranted`) for a business without a usable provider, and did not touch the frontend:
+these helpers branch on `available` alone, so such a business currently sees "Unavailable" with the
+support-view sentence - wrong wording for the right state. Reading the reason and wording each one,
+including the storage-only `mode` the ordering card now carries, is issue #727.
 
 **What proves it.** `support-session.service.spec.ts` covers `active$` publishing `true` once a
 session starts and `false` again once it ends, with no duplicate for an unchanged state.
@@ -6698,6 +6707,12 @@ credentials and those two cards are the only part of this summary the live fleet
 read is not attempted at all in that state, and every other section is the real local figure. See
 [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
 
+Since issue #726, `needsRefill` is additionally withheld - and `needsOrdering` is counted over
+storage alone and says so - for a business whose Nayax connection is unusable or whose Nayax account
+has not granted the fleet reads. The summary is answered rather than refused in that state. See
+[Provider-optional reorder and dashboard summary](#provider-optional-reorder-and-dashboard-summary-issue-726)
+below.
+
 `Inventory.Application.Dashboard.GetDashboardSummary` is the use case. It owns no formula of its
 own: every figure comes from an authority that already existed.
 
@@ -6779,6 +6794,118 @@ namespace is reserved for the `/reports/*` slices (`GetDashboardReport` is the r
 `/reports/dashboard`, a different feature). `GetInventoryValuationSummary` stays where it is; this
 use case reuses the Domain `InventoryValuationPolicy` it is built on rather than calling it, so the
 valuation and the product count describe one catalogue read instead of two.
+
+#### Provider-optional reorder and dashboard summary (issue #726)
+
+Nayax is an optional add-on; stock-storage management is what the application is for. Issue #726 is
+the backend half of that for reorder and the home Dashboard (the #328 release gate, child D1 of
+issue #329), and the frontend half is #727. Before it, `GET /api/dashboard/summary`,
+`GET /api/products/alerts/low-stock` and the Needs Ordering page all answered `409
+nayax_not_connected` for a business with no usable connection, because `CalculateReorderNeeds`
+starts with a live `GetMachinesAsync` and every caller of it propagated that refusal - so three
+screens made of local stock data went down with the fleet read.
+
+**Reorder has two explicit modes, and every result carries the one it was produced in.**
+`Inventory.Application.Reorder.ReorderMode` is the vocabulary and `ReorderNeedsResult.Mode` is
+`required`, so a result without a stated mode cannot exist:
+
+| Mode | What it accounted for | How it is reached |
+| --- | --- | --- |
+| `MachineAware` | Storage stock, low-stock threshold, restock target, outstanding supplier orders **and** the machines' current replenishment need | The fleet read and every machine-products read succeeded |
+| `StorageOnly` | The same local facts, with the machines' replenishment need taken as **0** | The business has no usable connection, or Nayax has not granted one of the two fleet reads |
+
+`StorageOnly` is the enum's default value deliberately: a result nobody labelled claims less rather
+than claiming the machines were read. A storage-only result is built only through
+`ReorderNeedsResult.StorageOnly(onOrderQuantities, reason)`, which is why it can never carry a
+machine need, a machine id or a machine selection, and never carries no reason. Nothing about the
+formulas changed - `ProductReorderPolicy.NeedToOrder` is still the one authoritative calculation,
+and storage-only is simply that formula with a machine need of zero, not a second formula.
+
+**Availability is per feature, and exactly two answers are availability answers** (decision P9 of
+issue #329). `CalculateReorderNeeds` degrades on `NayaxNotConnectedException` (nothing stored,
+`NotConfigured`, or the `NeedsAttention` the `NayaxConnectionStatusGate` refuses → reason
+`NayaxNotConnected`) and on `NayaxPermissionNotGrantedException` (the credentials are usable and
+Nayax answered a fleet read with `403` while the connection is `PendingPermissions` → reason
+`PermissionNotGranted`). That is the same line `GetMachineStockReconciliation` already draws, and the
+403 case stays a per-feature answer that writes no connection status: the Nayax contract documents
+403 as the token's scopes not covering the requested resource or action, and each Lynx endpoint
+carries its own permission, so the fleet reads being refused says nothing about the rest of the
+integration.
+
+**Everything else is still an error, including mid-fleet.** A transport failure (`502` through
+`NayaxUpstreamExceptionHandler`), a cancellation, a `401` that closes the status gate part-way
+through the fan-out, and the support-session refusal all propagate unchanged. A fleet that was half
+read is an outage, not a smaller fleet, and must never be published as a business whose machines
+need nothing - the storage-only mode is not a place to absorb failures into. A permission refusal
+inside the fan-out is recorded rather than thrown (so the availability answer does not arrive
+wrapped beside the sibling cancellations a faulted parallel loop raises), the remaining machines are
+skipped, and everything already read is **discarded**: a fleet this business may not read produces a
+storage-only answer, never a partial one.
+
+**In the mixed case the failure wins, not the availability answer.** If one machine request is
+refused for lack of permission while a sibling request that is already in flight fails upstream, the
+upstream failure propagates out of the fan-out and the caller gets the error - a fleet that was half
+read is an outage whatever else the fleet answered, and a `403` somewhere in it is no reason to
+publish a business as needing nothing. The permission refusal only decides the answer when it is
+recorded before a sibling request starts, in which case the remaining machines are skipped and no
+other request is made at all. `CalculateReorderNeedsTests`'s
+`Handle_PropagatesAnUpstreamFailure_EvenWhenASiblingReportsPermissionNotGranted` pins that
+precedence deterministically, with both requests genuinely in flight together.
+
+**What each consumer publishes.**
+
+- `GET /api/dashboard/summary` keeps its three role/session shapes. In storage-only mode
+  `needsRefill` is `UnavailableDashboardSectionDto` - `{ "available": false, "reason":
+  "NayaxNotConnected" | "PermissionNotGranted" }` - because every figure on that card is a figure
+  about machines and `0 of 0 machines` would read as a fact about the fleet. `needsOrdering` is a
+  real count and carries `mode`, the published code of `ReorderMode`. `salesThisWeek` and
+  `inventory` are untouched. The refill section is therefore a union
+  (`IDashboardRefillSectionDto`, two `[JsonDerivedType]` declarations with no type discriminator, so
+  the JSON is the member's own object), which is the shape `models.ts` already declares for the
+  frontend and which `isDashboardSectionUnavailable` already branches on.
+- A **support session** is unchanged (#512/#552): both sections are
+  `{ "available": false, "reason": "SupportView" }` and no fleet read starts, because that branch is
+  taken from `IBusinessScope.State` before `CalculateReorderNeeds` is called at all.
+- `GET /api/products/alerts/low-stock` (and `GET /api/products?lowStockOnly=true`, the same use
+  case) returns the storage-only alerts instead of `409`. The product rows are unchanged, with
+  `machineReplenishmentNeed: 0` - which is exactly why the listing publishes its mode as well: that
+  `0` means "the machines need nothing" in machine-aware mode and "the machines were never read" in
+  storage-only mode, and a caller must not have to fetch the dashboard summary to tell the two apart.
+  The body stays the JSON **array** it has always been, and the mode is additive response metadata
+  beside it:
+
+  | Header | Value |
+  | --- | --- |
+  | `X-Reorder-Mode` | `MachineAware` or `StorageOnly`, the published `ReorderMode` code |
+  | `X-Reorder-Machine-Need-Unavailable-Reason` | `NayaxNotConnected` or `PermissionNotGranted`, in storage-only mode only |
+
+  Headers rather than an envelope or a per-row field, because the array contract is established and
+  the mode belongs to the whole answer: an **empty** list still has one, and that is the case a
+  per-row field could not express at all. An existing caller ignores both headers and reads the same
+  body it read before. The plain catalogue listing (`GET /api/products` without `lowStockOnly=true`)
+  calculates no reorder needs and so publishes neither header - an absent mode means "no reorder facts
+  were involved", never a guess at which mode would have applied. The two header names live in
+  `InventoryApi.Adapters.Mapping.ReorderListingMetadataHeaders`, and that one list is what the CORS
+  policy exposes (`WithExposedHeaders`): a browser client cannot read a response header a policy does
+  not expose, and no origin, method or request header was widened to add them. A reverse proxy or
+  gateway in front of the API that enumerates the response headers it forwards must forward these two,
+  which is deployed configuration outside this repository; a caller that never sees them reads the
+  same array it read before. `ListLowStockProducts`
+  and `ListProducts` answer `ProductListing` (the products plus the mode and reason) rather than a
+  bare list, which is what carries the two out of the use case; the selection, the ranking and every
+  figure on a row are unchanged.
+
+**No deployment or schema change, and no behaviour change for a connected business.** There is no
+migration, no new configuration and no new port. A business whose status is `Ready` or
+`PendingPermissions` with the fleet reads granted gets exactly what it got before, which
+`DashboardControllerTests`, `DashboardSummaryRedactionApiTests` and
+`GetDashboardSummaryTenancyTests` pin. `NayaxConfigurationFreeStartupTests` proves the API starts
+and serves requests with no `NayaxLynx` section at all (the base URL then comes from
+`NayaxLynxOptions`' own default), and `ProviderOptionalReorderApiTests` exercises both endpoints
+through the real pipeline against a business with no `BusinessNayaxConnection` row and the real
+`NayaxLynxClient` registered. `LowStockReorderMetadataApiTests` covers the listing's response
+metadata through the same pipeline for both low-stock endpoints, in all three modes/reasons and for an
+empty result.
 
 #### Home dashboard: four headline cards (issue #460)
 
@@ -7619,6 +7746,13 @@ legacy sequential loop never accepted one, because neither `ProductService.LowSt
 errors](#external-integration-errors)) or a genuine cancellation - propagates out of `Handle` unchanged;
 `Parallel.ForEachAsync` never assembles a completed-looking aggregate once one machine's call has
 failed, so a caller never receives a partial reorder calculation presented as a complete one.
+
+Since issue #726 this use case answers in one of two modes rather than failing when the fleet is
+unavailable to the business at all: the two per-feature availability answers
+(`NayaxNotConnectedException`, `NayaxPermissionNotGrantedException`) produce a complete storage-only
+result with the reason, and every other failure - including the upstream and cancellation cases above
+- still propagates. See
+[Provider-optional reorder and dashboard summary](#provider-optional-reorder-and-dashboard-summary-issue-726).
 
 #### Pick List backend projection (issue #221)
 

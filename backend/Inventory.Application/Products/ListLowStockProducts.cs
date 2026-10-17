@@ -14,6 +14,11 @@ namespace Inventory.Application.Products;
 /// <see cref="Inventory.Domain.Products.ProductReorderPolicy"/>, the same formulas the API's product
 /// response exposes, so a product can never be listed with a reorder quantity the caller then sees
 /// differently.
+///
+/// <para>Since issue #726 it answers a <see cref="ProductListing"/> rather than a bare list, so the
+/// <see cref="ReorderMode"/> the needs were calculated in - and, in storage-only mode, the reason the
+/// machines were not read - reaches the caller with the rows they qualify. The selection and the
+/// ranking are unchanged.</para>
 /// </summary>
 public sealed class ListLowStockProducts
 {
@@ -26,14 +31,14 @@ public sealed class ListLowStockProducts
         _calculateReorderNeeds = calculateReorderNeeds;
     }
 
-    public async Task<IReadOnlyList<ProductRecord>> Handle(
+    public async Task<ProductListing> Handle(
         ProductCatalogFilter filter, CancellationToken cancellationToken)
     {
         var products = await _catalog.ListUnorderedAsync(filter, cancellationToken);
 
         var reorderNeeds = await _calculateReorderNeeds.Handle(cancellationToken);
 
-        return SelectReorderAlerts(products, reorderNeeds);
+        return ProductListing.ReorderAlerts(SelectReorderAlerts(products, reorderNeeds), reorderNeeds);
     }
 
     /// <summary>
