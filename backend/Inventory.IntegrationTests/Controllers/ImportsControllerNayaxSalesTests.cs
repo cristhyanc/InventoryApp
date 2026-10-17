@@ -128,7 +128,12 @@ public class ImportsControllerNayaxSalesTests
                 Mock.Of<Inventory.Application.Nayax.INayaxLynxClient>(),
                 Mock.Of<INayaxProductCatalogImportStore>(),
                 Mock.Of<IClock>()),
-            new ImportNayaxSales(reader, store, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>()),
+            new ImportNayaxSales(
+                reader,
+                store,
+                Mock.Of<ICostSale>(),
+                Mock.Of<IRebuildProductCost>(),
+                InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
             new ImportPendingReimbursementXmlFiles(
                 Mock.Of<IPendingReimbursementXmlSource>(),
                 Mock.Of<IImportedReimbursementStore>(),

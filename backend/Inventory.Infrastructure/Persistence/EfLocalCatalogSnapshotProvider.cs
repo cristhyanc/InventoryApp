@@ -1,5 +1,6 @@
 using Inventory.Application.CatalogReconciliation;
 using Inventory.Domain.CatalogReconciliation;
+using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -12,8 +13,9 @@ namespace Inventory.Infrastructure.Persistence;
 /// counterpart, <see cref="Inventory.Infrastructure.Nayax.NayaxCatalogSnapshotProvider"/>, arrived
 /// with issue #306.
 ///
-/// Products are persisted directly, keyed by the Nayax product identifier (see
-/// <c>ImportService.ImportProductsAsync</c>). Machines have no persisted entity at all - the current
+/// Products are persisted directly, and since issue #745 their Nayax identity is read from the
+/// <c>ProductExternalIds</c> link table rather than from <c>Product.Id</c>. Machines have no
+/// persisted entity at all - the current
 /// remote-only machine view (<c>MachineService</c>) is not local history - so a machine's local
 /// history is derived from the <c>NayaxSales</c> rows recorded against it: the <c>MachineName</c> on
 /// its most recent sale is the latest reliable local name, and any other distinct name recorded for
@@ -31,11 +33,45 @@ public sealed class EfLocalCatalogSnapshotProvider : ILocalCatalogSnapshotProvid
         _db = db;
     }
 
-    public async Task<IReadOnlyList<LocalCatalogEntry>> GetProductsAsync(CancellationToken cancellationToken) =>
-        await _db.Products
+    /// <summary>
+    /// Every product this business has a Nayax identity for, reported under that identity (issue
+    /// #745). The <c>ProductExternalIds</c> link is what a `NayaxProductID` names, so the local key
+    /// is no longer read as one; the two reads are awaited one at a time, on the request's own
+    /// scoped context, like every other local read here.
+    ///
+    /// <para>A local product with no Nayax link has no Nayax identity, so it is not part of this
+    /// comparison at all: it is a product Nayax never named, not one Nayax stopped returning, and
+    /// reporting it under its own key would be exactly the coincidence this resolution removes. A
+    /// stored <c>ExternalId</c> the one Nayax conversion could not have written is skipped for the
+    /// same reason - it is not a Nayax product id.</para>
+    /// </summary>
+    public async Task<IReadOnlyList<LocalCatalogEntry>> GetProductsAsync(CancellationToken cancellationToken)
+    {
+        var links = await _db.ProductExternalIds
             .AsNoTracking()
-            .Select(product => new LocalCatalogEntry(product.Id, product.Name))
+            .Where(link => link.Provider == ExternalProvider.Nayax)
+            .Select(link => new { link.ExternalId, link.ProductId })
             .ToListAsync(cancellationToken);
+        if (links.Count == 0)
+            return [];
+
+        var nameByProductId = await _db.Products
+            .AsNoTracking()
+            .Select(product => new { product.Id, product.Name })
+            .ToDictionaryAsync(product => product.Id, product => product.Name, cancellationToken);
+
+        var entries = new List<LocalCatalogEntry>(links.Count);
+        foreach (var link in links)
+        {
+            // The link's composite foreign key guarantees the product exists in this business, so a
+            // name that is missing here means the row was deleted between the two reads.
+            if (NayaxExternalId.TryParse(link.ExternalId, out var nayaxProductId) &&
+                nameByProductId.TryGetValue(link.ProductId, out var name))
+                entries.Add(new LocalCatalogEntry(nayaxProductId, name));
+        }
+
+        return entries;
+    }
 
     public async Task<IReadOnlyList<LocalCatalogEntry>> GetMachinesAsync(CancellationToken cancellationToken)
     {

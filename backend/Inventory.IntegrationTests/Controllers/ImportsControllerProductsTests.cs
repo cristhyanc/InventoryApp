@@ -76,7 +76,8 @@ public class ImportsControllerProductsTests
                 Mock.Of<INayaxSalesWorkbookReader>(),
                 Mock.Of<INayaxSalesImportStore>(),
                 Mock.Of<ICostSale>(),
-                Mock.Of<IRebuildProductCost>()),
+                Mock.Of<IRebuildProductCost>(),
+                InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
             new ImportPendingReimbursementXmlFiles(
                 Mock.Of<IPendingReimbursementXmlSource>(),
                 Mock.Of<IImportedReimbursementStore>(),

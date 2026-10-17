@@ -1,3 +1,4 @@
+using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -13,6 +14,14 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// </summary>
 public class EfLocalCatalogSnapshotProviderTests
 {
+    private static ProductExternalId NayaxLink(long nayaxProductId, long localProductId) =>
+        new()
+        {
+            Provider = ExternalProvider.Nayax,
+            ExternalId = NayaxExternalId.From(nayaxProductId),
+            ProductId = localProductId,
+        };
+
     private static async Task<SqliteConnection> CreateSqliteAsync()
     {
         var connection = new SqliteConnection("Data Source=:memory:");
@@ -22,6 +31,11 @@ public class EfLocalCatalogSnapshotProviderTests
         return connection;
     }
 
+    /// <summary>
+    /// The shape issue #732's backfill recorded for data that already existed: every product linked
+    /// to the Nayax id that equals its own key, so the reconciliation reports exactly what it
+    /// always did while reading the link table rather than <c>Product.Id</c> (issue #745).
+    /// </summary>
     [Fact]
     public async Task GetProductsAsync_returns_every_persisted_product_by_its_Nayax_identity()
     {
@@ -30,6 +44,8 @@ public class EfLocalCatalogSnapshotProviderTests
         db.Products.Add(new Product { Id = 1, Name = "Coke Zero", RestockTo = 0 });
         db.Products.Add(new Product { Id = 2, Name = "Chips", RestockTo = 0 });
         await db.SaveChangesAsync();
+        db.ProductExternalIds.AddRange(NayaxLink(nayaxProductId: 1, localProductId: 1), NayaxLink(2, 2));
+        await db.SaveChangesAsync();
         var provider = new EfLocalCatalogSnapshotProvider(db);
 
         var products = await provider.GetProductsAsync(CancellationToken.None);
@@ -37,6 +53,48 @@ public class EfLocalCatalogSnapshotProviderTests
         Assert.Equal(2, products.Count);
         Assert.Contains(products, p => p.ExternalId == 1 && p.Name == "Coke Zero");
         Assert.Contains(products, p => p.ExternalId == 2 && p.Name == "Chips");
+    }
+
+    /// <summary>
+    /// Issue #745: a product's Nayax identity is its link, so a local key that differs from it is
+    /// reported under the linked Nayax id - and a local product whose own key equals an unrelated
+    /// Nayax id is not reported under that id, which is what would otherwise make the report
+    /// describe the wrong product once #735 (A4) ends the coincidence.
+    /// </summary>
+    [Fact]
+    public async Task GetProductsAsync_reports_a_product_under_the_Nayax_id_its_link_names()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.For(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options, businessId: 1);
+        db.Products.Add(new Product { Id = 5001, Name = "Coke Zero", RestockTo = 0 });
+        db.Products.Add(new Product { Id = 900, Name = "Locally created", RestockTo = 0 });
+        await db.SaveChangesAsync();
+        db.ProductExternalIds.Add(NayaxLink(nayaxProductId: 900, localProductId: 5001));
+        await db.SaveChangesAsync();
+        var provider = new EfLocalCatalogSnapshotProvider(db);
+
+        var product = Assert.Single(await provider.GetProductsAsync(CancellationToken.None));
+
+        Assert.Equal(900, product.ExternalId);
+        Assert.Equal("Coke Zero", product.Name);
+    }
+
+    /// <summary>
+    /// A product with no Nayax link has no Nayax identity at all, so it takes no part in a
+    /// comparison against Nayax's catalogue: it is a product Nayax never named, not one Nayax
+    /// stopped returning, and reporting it as either would be a data-quality claim about an identity
+    /// that does not exist.
+    /// </summary>
+    [Fact]
+    public async Task GetProductsAsync_omits_a_product_that_has_no_Nayax_link()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.For(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options, businessId: 1);
+        db.Products.Add(new Product { Id = 7, Name = "Locally created", RestockTo = 0 });
+        await db.SaveChangesAsync();
+        var provider = new EfLocalCatalogSnapshotProvider(db);
+
+        Assert.Empty(await provider.GetProductsAsync(CancellationToken.None));
     }
 
     [Fact]
@@ -124,6 +182,10 @@ public class EfLocalCatalogSnapshotProviderTests
         {
             businessOne.Products.Add(new Product { Id = 1, Name = "Business One Product", RestockTo = 0 });
             businessOne.NayaxSales.Add(new NayaxSales { TransactionID = 1, MachineID = 10, MachineName = "Business One Machine", SettlementValue = 2m, MachineAuthorizationTime = new DateTime(2026, 1, 1) });
+            await businessOne.SaveChangesAsync();
+            // Linked, so business one really does have a product to report: the other business
+            // seeing nothing is the tenant filter's answer, not an absent link's.
+            businessOne.ProductExternalIds.Add(NayaxLink(nayaxProductId: 1, localProductId: 1));
             await businessOne.SaveChangesAsync();
         }
 

@@ -174,6 +174,10 @@ public sealed class NayaxImportTenantIsolationTests : IDisposable
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db, rebuild),
-            rebuild);
+            rebuild,
+            // The real link table over the same business-scoped context, so the identity resolution
+            // issue #745 added is as tenant-scoped here as the existing-transaction lookup these
+            // tests are about.
+            new EfNayaxProductLinkStore(db));
     }
 }

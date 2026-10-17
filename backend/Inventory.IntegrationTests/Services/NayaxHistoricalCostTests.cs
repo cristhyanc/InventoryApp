@@ -430,7 +430,9 @@ public class NayaxHistoricalCostTests
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
         return TestSalesSync.UseCase(
-            nayax, new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild));
+            nayax,
+            new EfLatestNayaxSalesStore(
+                db, TestCostingUseCases.CostSale(db, rebuild), rebuild, IdentityLinks()));
     }
 
     private static AppDbContext CreateDb() =>
@@ -448,7 +450,17 @@ public class NayaxHistoricalCostTests
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db),
-            new Mock<IRebuildProductCost>().Object);
+            new Mock<IRebuildProductCost>().Object,
+            IdentityLinks());
+
+    /// <summary>
+    /// The links issue #732's backfill recorded for data that already existed - every Nayax product
+    /// id names the local product with the same id - so these historical-cost cases keep asserting
+    /// the same matches while both Nayax sale paths resolve a remote id through the link lookup
+    /// (issue #745) instead of comparing it with <c>Product.Id</c>.
+    /// </summary>
+    private static Inventory.Application.Nayax.INayaxProductLinkStore IdentityLinks() =>
+        InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself();
 
     private static NayaxSales Sale(long id, long productId, decimal? nayaxCost, string paymentMethod) =>
         new()

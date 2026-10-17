@@ -250,7 +250,8 @@ public class NayaxSaleMixedPathTimestampTests
     private static EfLatestNayaxSalesStore SyncStore(AppDbContext db)
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
-        return new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild);
+        return new EfLatestNayaxSalesStore(
+            db, TestCostingUseCases.CostSale(db, rebuild), rebuild, IdentityLinks());
     }
 
     private static ImportNayaxSales Import(AppDbContext db, IRebuildProductCost? rebuild = null)
@@ -260,8 +261,18 @@ public class NayaxSaleMixedPathTimestampTests
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db, costRebuild),
-            costRebuild);
+            costRebuild,
+            IdentityLinks());
     }
+
+    /// <summary>
+    /// The links issue #732's backfill recorded for data that already existed - every Nayax product
+    /// id names the local product with the same id - so these timestamp cases keep asserting the
+    /// same matches while both paths resolve a remote id through the link lookup (issue #745)
+    /// instead of comparing it with <c>Product.Id</c>.
+    /// </summary>
+    private static Inventory.Application.Nayax.INayaxProductLinkStore IdentityLinks() =>
+        InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself();
 
     private static NayaxSalesFileInput Csv(string content) =>
         new("sales.csv", () => new MemoryStream(Encoding.UTF8.GetBytes(content)));

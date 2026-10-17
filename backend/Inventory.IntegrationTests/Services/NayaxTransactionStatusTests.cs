@@ -41,7 +41,12 @@ public class NayaxTransactionStatusTests
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db),
-            Mock.Of<IRebuildProductCost>());
+            Mock.Of<IRebuildProductCost>(),
+            // Every Nayax id names the local product with the same id, as issue #732's backfill
+            // recorded for data that already existed, so these status cases keep asserting the same
+            // matches while the import resolves the row's remote id through the link lookup
+            // (issue #745).
+            InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself());
 
         await import.Handle(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,55,10,5,2/9/2026 2:30:00 PM"));
         await import.Handle(File("TransactionID,TransactionStatusId,MachineID,SettlementValue,MachineAuthorizationTime\n1,12,10,5,2/9/2026 2:30:00 PM"));
