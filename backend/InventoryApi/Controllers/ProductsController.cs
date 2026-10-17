@@ -87,9 +87,12 @@ public class ProductsController : ControllerBase
         CancellationToken ct)
     {
         var visibility = await _capabilities.ForCurrentRequestAsync(ct);
-        var products = await _listProducts.Handle(
+        var listing = await _listProducts.Handle(
             new ProductCatalogFilter(search, categoryId, supplierId), lowStockOnly, ct);
-        return Ok(products.Select(product => ProductRecordResponseMapper.ToResponse(product, visibility)).ToList());
+        ReorderListingMetadataHeaders.Publish(Response, listing);
+        return Ok(listing.Products
+            .Select(product => ProductRecordResponseMapper.ToResponse(product, visibility))
+            .ToList());
     }
 
     [HttpGet("{id:long}")]
@@ -136,6 +139,17 @@ public class ProductsController : ControllerBase
         return Ok(await _getProductPriceComparison.Handle(id, ct));
     }
 
+    /// <summary>
+    /// The reorder alerts for the filtered catalogue.
+    ///
+    /// <para>The body is the same JSON array it has always been. Since issue #726 reorder has two
+    /// modes, so the response also carries <c>X-Reorder-Mode</c> and - in storage-only mode -
+    /// <c>X-Reorder-Machine-Need-Unavailable-Reason</c>, because a row with
+    /// <c>machineReplenishmentNeed: 0</c> means something different in each mode and an empty list
+    /// still has a mode. See <see cref="ReorderListingMetadataHeaders"/>. The same metadata is
+    /// published by <see cref="GetAll"/> when <c>lowStockOnly=true</c>, which is this same use
+    /// case.</para>
+    /// </summary>
     [HttpGet("alerts/low-stock")]
     public async Task<ActionResult<IEnumerable<ProductResponse>>> LowStock(
         [FromQuery] string? search,
@@ -144,9 +158,12 @@ public class ProductsController : ControllerBase
         CancellationToken ct)
     {
         var visibility = await _capabilities.ForCurrentRequestAsync(ct);
-        var items = await _listLowStockProducts.Handle(
+        var listing = await _listLowStockProducts.Handle(
             new ProductCatalogFilter(search, categoryId, supplierId), ct);
-        return Ok(items.Select(item => ProductRecordResponseMapper.ToResponse(item, visibility)).ToList());
+        ReorderListingMetadataHeaders.Publish(Response, listing);
+        return Ok(listing.Products
+            .Select(item => ProductRecordResponseMapper.ToResponse(item, visibility))
+            .ToList());
     }
 
     /// <summary>

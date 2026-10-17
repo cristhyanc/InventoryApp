@@ -213,6 +213,63 @@ public class CalculateReorderNeedsTests
             x => x.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    /// <summary>
+    /// Issue #726, review repair: the mixed case, and which answer wins. A permission refusal inside
+    /// the fan-out is recorded rather than thrown, but that must never swallow a sibling request that
+    /// failed upstream in the same fan-out - a fleet that was half read is an outage whatever else
+    /// the fleet answered, and a 403 somewhere in it is no reason to publish a business as needing
+    /// nothing. The storage-only answer is reserved for a fleet nobody was allowed to read, not for a
+    /// fleet nobody could read.
+    ///
+    /// <para>Deterministic by handshake rather than by timing. Machine 2's request announces that it
+    /// has started - so it is already past the use case's skip check and will throw whatever the
+    /// permission flag does next - and then waits for machine 1 to refuse; machine 1 waits for that
+    /// announcement before refusing. Both requests are therefore genuinely in flight together, the
+    /// permission refusal genuinely happens, and the upstream failure is still the answer the caller
+    /// gets. The strict outstanding-orders store proves no storage-only result was built, since that
+    /// is the one thing a storage-only answer has to read.</para>
+    /// </summary>
+    [Fact]
+    public async Task Handle_PropagatesAnUpstreamFailure_EvenWhenASiblingReportsPermissionNotGranted()
+    {
+        var timeout = TimeSpan.FromSeconds(10);
+        var upstreamRequestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var permissionRefused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<List<NayaxMachineProduct>> RefuseForPermissionAsync()
+        {
+            await upstreamRequestStarted.Task.WaitAsync(timeout);
+            permissionRefused.SetResult();
+            throw new NayaxPermissionNotGrantedException("GetMachineProducts");
+        }
+
+        async Task<List<NayaxMachineProduct>> FailUpstreamAsync()
+        {
+            upstreamRequestStarted.SetResult();
+            await permissionRefused.Task.WaitAsync(timeout);
+            throw new NayaxUpstreamException(
+                "GetMachineProducts", HttpMethod.Get, "machines/2/machineProducts", HttpStatusCode.BadGateway);
+        }
+
+        var nayax = NayaxWithMachines(1, 2);
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .Returns(RefuseForPermissionAsync);
+        nayax.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+            .Returns(FailUpstreamAsync);
+        var store = new Mock<IOutstandingSupplierOrderQuantityStore>(MockBehavior.Strict);
+        var useCase = new CalculateReorderNeeds(nayax.Object, store.Object, maxConcurrentMachineRequests: 2);
+
+        // Off xUnit's test synchronization context, for the reason the concurrency-bound test below
+        // gives: both machine requests have to be in flight at once, and this assembly's test threads
+        // are often busy with long synchronous SQLite tests.
+        await Assert.ThrowsAsync<NayaxUpstreamException>(
+            () => Task.Run(() => useCase.Handle(CancellationToken.None)).WaitAsync(TimeSpan.FromSeconds(30)));
+
+        Assert.True(permissionRefused.Task.IsCompletedSuccessfully);
+        store.Verify(
+            x => x.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task Handle_PropagatesCallerCancellation()
     {

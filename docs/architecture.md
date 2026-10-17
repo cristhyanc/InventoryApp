@@ -6841,6 +6841,16 @@ wrapped beside the sibling cancellations a faulted parallel loop raises), the re
 skipped, and everything already read is **discarded**: a fleet this business may not read produces a
 storage-only answer, never a partial one.
 
+**In the mixed case the failure wins, not the availability answer.** If one machine request is
+refused for lack of permission while a sibling request that is already in flight fails upstream, the
+upstream failure propagates out of the fan-out and the caller gets the error - a fleet that was half
+read is an outage whatever else the fleet answered, and a `403` somewhere in it is no reason to
+publish a business as needing nothing. The permission refusal only decides the answer when it is
+recorded before a sibling request starts, in which case the remaining machines are skipped and no
+other request is made at all. `CalculateReorderNeedsTests`'s
+`Handle_PropagatesAnUpstreamFailure_EvenWhenASiblingReportsPermissionNotGranted` pins that
+precedence deterministically, with both requests genuinely in flight together.
+
 **What each consumer publishes.**
 
 - `GET /api/dashboard/summary` keeps its three role/session shapes. In storage-only mode
@@ -6857,7 +6867,32 @@ storage-only answer, never a partial one.
   taken from `IBusinessScope.State` before `CalculateReorderNeeds` is called at all.
 - `GET /api/products/alerts/low-stock` (and `GET /api/products?lowStockOnly=true`, the same use
   case) returns the storage-only alerts instead of `409`. The product rows are unchanged, with
-  `machineReplenishmentNeed: 0`; the listing is a list of products and carries no mode of its own.
+  `machineReplenishmentNeed: 0` - which is exactly why the listing publishes its mode as well: that
+  `0` means "the machines need nothing" in machine-aware mode and "the machines were never read" in
+  storage-only mode, and a caller must not have to fetch the dashboard summary to tell the two apart.
+  The body stays the JSON **array** it has always been, and the mode is additive response metadata
+  beside it:
+
+  | Header | Value |
+  | --- | --- |
+  | `X-Reorder-Mode` | `MachineAware` or `StorageOnly`, the published `ReorderMode` code |
+  | `X-Reorder-Machine-Need-Unavailable-Reason` | `NayaxNotConnected` or `PermissionNotGranted`, in storage-only mode only |
+
+  Headers rather than an envelope or a per-row field, because the array contract is established and
+  the mode belongs to the whole answer: an **empty** list still has one, and that is the case a
+  per-row field could not express at all. An existing caller ignores both headers and reads the same
+  body it read before. The plain catalogue listing (`GET /api/products` without `lowStockOnly=true`)
+  calculates no reorder needs and so publishes neither header - an absent mode means "no reorder facts
+  were involved", never a guess at which mode would have applied. The two header names live in
+  `InventoryApi.Adapters.Mapping.ReorderListingMetadataHeaders`, and that one list is what the CORS
+  policy exposes (`WithExposedHeaders`): a browser client cannot read a response header a policy does
+  not expose, and no origin, method or request header was widened to add them. A reverse proxy or
+  gateway in front of the API that enumerates the response headers it forwards must forward these two,
+  which is deployed configuration outside this repository; a caller that never sees them reads the
+  same array it read before. `ListLowStockProducts`
+  and `ListProducts` answer `ProductListing` (the products plus the mode and reason) rather than a
+  bare list, which is what carries the two out of the use case; the selection, the ranking and every
+  figure on a row are unchanged.
 
 **No deployment or schema change, and no behaviour change for a connected business.** There is no
 migration, no new configuration and no new port. A business whose status is `Ready` or
@@ -6867,7 +6902,9 @@ migration, no new configuration and no new port. A business whose status is `Rea
 and serves requests with no `NayaxLynx` section at all (the base URL then comes from
 `NayaxLynxOptions`' own default), and `ProviderOptionalReorderApiTests` exercises both endpoints
 through the real pipeline against a business with no `BusinessNayaxConnection` row and the real
-`NayaxLynxClient` registered.
+`NayaxLynxClient` registered. `LowStockReorderMetadataApiTests` covers the listing's response
+metadata through the same pipeline for both low-stock endpoints, in all three modes/reasons and for an
+empty result.
 
 #### Home dashboard: four headline cards (issue #460)
 

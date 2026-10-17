@@ -133,16 +133,23 @@ public sealed record UnavailableDashboardSectionDto(string Reason) : IDashboardR
     /// The reason code for a business that has no Nayax credentials an ordinary operation may use -
     /// nothing stored, or a connection the status gate refuses (issue #726). An operator connects or
     /// reconnects Nayax; nothing about the business's own storage data is affected.
+    ///
+    /// <para>Taken from <see cref="MachineNeedUnavailableReasons"/>, the one published vocabulary for
+    /// these two answers, so this section and the reorder-alert listing's response metadata cannot
+    /// drift into two spellings of one reason.</para>
     /// </summary>
-    public const string NayaxNotConnectedReason = "NayaxNotConnected";
+    public const string NayaxNotConnectedReason = MachineNeedUnavailableReasons.NayaxNotConnected;
 
     /// <summary>
     /// The reason code for a business whose Nayax account has not granted this feature's reads
     /// (issue #726): the credentials are usable and Nayax refused the fleet read with <c>403</c>.
     /// Availability is per feature (issue #329, decision P9), so it is this section that is
     /// unavailable and not the connection that is broken.
+    ///
+    /// <para>Taken from <see cref="MachineNeedUnavailableReasons"/>, as
+    /// <see cref="NayaxNotConnectedReason"/> is.</para>
     /// </summary>
-    public const string PermissionNotGrantedReason = "PermissionNotGranted";
+    public const string PermissionNotGrantedReason = MachineNeedUnavailableReasons.PermissionNotGranted;
 
     /// <summary>
     /// Always <see langword="false"/>. The property is published so a client branches on a stated

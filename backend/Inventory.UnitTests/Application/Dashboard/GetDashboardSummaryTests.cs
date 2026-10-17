@@ -299,7 +299,7 @@ public class GetDashboardSummaryTests
                 new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object))
             .Handle(ProductCatalogFilter.None, CancellationToken.None);
 
-        Assert.Equal(expected.Count, summary.NeedsOrdering.ProductsNeedingOrdering);
+        Assert.Equal(expected.Products.Count, summary.NeedsOrdering.ProductsNeedingOrdering);
         Assert.Equal(1, summary.NeedsOrdering.ProductsNeedingOrdering);
         Assert.Equal(3, summary.NeedsOrdering.ProductsEvaluated);
     }

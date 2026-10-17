@@ -79,3 +79,31 @@ public static class ReorderModes
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown reorder mode."),
     };
 }
+
+/// <summary>
+/// The stable codes <see cref="MachineNeedUnavailableReason"/> is published under. Written out here
+/// for the same reason <see cref="ReorderModes"/> is - renaming a C# member must not silently change
+/// the API contract - and it is the <em>one</em> vocabulary: the dashboard's withheld refill section
+/// (<c>UnavailableDashboardSectionDto</c>) and the reorder-alert listing's response metadata both
+/// publish these constants, so the two cannot drift apart into two spellings of one answer.
+/// </summary>
+public static class MachineNeedUnavailableReasons
+{
+    /// <summary>The published code for <see cref="MachineNeedUnavailableReason.NayaxNotConnected"/>.</summary>
+    public const string NayaxNotConnected = "NayaxNotConnected";
+
+    /// <summary>The published code for <see cref="MachineNeedUnavailableReason.PermissionNotGranted"/>.</summary>
+    public const string PermissionNotGranted = "PermissionNotGranted";
+
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// A reason this vocabulary has never heard of - a value cast from an integer, which an enum
+    /// cannot prevent. Refused rather than published under a guessed code.
+    /// </exception>
+    public static string Code(MachineNeedUnavailableReason reason) => reason switch
+    {
+        MachineNeedUnavailableReason.NayaxNotConnected => NayaxNotConnected,
+        MachineNeedUnavailableReason.PermissionNotGranted => PermissionNotGranted,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(reason), reason, "Unknown machine-need unavailability reason."),
+    };
+}

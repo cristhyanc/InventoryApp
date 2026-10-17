@@ -71,9 +71,9 @@ public class ProductReadUseCaseTests
             FakeProductCatalogStore.Product(2, "Alpha"));
         var useCases = UseCases(catalog);
 
-        var products = await useCases.List.Handle(ProductCatalogFilter.None, lowStockOnly: null, CancellationToken.None);
+        var listing = await useCases.List.Handle(ProductCatalogFilter.None, lowStockOnly: null, CancellationToken.None);
 
-        Assert.Equal(["Alpha", "Zulu"], products.Select(product => product.Name));
+        Assert.Equal(["Alpha", "Zulu"], listing.Products.Select(product => product.Name));
         Assert.Equal(1, catalog.ListOrderedByNameCalls);
     }
 
@@ -102,10 +102,10 @@ public class ProductReadUseCaseTests
             FakeProductCatalogStore.Product(3, "Middle", quantityInStock: 10, lowStockThreshold: 20, restockTo: 30),
             FakeProductCatalogStore.Product(4, "Stocked", quantityInStock: 99, lowStockThreshold: 1, restockTo: 1));
 
-        var products = await UseCases(catalog).List.Handle(
+        var listing = await UseCases(catalog).List.Handle(
             ProductCatalogFilter.None, lowStockOnly: true, CancellationToken.None);
 
-        Assert.Equal(["Alpha", "Zulu", "Middle"], products.Select(product => product.Name));
+        Assert.Equal(["Alpha", "Zulu", "Middle"], listing.Products.Select(product => product.Name));
         Assert.Equal(0, catalog.ListOrderedByNameCalls);
     }
 
@@ -120,8 +120,9 @@ public class ProductReadUseCaseTests
                 machineReplenishmentNeed: new Dictionary<long, int> { [1] = 1 },
                 onOrderQuantity: new Dictionary<long, decimal> { [1] = 8m })).LowStock;
 
-        var product = Assert.Single(await lowStock.Handle(ProductCatalogFilter.None, CancellationToken.None));
+        var listing = await lowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
 
+        var product = Assert.Single(listing.Products);
         Assert.Equal(1, product.MachineReplenishmentNeed);
         Assert.Equal(8m, product.OnOrderQuantity);
         Assert.Equal(8m, product.NeedToOrder);
@@ -141,7 +142,8 @@ public class ProductReadUseCaseTests
             catalog,
             ReorderNeeds(onOrderQuantity: new Dictionary<long, decimal> { [1] = -5m })).LowStock;
 
-        var product = Assert.Single(await lowStock.Handle(ProductCatalogFilter.None, CancellationToken.None));
+        var product = Assert.Single(
+            (await lowStock.Handle(ProductCatalogFilter.None, CancellationToken.None)).Products);
 
         Assert.Equal(0m, product.OnOrderQuantity);
         Assert.Equal(16m, product.NeedToOrder);
@@ -163,8 +165,9 @@ public class ProductReadUseCaseTests
             catalog,
             ReorderNeedsWithoutAProvider(onOrderQuantity: new Dictionary<long, decimal> { [1] = 8m })).LowStock;
 
-        var product = Assert.Single(await lowStock.Handle(ProductCatalogFilter.None, CancellationToken.None));
+        var listing = await lowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
 
+        var product = Assert.Single(listing.Products);
         Assert.Equal(0, product.MachineReplenishmentNeed);
         Assert.Equal(8m, product.OnOrderQuantity);
         Assert.Equal(7m, product.NeedToOrder);
@@ -178,7 +181,104 @@ public class ProductReadUseCaseTests
             FakeProductCatalogStore.Product(
                 1, "Retired", quantityInStock: 0, lowStockThreshold: 10, restockTo: 20, isActive: false));
 
-        Assert.Empty(await UseCases(catalog).LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None));
+        var listing = await UseCases(catalog).LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
+
+        Assert.Empty(listing.Products);
+    }
+
+    /// <summary>
+    /// Issue #726, review repair: the listing carries the mode its reorder needs were calculated in,
+    /// so a caller is not left reading <c>machineReplenishmentNeed: 0</c> as "the machines need
+    /// nothing" when the machines were never read. A machine-aware listing has nothing unavailable to
+    /// explain, so it carries no reason.
+    /// </summary>
+    [Fact]
+    public async Task ListLowStockProducts_CarriesTheMachineAwareMode_WhenTheFleetWasRead()
+    {
+        var catalog = new FakeProductCatalogStore(
+            FakeProductCatalogStore.Product(1, "Coke", quantityInStock: 2, lowStockThreshold: 10, restockTo: 17));
+        var lowStock = UseCases(
+            catalog,
+            ReorderNeeds(machineReplenishmentNeed: new Dictionary<long, int> { [1] = 1 })).LowStock;
+
+        var listing = await lowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
+
+        Assert.Equal(ReorderMode.MachineAware, listing.Mode);
+        Assert.Null(listing.MachineNeedUnavailableReason);
+    }
+
+    [Fact]
+    public async Task ListLowStockProducts_CarriesTheStorageOnlyModeAndItsReason_WhenTheConnectionIsUnusable()
+    {
+        var catalog = new FakeProductCatalogStore(
+            FakeProductCatalogStore.Product(1, "Coke", quantityInStock: 2, lowStockThreshold: 10, restockTo: 17));
+        var lowStock = UseCases(
+            catalog, ReorderNeedsWithoutAProvider(new Dictionary<long, decimal>())).LowStock;
+
+        var listing = await lowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
+
+        Assert.Equal(ReorderMode.StorageOnly, listing.Mode);
+        Assert.Equal(MachineNeedUnavailableReason.NayaxNotConnected, listing.MachineNeedUnavailableReason);
+    }
+
+    [Fact]
+    public async Task ListLowStockProducts_CarriesThePermissionNotGrantedReason_WhenNayaxRefusesTheFleetRead()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(client => client.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new NayaxPermissionNotGrantedException("GetMachinesAsync"));
+        var outstanding = new Mock<IOutstandingSupplierOrderQuantityStore>();
+        outstanding.Setup(store => store.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<long, decimal>());
+        var catalog = new FakeProductCatalogStore(
+            FakeProductCatalogStore.Product(1, "Coke", quantityInStock: 2, lowStockThreshold: 10, restockTo: 17));
+
+        var listing = await UseCases(catalog, new CalculateReorderNeeds(nayax.Object, outstanding.Object))
+            .LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
+
+        Assert.Equal(ReorderMode.StorageOnly, listing.Mode);
+        Assert.Equal(MachineNeedUnavailableReason.PermissionNotGranted, listing.MachineNeedUnavailableReason);
+    }
+
+    /// <summary>
+    /// An empty alert list is exactly where the mode matters most: "nothing alerts, machines
+    /// included" and "nothing alerts on storage stock alone" are different answers, and only the mode
+    /// tells them apart.
+    /// </summary>
+    [Fact]
+    public async Task ListLowStockProducts_KeepsItsMode_WhenNothingAlerts()
+    {
+        var catalog = new FakeProductCatalogStore(
+            FakeProductCatalogStore.Product(1, "Stocked", quantityInStock: 99, lowStockThreshold: 1, restockTo: 1));
+        var lowStock = UseCases(
+            catalog, ReorderNeedsWithoutAProvider(new Dictionary<long, decimal>())).LowStock;
+
+        var listing = await lowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
+
+        Assert.Empty(listing.Products);
+        Assert.Equal(ReorderMode.StorageOnly, listing.Mode);
+        Assert.Equal(MachineNeedUnavailableReason.NayaxNotConnected, listing.MachineNeedUnavailableReason);
+    }
+
+    /// <summary>
+    /// The plain catalogue listing calculates no reorder needs at all, so it carries no mode: an
+    /// absent mode is "no reorder facts were involved", never a guess at which mode would have
+    /// applied. <c>lowStockOnly=true</c> is the reorder-alert listing and carries that listing's mode.
+    /// </summary>
+    [Fact]
+    public async Task ListProducts_CarriesNoReorderMode_ForThePlainCatalogueListing()
+    {
+        var catalog = new FakeProductCatalogStore(FakeProductCatalogStore.Product(1, "Coke"));
+        var useCases = UseCases(catalog, ReorderNeedsWithoutAProvider(new Dictionary<long, decimal>()));
+
+        var plain = await useCases.List.Handle(
+            ProductCatalogFilter.None, lowStockOnly: null, CancellationToken.None);
+        var alerts = await useCases.List.Handle(
+            ProductCatalogFilter.None, lowStockOnly: true, CancellationToken.None);
+
+        Assert.Null(plain.Mode);
+        Assert.Null(plain.MachineNeedUnavailableReason);
+        Assert.Equal(ReorderMode.StorageOnly, alerts.Mode);
     }
 
     [Fact]

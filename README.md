@@ -1061,9 +1061,10 @@ reorder alerts and its ordering figures, calculated from the data this applicati
 - **Needs ordering and the reorder-alert list** are answered in **storage-only** mode: storage
   stock, each product's low-stock threshold and restock target, and the quantity already on an
   outstanding supplier order, with the machines' current need counted as **zero**. The formula is
-  unchanged — it is the same calculation with one input missing. The dashboard's Needs ordering card
-  states the mode it was counted in (`StorageOnly` or `MachineAware`), so a figure that did not
-  account for the machines is never read as one that did.
+  unchanged — it is the same calculation with one input missing. Both the dashboard's Needs ordering
+  card and the reorder-alert list state the mode they were produced in (`StorageOnly` or
+  `MachineAware`), and in storage-only mode the reason the machines are missing, so a figure that did
+  not account for the machines is never read as one that did.
 - **Needs refill** is reported as unavailable with the reason (`NayaxNotConnected` when the
   connection is unusable, `PermissionNotGranted` when Nayax has not granted the machine reads),
   because every figure on that card is a figure about machines. It is never shown as "no machine
