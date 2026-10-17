@@ -5,6 +5,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
 using InventoryApi.Controllers;
+using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
@@ -50,7 +51,8 @@ public class DashboardControllerTests
             // DashboardSummaryRedactionApiTests, through the real request pipeline.
             new CurrentCapabilities(
                 new FakeSupportSessionAccessor(),
-                new FakeCurrentBusinessProvider(businessId: 1)),
+                new FakeCurrentBusinessProvider(businessId: 1),
+                new FakeRolePreviewAccessor()),
             // A member's own resolved scope, so the whole summary is computed; the support view's
             // degraded shape (issue #552) is SupportSessionRequestApiTests.
             TestAppDbContext.ScopeFor(businessId: 1),

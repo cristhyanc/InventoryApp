@@ -10,6 +10,9 @@ import { ListLoadState } from '../shared/list-load-state';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../shared/multi-select-dropdown.component';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
+import { SortDirection, compareSortValues, nextSortState, sortAriaState, sortColumnLabel } from '../shared/sortable-column';
+
+type PickListSortColumn = 'name' | 'mdbCode';
 
 /**
  * Pick List (Restock Planning) page (issues #222, #226): a read-only matrix built on the #221
@@ -41,6 +44,10 @@ export class PickListComponent implements OnInit {
 
   /** Ephemeral picked/unpicked state, keyed by `productId:machineId`. Never persisted. */
   private readonly pickedCells = new Set<string>();
+
+  /** Client-side only: until a header is clicked, rows stay in the backend's default order. */
+  sortColumn: PickListSortColumn | null = null;
+  sortDirection: SortDirection = 'asc';
 
   lastRefreshedAt: Date | null = null;
   readonly loadState = new ListLoadState();
@@ -118,10 +125,27 @@ export class PickListComponent implements OnInit {
     this.pickListProducts = [];
     this.pickedCells.clear();
     this.lastRefreshedAt = null;
+    this.sortColumn = null;
+    this.sortDirection = 'asc';
   }
 
   visibleProducts(): PickListProduct[] {
-    return this.pickListProducts.filter((p) => this.appliedProductIds.includes(p.productId));
+    const filtered = this.pickListProducts.filter((p) => this.appliedProductIds.includes(p.productId));
+    return this.sortColumn === null ? filtered : this.sortProducts(filtered);
+  }
+
+  sortBy(column: PickListSortColumn): void {
+    const next = nextSortState(this.sortColumn, this.sortDirection, column);
+    this.sortColumn = next.column;
+    this.sortDirection = next.direction;
+  }
+
+  ariaSort(column: PickListSortColumn): 'ascending' | 'descending' | 'none' {
+    return sortAriaState(this.sortColumn, this.sortDirection, column);
+  }
+
+  sortLabel(label: string, column: PickListSortColumn): string {
+    return sortColumnLabel(label, this.sortColumn, this.sortDirection, column);
   }
 
   cellFor(product: PickListProduct, machineId: number): PickListMachineQuantity | undefined {
@@ -218,6 +242,40 @@ export class PickListComponent implements OnInit {
         this.pickedCells.delete(key);
       }
     }
+  }
+
+  /**
+   * Product sorts ascending/descending by name; MDB Code sorts numerically, but a missing code
+   * (shown as "—") always sorts last in both directions, matching the Needs Ordering page's
+   * page-local null policy. Ties fall back to product name, then product id, for a deterministic order.
+   */
+  private sortProducts(products: PickListProduct[]): PickListProduct[] {
+    const column = this.sortColumn;
+    const direction = this.sortDirection;
+    return [...products].sort((left, right) => {
+      if (column === 'mdbCode') {
+        const leftCode = left.mdbCode;
+        const rightCode = right.mdbCode;
+        if (leftCode == null || rightCode == null) {
+          if (leftCode == null && rightCode == null) {
+            return this.tieBreak(left, right);
+          }
+          return leftCode == null ? 1 : -1;
+        }
+
+        const comparison = compareSortValues(leftCode, rightCode);
+        const resolved = comparison !== 0 ? comparison : this.tieBreak(left, right);
+        return direction === 'desc' ? -resolved : resolved;
+      }
+
+      const resolved = this.tieBreak(left, right);
+      return direction === 'desc' ? -resolved : resolved;
+    });
+  }
+
+  private tieBreak(left: PickListProduct, right: PickListProduct): number {
+    const nameComparison = compareSortValues(left.productName, right.productName);
+    return nameComparison !== 0 ? nameComparison : left.productId - right.productId;
   }
 
   private sameIds(a: number[], b: number[]): boolean {

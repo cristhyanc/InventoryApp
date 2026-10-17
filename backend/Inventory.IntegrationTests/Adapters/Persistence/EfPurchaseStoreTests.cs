@@ -1,5 +1,6 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Purchases;
+using Inventory.Domain.Purchases;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -74,6 +75,51 @@ public sealed class EfPurchaseStoreTests : IDisposable
             .OrderBy(line => line.SupplierOrder.OrderDate).ToListAsync();
         Assert.Equal(10m, lines[0].QuantityReceived);
         Assert.Equal(2m, lines[1].QuantityReceived);
+    }
+
+    /// <summary>
+    /// The persistence half of the per-line price entry of issue #707: the Add Purchase form
+    /// submits the unrounded quotient of the total paid over the line's units, so the stored unit
+    /// cost has to keep enough precision for the line amount
+    /// (<see cref="PurchaseGstPolicy.LineAmount"/>) to come back to the amount that was entered.
+    /// $100.00 over 300 units is the case the issue names, and it is asserted here on a real SQLite
+    /// database rather than on an InMemory one, because the round trip through the provider's
+    /// <c>decimal</c> mapping is the part in question - a stored 0.3333 would be a cent short.
+    /// </summary>
+    [Fact]
+    public async Task CreateAsync_keeps_an_unrounded_unit_cost_so_the_line_amount_reproduces_the_entered_total()
+    {
+        const decimal enteredLineTotal = 100.00m;
+        const decimal quantity = 300m;
+        var submittedUnitCost = 0.3333333333333333m;  // what the form's JSON number carries
+
+        await using (var seed = TestAppDbContext.Unrestricted(_options))
+        {
+            seed.Products.Add(new Product { Id = 1, Name = "Coke" });
+            seed.InventoryCostTransitionBaselines.Add(new InventoryCostTransitionBaseline
+            {
+                ProductId = 1,
+                CutoffAt = DateTime.UtcNow.AddDays(-1),
+                HomeStockQuantity = 0,
+                CostSource = InventoryCostBaselineSource.ManualAuthoritative,
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await using (var db = TestAppDbContext.Unrestricted(_options))
+        {
+            var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+            await store.CreateAsync(
+                new PurchaseFields("Box of 300", null, enteredLineTotal, null, null, DateTime.UtcNow, null),
+                [new PurchaseItemInput(1, quantity, submittedUnitCost)],
+                FileMetadata(),
+                CancellationToken.None);
+        }
+
+        await using var verify = TestAppDbContext.Unrestricted(_options);
+        var item = await verify.ReceiptItems.SingleAsync();
+        Assert.Equal(quantity, item.Quantity);
+        Assert.Equal(enteredLineTotal, PurchaseGstPolicy.LineAmount(item.Quantity, item.UnitCost));
     }
 
     [Fact]

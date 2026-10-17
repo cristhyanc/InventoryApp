@@ -1,3 +1,4 @@
+import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { UserMenuComponent } from './user-menu.component';
 
@@ -114,5 +115,52 @@ describe('UserMenuComponent signed in (issue #391)', () => {
     const trigger = host.querySelector<HTMLButtonElement>('button[aria-haspopup]');
     expect(trigger).not.toBeNull();
     expect(trigger?.textContent?.trim()).toBeTruthy();
+  });
+});
+
+/**
+ * What the shell composes into the panel (issue #721): the **View as** entry is projected rather
+ * than built here, so this component still owns no access decision, and it is closed through
+ * {@link UserMenuComponent.close} because a click on projected content is a click *inside* this
+ * element and would otherwise leave the panel open over a rebuilt page.
+ */
+describe('UserMenuComponent projected content (issue #721)', () => {
+  @Component({ standalone: true, imports: [UserMenuComponent], template: '<app-user-menu [isSignedIn]="true"><button type="button">View as Operator</button></app-user-menu>' })
+  class HostComponent {}
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('renders projected content only while the panel is open', async () => {
+    await TestBed.configureTestingModule({ imports: [HostComponent] }).compileComponents();
+    const fixture = TestBed.createComponent(HostComponent);
+    fixture.detectChanges();
+    const host = fixture.nativeElement as HTMLElement;
+    expect(host.textContent).not.toContain('View as Operator');
+
+    host.querySelector<HTMLButtonElement>('button[aria-haspopup]')?.click();
+    fixture.detectChanges();
+
+    expect(host.querySelector('#user-menu-panel')?.textContent).toContain('View as Operator');
+  });
+
+  it('closes the panel when asked to, which a click inside it never does', async () => {
+    await TestBed.configureTestingModule({ imports: [HostComponent] }).compileComponents();
+    const fixture = TestBed.createComponent(HostComponent);
+    fixture.detectChanges();
+    const host = fixture.nativeElement as HTMLElement;
+    host.querySelector<HTMLButtonElement>('button[aria-haspopup]')?.click();
+    fixture.detectChanges();
+
+    const projected = Array.from(host.querySelectorAll('button')).find(
+      (candidate) => candidate.textContent?.trim() === 'View as Operator'
+    );
+    projected?.click();
+    fixture.detectChanges();
+    expect(host.querySelector('#user-menu-panel')).not.toBeNull();
+
+    fixture.debugElement.children[0].componentInstance.close();
+    fixture.detectChanges();
+
+    expect(host.querySelector('#user-menu-panel')).toBeNull();
   });
 });

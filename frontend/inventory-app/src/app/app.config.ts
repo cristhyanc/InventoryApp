@@ -5,6 +5,7 @@ import { routes } from './app.routes';
 import { ConfigService } from './services/config.service';
 import { FORBIDDEN_INTERCEPTORS } from './access/forbidden-interceptors';
 import { loadingInterceptor } from './interceptors/loading.interceptor';
+import { rolePreviewInterceptor } from './role-preview/role-preview.interceptor';
 import { supportSessionInterceptor } from './support-session/support-session.interceptor';
 import { supportSessionMessageInterceptor } from './support-session/support-session-message.interceptor';
 import { browserAuthProviders } from './auth/browser-auth-providers';
@@ -29,6 +30,11 @@ export const appConfig: ApplicationConfig = {
     // discarded as stale - and reports the support session's own two `403` messages
     // (`read_only_support_session`, `unavailable_in_support_view`), which the last of the three
     // excludes for the same reason it excludes a bypassed route (issue #554).
+    // `rolePreviewInterceptor` runs next (issue #721): it presents `X-Role-Preview` on the member
+    // and cache-probe requests and reports or ends the preview on its own three codes, which the
+    // two `403` interceptors that would otherwise react to them exclude. It is outer to
+    // `supportSessionInterceptor` for the same reason the message interceptor is - it must never
+    // react to a response that one has already discarded as stale.
     // `supportSessionInterceptor` runs last - innermost, closest to the backend - so it is the
     // first to see a raw response on the way back: it can discard a stale one before any of the
     // interceptors above ever reacts to it, and `loadingInterceptor`'s `finalize` still runs
@@ -39,6 +45,7 @@ export const appConfig: ApplicationConfig = {
         loadingInterceptor,
         ...FORBIDDEN_INTERCEPTORS,
         supportSessionMessageInterceptor,
+        rolePreviewInterceptor,
         supportSessionInterceptor
       ]),
       withInterceptorsFromDi()

@@ -45,6 +45,51 @@ public class PurchaseGstPolicyTests
     }
 
     /// <summary>
+    /// What the purchase forms' per-line price entry depends on (issue #707): a unit cost submitted
+    /// as the <em>unrounded</em> quotient of an entered line total reproduces that total as the
+    /// line amount, and a quotient rounded to the four decimals the form displays does not. $100.00
+    /// over 300 units is the case the issue names: 300 x 0.3333 is $99.99, a cent short of what was
+    /// paid. The form's figures are display only; this is the arithmetic the saved line has to meet.
+    /// </summary>
+    [Fact]
+    public void Line_amount_reproduces_an_entered_total_divided_unrounded_over_its_units()
+    {
+        (decimal Quantity, decimal EnteredTotal)[] cases =
+        [
+            (300m, 100.00m),
+            (20m, 32.50m),
+            (24m, 39.90m),
+            (7m, 10.00m),
+            (3m, 0.05m),
+        ];
+
+        foreach (var (quantity, enteredTotal) in cases)
+            Assert.Equal(enteredTotal, PurchaseGstPolicy.LineAmount(quantity, enteredTotal / quantity));
+    }
+
+    [Fact]
+    public void Line_amount_falls_short_of_the_entered_total_when_the_unit_cost_is_rounded_first()
+    {
+        var roundedToFourDecimals = Math.Round(100.00m / 300, 4, MidpointRounding.AwayFromZero);
+
+        Assert.Equal(0.3333m, roundedToFourDecimals);
+        Assert.Equal(99.99m, PurchaseGstPolicy.LineAmount(300m, roundedToFourDecimals));
+    }
+
+    /// <summary>
+    /// The quotient the Angular form actually submits is a JSON number, so the server receives the
+    /// shortest decimal that round-trips the double - 0.3333333333333333 for $100.00 over 300
+    /// units - rather than an exact third. That value has to reproduce the entered total too.
+    /// </summary>
+    [Fact]
+    public void Line_amount_reproduces_the_entered_total_from_the_submitted_double_precision_quotient()
+    {
+        Assert.Equal(100.00m, PurchaseGstPolicy.LineAmount(300m, 0.3333333333333333m));
+        Assert.Equal(32.50m, PurchaseGstPolicy.LineAmount(20m, 1.625m));
+        Assert.Equal(10.00m, PurchaseGstPolicy.LineAmount(7m, 1.4285714285714286m));
+    }
+
+    /// <summary>
     /// The concrete supplier-invoice check recorded in #62: per-component rounding is authoritative
     /// even when it differs from the grand total divided by 11. A $10.05 taxable product line plus a
     /// $10.05 taxable delivery charge is 0.91 + 0.91 = 1.82, while 20.10 / 11 rounds to 1.83.
