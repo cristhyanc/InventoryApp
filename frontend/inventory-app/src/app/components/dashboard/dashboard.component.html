@@ -69,36 +69,42 @@
       </a>
     }
 
-    <a
-      routerLink="/pick-list"
-      class="stat-card block transition-colors hover:border-md-gray-300"
-      aria-label="Needs refill. Open the Pick List."
-    >
-      <div class="stat-card-head">
-        <div class="stat-card-content">
-          <p class="stat-card-label">Needs refill</p>
-          @if (isLoadingSummary) {
-            <div class="h-8 w-16 animate-pulse rounded bg-md-gray-100"></div>
-          } @else if (summary) {
-            <p class="stat-card-value" [ngClass]="refillValueClass(summary.needsRefill)">{{ refillValueDisplay(summary.needsRefill) }}</p>
-          } @else {
-            <p class="stat-card-value value-muted">Unavailable</p>
-          }
+    <!--
+      Every figure on this card is a figure about machines, so a business with no usable provider
+      is shown no card at all rather than one reporting "Unavailable" (issue #727).
+    -->
+    @if (isLiveFleetShown) {
+      <a
+        routerLink="/pick-list"
+        class="stat-card block transition-colors hover:border-md-gray-300"
+        aria-label="Needs refill. Open the Pick List."
+      >
+        <div class="stat-card-head">
+          <div class="stat-card-content">
+            <p class="stat-card-label">Needs refill</p>
+            @if (isLoadingSummary) {
+              <div class="h-8 w-16 animate-pulse rounded bg-md-gray-100"></div>
+            } @else if (summary) {
+              <p class="stat-card-value" [ngClass]="refillValueClass(summary.needsRefill)">{{ refillValueDisplay(summary.needsRefill) }}</p>
+            } @else {
+              <p class="stat-card-value value-muted">Unavailable</p>
+            }
+          </div>
+          <span class="icon-tile icon-tile-warning">
+            <app-icon name="assignment" />
+          </span>
         </div>
-        <span class="icon-tile icon-tile-warning">
-          <app-icon name="assignment" />
-        </span>
-      </div>
-      <p class="stat-card-footer">
-        @if (isLoadingSummary) {
-          <span class="value-muted">Loading…</span>
-        } @else if (summary) {
-          <span [ngClass]="refillFooterClass(summary.needsRefill)">{{ refillFooterText(summary.needsRefill) }}</span>
-        } @else {
-          <span class="value-muted">Refill status unavailable</span>
-        }
-      </p>
-    </a>
+        <p class="stat-card-footer">
+          @if (isLoadingSummary) {
+            <span class="value-muted">Loading…</span>
+          } @else if (summary) {
+            <span [ngClass]="refillFooterClass(summary.needsRefill)">{{ refillFooterText(summary.needsRefill) }}</span>
+          } @else {
+            <span class="value-muted">Refill status unavailable</span>
+          }
+        </p>
+      </a>
+    }
 
     <a
       routerLink="/products/needs-ordering"
@@ -124,7 +130,11 @@
         @if (isLoadingSummary) {
           <span class="value-muted">Loading…</span>
         } @else if (summary) {
-          <span [ngClass]="orderingFooterClass(summary.needsOrdering)">{{ orderingFooterText(summary.needsOrdering) }}</span>
+          <span class="block" [ngClass]="orderingFooterClass(summary.needsOrdering)">{{ orderingFooterText(summary.needsOrdering) }}</span>
+          <!-- A storage-only count says so, so it is never read as a machine-aware one (issue #727). -->
+          @if (orderingModeNote) {
+            <span class="block value-muted">{{ orderingModeNote }}</span>
+          }
         } @else {
           <span class="value-muted">Ordering status unavailable</span>
         }
@@ -166,6 +176,13 @@
     }
   </section>
 
+  <!--
+    The two live-fleet sections (issue #727). Both are read from Nayax, so a business with no usable
+    provider is shown neither - not an empty one, which would say the business has no sites or
+    machines, and not an unavailable one, because the page is about what it does have. The reorder
+    alerts below are then the page's main section.
+  -->
+  @if (isLiveFleetShown) {
   <section class="card">
     <div class="card-header">
       <h2 class="card-title">📍 Sites</h2>
@@ -178,6 +195,9 @@
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
         </div>
+      } @else if (sitesError) {
+        <!-- A request nobody answered is never "No sites available yet" (issue #727). -->
+        <p class="p-4 text-md-body value-negative">{{ sitesError }}</p>
       } @else if (sites.length === 0) {
         <p class="p-4 text-md-body value-muted">No sites available yet.</p>
       } @else {
@@ -239,6 +259,8 @@
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
         </div>
+      } @else if (machinesError) {
+        <p class="p-4 text-md-body value-negative">{{ machinesError }}</p>
       } @else if (machines.length === 0) {
         <p class="p-4 text-md-body value-muted">No machines available yet.</p>
       } @else {
@@ -320,6 +342,7 @@
       }
     </div>
   </section>
+  }
 
   <section class="card">
     <div class="card-header">
@@ -327,6 +350,13 @@
       <a routerLink="/products/needs-ordering" class="btn btn-sm btn-secondary">View reorder alerts</a>
     </div>
     <div class="card-body p-0">
+      <!--
+        Shown above the list and for an empty list too (issue #727): "nothing needs ordering" means
+        something different when the machines' current need was never read.
+      -->
+      @if (reorderModeNote) {
+        <p class="border-b border-md-gray-200 p-4 text-md-body value-muted">{{ reorderModeNote }}</p>
+      }
       @if (isLoadingLowStock) {
         <div class="space-y-3 p-4">
           <div class="h-4 w-40 animate-pulse rounded bg-md-gray-200"></div>
@@ -334,6 +364,9 @@
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
           <div class="h-10 w-full animate-pulse rounded bg-md-gray-100"></div>
         </div>
+      } @else if (reorderAlertsError) {
+        <!-- Never "Everything looks good" for a list nobody answered (issue #727). -->
+        <p class="p-4 text-md-body value-negative">{{ reorderAlertsError }}</p>
       } @else if (lowStock.length === 0) {
         <p class="p-4 text-md-body value-muted">No reorder alerts. Everything looks good! ✅</p>
       } @else {
@@ -345,10 +378,14 @@
                 <th scope="col" class="table-cell">Supplier</th>
                 <th scope="col" class="table-cell">Stock</th>
                 <th scope="col" class="table-cell">Low Stock Threshold</th>
-                <th scope="col" class="table-cell">Machine need</th>
+                @if (isMachineNeedShownInReorderAlerts) {
+                  <th scope="col" class="table-cell">Machine need</th>
+                }
                 <th scope="col" class="table-cell">Restock To</th>
                 <th scope="col" class="table-cell">On order</th>
-                <th scope="col" class="table-cell">Stock after machine need</th>
+                @if (isMachineNeedShownInReorderAlerts) {
+                  <th scope="col" class="table-cell">Stock after machine need</th>
+                }
                 <th scope="col" class="table-cell">Need to Order</th>
                 <th scope="col" class="table-cell">Unit Price</th>
               </tr>
@@ -360,10 +397,14 @@
                   <td class="table-cell">{{ p.supplier?.name || '—' }}</td>
                   <td class="table-cell"><span class="badge badge-danger">{{ p.quantityInStock }}</span></td>
                   <td class="table-cell">{{ p.lowStockThreshold }}</td>
-                  <td class="table-cell">{{ p.machineReplenishmentNeed }}</td>
+                  @if (isMachineNeedShownInReorderAlerts) {
+                    <td class="table-cell">{{ p.machineReplenishmentNeed }}</td>
+                  }
                   <td class="table-cell">{{ p.restockTo }}</td>
                   <td class="table-cell">{{ p.onOrderQuantity }}</td>
-                  <td class="table-cell" [ngClass]="stockAfterMachineNeedClass(p)">{{ stockAfterMachineNeed(p) }}</td>
+                  @if (isMachineNeedShownInReorderAlerts) {
+                    <td class="table-cell" [ngClass]="stockAfterMachineNeedClass(p)">{{ stockAfterMachineNeed(p) }}</td>
+                  }
                   <td class="table-cell value-negative font-semibold">{{ p.needToOrder }}</td>
                   <td class="table-cell">${{ p.unitPrice.toFixed(2) }}</td>
                 </tr>

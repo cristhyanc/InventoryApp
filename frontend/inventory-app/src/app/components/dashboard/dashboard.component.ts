@@ -15,12 +15,21 @@ import {
   DashboardRefillSummary,
   DashboardSalesThisWeek,
   DashboardSummary,
+  ReorderMode,
   UnavailableDashboardSection,
   isDashboardSectionUnavailable,
   Product,
   Machine,
   Site
 } from '../../models/models';
+import {
+  NayaxUnavailability,
+  SUPPORT_VIEW_REASON,
+  nayaxUnavailabilityOfError,
+  nayaxUnavailabilityOfReason,
+  nayaxUnavailableMessage,
+  storageOnlyReorderLabel
+} from '../../provider/nayax-availability';
 import { trendLabel, trendClass } from '../../formatting/revenue-trend';
 import { siteStockClass } from '../../formatting/site-stock-status';
 import { money } from '../reports/report-formatting';
@@ -28,6 +37,26 @@ import { IconComponent } from '../shared/icon.component';
 import { LegacyBusinessSettingsPromptComponent } from '../shared/legacy-business-settings-prompt/legacy-business-settings-prompt.component';
 import { NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE } from '../../support-session/support-session-messages';
 import { SupportSessionService } from '../../support-session/support-session.service';
+
+/**
+ * What this page knows about the business's sales provider, read from its own summary (issue #727).
+ *
+ * Nayax is an optional add-on, so this is a normal property of a working business rather than an
+ * error state. `GET /api/dashboard/summary` already answers the question: `needsRefill` is a real
+ * card for a business whose fleet was read, and `{ available: false, reason }` for one whose was
+ * not, with the reason saying which of these this is (issue #726). The page therefore needs no
+ * second probe - the shared, application-wide availability signal is issue #728.
+ *
+ * `unknown` is the state before the summary has been read, and after a summary that failed: a
+ * summary nobody read says nothing about the provider, so the page keeps its connected behaviour
+ * rather than hiding a connected business's live sections on a transient failure.
+ */
+export type DashboardProviderAvailability =
+  | 'unknown'
+  | 'usable'
+  | 'notConnected'
+  | 'permissionNotGranted'
+  | 'supportView';
 
 @Component({
   selector: 'app-dashboard',
@@ -39,9 +68,25 @@ export class DashboardComponent implements OnInit, OnDestroy {
   lowStock: Product[] = [];
   machines: Machine[] = [];
   sites: Site[] = [];
-  isLoadingSites = false;
-  isLoadingMachines = false;
+
+  /**
+   * The Sites and Machines sections start as loading, not as empty: whether they are loaded at all
+   * is decided by the summary (see {@link refreshSummary}), and an outstanding decision must not
+   * show as "No sites available yet".
+   */
+  isLoadingSites = true;
+  isLoadingMachines = true;
   isLoadingLowStock = false;
+
+  /**
+   * What to say instead of a list when a section's own request failed (issue #727). Never `null`
+   * together with an empty list for a failed load: a request nobody answered is not a business with
+   * nothing in it, and "No sites available yet" or "Everything looks good" would be a claim about
+   * data this page was never given.
+   */
+  sitesError: string | null = null;
+  machinesError: string | null = null;
+  reorderAlertsError: string | null = null;
   isSalesSyncFailed = false;
 
   /**
@@ -54,6 +99,18 @@ export class DashboardComponent implements OnInit, OnDestroy {
   summary: DashboardSummary | null = null;
   isLoadingSummary = false;
   isSummaryFailed = false;
+
+  /** What the summary said about the provider; see {@link DashboardProviderAvailability}. */
+  providerAvailability: DashboardProviderAvailability = 'unknown';
+
+  /**
+   * Which facts the reorder-alert list below was calculated from, and - in storage-only mode - why
+   * the machines are missing from it, as `GET /api/products/alerts/low-stock` published them
+   * (issue #726). Read from the list's own response rather than from the summary's ordering card,
+   * so the table and its label always describe one read.
+   */
+  reorderMode: ReorderMode | null = null;
+  reorderMachineNeedUnavailableReason: NayaxUnavailability | null = null;
 
   /**
    * Whether the latest-sales synchronization was deliberately not attempted because a support
@@ -104,7 +161,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   ngOnInit(): void {
     this.refreshLowStock();
-    this.refreshSalesDashboard();
+    // The summary decides whether the live-fleet half of this page runs at all, so it starts it
+    // rather than running beside it; see `refreshSummary`.
     this.refreshSummary();
   }
 
@@ -118,6 +176,13 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * week", "Needs refill", "Needs ordering" and "Inventory" always describe the same backend read.
    * A request failure clears `summary` rather than leaving a stale one, so a failed metric is never
    * presented as a real zero.
+   *
+   * It is also where this page learns whether the business has a usable sales provider (issue
+   * #727), which is why the live-fleet half of the page - the sales synchronization and the Sites
+   * and Machines sections - is started from here instead of beside it. Without that order the
+   * synchronization would already have been sent by the time the answer arrived, and "sales sync is
+   * not called when the provider is not usable" cannot be satisfied after the fact. A business with
+   * a usable provider gets the same calls in the same order as before, one summary later.
    */
   refreshSummary(): void {
     this.isLoadingSummary = true;
@@ -126,11 +191,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
       next: (summary) => {
         this.summary = summary;
         this.isLoadingSummary = false;
+        this.providerAvailability = providerAvailabilityOf(summary);
+        this.refreshSalesDashboard();
       },
       error: () => {
         this.summary = null;
         this.isSummaryFailed = true;
         this.isLoadingSummary = false;
+        this.providerAvailability = 'unknown';
+        this.refreshSalesDashboard();
       }
     });
   }
@@ -147,11 +216,21 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * Inside a support session (issue #661) the synchronization is not attempted at all: it is a
    * `POST`, and it is a Nayax call, and a session is refused on both counts (issue #551). The
    * persisted figures are still loaded, flagged as not synchronized rather than as failed.
+   *
+   * For a business with no usable provider (issue #727) none of this runs: there is nothing to
+   * synchronize, the call could only be refused, and the two sections it refreshes are not
+   * rendered. No notice is shown either - a sync that was never attempted neither failed nor
+   * succeeded, and the page says what the business *does* have instead.
    */
   refreshSalesDashboard(): void {
     this.isSalesSyncFailed = false;
     this.isSalesSyncRecentlyRefreshed = false;
     this.isSalesSyncSkippedInSupportView = false;
+    if (!this.isProviderUsable) {
+      this.isLoadingSites = false;
+      this.isLoadingMachines = false;
+      return;
+    }
     this.isLoadingSites = true;
     this.isLoadingMachines = true;
     if (this.sessionActive) {
@@ -179,14 +258,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   refreshSites(): void {
     this.isLoadingSites = true;
+    this.sitesError = null;
     this.siteService.getAll().subscribe({
       next: (sites) => {
         this.sites = sites;
+        this.isLoadingSites = false;
       },
-      error: () => {
+      error: (error: unknown) => {
         this.sites = [];
-      },
-      complete: () => {
+        this.sitesError = sectionUnavailableText(error, 'The Sites section');
         this.isLoadingSites = false;
       }
     });
@@ -194,14 +274,20 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   refreshLowStock(): void {
     this.isLoadingLowStock = true;
+    this.reorderAlertsError = null;
     this.productService.getLowStock().subscribe({
-      next: (p) => {
-        this.lowStock = p.filter((product) => product.isActive !== false);
+      next: (listing) => {
+        this.lowStock = listing.products.filter((product) => product.isActive !== false);
+        this.reorderMode = listing.mode;
+        this.reorderMachineNeedUnavailableReason = listing.machineNeedUnavailableReason;
+        this.isLoadingLowStock = false;
       },
-      error: () => {
+      error: (error: unknown) => {
         this.lowStock = [];
-      },
-      complete: () => {
+        // A mode nobody published must not survive the failure and label the next render.
+        this.reorderMode = null;
+        this.reorderMachineNeedUnavailableReason = null;
+        this.reorderAlertsError = sectionUnavailableText(error, 'The reorder-alert list');
         this.isLoadingLowStock = false;
       }
     });
@@ -209,14 +295,15 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   refreshMachines(): void {
     this.isLoadingMachines = true;
+    this.machinesError = null;
     this.machineService.getAll().subscribe({
       next: (m) => {
         this.machines = m;
+        this.isLoadingMachines = false;
       },
-      error: () => {
+      error: (error: unknown) => {
         this.machines = [];
-      },
-      complete: () => {
+        this.machinesError = sectionUnavailableText(error, 'The Machines section');
         this.isLoadingMachines = false;
       }
     });
@@ -235,15 +322,36 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Whether to render the "Sales this week" card at all (issue #528).
+   * Whether the business has a sales provider this page can show provider figures for (issue
+   * #727). Only an answered `NayaxNotConnected` makes it false: `PendingPermissions` with one read
+   * ungranted is a usable connection with one feature missing (decision P9 of issue #329), a
+   * support session keeps its existing behaviour, and an unread summary claims nothing.
+   */
+  get isProviderUsable(): boolean {
+    return this.providerAvailability !== 'notConnected';
+  }
+
+  /**
+   * Whether to render the Sites and Machines sections and the "Needs refill" card - everything on
+   * this page whose every figure is a figure about machines. Without a provider they are not shown
+   * at all rather than shown as empty or unavailable: there is no fleet to report on, and the page
+   * is about what the business does have.
+   */
+  get isLiveFleetShown(): boolean {
+    return this.isProviderUsable;
+  }
+
+  /**
+   * Whether to render the "Sales this week" card at all (issues #528 and #727).
    *
-   * It is hidden only when a summary that *was* loaded does not carry the figure, which is what
-   * the API's redaction looks like. A summary that is still loading or that failed keeps the card,
+   * It is hidden when a summary that *was* loaded does not carry the figure, which is what the
+   * API's redaction looks like, and for a business with no usable provider, whose sales this
+   * application does not have. A summary that is still loading or that failed keeps the card,
    * reporting "Unavailable" exactly as before: not knowing the figure yet, or at all, is a
    * different thing from having been told it is not this member's to see.
    */
   get isSalesCardShown(): boolean {
-    return this.summary === null || this.summary.salesThisWeek !== undefined;
+    return this.isProviderUsable && (this.summary === null || this.summary.salesThisWeek !== undefined);
   }
 
   /**
@@ -313,11 +421,14 @@ export class DashboardComponent implements OnInit, OnDestroy {
   /**
    * The "Needs refill" supporting detail. `machinesEvaluated` is what makes a zero honest: zero of
    * zero machines is nothing to evaluate yet, zero of many is every evaluated machine adequately
-   * stocked. Inside a support session (issue #554) the fleet is never read at all, so this is where
-   * that is explained.
+   * stocked. A withheld card carries the reason's own sentence (issue #727): inside a support
+   * session (issue #554) the fleet is never read at all, and for a feature Nayax has not granted
+   * the card says that instead - the two are different answers and were one sentence until #727.
    */
   refillFooterText(refill: DashboardRefillSummary | UnavailableDashboardSection): string {
-    if (isDashboardSectionUnavailable(refill)) return NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE;
+    if (isDashboardSectionUnavailable(refill)) {
+      return this.unavailableSectionText(refill.reason, 'Machine refill status');
+    }
     if (refill.machinesEvaluated === 0) return 'No machines to evaluate yet';
     if (refill.machinesNeedingRefill === 0) return `All ${refill.machinesEvaluated} machines adequately stocked`;
     return `${refill.lowSelectionCount} low · ${refill.emptySelectionCount} empty selections across ${refill.machinesEvaluated} machines evaluated`;
@@ -338,9 +449,26 @@ export class DashboardComponent implements OnInit, OnDestroy {
     return isDashboardSectionUnavailable(ordering) ? 'value-muted' : '';
   }
 
+  /**
+   * The storage-only label the "Needs ordering" card carries, or `null` for a machine-aware count
+   * (issue #727). A storage-only count is a complete answer about storage rather than a partial one
+   * about the fleet, and saying so is what keeps it from being read as a machine-aware figure. The
+   * reason comes from the refill section of the same response, which is where this summary states
+   * why the machines are missing.
+   */
+  get orderingModeNote(): string | null {
+    const ordering = this.summary?.needsOrdering;
+    if (ordering === undefined || isDashboardSectionUnavailable(ordering) || ordering.mode !== 'StorageOnly') {
+      return null;
+    }
+    return storageOnlyReorderLabel(this.summaryMachineNeedUnavailableReason);
+  }
+
   /** The "Needs ordering" supporting detail, over the same catalogue the count was taken over. */
   orderingFooterText(ordering: DashboardOrderingSummary | UnavailableDashboardSection): string {
-    if (isDashboardSectionUnavailable(ordering)) return NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE;
+    if (isDashboardSectionUnavailable(ordering)) {
+      return this.unavailableSectionText(ordering.reason, 'Ordering figures');
+    }
     if (ordering.productsEvaluated === 0) return 'No products in the catalogue yet';
     if (ordering.productsNeedingOrdering === 0) return `All ${ordering.productsEvaluated} products adequately stocked`;
     return `of ${ordering.productsEvaluated} products in the catalogue`;
@@ -350,6 +478,46 @@ export class DashboardComponent implements OnInit, OnDestroy {
     if (isDashboardSectionUnavailable(ordering)) return 'value-muted';
     if (ordering.productsEvaluated === 0) return 'value-muted';
     return ordering.productsNeedingOrdering === 0 ? 'value-positive' : 'value-muted';
+  }
+
+  /**
+   * The storage-only label the Reorder Alerts section carries, or `null` in machine-aware mode and
+   * for a listing that published no mode at all. It is shown for an **empty** storage-only list
+   * too: "nothing alerts" means something different when the machines were never read.
+   */
+  get reorderModeNote(): string | null {
+    return this.reorderMode === 'StorageOnly'
+      ? storageOnlyReorderLabel(this.reorderMachineNeedUnavailableReason)
+      : null;
+  }
+
+  /**
+   * Whether the Reorder Alerts table may show the machines' replenishment need and the storage
+   * stock left after it. In storage-only mode it may not: `machineReplenishmentNeed` is `0` there
+   * because nobody read the machines, and a column of zeroes - with a "Stock after machine need"
+   * equal to the stock beside it - would state that the machines need nothing.
+   */
+  get isMachineNeedShownInReorderAlerts(): boolean {
+    return this.reorderMode !== 'StorageOnly';
+  }
+
+  /**
+   * The sentence for a withheld summary section, by the reason the backend published. The reason is
+   * a stable code and never displayed; an unrecognised one reports the feature as unavailable
+   * without inventing a cause for it.
+   */
+  private unavailableSectionText(reason: string, feature: string): string {
+    if (reason === SUPPORT_VIEW_REASON) return NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE;
+    const unavailability = nayaxUnavailabilityOfReason(reason);
+    return unavailability === null ? `${feature} is unavailable.` : nayaxUnavailableMessage(unavailability, feature);
+  }
+
+  /** Why this summary's machine figures are missing, as its refill section states it. */
+  private get summaryMachineNeedUnavailableReason(): NayaxUnavailability | null {
+    const refill = this.summary?.needsRefill;
+    return refill !== undefined && isDashboardSectionUnavailable(refill)
+      ? nayaxUnavailabilityOfReason(refill.reason)
+      : null;
   }
 
   /**
@@ -507,4 +675,39 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
     (event.currentTarget as Element).querySelector<HTMLAnchorElement>('a.table-row-anchor')?.click();
   }
+}
+
+/**
+ * What one summary says about the provider (issue #727). The refill card is the one section of this
+ * response whose every figure comes from the live fleet, so it is the section that states whether
+ * the fleet was readable: a real card means it was, and a withheld one carries the reason it was
+ * not. A reason this build does not recognise is `unknown` - it keeps the connected behaviour
+ * rather than hiding sections because of a code nobody here understands.
+ */
+function providerAvailabilityOf(summary: DashboardSummary): DashboardProviderAvailability {
+  const refill = summary.needsRefill;
+  if (!isDashboardSectionUnavailable(refill)) return 'usable';
+  if (refill.reason === SUPPORT_VIEW_REASON) return 'supportView';
+  switch (nayaxUnavailabilityOfReason(refill.reason)) {
+    case 'NayaxNotConnected':
+      return 'notConnected';
+    case 'PermissionNotGranted':
+      return 'permissionNotGranted';
+    default:
+      return 'unknown';
+  }
+}
+
+/**
+ * What to show in place of a section whose own request failed. A `409` carrying one of the two
+ * Nayax availability codes is that feature's own availability answer and gets its per-feature
+ * message (decision P9 of issue #329); every other failure is an error and is reported as one - a
+ * transport failure or a real Nayax outage must never be presented as a business that is simply
+ * not connected.
+ */
+function sectionUnavailableText(error: unknown, feature: string): string {
+  const unavailability = nayaxUnavailabilityOfError(error);
+  return unavailability === null
+    ? `${feature} could not be loaded. Reload the page to try again.`
+    : nayaxUnavailableMessage(unavailability, feature);
 }
