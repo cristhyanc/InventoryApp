@@ -1146,6 +1146,12 @@ the filters and fields below.
 - **A connection that needs attention is still a connection.** A business whose stored token stopped
   working keeps its Nayax expense category and its Nayax source filter; what it loses is the live
   fleet reads, with the banner asking an Owner to reconnect.
+- **One permission Nayax has not granted does not take the rest of the application with it.** When
+  Nayax refuses one read for lack of permission, that one feature says so where its control was and
+  is not asked for again until the connection is saved or re-tested; everything else the Nayax account
+  does allow keeps working. A business whose connection is usable is never assumed to have been
+  granted every permission, so nothing is hidden on a guess either: a feature nobody has been refused
+  is offered, and its own request reports its own outcome.
 
 **A connected business sees no change here either.** Every filter, field and category is exactly as
 before.

@@ -700,7 +700,9 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     this.saveSubscription = this.connections.save(result.draftId).subscribe({
       next: (connection) => {
         this.saving = false;
-        this.acceptConnection(connection);
+        // The stored pair is exactly the pair this test ran against, so its check lines are
+        // evidence about the connection that now exists (issue #728).
+        this.acceptConnection(connection, result.checks);
         this.saved = true;
         // The draft is consumed: withdrawing it is what makes a second save impossible here as
         // well as refused by the server.
@@ -735,7 +737,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
       next: (result) => {
         this.retesting = false;
         this.retestResult = result;
-        this.acceptConnection(result.connection);
+        this.acceptConnection(result.connection, result.checks);
         if (!result.statusUpdated) {
           this.notice = {
             tone: 'warning',
@@ -918,11 +920,19 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
    * #728). This is the one place the connection changes, so it is the one place that signal needs
    * refreshing: without it a banner, a machine filter or an expense category read earlier in the
    * session would keep describing the connection the Owner has just replaced.
+   *
+   * `checks` is the completed run's own check lines, which a save and a re-test have and a plain
+   * status read does not. They are the only per-read evidence this application ever obtains about
+   * which Nayax permissions the stored credentials have, so they refresh the shared signal's
+   * per-feature answers; without them those answers are cleared rather than carried over.
    */
-  private acceptConnection(connection: NayaxConnectionState): void {
+  private acceptConnection(
+    connection: NayaxConnectionState,
+    checks?: readonly NayaxConnectionCheckLine[]
+  ): void {
     this.connection = connection;
     this.statusUnavailable = false;
-    this.provider.accept(connection);
+    this.provider.accept(connection, checks);
   }
 
   private discardToken(): void {

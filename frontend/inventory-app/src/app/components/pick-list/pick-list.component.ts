@@ -77,7 +77,7 @@ export class PickListComponent implements OnInit {
   ) {}
 
   ngOnInit(): void {
-    loadProviderList(this.provider, 'liveFleet', () => this.machineService.getAll()).subscribe((outcome) => {
+    loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe((outcome) => {
       this.allMachines = outcome.kind === 'listed' ? outcome.items : [];
       this.machinesUnavailable =
         outcome.kind === 'unavailable' ? nayaxUnavailableMessage(outcome.unavailability, 'The pick list') : '';

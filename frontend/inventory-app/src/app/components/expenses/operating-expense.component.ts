@@ -267,13 +267,13 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.load();
     this.supplierService.getAll().subscribe(x => this.suppliers = x);
-    loadProviderList(this.provider, 'liveFleet', () => this.machineService.getAll()).subscribe(outcome => {
+    loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe(outcome => {
       this.machines = outcome.kind === 'listed' ? outcome.items : [];
       this.machinesError = outcome.kind === 'failed'
         ? 'The machine list could not be loaded, so an expense cannot be attributed to a machine.'
         : '';
     });
-    this.provider.feature('providerRecords').subscribe(available => (this.providerRecordsAvailable = available));
+    this.provider.featureOffered('providerRecords').subscribe(available => (this.providerRecordsAvailable = available));
   }
 
   /** The page's own wording: without Nayax it describes only what this business does record. */

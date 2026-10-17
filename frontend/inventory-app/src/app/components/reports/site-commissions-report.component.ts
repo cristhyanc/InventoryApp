@@ -96,7 +96,7 @@ export class SiteCommissionsReportComponent implements OnInit, OnDestroy {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
   }
   ngOnInit(): void {
-    loadProviderList(this.provider, 'liveFleet', () => this.siteService.getAll()).subscribe(outcome => {
+    loadProviderList(this.provider, 'machineFleet', () => this.siteService.getAll()).subscribe(outcome => {
       this.sites = outcome.kind === 'listed' ? outcome.items : [];
       this.sitesError = outcome.kind === 'failed'
         ? 'The site list could not be loaded, so this report cannot be narrowed to one site.'

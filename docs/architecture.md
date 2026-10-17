@@ -3641,7 +3641,7 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | `app.component.*` | Application shell: header with the sidebar collapse control and the signed-in user control, the sidebar, the routed page region, MSAL redirect/account handling, and the toast/loading hosts |
 | `layout/` | Primary navigation: `navigation.ts` (the navigation data, each destination's capability, and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
 | `access/` | What the signed-in member may do (issue #528) and which account state they are in (issue #529): the capability vocabulary, the cached `GET /api/me/access` and `GET /api/me/account-state` reads, the two route guards, the "access not allowed" and "access unavailable" pages, and the interceptors that keep the caches current and show the global `403` notice |
-| `provider/` | Whether this business's Nayax connection is usable: the published availability vocabulary and its wording (issue #727), the application-wide session-cached signal, the shared `409 nayax_not_connected` handling path and the one machine/site list load (issue #728) |
+| `provider/` | Whether this business's Nayax connection is usable: the published availability vocabulary and its wording (issue #727), the application-wide session-cached signal, the per-feature permission vocabulary and evidence, the shared `409 nayax_not_connected` handling path and the one machine/site list load (issue #728) |
 | `app.routes.ts` | Product, stock, supplier, machine, site, purchase, report, expense, and administration routes, each with the capability its page needs |
 | `components/` | Routed feature pages plus a small set of shared components |
 | `services/` | Typed HTTP calls, runtime configuration, toast state, and feature-specific client behavior |
@@ -5706,44 +5706,109 @@ many banners, filters and forms want it, the endpoint is asked a single time. `l
 **settled** answer, so no screen renders a decision that has not been made. A read that failed emits
 `unknown` and drops the shared attempt, so the next screen asks again.
 
-**The answer has one overall state and two per-feature ones.** `ProviderConnection` is `usable`,
+**The answer has one overall state and one state per feature.** `ProviderConnection` is `usable`,
 `needsAttention`, `notConnected` or `unknown`. `providerConnectionOf` is a translation of
 `Inventory.Domain.Nayax.NayaxConnectionStatusGate` and not a second opinion - `Ready` and
 `PendingPermissions` are the two usable states because that gate says so, and a status name this
 build has never heard of is `unknown` rather than usable, for the same reason the gate is an
-allow-list. `ProviderFeature` then answers per **kind** of dependency, not per page:
-
-- `liveFleet` - anything whose figures come from a live Nayax read: the machine fleet, the site list,
-  the pick list, Sync Restock. It needs credentials the gate will use, so `needsAttention` refuses it.
-- `providerRecords` - anything that only needs Nayax to be *part of* this business: the "Nayax Sync
-  Restock" source of an already-recorded stock movement, the "Nayax monthly fee" expense category.
-  `needsAttention` **keeps** it, because stored credentials that stopped working are still a Nayax
-  account the business pays for and records expenses against.
+allow-list.
 
 Keeping `needsAttention` apart from `notConnected` is the whole reason the overall state exists:
 the two mean opposite things to a business, and collapsing them would withhold the Nayax fee category
-from a business that does pay a Nayax monthly fee. **Both per-feature answers fail open while the
-state is `unknown`**, matching the banner and issue #727: withholding a connected business's machine
-filter because one probe failed is a worse error than showing a filter whose own request then reports
-its own failure.
+from a business that does pay a Nayax monthly fee.
+
+**A usable connection is never read as "every feature is granted".** A connection is usable in
+`PendingPermissions` *precisely because* the business's Nayax account may have granted some reads and
+refused others, so the overall state cannot answer for a feature. `ProviderFeature`
+(`provider/provider-feature-permissions.ts`) is therefore a vocabulary of **kinds of Nayax read**,
+not of pages, taken from the reads this application already declares in
+`Inventory.Domain.Nayax.NayaxConnectionCheck`:
+
+| Feature | What it is | Declared check that is evidence about it |
+| --- | --- | --- |
+| `machineFleet` | the operator's machine list and the site list derived from it (`GET /api/machines`, `GET /api/sites`, the pick list) | `Machines` |
+| `machineSales` | a machine's latest sales read from Nayax | `MachineLastSales` |
+| `machineStock` | a machine's own product/stock state | `MachineProducts` |
+| `productCatalogue` | the operator's product catalogue and product groups | `ProductCatalogue`, `ProductGroups` |
+| `providerRecords` | what only needs Nayax to be *part of* this business and makes no live read at all: the "Nayax Sync Restock" source of an already-recorded movement, the "Nayax monthly fee" expense category | none - no permission can be granted or refused for it |
+
+`PROVIDER_FEATURE_CHECKS` is that mapping, and it is the feature-to-permission mapping issue #729
+(E2) reads for a locked menu item. A check no feature claims - `SignIn`, which is about the
+credentials rather than about a read, and `Machine` and `MachineLastAlerts`, which no screen depends
+on - is evidence about nothing here rather than about the feature it most resembles.
+
+Every feature then carries one `ProviderFeatureAvailability`, and the four states are answers rather
+than labels on each other:
+
+| Feature state | When |
+| --- | --- |
+| `available` | the connection allows the feature **and** evidence says Nayax granted the read |
+| `notConnected` | the connection cannot serve it at all: `notConnected`, or `needsAttention` for a live read. `providerRecords` survives `needsAttention`, because stored credentials that stopped working are still a Nayax account the business pays for |
+| `permissionNotGranted` | the credentials work and Nayax has refused this feature's read for lack of permission |
+| `unknown` | nothing has stated it: the status is unread or unreadable, or the connection is usable and no test, re-test or refusal has said anything about this feature's permission |
+
+`providerFeatureOffered` **fails open on `unknown`**, matching the banner and issue #727: withholding
+a connected business's machine filter because one probe failed, or because nothing has yet stated a
+permission, is a worse error than showing a filter whose own request then reports its own failure.
+Only a *stated* refusal withholds a feature, and it withholds that feature alone - the connection's
+own availability and every other feature are untouched, so a granted machine read stays usable beside
+a refused sales read.
+
+**Permission evidence is only ever evidence this application produced.** There are exactly two
+sources, and neither is the status:
+
+- **A completed connection test or re-test** (issues #536, #538). `providerPermissionsOfChecks` reads
+  its check lines: a check refused with `PermissionNotGranted` is `denied` and outweighs a sibling
+  that passed (a feature needing two reads needs both), a check that passed is `granted`, and
+  everything else - `NotChecked`, an invalid token, a Nayax outage, an answer nobody interpreted -
+  leaves the feature `unknown`, because a read nobody completed says nothing about a permission.
+- **A `409 nayax_permission_not_granted` the session saw**, retained by `noteRefusal` against the
+  feature whose request earned it. The refusal does not name a feature itself - the response carries
+  the stable code and no operation name - so the caller passes the feature it was asking about, which
+  is why `noteRefusal` takes one.
 
 **The connection changes in exactly one place, so that is the one place the signal is refreshed.**
-`NayaxConnectionWizardComponent` calls `accept(state)` with the state the server returned from its
-status read, its save and its re-test (issues #537, #538), which replaces the shared answer without
-spending another request. `reset()` drops it for a change of the business this tab resolves - a
+`NayaxConnectionWizardComponent` calls `accept(state, checks?)` with the state the server returned
+from its status read, its save and its re-test (issues #537, #538), which replaces the shared answer
+without spending another request. A save and a re-test pass the completed run's **check lines** - for
+a save, the test whose draft it promoted, because the stored pair is exactly the pair that was tested
+- so the per-feature answers are refreshed from them; a plain status read carries none, and then the
+permission evidence is **cleared** rather than carried over onto a connection that may have changed.
+`reset()` drops the status and every permission for a change of the business this tab resolves - a
 support-session start, end or expiry - called from `SupportSessionService.applyBusinessContextChange`
 beside `BusinessService.reset()` (issues #669, #670), because the cached answer is about one
 business's connection and a support view resolves no Nayax credentials at all (issue #551).
 
-**`noteRefusal` is the one HTTP handling path for the two `409` availability codes.** It returns the
-`NayaxUnavailability` a refusal stated (`nayax_not_connected` / `nayax_permission_not_granted`,
-worded by `provider/nayax-availability.ts` since issue #727) and `null` for every other failure - a
-transport failure, a `502` from a real Nayax outage, a `403` about the caller's own access - which
-stays an **error**, because reporting one of those as "Nayax is not connected" would describe a
-connection nobody tested. A not-connected refusal also **replaces** the shared answer, taking the
+**Bounded dependency: no contract reports a per-feature permission, or names one.**
+`GET /api/settings/nayax-connection/status` publishes a status and `machineChecksPending` and nothing
+per read, and `NayaxConnectionExceptionHandler` deliberately keeps
+`NayaxPermissionNotGrantedException.Operation` out of the `409` body (it is logged server-side). So
+in an ordinary session every feature is `unknown` until a request is refused, and only an Owner with
+`Integration.Manage` can produce positive evidence, by running the rate-limited re-test. Two things
+therefore cannot be built on this signal as it stands, and neither is invented here:
+
+- a page that states up front which Nayax permissions a business is missing, without first being
+  refused;
+- issue #729's "waiting for Nayax permission (naming the missing permission)" wording. The
+  application knows its own check names, not the Nayax permission an operator has to grant, and a
+  name nothing published must not be guessed.
+
+Closing either needs a backend contract change - the status response (or a new read) publishing each
+declared check's last outcome, and an authoritative Nayax statement of the permission behind it -
+which is a reviewed decision of its own, not an implementation detail of this signal.
+
+**`noteRefusal(error, feature)` is the one HTTP handling path for the two `409` availability codes.**
+It returns the `NayaxUnavailability` a refusal stated (`nayax_not_connected` /
+`nayax_permission_not_granted`, worded by `provider/nayax-availability.ts` since issue #727) and
+`null` for every other failure - a transport failure, a `502` from a real Nayax outage, a `403` about
+the caller's own access - which stays an **error**, because reporting one of those as "Nayax is not
+connected" would describe a connection nobody tested, and recording one as a permission refusal would
+withhold a feature nobody refused. A not-connected refusal **replaces** the shared answer, taking the
 status out of the refusal's own `nayaxConnectionStatus` extension (issue #520): the one `409` covers
 "nothing stored" and "stored and known not to work" alike, so the code on its own cannot tell them
-apart, and a refusal that published no recognised status records nothing rather than guessing.
+apart, and a refusal that published no recognised status records nothing rather than guessing. A
+permission refusal instead records `denied` for the one feature it was about and leaves the
+connection's own availability exactly as it was, because the credentials are working.
 
 **`loadProviderList` is the one machine/site list load**
 (`frontend/inventory-app/src/app/provider/provider-list-load.ts`). It reads the shared answer, does
@@ -5753,8 +5818,13 @@ page may never confuse:
 | Outcome | When | What a page does |
 | --- | --- | --- |
 | `listed` | the request answered | render the control; an empty list is a legitimate empty list |
-| `unavailable` | the shared answer refuses the feature, or the request came back with one of the two `409` codes | **hide** the control - a filter over a list that cannot exist is not a filter |
+| `unavailable` | the shared answer refuses the feature - the connection cannot serve it, or this session has already seen Nayax refuse it for lack of permission - or the request came back with one of the two `409` codes | **hide** the control - a filter over a list that cannot exist is not a filter |
 | `failed` | anything else | render an **error in place of** the control |
+
+A feature the shared answer already refuses is not requested again, and the answer it carries says
+which refusal it was: a connection that cannot serve the feature carries the not-connected answer
+(the one the server itself would have given), and a retained permission refusal carries the
+permission answer, so a page that has been told why says why.
 
 Before this, each page subscribed to `MachineService.getAll()` and assigned `[]` on failure - or, on
 the Pick List, had no error handler at all - so a refused request, a transport failure and a business
@@ -5774,7 +5844,7 @@ the page reports on.
   right alignment either way. **Site Commissions** does the same for its Site select over
   `SiteService.getAll()`, which is a live fleet read too.
 - **Stock History** (`StockHistoryPageComponent`) keeps its two provider-dependent filters apart: the
-  **machine** filter needs a machine list (`liveFleet`) and stays hidden until machines exist - which
+  **machine** filter needs a machine list (`machineFleet`) and stays hidden until machines exist - which
   is what issue #746 (G2b) will change by listing locally recorded machines - while the **"Nayax Sync
   Restock" source** option needs only `providerRecords`, because the movements it selects are already
   recorded locally. The table keeps labelling a Nayax-sourced movement whatever the filter offers.
@@ -5796,17 +5866,26 @@ disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b
 issue #729 (E2).
 
 **What proves it.** `provider/provider-availability.service.spec.ts` covers the status derivation,
-the one-read-per-session cache, the retry after a failed read, `accept`, `reset`, and every refusal
-`noteRefusal` must and must not claim an answer for.
+the one-read-per-session cache, the retry after a failed read, the four per-feature states, a usable
+connection claiming no permission, one granted feature beside one refused feature, the refusal
+retained against one feature only, the refresh after a re-test, the clearing after a connection state
+with no checks, the business-context reset, and every refusal `noteRefusal` must and must not claim
+an answer for - including the transport failure that must never become permission evidence.
+`provider/provider-feature-permissions.spec.ts` covers the feature-to-check mapping and the evidence
+rule: a refused read outweighing a passed sibling, and `NotChecked`, a non-permission failure and a
+check no feature claims all leaving a feature `unknown`.
 `provider/provider-list-load.spec.ts` covers the three outcomes, the request that is not sent, the
-per-feature difference between `liveFleet` and `providerRecords`, and the failures that stay errors.
+per-feature difference between `machineFleet` and `providerRecords`, the second request a retained
+permission refusal prevents while an unrelated feature stays loadable, and the failures that stay
+errors.
 `pick-list.component.provider-optional.spec.ts`,
 `stock-history-page.component.provider-optional.spec.ts`,
 `operating-expense.component.provider-optional.spec.ts` and `reports/report-provider-optional.spec.ts`
 cover each screen's hidden control, its error state, and the empty list neither may be confused with;
 `stock-adjustment-form.component.spec.ts` covers the machine field and the dropped staged machine;
 `nayax-connection-wizard.component.spec.ts` covers the signal being refreshed by a save and a
-re-test; `nayax-status-banner.component.spec.ts` covers three banners costing one read; and
+re-test, including the per-feature permissions a re-test found, granted and refused alike;
+`nayax-status-banner.component.spec.ts` covers three banners costing one read; and
 `support-session.service.spec.ts` covers the answer being forgotten on a context transition.
 
 ### Target feature boundaries

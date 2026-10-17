@@ -40,7 +40,7 @@ export abstract class ReportPageBase<T> implements OnInit {
     protected provider: ProviderAvailabilityService) {}
 
   ngOnInit(): void {
-    loadProviderList(this.provider, 'liveFleet', () => this.machineService.getAll()).subscribe(outcome => {
+    loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe(outcome => {
       this.machines = outcome.kind === 'listed' ? outcome.items : [];
       this.machinesError = outcome.kind === 'failed' ? REPORT_MACHINE_FILTER_ERROR : '';
     });

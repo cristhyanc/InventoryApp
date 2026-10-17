@@ -112,7 +112,7 @@ export class StockHistoryPageComponent implements OnInit {
     });
     this.loadMachines();
     this.provider
-      .feature('providerRecords')
+      .featureOffered('providerRecords')
       .subscribe((available) => (this.providerRecordsAvailable = available));
     this.load();
   }
@@ -134,7 +134,7 @@ export class StockHistoryPageComponent implements OnInit {
   }
 
   private loadMachines(): void {
-    loadProviderList(this.provider, 'liveFleet', () => this.machineService.getAll()).subscribe((outcome) => {
+    loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe((outcome) => {
       this.machines = outcome.kind === 'listed' ? outcome.items : [];
       this.machinesError =
         outcome.kind === 'failed' ? 'The machine list could not be loaded, so machines cannot be filtered.' : '';
