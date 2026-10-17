@@ -4062,10 +4062,13 @@ direct refusal, so the error and the degraded card are never two different sente
 reason.
 
 Issue #726 added a second and third `reason` to the same shape (`NayaxNotConnected`,
-`PermissionNotGranted`) for a business without a usable provider, and did not touch the frontend:
-these helpers branch on `available` alone, so such a business currently sees "Unavailable" with the
-support-view sentence - wrong wording for the right state. Reading the reason and wording each one,
-including the storage-only `mode` the ordering card now carries, is issue #727.
+`PermissionNotGranted`) for a business without a usable provider, and did not touch the frontend, so
+such a business briefly saw "Unavailable" with the support-view sentence - wrong wording for the
+right state. Issue #727 fixed that: `refillFooterText`/`orderingFooterText` now branch on the
+**reason**, not on `available` alone, and the support-view sentence is one of three answers rather
+than the only one. The other two have their own wording in `provider/nayax-availability.ts`, and a
+`NayaxNotConnected` refill card is not worded at all, because that card is not rendered for a
+business with no provider - see [Provider-optional dashboard and Needs Ordering screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727).
 
 **What proves it.** `support-session.service.spec.ts` covers `active$` publishing `true` once a
 session starts and `false` again once it ends, with no duplicate for an unchanged state.
@@ -6711,7 +6714,8 @@ Since issue #726, `needsRefill` is additionally withheld - and `needsOrdering` i
 storage alone and says so - for a business whose Nayax connection is unusable or whose Nayax account
 has not granted the fleet reads. The summary is answered rather than refused in that state. See
 [Provider-optional reorder and dashboard summary](#provider-optional-reorder-and-dashboard-summary-issue-726)
-below.
+below, and [Provider-optional dashboard and Needs Ordering screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)
+for the screens that present it, which is also where the page reads that state from.
 
 `Inventory.Application.Dashboard.GetDashboardSummary` is the use case. It owns no formula of its
 own: every figure comes from an authority that already existed.
@@ -6799,7 +6803,7 @@ valuation and the product count describe one catalogue read instead of two.
 
 Nayax is an optional add-on; stock-storage management is what the application is for. Issue #726 is
 the backend half of that for reorder and the home Dashboard (the #328 release gate, child D1 of
-issue #329), and the frontend half is #727. Before it, `GET /api/dashboard/summary`,
+issue #329), and the frontend half is #727, below. Before it, `GET /api/dashboard/summary`,
 `GET /api/products/alerts/low-stock` and the Needs Ordering page all answered `409
 nayax_not_connected` for a business with no usable connection, because `CalculateReorderNeeds`
 starts with a live `GetMachinesAsync` and every caller of it propagated that refusal - so three
@@ -6906,6 +6910,92 @@ through the real pipeline against a business with no `BusinessNayaxConnection` r
 `NayaxLynxClient` registered. `LowStockReorderMetadataApiTests` covers the listing's response
 metadata through the same pipeline for both low-stock endpoints, in all three modes/reasons and for an
 empty result.
+
+#### Provider-optional dashboard and Needs Ordering screens (issue #727)
+
+The frontend half of the above (child D2 of issue #329, decisions P9 and P10). Without a usable
+provider the home Dashboard is a storage-management dashboard: it states what the business has
+rather than what it is missing, and it asks for nothing it cannot be given.
+
+**The page reads the provider's availability out of its own summary, and there is no second probe.**
+`GET /api/dashboard/summary` already answers the question - the refill card is the one section of
+that response whose every figure comes from the live fleet, so a real card means the fleet was read
+and a withheld one carries the reason it was not. `DashboardComponent.providerAvailability`
+(`DashboardProviderAvailability`) is that answer: `usable`, `notConnected`, `permissionNotGranted`,
+`supportView`, or `unknown` before the summary has been read and after one that failed. The
+business's Nayax **connection status** is deliberately not consulted:
+`GET /api/settings/nayax-connection/status` needs `Integration.Manage`, which an Operator or a
+Manager reading this page does not have, and a second probe would be a second answer that could
+disagree with the cards beside it. The application-wide availability signal every other screen will
+share is issue #728; this page's own is deliberately local until then.
+
+**Only `notConnected` hides anything**, and what it hides is everything on the page whose every
+figure is about machines: the "Sales this week" and "Needs refill" cards and the Sites and Machines
+sections (`isLiveFleetShown`). They are hidden rather than rendered empty or "Unavailable" - "No
+sites available yet" is a claim about the business, not about Nayax. "Needs ordering" and
+"Inventory" are shown as usual, so the reorder alerts become the page's main section without the
+page having to reorder anything. `PendingPermissions` with a read ungranted is **not** this state:
+the connection is usable, every card and section stays, and only the affected one says so.
+
+**The summary is what starts the live-fleet half of the page**, which is the one load-order change
+this issue makes. `ngOnInit` runs the reorder-alert load and the summary; the summary's handler -
+success or failure - then calls `refreshSalesDashboard`, which is where `POST /api/nayax-sales-sync`
+and the Sites and Machines loads live. Without that order the synchronization would already have
+been sent by the time the answer arrived, and "sales sync is not called when the provider is not
+usable" cannot be satisfied after the fact. A business with a usable provider gets the same three
+calls in the same order as before, one summary later; the two sections start in their loading state
+so a pending decision is never rendered as an empty one. A **failed** summary says nothing about the
+provider, so it leaves `unknown` and keeps the connected behaviour - a transient failure must not
+hide a connected business's live sections.
+
+**A storage-only figure is labelled, and the machine columns go with it.** The "Needs ordering"
+card's label comes from `needsOrdering.mode` with the reason from the same response's refill
+section; the Reorder Alerts list's comes from its own response headers, so the table and its label
+always describe one read. In storage-only mode the list drops the "Machine need" and "Stock after
+machine need" columns, because `machineReplenishmentNeed` is `0` there for the one reason that is
+not "the machines need nothing", and a "Stock after machine need" equal to the stock beside it
+would assert the opposite. The label is rendered for an **empty** list too.
+
+**One vocabulary, one sentence each.** `provider/nayax-availability.ts` is the frontend's copy of
+the published availability vocabulary and the only place it is worded:
+`nayaxUnavailabilityOfReason` for a withheld summary section or an `X-Reorder-*` header,
+`nayaxUnavailabilityOfError` for the two stable `409` codes
+(`nayax_not_connected`/`nayax_permission_not_granted`), and `nayaxUnavailableMessage`/
+`storageOnlyReorderLabel` for the wording. It mirrors
+`support-session/support-session-messages.ts`, which does the same for a session's two refusals, and
+the support-view sentence stays there - a session says nothing about the business's connection.
+Every message **names its feature**, because availability is per feature: one page can carry a
+permission message for one card and real figures beside it. A reason or code this build does not
+recognise is never guessed into one of the two: the feature is reported as unavailable with no cause
+claimed, and an unrecognised summary reason leaves the page's behaviour unchanged.
+
+**A failed request is an error, not an empty result.** `sitesError`, `machinesError` and
+`reorderAlertsError` are rendered in place of the list, so a request nobody answered is never shown
+as "No sites available yet", "No machines available yet" or "No reorder alerts. Everything looks
+good! ✅". A `409` carrying one of the two availability codes gets that feature's own message; every
+other failure - a transport failure, a `502` from a real Nayax outage, a `403` about the caller's own
+access - is reported as an error, because presenting one of those as "Nayax is not connected" would
+describe a connection nobody tested. Each loader also settles its own loading flag in both its
+`next` and its `error` handler rather than in `complete`, which RxJS does not call after an error and
+which used to leave a failed section loading forever.
+
+**Products → Needs Ordering** is the same change in one page: it reads the mode from the listing it
+already fetches, labels a storage-only list, and hides the "Machine need" column there. Its
+filters, sorting, status toggle and "Mark as ordered" are untouched and work without a provider -
+the supplier order it creates is local data. Its error-versus-empty distinction already existed
+(`ListLoadState`) and is unchanged.
+
+**What proves it.** `dashboard.component.provider-optional.spec.ts` covers the five states the issue
+names - not usable, permission not granted, support session, usable, and a failed request - over the
+rendered page: the hidden cards and sections, the sync that is not called and the warning that is
+not shown, the sites and machines that are not even asked for, the storage-only label, the dropped
+machine columns, the per-feature permission message (both from the summary and from a refused
+section request), the three error states and the empty states they must not be confused with, and
+the unchanged connected and support-session pages including the `sync → machines → sites` order.
+`product-needs-ordering.component.provider-optional.spec.ts` covers that page in both modes.
+`product.service.spec.ts` covers the response-header contract, including an empty listing, an
+unrecognised code and a reason published beside a machine-aware mode, and
+`provider/nayax-availability.spec.ts` covers what is **not** an availability answer.
 
 #### Home dashboard: four headline cards (issue #460)
 

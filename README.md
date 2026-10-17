@@ -1077,8 +1077,47 @@ reorder alerts and its ordering figures, calculated from the data this applicati
   not granted" produce storage-only figures; a Nayax request that fails in transport, or a fleet
   only half read, surfaces as an error rather than as a business whose machines need nothing.
 
-The screens that present these states are issue #727; until it ships, the dashboard shows the
-unavailable refill card with the support-view wording.
+#### The dashboard without a usable provider
+
+The dashboard presents those states (issue #727). Without a usable Nayax connection it is a
+storage-management dashboard, and it says what the business has rather than what it is missing:
+
+- **"Sales this week" and "Needs refill" are not shown, and neither are the Sites and Machines
+  sections.** Every figure on them comes from Nayax, so they are hidden rather than shown empty or
+  "Unavailable" — an empty Sites section would say the business has no sites, which is a different
+  claim. **"Needs ordering" and "Inventory" are shown as usual**, and the reorder alerts are then
+  the page's main section.
+- **The storage-only figures say so.** The "Needs ordering" card and the reorder-alert list each
+  carry a label — "Storage stock only: these figures do not include the machines' current
+  replenishment need, because Nayax is not connected" — and the list drops its "Machine need" and
+  "Stock after machine need" columns, whose values would otherwise be a column of zeroes stating
+  that the machines need nothing. The label is shown for an **empty** list too, because "nothing
+  needs ordering" means something different when the machines were never read.
+- **No sales synchronization is attempted, and no sync warning is shown.** `POST
+  /api/nayax-sales-sync` is a Nayax call that could only be refused, so the page does not make it;
+  a call that was never attempted neither failed nor succeeded, so there is nothing to warn about.
+  The dashboard reads its summary first and asks it whether the business has a usable provider,
+  which is what makes that possible.
+- **A permission Nayax has not granted is reported per feature.** With a usable connection whose
+  Nayax account has not granted a particular read (`PendingPermissions`), everything else keeps
+  working and only the affected card or section says so — "Machine refill status is unavailable
+  because Nayax has not granted this application permission to read it" — instead of a message
+  about the connection as a whole.
+- **A failed request is an error, never an empty result.** A Sites, Machines or reorder-alert
+  request that fails says so ("The Sites section could not be loaded. Reload the page to try
+  again."). It is never shown as "No sites available yet" or "No reorder alerts. Everything looks
+  good!", which are statements about data the page was never given. A genuinely empty answer still
+  shows those messages.
+
+**Products → Needs Ordering** works the same way in storage-only mode: the full page, with its
+filters, sorting and "Mark as ordered", over the storage-only alerts, labelled with the mode and
+with the "Machine need" column hidden.
+
+**A connected business sees no change, and neither does a support session.** With a usable
+connection and the fleet reads granted, every card, section and column is exactly as before. In a
+read-only support session the dashboard keeps its existing behaviour (issues #552 and #661): all
+four cards and all three sections, with "Nayax is not available in support view" on the two withheld
+cards and in place of the sync notice.
 
 ## Business settings (Admin page)
 
