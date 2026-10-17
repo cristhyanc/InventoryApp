@@ -279,17 +279,41 @@ public class BusinessDataIsolationTests : IDisposable
     /// <summary>
     /// Ownership is immutable: a business cannot give its own record away, which would otherwise
     /// be a one-line path to moving data between tenants.
+    ///
+    /// <para>Two refusals, because issue #732 changed which one arrives first for a product.
+    /// <c>(BusinessId, Id)</c> is now an alternate key of <c>Products</c> and <c>Categories</c> -
+    /// the parent of each provider link's composite foreign key - and EF refuses outright to modify
+    /// a property that is part of a key, before <c>BusinessOwnershipEnforcer</c> is reached. The
+    /// same rule, enforced earlier and harder. Every other tenant-owned entity still meets the
+    /// enforcer's own immutability check, so both paths are pinned here and the record stays where
+    /// it was either way.</para>
     /// </summary>
     [Fact]
     public async Task Reassigning_an_owned_record_to_another_business_is_refused()
     {
-        SeedFor(BusinessA, (db, business) => db.Products.Add(NewProduct(business, "A Product")));
+        SeedFor(BusinessA, (db, business) =>
+        {
+            db.Products.Add(NewProduct(business, "A Product"));
+            db.Suppliers.Add(NewSupplier(business, "A Supplier"));
+        });
 
-        await using var a = AsBusiness(BusinessA);
-        var product = a.Products.Single();
-        product.BusinessId = BusinessB;
+        await using (var keyedEntity = AsBusiness(BusinessA))
+        {
+            keyedEntity.Products.Single().BusinessId = BusinessB;
 
-        await Assert.ThrowsAsync<CrossBusinessAccessException>(() => a.SaveChangesAsync());
+            await Assert.ThrowsAsync<InvalidOperationException>(() => keyedEntity.SaveChangesAsync());
+        }
+
+        await using (var enforcedEntity = AsBusiness(BusinessA))
+        {
+            enforcedEntity.Suppliers.Single().BusinessId = BusinessB;
+
+            await Assert.ThrowsAsync<CrossBusinessAccessException>(() => enforcedEntity.SaveChangesAsync());
+        }
+
+        await using var verify = TestAppDbContext.Unrestricted(_options);
+        Assert.Equal(BusinessA, verify.Products.Single().BusinessId);
+        Assert.Equal(BusinessA, verify.Suppliers.Single().BusinessId);
     }
 
     [Fact]

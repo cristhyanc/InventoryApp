@@ -225,6 +225,41 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("Categories");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.CategoryExternalId", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("CategoryId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ExternalId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "CategoryId");
+
+                    b.HasIndex("BusinessId", "Provider", "CategoryId")
+                        .IsUnique();
+
+                    b.HasIndex("BusinessId", "Provider", "ExternalId")
+                        .IsUnique();
+
+                    b.ToTable("CategoryExternalIds");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.CommissionPayment", b =>
                 {
                     b.Property<int>("Id")
@@ -1324,6 +1359,41 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("Products");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProductExternalId", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ExternalId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "ProductId");
+
+                    b.HasIndex("BusinessId", "Provider", "ExternalId")
+                        .IsUnique();
+
+                    b.HasIndex("BusinessId", "Provider", "ProductId")
+                        .IsUnique();
+
+                    b.ToTable("ProductExternalIds");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.Purchase", b =>
                 {
                     b.Property<int>("Id")
@@ -1760,6 +1830,18 @@ namespace Inventory.Infrastructure.Migrations
                     b.Navigation("Business");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.CategoryExternalId", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.Category", "Category")
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "CategoryId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Category");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.ImportedDevicePayment", b =>
                 {
                     b.HasOne("Inventory.Infrastructure.Models.ImportedReimbursement", "ImportedReimbursement")
@@ -1909,6 +1991,18 @@ namespace Inventory.Infrastructure.Migrations
                     b.Navigation("Category");
 
                     b.Navigation("Supplier");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProductExternalId", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "ProductId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Product");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Purchase", b =>
