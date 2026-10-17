@@ -63,6 +63,18 @@ namespace Inventory.Application.Dashboard;
 /// <c>NayaxRequestCredentialProvider</c> refuses in, so "the dashboard degrades" and "Nayax is
 /// blocked" cannot come to mean different things; it is not a second rule about who the caller
 /// is.</para>
+///
+/// <para><b>A business without a usable provider keeps its local summary (issue #726, under
+/// #329).</b> Nayax is an optional add-on; storage management is the application's own purpose. So
+/// when <see cref="CalculateReorderNeeds"/> answers in <see cref="ReorderMode.StorageOnly"/> -
+/// because the business's connection is unusable, or because its Nayax account has not granted the
+/// fleet reads - this summary is still the whole local one: the week's sales and the inventory card
+/// unchanged, <c>needsOrdering</c> a real storage-only count labelled with its mode, and only
+/// <c>needsRefill</c> replaced by <see cref="UnavailableDashboardSectionDto"/> with the reason,
+/// because every figure on that card is a figure about machines. The decision is the mode the
+/// reorder use case reported, never a second reading of the connection status here, and it is taken
+/// after the support-session branch above: a support view keeps its own #512/#552 contract exactly,
+/// with both sections withheld and no fleet read started.</para>
 /// </summary>
 public sealed class GetDashboardSummary
 {
@@ -211,10 +223,29 @@ public sealed class GetDashboardSummary
     /// it maps to before the Domain rules see it: a selection whose product the caller's business
     /// does not own is simply not in the catalogue snapshot, so it is reported unmapped and never
     /// alerts - the tenant boundary, not a data gap (the same decision the Pick List already makes).
+    ///
+    /// <para>In <see cref="ReorderMode.StorageOnly"/> there is no card to build: the section is
+    /// published as unavailable with the reason the reorder use case reported (issue #726). It is
+    /// not summarized from the empty selection list a storage-only result carries, because
+    /// "0 of 0 machines need refilling" is a statement about a fleet nobody read.</para>
     /// </summary>
-    private static DashboardRefillSummaryDto NeedsRefill(
+    /// <exception cref="InvalidOperationException">
+    /// A storage-only reorder result carried no reason. <see cref="ReorderNeedsResult.StorageOnly"/>
+    /// requires one, so a request cannot reach this; it fails closed rather than publishing a
+    /// refill card counted over machines that were never read.
+    /// </exception>
+    private static IDashboardRefillSectionDto NeedsRefill(
         ReorderNeedsResult reorderNeeds, IReadOnlyList<ProductRecord> products)
     {
+        if (reorderNeeds.Mode != ReorderMode.MachineAware)
+        {
+            return reorderNeeds.MachineNeedUnavailableReason is { } reason
+                ? UnavailableDashboardSectionDto.For(reason)
+                : throw new InvalidOperationException(
+                    "A storage-only reorder result must carry the reason the machines' "
+                        + "replenishment need is unavailable.");
+        }
+
         var activeById = products.ToDictionary(product => product.Id, product => product.IsActive);
 
         // Mirrors how GetSiteSummaries builds the site policy's facts: the selection keeps its Nayax
@@ -239,9 +270,19 @@ public sealed class GetDashboardSummary
             summary.SelectionsEvaluated);
     }
 
+    /// <summary>
+    /// The ordering card, counted over exactly the set <c>GET api/products/alerts/low-stock</c>
+    /// lists, in whichever mode the reorder calculation ran (issue #726): the same selection, the
+    /// same authoritative policy and the same storage facts either way, with the machines' need
+    /// taken as 0 in storage-only mode. The mode is published so the count is never read as if it
+    /// had accounted for the fleet.
+    /// </summary>
     private static DashboardOrderingSummaryDto NeedsOrdering(
         ReorderNeedsResult reorderNeeds, IReadOnlyList<ProductRecord> products) =>
-        new(ListLowStockProducts.SelectReorderAlerts(products, reorderNeeds).Count, products.Count);
+        new(
+            ListLowStockProducts.SelectReorderAlerts(products, reorderNeeds).Count,
+            products.Count,
+            ReorderModes.Code(reorderNeeds.Mode));
 
     private static DashboardInventorySummaryDto Inventory(IReadOnlyList<ProductRecord> products)
     {

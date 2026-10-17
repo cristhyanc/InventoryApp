@@ -191,6 +191,28 @@ public class CalculateReorderNeedsTests
             x => x.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
+    /// <summary>
+    /// Issue #726: reorder degrades to storage-only for exactly two availability answers, and an
+    /// upstream failure is neither of them. A fleet read that failed in transport says nothing about
+    /// whether this business has machines needing stock, so it must not be relabelled as a business
+    /// with no machine need - which would publish "nothing needs refilling" during a Nayax outage.
+    /// </summary>
+    [Fact]
+    public async Task Handle_PropagatesAnUpstreamFleetReadFailure_RatherThanDegradingToStorageOnly()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new NayaxUpstreamException(
+                "GetMachines", HttpMethod.Get, "machines", HttpStatusCode.BadGateway));
+        var store = new Mock<IOutstandingSupplierOrderQuantityStore>(MockBehavior.Strict);
+
+        await Assert.ThrowsAsync<NayaxUpstreamException>(
+            () => new CalculateReorderNeeds(nayax.Object, store.Object).Handle(CancellationToken.None));
+
+        store.Verify(
+            x => x.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
     [Fact]
     public async Task Handle_PropagatesCallerCancellation()
     {

@@ -1,6 +1,7 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
+using Inventory.Domain.Nayax;
 using Moq;
 using Xunit;
 
@@ -32,6 +33,25 @@ public class ProductReadUseCaseTests
         var outstanding = new Mock<IOutstandingSupplierOrderQuantityStore>();
         outstanding.Setup(store => store.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(onOrderQuantity ?? new Dictionary<long, decimal>());
+
+        return new CalculateReorderNeeds(nayax.Object, outstanding.Object);
+    }
+
+    /// <summary>
+    /// The same reorder calculation for a business the Nayax status gate refuses (issue #726): the
+    /// fleet read fails closed inside the credential provider, so reorder answers in storage-only
+    /// mode and the outstanding supplier orders are still read.
+    /// </summary>
+    private static CalculateReorderNeeds ReorderNeedsWithoutAProvider(
+        IReadOnlyDictionary<long, decimal> onOrderQuantity)
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(client => client.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new NayaxNotConnectedException(NayaxConnectionStatus.NotConfigured));
+
+        var outstanding = new Mock<IOutstandingSupplierOrderQuantityStore>();
+        outstanding.Setup(store => store.GetOutstandingQuantitiesByProductAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(onOrderQuantity);
 
         return new CalculateReorderNeeds(nayax.Object, outstanding.Object);
     }
@@ -125,6 +145,30 @@ public class ProductReadUseCaseTests
 
         Assert.Equal(0m, product.OnOrderQuantity);
         Assert.Equal(16m, product.NeedToOrder);
+    }
+
+    /// <summary>
+    /// Issue #726: the reorder-alert listing of a business with no usable Nayax connection is the
+    /// storage-only one, not a refusal. Storage stock, the threshold, the restock target and the
+    /// outstanding supplier order are all still accounted for, and the machines' need is 0 -
+    /// <c>GET api/products/alerts/low-stock</c> answered 409 <c>nayax_not_connected</c> before this,
+    /// taking a purely local screen down with the fleet read.
+    /// </summary>
+    [Fact]
+    public async Task ListLowStockProducts_ReturnsTheStorageOnlyAlerts_WhenTheBusinessHasNoUsableConnection()
+    {
+        var catalog = new FakeProductCatalogStore(
+            FakeProductCatalogStore.Product(1, "Coke", quantityInStock: 2, lowStockThreshold: 10, restockTo: 17));
+        var lowStock = UseCases(
+            catalog,
+            ReorderNeedsWithoutAProvider(onOrderQuantity: new Dictionary<long, decimal> { [1] = 8m })).LowStock;
+
+        var product = Assert.Single(await lowStock.Handle(ProductCatalogFilter.None, CancellationToken.None));
+
+        Assert.Equal(0, product.MachineReplenishmentNeed);
+        Assert.Equal(8m, product.OnOrderQuantity);
+        Assert.Equal(7m, product.NeedToOrder);
+        Assert.True(product.IsReorderAlert);
     }
 
     [Fact]

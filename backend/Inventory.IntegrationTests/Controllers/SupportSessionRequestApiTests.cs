@@ -324,9 +324,12 @@ public class SupportSessionRequestApiTests
             ["emptySelectionCount", "lowSelectionCount", "machinesEvaluated", "machinesNeedingRefill",
                 "machinesWithEmptySelections", "machinesWithLowSelections", "selectionsEvaluated"],
             Properties(summary.GetProperty("needsRefill")));
+        // "mode" is issue #726's label on the ordering card: this business has a usable connection
+        // and its fleet really was read, so the count says it accounted for the machines.
         Assert.Equal(
-            ["productsEvaluated", "productsNeedingOrdering"],
+            ["mode", "productsEvaluated", "productsNeedingOrdering"],
             Properties(summary.GetProperty("needsOrdering")));
+        Assert.Equal("MachineAware", summary.GetProperty("needsOrdering").GetProperty("mode").GetString());
         Assert.DoesNotContain("SupportView", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
 
