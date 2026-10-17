@@ -53,8 +53,6 @@ public sealed class GetGstAccountingAid
         // this period (issue #730); this report shows the same two figure families, so it reports
         // the same states rather than deciding them a second time.
         var availability = bookkeeping.ProviderAvailability;
-        var netGstAvailability = ReportAvailabilityPolicy.LeastComplete(
-            Availability(availability.Sales), Availability(availability.Fees));
 
         var notes = new List<string>();
         if (!purchases.IsComplete)
@@ -88,19 +86,12 @@ public sealed class GetGstAccountingAid
             PurchaseUnresolvedAmount = purchases.UnresolvedAmount,
             PurchaseGstIncomplete = !purchases.IsComplete || isMachineFiltered,
             ProviderAvailability = availability,
-            NetGstAvailability = ReportAvailabilityDto.From(netGstAvailability)
+            // Net GST depends on both families, so it carries the combined state the bookkeeping
+            // report already derived from them through the Domain policy - never a second
+            // combination written here.
+            NetGstAvailability = availability.Combined
         };
     }
-
-    /// <summary>
-    /// Reads a reported state back into the Domain value, so the combination rule stays the Domain
-    /// policy's rather than a second comparison written here. An unrecognised name is treated as
-    /// the least complete answer: a state this code cannot interpret must never license a zero.
-    /// </summary>
-    private static ReportAvailability Availability(ReportAvailabilityDto reported) =>
-        new(Enum.TryParse<ReportAvailabilityState>(reported.State, out var state)
-            ? state
-            : ReportAvailabilityState.Missing, reported.AsOfUtc);
 
     /// <summary>
     /// The GST report's own wording of a non-complete figure family, named for the figures this
@@ -108,7 +99,7 @@ public sealed class GetGstAccountingAid
     /// </summary>
     private static void AddAvailabilityNote(List<string> notes, ReportAvailabilityDto reported, string figures)
     {
-        var availability = Availability(reported);
+        var availability = reported.ToDomain();
         switch (availability.State)
         {
             case ReportAvailabilityState.Missing:

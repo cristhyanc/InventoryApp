@@ -58,7 +58,26 @@ export function availabilityBadge(availability?: ReportAvailability | null): str
  * financial values are never rendered as `0` (AGENTS.md § Frontend rules). A non-zero amount in an
  * incomplete state is real partial data and stays visible, with its badge beside it.
  */
-export function moneyOrState(value: number | null | undefined, availability?: ReportAvailability | null): string {
-  if (!availability || availability.state === 'Complete') return moneyOrUnavailable(value, 'Unavailable');
+export function moneyOrState(
+  value: number | null | undefined,
+  availability?: ReportAvailability | null,
+  unavailableLabel = 'Unavailable'
+): string {
+  if (!availability || availability.state === 'Complete') return moneyOrUnavailable(value, unavailableLabel);
   return value == null || value === 0 ? availabilityBadge(availability) : money(value);
+}
+
+/**
+ * A provider-sourced percentage, or the availability state in its place, by exactly the rule
+ * `moneyOrState` applies to an amount (issue #730). A margin of `0.0%` without coverage behind it
+ * is the same false measurement as `$0.00`: it reads as "this period broke even", which nothing
+ * established. A real non-zero margin stays visible with its badge.
+ */
+export function percentOrState(
+  value: number | null | undefined,
+  availability?: ReportAvailability | null,
+  unavailableLabel = 'Profit unavailable'
+): string {
+  if (!availability || availability.state === 'Complete') return percentOrUnavailable(value, '', unavailableLabel);
+  return value == null || value === 0 ? availabilityBadge(availability) : percentOrUnavailable(value);
 }

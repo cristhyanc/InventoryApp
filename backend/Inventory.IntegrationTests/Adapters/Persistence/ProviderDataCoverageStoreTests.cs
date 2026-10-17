@@ -150,8 +150,11 @@ public class ProviderDataCoverageStoreTests
                 db2, TestFinancialUseCases.ProcessingFees(db2), EmptyCommissions())
             .GetFactsAsync(PeriodFrom, PeriodTo, null, CancellationToken.None);
 
-        // The sync and the file import together span the period with no gap, so sales are complete;
+        // The two sales-family rows together span the period with no gap, so sales are complete;
         // the settlement import stops on the 11th, so the fee figures are only good up to then.
+        // The SalesFileImport row is written straight to the store here to exercise the read's
+        // grouping: nothing in the application writes that source today, because a transaction
+        // export proves no interval (issue #730, see ImportNayaxSalesCoverageTests).
         Assert.Equal(2, facts.SalesCoverage.Count);
         Assert.Equal(
             ReportAvailabilityState.Complete,

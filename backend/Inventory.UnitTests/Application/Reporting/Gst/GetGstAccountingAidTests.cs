@@ -22,7 +22,7 @@ public class GetGstAccountingAidTests
             // A complete bookkeeping result is one whose provider coverage accounted for the whole
             // period (issue #730), so these tests stay about the GST derivation rather than about
             // availability; GstAccountingAidAvailabilityTests covers the other three states.
-            ProviderAvailability = new ReportProviderAvailabilityDto(CompleteAvailability, CompleteAvailability)
+            ProviderAvailability = ReportProviderAvailabilityDto.From(CompleteAvailability, CompleteAvailability)
         };
 
     private static readonly ReportAvailabilityDto CompleteAvailability =

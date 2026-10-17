@@ -22,9 +22,11 @@ export interface BookkeepingReport {
   structuredOperatingExpenses?: number; operatingExpenseGst?: number; operatingExpensesByCategory?: Record<string, number>;
   /**
    * How well recorded provider coverage accounts for this period (issue #730). `sales` governs
-   * sales, the card/cash split, COGS and the profit figures; `fees` governs the Nayax processing
-   * fees and their GST. Delivery, packaging and operating expenses are this business's own records
-   * and carry no state. Optional because an older API response does not carry it.
+   * sales, the card/cash split, COGS, gross profit and site commission; `fees` governs the Nayax
+   * processing fees and their GST; `combined` governs the figures that depend on both - net and
+   * direct profit and their margins, the net card settlement and the total of operating costs.
+   * Delivery, packaging and operating expenses are this business's own records and carry no state.
+   * Optional because an older API response does not carry it.
    */
   providerAvailability?: ReportProviderAvailability;
 }

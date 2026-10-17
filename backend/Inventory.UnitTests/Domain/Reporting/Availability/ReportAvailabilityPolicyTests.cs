@@ -151,4 +151,21 @@ public class ReportAvailabilityPolicyTests
 
         Assert.Equal(asOf, combined.AsOfUtc);
     }
+
+    [Fact]
+    public void Merging_joins_overlapping_and_touching_ranges_and_never_bridges_a_gap()
+    {
+        // The one merge in the application, used where coverage is recorded as well as where a
+        // report decides a state (issue #730), so the two cannot disagree about what a set of
+        // intervals proves. July 1-10 and July 5-15 overlap and July 15-20 touches, so those three
+        // are one range; July 25-31 is separated by five unaccounted days and stays its own.
+        ReportCoverageRange Range(int fromDay, int toDay) =>
+            new(new DateTime(2026, 7, fromDay, 0, 0, 0, DateTimeKind.Utc),
+                new DateTime(2026, 7, toDay, 0, 0, 0, DateTimeKind.Utc));
+
+        var merged = ReportCoverageRange.Merge(
+            [Range(25, 31), Range(5, 15), Range(1, 10), Range(15, 20), Range(8, 8)]);
+
+        Assert.Equal([Range(1, 20), Range(25, 31)], merged);
+    }
 }

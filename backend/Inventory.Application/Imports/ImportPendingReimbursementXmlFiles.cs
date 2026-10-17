@@ -1,6 +1,7 @@
 using Inventory.Application.Providers;
 using Inventory.Application.Time;
 using Inventory.Domain.Providers;
+using Inventory.Domain.Reporting.Availability;
 
 namespace Inventory.Application.Imports;
 
@@ -76,7 +77,7 @@ public sealed class ImportPendingReimbursementXmlFiles
             // genuinely imported alongside the failure, as the legacy implementation did.
             importedReimbursements += file.Reimbursements.Count;
 
-            // For the same reason, the coverage this file accounts for is recorded here (issue
+            // For the same reason, the periods this file accounts for are recorded here (issue
             // #730): the whole file is committed at this point, which is the one circumstance a
             // coverage record may be written in. A file that could not be read or parsed is counted
             // as failed above and never reaches this line, and a duplicate is skipped before it -
@@ -91,34 +92,50 @@ public sealed class ImportPendingReimbursementXmlFiles
     }
 
     /// <summary>
-    /// Records the settlement period a committed file accounted for (issue #730, parent #329
-    /// decision P9): from the earliest <c>ReimbursementStartDate</c> it carries to the end of the
-    /// last day of its latest <c>ReimbursementEndDate</c>.
+    /// Records the settlement periods a committed file accounted for (issue #730, parent #329
+    /// decision P9) - <b>one coverage row per period the file proves, never one row spanning them
+    /// all</b>.
     ///
-    /// <para>Those two dates are the provider's own statement of the period the file settles
-    /// (AGENTS.md § Reimbursements and reconciliation: a reimbursement belongs to its coverage
-    /// dates, not its payout or import date), so unlike a transaction export this file really does
-    /// declare its range, and the range it declares is what is recorded. The end date is an
-    /// inclusive calendar day, so the exclusive end of the coverage is the following midnight.</para>
+    /// <para>Each reimbursement row declares its own settled period through
+    /// <c>ReimbursementStartDate</c>/<c>ReimbursementEndDate</c>, which is the provider's own
+    /// statement of what that row settles (AGENTS.md § Reimbursements and reconciliation: a
+    /// reimbursement belongs to its coverage dates, not its payout or import date). Those declared
+    /// intervals are the evidence, so they are recorded as they are: overlapping and exactly
+    /// touching rows merge into one range through <see cref="ReportCoverageRange.Merge"/>, and a
+    /// <b>gap between two rows is never bridged</b>. A file holding July and September settlements
+    /// proves nothing whatsoever about August, and pooling the earliest start with the latest end
+    /// would have claimed it - exactly the false completeness this record exists to prevent.</para>
     ///
-    /// <para>A file whose rows carry neither date declares no period, and a period cannot be
-    /// inferred from a payout date or an import instant, so nothing is recorded for it and the
-    /// affected report stays unverified instead of falsely complete.</para>
+    /// <para>Only a row carrying <b>both</b> of its own dates declares an interval; one carrying a
+    /// start or an end alone declares none, and a period is never inferred from a payout date, an
+    /// import instant or another row's dates. A file that declares nothing records nothing, and the
+    /// affected report stays unverified instead of falsely complete. The end date is an inclusive
+    /// calendar day, so the exclusive end of the coverage is the following midnight.</para>
+    ///
+    /// <para>The claim is business-wide because the row is: a reimbursement row is the operator
+    /// account's own settlement statement for its period - it carries the account's company name,
+    /// customer id and device counts, and every device it settles is nested beneath it - and the
+    /// fee figures the reports show are summed from exactly these rows, for every device in them
+    /// (<c>EfReportingSharedQueries.ImportedSummaryAsync</c>). Coverage therefore claims the same
+    /// scope as the figures it governs, rather than a wider one. A machine-filtered report narrows
+    /// which stored rows a figure counts and already says in a data-quality note that imported fees
+    /// are account-level and unallocated; it never narrows what coverage was recorded.</para>
     /// </summary>
     private async Task RecordCoverageAsync(PendingReimbursementXmlFile file, CancellationToken cancellationToken)
     {
-        var starts = file.Reimbursements.Where(row => row.ReimbursementStartDate.HasValue)
-            .Select(row => row.ReimbursementStartDate!.Value).ToList();
-        var ends = file.Reimbursements.Where(row => row.ReimbursementEndDate.HasValue)
-            .Select(row => row.ReimbursementEndDate!.Value).ToList();
-        if (starts.Count == 0 || ends.Count == 0)
-            return;
+        var declared = file.Reimbursements
+            .Where(row => row.ReimbursementStartDate.HasValue && row.ReimbursementEndDate.HasValue)
+            .Select(row => new ReportCoverageRange(
+                row.ReimbursementStartDate!.Value, row.ReimbursementEndDate!.Value.Date.AddDays(1)));
 
-        await _coverage.RecordAsync(
-            ExternalProvider.Nayax,
-            ProviderDataSource.SettlementImport,
-            starts.Min(),
-            ends.Max().Date.AddDays(1),
-            cancellationToken);
+        foreach (var range in ReportCoverageRange.Merge(declared))
+        {
+            await _coverage.RecordAsync(
+                ExternalProvider.Nayax,
+                ProviderDataSource.SettlementImport,
+                range.FromUtc,
+                range.ToUtc,
+                cancellationToken);
+        }
     }
 }

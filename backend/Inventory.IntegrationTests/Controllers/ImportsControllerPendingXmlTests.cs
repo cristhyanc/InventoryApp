@@ -47,8 +47,7 @@ public class ImportsControllerPendingXmlTests
                 Mock.Of<INayaxSalesWorkbookReader>(),
                 Mock.Of<INayaxSalesImportStore>(),
                 Mock.Of<Inventory.Application.Costing.ICostSale>(),
-                Mock.Of<Inventory.Application.Costing.IRebuildProductCost>(),
-                new FakeProviderDataCoverageStore()),
+                Mock.Of<Inventory.Application.Costing.IRebuildProductCost>()),
             new ImportPendingReimbursementXmlFiles(
                 source.Object, store.Object, Mock.Of<IClock>(), new FakeProviderDataCoverageStore()));
 

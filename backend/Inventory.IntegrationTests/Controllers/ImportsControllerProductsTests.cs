@@ -77,8 +77,7 @@ public class ImportsControllerProductsTests
                 Mock.Of<INayaxSalesWorkbookReader>(),
                 Mock.Of<INayaxSalesImportStore>(),
                 Mock.Of<ICostSale>(),
-                Mock.Of<IRebuildProductCost>(),
-                new FakeProviderDataCoverageStore()),
+                Mock.Of<IRebuildProductCost>()),
             new ImportPendingReimbursementXmlFiles(
                 Mock.Of<IPendingReimbursementXmlSource>(),
                 Mock.Of<IImportedReimbursementStore>(),

@@ -1,11 +1,15 @@
 using System.Text;
-using Inventory.Application.Costing;
 using Inventory.Application.Imports;
-using Inventory.Domain.Providers;
+using Inventory.Application.Reporting.Bookkeeping;
+using Inventory.Application.Reporting.Shared;
+using Inventory.Domain.Reporting.Availability;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Imports;
+using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
-using InventoryApi.Tests.Application.Providers;
+using Inventory.Infrastructure.Reporting.Persistence;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -13,141 +17,175 @@ using Xunit;
 namespace InventoryApi.Tests.Application.Imports;
 
 /// <summary>
-/// Issue #730 (parent #329 decision P9): what an uploaded Nayax transaction export records as
-/// covered, and when it records nothing.
+/// Issue #730 (parent #329 decision P9): an uploaded Nayax transaction export records <b>no</b>
+/// provider data coverage, however completely it imported.
 ///
-/// A sales export carries no requested-period metadata, so the instants of the rows it committed
-/// are the only range it proves. The rule that matters financially is the other half: a file that
-/// was not committed whole - a row that could not be identified, or a cost replay that failed -
-/// records no coverage, so its period stays visibly unaccounted for instead of looking complete.
+/// <para>The import succeeding says what was stored; it does not say the workbook held every
+/// transaction of the span its rows happen to cover. The upload is a file a person exported from
+/// Nayax Core and it declares neither its range nor its scope - it may have been filtered to one
+/// machine, one payment type or one site - and the authoritative <c>lastSales</c> contract carries
+/// no requested-period metadata either. Recording the interval between the earliest and latest
+/// imported instants would therefore claim completeness for time nothing accounted for, which is the
+/// false zero the coverage record exists to prevent. These tests pin that: the imported sales are
+/// reported in full, and their period stays <c>Unverified</c> - never <c>Complete</c> - until a
+/// fully successful synchronization covers it.</para>
+///
+/// <para>Relational SQLite rather than in-memory, because the claim being tested is about what the
+/// database holds and what the reporting read then makes of it (AGENTS.md § Database and
+/// migrations).</para>
 /// </summary>
 public class ImportNayaxSalesCoverageTests
 {
+    private const int BusinessA = 1;
+
+    private static readonly DateTime PeriodFrom = new(2026, 7, 1);
+    private static readonly DateTime PeriodTo = new(2026, 7, 31);
+
     private const string SalesHeader =
         "TransactionID,TransactionStatusId,MachineID,NayaxProductId,SettlementValue,PaymentMethod,ProductName,MachineAuthorizationTime,AuthorizationDateTimeGMT";
 
-    private static AppDbContext CreateDb() =>
-        TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
-
-    private static ImportNayaxSales UseCase(
-        AppDbContext db, FakeProviderDataCoverageStore coverage, IRebuildProductCost? rebuild = null)
+    private static async Task<DbContextOptions<AppDbContext>> CreateSqliteAsync(SqliteConnection connection)
     {
-        var costRebuild = rebuild ?? TestCostingUseCases.Rebuild(db);
-        return new ImportNayaxSales(
-            new ClosedXmlNayaxSalesWorkbookReader(),
-            new EfNayaxSalesImportStore(db),
-            TestCostingUseCases.CostSale(db, costRebuild),
-            costRebuild,
-            coverage);
+        await connection.OpenAsync();
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
+        await using var setup = TestAppDbContext.Unrestricted(options);
+        await setup.Database.EnsureCreatedAsync();
+        setup.Businesses.Add(new Business
+        {
+            Id = BusinessA,
+            Name = "Vending A",
+            Status = BusinessStatus.Active,
+            CreatedAtUtc = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        });
+        await setup.SaveChangesAsync();
+        return options;
     }
+
+    private static ImportNayaxSales UseCase(AppDbContext db) =>
+        new(new ClosedXmlNayaxSalesWorkbookReader(),
+            new EfNayaxSalesImportStore(db),
+            TestCostingUseCases.CostSale(db),
+            Mock.Of<Inventory.Application.Costing.IRebuildProductCost>());
 
     private static NayaxSalesFileInput Csv(string content) =>
         new("sales.csv", () => new MemoryStream(Encoding.UTF8.GetBytes(content)));
 
-    private static string Row(long transactionId, string gmt) =>
-        $"{transactionId},12,10,,4.00,Credit Card,Snack,{gmt},{gmt}";
+    /// <summary>One completed card sale of machine <paramref name="machineId"/>.</summary>
+    private static string Row(long transactionId, long machineId, string gmt) =>
+        $"{transactionId},12,{machineId},,4.00,Credit Card,Snack,{gmt},{gmt}";
 
-    [Fact]
-    public async Task A_file_committed_whole_claims_the_span_of_the_instants_it_stored()
+    private static Inventory.Application.Commissions.IGetSiteCommissionReport EmptyCommissions()
     {
-        await using var db = CreateDb();
-        var coverage = new FakeProviderDataCoverageStore();
-
-        var result = await UseCase(db, coverage).Handle(Csv(string.Join('\n',
-            SalesHeader,
-            Row(1, "2026-07-04T08:00:00Z"),
-            Row(2, "2026-07-21T19:30:00Z"),
-            Row(3, "2026-07-11T12:15:00Z"))));
-
-        Assert.Equal(new NayaxSalesImportResult(3, 0, 0), result);
-        var recorded = Assert.Single(coverage.Recorded);
-        Assert.Equal(ExternalProvider.Nayax, recorded.Provider);
-        Assert.Equal(ProviderDataSource.SalesFileImport, recorded.Source);
-        Assert.Equal(new DateTime(2026, 7, 4, 8, 0, 0, DateTimeKind.Utc), recorded.FromUtc);
-        Assert.Equal(new DateTime(2026, 7, 21, 19, 30, 0, DateTimeKind.Utc), recorded.ToUtc);
+        var mock = new Mock<Inventory.Application.Commissions.IGetSiteCommissionReport>();
+        mock.Setup(x => x.Handle(It.IsAny<DateTime>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((DateTime from, DateTime to, long? _, CancellationToken _) =>
+                new Inventory.Application.Commissions.SiteCommissionReport(from, to, []));
+        return mock.Object;
     }
 
-    [Fact]
-    public async Task A_file_with_a_row_the_import_could_not_identify_records_no_coverage()
-    {
-        // The skipped row is a sale of this period the import did not store, so the period is not
-        // accounted for and must not be claimed - even though the other rows were saved.
-        await using var db = CreateDb();
-        var coverage = new FakeProviderDataCoverageStore();
-
-        var result = await UseCase(db, coverage).Handle(Csv(string.Join('\n',
-            SalesHeader,
-            Row(1, "2026-07-04T08:00:00Z"),
-            // No transaction identifier: skipped, never guessed at.
-            $",12,10,,4.00,Credit Card,Snack,2026-07-05T08:00:00Z,2026-07-05T08:00:00Z")));
-
-        Assert.Equal(1, result.Imported);
-        Assert.Equal(1, result.Skipped);
-        Assert.Single(await db.NayaxSales.ToListAsync());
-        Assert.Empty(coverage.Recorded);
-    }
+    private static Task<BookkeepingReportDto> ReportAsync(AppDbContext db) =>
+        new GetBookkeepingReport(
+                new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions()))
+            .Handle(new ReportingFilterDto(PeriodFrom, PeriodTo), CancellationToken.None);
 
     [Fact]
-    public async Task An_import_whose_cost_replay_fails_part_way_records_no_coverage()
+    public async Task A_workbook_imported_whole_records_no_coverage_at_all()
     {
-        await using var db = CreateDb();
-        db.Products.Add(new Inventory.Infrastructure.Models.Product
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
+
+        await using (var db = TestAppDbContext.For(options, BusinessA))
         {
-            Id = 10,
-            Name = "Snack",
-            QuantityInStock = 5,
-            AverageUnitCost = 2m,
-            CostingQuantity = 5,
-            InventoryValue = 10m
-        });
-        // The replay only runs for a product whose transition baseline the sale falls after, so the
-        // failure this test is about is only reachable with one recorded.
-        db.InventoryCostTransitionBaselines.Add(new Inventory.Infrastructure.Models.InventoryCostTransitionBaseline
+            var result = await UseCase(db).Handle(Csv(string.Join('\n',
+                SalesHeader,
+                Row(1, 10, "2026-07-04T08:00:00Z"),
+                Row(2, 10, "2026-07-21T19:30:00Z"),
+                Row(3, 10, "2026-07-11T12:15:00Z"))));
+
+            Assert.Equal(new NayaxSalesImportResult(3, 0, 0), result);
+        }
+
+        await using var verify = TestAppDbContext.Unrestricted(options);
+        Assert.Empty(await verify.ProviderDataCoverages.ToListAsync());
+    }
+
+    [Fact]
+    public async Task A_machine_filtered_workbook_cannot_make_an_uncovered_period_complete()
+    {
+        // The workbook holds only machine 10, on the 4th and the 21st. The business also sold
+        // through machine 11 on the 12th, and that sale is not in the file. Claiming
+        // [4 July, 21 July) from the file's own extrema would have presented the whole middle of
+        // the month as accounted for, which it is not - the file was filtered.
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
+
+        await using (var seed = TestAppDbContext.For(options, BusinessA))
         {
-            ProductId = 10,
-            CutoffAt = new DateTime(2026, 1, 1),
-            OpeningCostingQuantity = 5,
-            AverageUnitCost = 2m,
-            InventoryValue = 10m,
-            CostSource = Inventory.Infrastructure.Models.InventoryCostBaselineSource.ManualAuthoritative
-        });
-        await db.SaveChangesAsync();
-        var coverage = new FakeProviderDataCoverageStore();
-        var rebuild = new Mock<IRebuildProductCost>();
-        rebuild.Setup(x => x.RebuildAsync(It.IsAny<long>(), It.IsAny<DateTime?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new InventoryCostDataQualityException("unreplayable history"));
+            seed.NayaxSales.Add(new NayaxSales
+            {
+                TransactionID = 99,
+                MachineID = 11,
+                MachineName = "Machine B",
+                SettlementValue = 7m,
+                PaymentMethod = "Credit Card",
+                MachineAuthorizationTime = new DateTime(2026, 7, 12),
+                TransactionStatusId = Inventory.Domain.FinancialConfiguration.NayaxTransactionStatusIds.Completed,
+            });
+            await seed.SaveChangesAsync();
+        }
 
-        await Assert.ThrowsAsync<InventoryCostDataQualityException>(() => UseCase(db, coverage, rebuild.Object)
-            .Handle(Csv(string.Join('\n', SalesHeader, "1,12,10,10,4.00,Credit Card,Snack,2026-07-04T08:00:00Z,2026-07-04T08:00:00Z"))));
+        await using (var db = TestAppDbContext.For(options, BusinessA))
+        {
+            var result = await UseCase(db).Handle(Csv(string.Join('\n',
+                SalesHeader,
+                Row(1, 10, "2026-07-04T08:00:00Z"),
+                Row(2, 10, "2026-07-21T19:30:00Z"))));
 
-        Assert.Empty(coverage.Recorded);
+            Assert.Equal(new NayaxSalesImportResult(2, 0, 0), result);
+        }
+
+        await using var db2 = TestAppDbContext.For(options, BusinessA);
+        var report = await ReportAsync(db2);
+
+        Assert.Equal(nameof(ReportAvailabilityState.Unverified), report.ProviderAvailability.Sales.State);
+        Assert.NotEqual(nameof(ReportAvailabilityState.Complete), report.ProviderAvailability.Sales.State);
+        // The imported data is reported in full all the same: unverified labels it, it does not hide it.
+        Assert.Equal(15m, report.Sales);
     }
 
     [Fact]
-    public async Task An_export_with_no_data_rows_claims_nothing()
+    public async Task A_workbook_with_a_row_the_import_could_not_identify_records_no_coverage()
     {
-        await using var db = CreateDb();
-        var coverage = new FakeProviderDataCoverageStore();
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
 
-        var result = await UseCase(db, coverage).Handle(Csv(SalesHeader));
+        await using (var db = TestAppDbContext.For(options, BusinessA))
+        {
+            var result = await UseCase(db).Handle(Csv(string.Join('\n',
+                SalesHeader,
+                Row(1, 10, "2026-07-04T08:00:00Z"),
+                // No transaction identifier: skipped, never guessed at.
+                ",12,10,,4.00,Credit Card,Snack,2026-07-05T08:00:00Z,2026-07-05T08:00:00Z")));
 
-        Assert.Equal(new NayaxSalesImportResult(0, 0, 0), result);
-        Assert.Empty(coverage.Recorded);
+            Assert.Equal(1, result.Imported);
+            Assert.Equal(1, result.Skipped);
+        }
+
+        await using var verify = TestAppDbContext.Unrestricted(options);
+        Assert.Single(await verify.NayaxSales.ToListAsync());
+        Assert.Empty(await verify.ProviderDataCoverages.ToListAsync());
     }
 
     [Fact]
-    public async Task A_single_row_file_proves_no_span_and_claims_nothing()
+    public async Task An_export_with_no_data_rows_imports_nothing_and_records_nothing()
     {
-        // Coverage is half-open, so one instant is an empty range: the row is stored and reported,
-        // and it simply is not evidence that any period was read end to end.
-        await using var db = CreateDb();
-        var coverage = new FakeProviderDataCoverageStore();
+        await using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
 
-        var result = await UseCase(db, coverage).Handle(Csv(string.Join('\n',
-            SalesHeader, Row(1, "2026-07-04T08:00:00Z"))));
+        await using (var db = TestAppDbContext.For(options, BusinessA))
+            Assert.Equal(new NayaxSalesImportResult(0, 0, 0), await UseCase(db).Handle(Csv(SalesHeader)));
 
-        Assert.Equal(1, result.Imported);
-        Assert.Empty(coverage.Recorded);
+        await using var verify = TestAppDbContext.Unrestricted(options);
+        Assert.Empty(await verify.ProviderDataCoverages.ToListAsync());
     }
 }

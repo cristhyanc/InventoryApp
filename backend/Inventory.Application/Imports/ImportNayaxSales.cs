@@ -1,7 +1,5 @@
 using Inventory.Application.Costing;
-using Inventory.Application.Providers;
 using Inventory.Domain.FinancialConfiguration;
-using Inventory.Domain.Providers;
 using Inventory.Domain.Reporting.ProductMatching;
 
 namespace Inventory.Application.Imports;
@@ -51,6 +49,18 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 ///   is deliberately *not* applied here: that sync can never reconsider a sale it has already
 ///   stored, whereas re-uploading the export runs this import again, so failing loudly and
 ///   staging nothing is still the right answer. Whole-import atomicity is a separate change.</item>
+///   <item><b>This import records no provider data coverage</b> (issue #730, parent #329 decision
+///   P9). Importing every row of a workbook successfully says what was stored; it does not say that
+///   the workbook held every transaction of the span those rows cover. The upload is a file a person
+///   exported from Nayax Core, and it carries no statement of its own range or scope: it may have
+///   been filtered to one machine, one payment type, one site or any other criterion, and the
+///   authoritative <c>lastSales</c> contract carries no requested-period or scope metadata either
+///   (verified against the Nayax developer portal: <c>GET /v1/machines/{MachineID}/lastSales</c>
+///   takes only a machine id and returns no window boundary). Deriving a covered interval from the
+///   earliest and latest instants it happens to contain would therefore claim completeness for time
+///   nothing accounted for - precisely the false zero this coverage record exists to prevent. The
+///   imported sales are reported in full and their period stays <c>Unverified</c> until a fully
+///   successful synchronization covers it.</item>
 /// </list>
 /// </summary>
 public sealed class ImportNayaxSales
@@ -59,20 +69,17 @@ public sealed class ImportNayaxSales
     private readonly INayaxSalesImportStore _store;
     private readonly ICostSale _saleCosting;
     private readonly IRebuildProductCost _inventoryCostRebuild;
-    private readonly IProviderDataCoverageStore _coverage;
 
     public ImportNayaxSales(
         INayaxSalesWorkbookReader workbook,
         INayaxSalesImportStore store,
         ICostSale saleCosting,
-        IRebuildProductCost inventoryCostRebuild,
-        IProviderDataCoverageStore coverage)
+        IRebuildProductCost inventoryCostRebuild)
     {
         _workbook = workbook;
         _store = store;
         _saleCosting = saleCosting;
         _inventoryCostRebuild = inventoryCostRebuild;
-        _coverage = coverage;
     }
 
     /// <summary>
@@ -111,12 +118,6 @@ public sealed class ImportNayaxSales
         var imported = 0;
         var updated = 0;
         var skipped = 0;
-
-        // The span of sale instants this file actually accounted for (issue #730), tracked as the
-        // rows are persisted rather than read off the file, because only a row that was stored is
-        // covered.
-        DateTime? earliestInstant = null;
-        DateTime? latestInstant = null;
 
         // Each affected product mapped to the earliest completed sale that touched it, which is the
         // instant its cost replay has to restart from.
@@ -178,9 +179,6 @@ public sealed class ImportNayaxSales
             if (cost is not null)
                 _store.StageCost(sale, cost);
             TrackAffectedProduct(candidates, sale, affected);
-
-            if (earliestInstant is null || instant.Value < earliestInstant) earliestInstant = instant.Value;
-            if (latestInstant is null || instant.Value > latestInstant) latestInstant = instant.Value;
         }
 
         if (imported > 0 || updated > 0)
@@ -190,34 +188,7 @@ public sealed class ImportNayaxSales
             await _store.SaveChangesAsync(cancellationToken);
         }
 
-        await RecordCoverageAsync(skipped, earliestInstant, latestInstant, cancellationToken);
-
         return new NayaxSalesImportResult(imported, updated, skipped);
-    }
-
-    /// <summary>
-    /// Records the sale instants this upload accounted for (issue #730, parent #329 decision P9),
-    /// and only for a file that was committed whole.
-    ///
-    /// <para>A file with even one skipped row is not a committed file: a row the import could not
-    /// identify is a sale of that period it did not store, so claiming the period would be claiming
-    /// something false. Neither is a file whose replay threw - that propagates from above and never
-    /// reaches here, exactly as a failure part-way through must.</para>
-    ///
-    /// <para>The range claimed is <c>[earliest stored instant, latest stored instant)</c>, which is
-    /// the only thing the export proves: Nayax publishes no requested-period metadata with a
-    /// transaction export, so the rows themselves are the evidence, and a period's edges stay
-    /// unaccounted for unless a sale or another source covers them. Half-open, like every other
-    /// coverage range, so a one-row file claims nothing.</para>
-    /// </summary>
-    private async Task RecordCoverageAsync(
-        int skipped, DateTime? earliestInstant, DateTime? latestInstant, CancellationToken cancellationToken)
-    {
-        if (skipped > 0 || earliestInstant is not { } from || latestInstant is not { } to)
-            return;
-
-        await _coverage.RecordAsync(
-            ExternalProvider.Nayax, ProviderDataSource.SalesFileImport, from, to, cancellationToken);
     }
 
     /// <summary>

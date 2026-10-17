@@ -5,7 +5,7 @@ import { Machine } from '../../models/models';
 import { MachineService } from '../../services/machine.service';
 import { ReportAvailability } from '../../features/reports/shared/models/reporting.models';
 import { ReportingFilter, ReportingService } from '../../services/reporting.service';
-import { availabilityBadge, money, moneyOrState, moneyOrUnavailable, percentOrUnavailable } from './report-formatting';
+import { availabilityBadge, money, moneyOrState, moneyOrUnavailable, percentOrState, percentOrUnavailable } from './report-formatting';
 
 @Directive()
 export abstract class ReportPageBase<T> implements OnInit {
@@ -92,8 +92,21 @@ export abstract class ReportPageBase<T> implements OnInit {
   }
 
   /** A provider amount, or its availability state in place of a zero that was never measured. */
-  moneyOrState(value: number | null | undefined, availability?: ReportAvailability | null): string {
-    return moneyOrState(value, availability);
+  moneyOrState(
+    value: number | null | undefined,
+    availability?: ReportAvailability | null,
+    unavailableLabel?: string
+  ): string {
+    return moneyOrState(value, availability, unavailableLabel);
+  }
+
+  /** A provider percentage, or its availability state in place of a margin nobody measured. */
+  percentOrState(
+    value: number | null | undefined,
+    availability?: ReportAvailability | null,
+    unavailableLabel?: string
+  ): string {
+    return percentOrState(value, availability, unavailableLabel);
   }
 
   quality(): string[] {

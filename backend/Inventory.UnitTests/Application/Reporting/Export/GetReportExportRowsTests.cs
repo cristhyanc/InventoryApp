@@ -235,6 +235,143 @@ public class GetReportExportRowsTests
 
     private static string Invariant(decimal value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
+    /// <summary>
+    /// A period no provider source accounted for and that holds no provider data, with every
+    /// provider-sourced amount genuinely at zero, so the export's cells are the only thing that can
+    /// tell "nobody measured this" from "it was zero". The business's own delivery, package and
+    /// operating-expense figures stay as they are, because they must stay visible and exact.
+    /// </summary>
+    private static Inventory.Application.Reporting.Bookkeeping.BookkeepingReportFacts NoProviderData() =>
+        FakeBookkeepingReportFactsProvider.Complete(
+            sales: 0m, cost: 0m, cardSales: 0m, cardTransactions: 0, cashSales: 0m, cashTransactions: 0) with
+        {
+            SalesCoverage = [],
+            SettlementCoverage = [],
+            ContainsSalesRows = false,
+            ImportedContainsRows = false,
+            ImportedHasNetSettlement = false,
+            ImportedNetSettlement = 0m,
+            SiteCommission = 0m,
+            OperatingExpensesGst = 0m,
+            ProcessingFees = new NayaxProcessingFeeResult(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null),
+        };
+
+    [Fact]
+    public async Task Gst_export_reports_a_missing_provider_figure_as_its_state_and_never_as_a_zero()
+    {
+        // The export is the surface where an unlabelled 0 does the most damage: it is read away from
+        // the application and pasted into a BAS working paper (issue #730, AGENTS.md § Nayax
+        // processing fees and GST - never render a missing figure as 0 in an API, a UI or an export).
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(NoProviderData()));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+
+        var table = await Sut(bookkeeping: bookkeeping, gstAccountingAid: GstWith(bookkeeping))
+            .Handle("gst", filter, CancellationToken.None);
+
+        var header = table.Rows[0].ToList();
+        var values = table.Rows[1];
+        string Column(string name) => values[header.IndexOf(name)];
+        Assert.Equal(header.Count, values.Count);
+
+        foreach (var column in new[] { "TaxableSales", "GstOnSales", "TaxableFees", "GstOnFees", "NetGst" })
+        {
+            Assert.Equal("Missing", Column(column));
+            Assert.NotEqual("0", Column(column));
+        }
+
+        Assert.Equal("Missing", Column("SalesDataAvailability"));
+        Assert.Equal("Missing", Column("FeeDataAvailability"));
+        Assert.Equal("Missing", Column("NetGstAvailability"));
+        Assert.Equal(string.Empty, Column("SalesDataAsOfUtc"));
+        Assert.Contains("not a measured zero", Column("DataQualityNotes"));
+
+        // The business's own purchase input GST is a measured zero and stays one.
+        Assert.Equal("0", Column("PurchaseInputGst"));
+        Assert.Equal("0", Column("PurchaseLineGst"));
+    }
+
+    [Fact]
+    public async Task Gst_export_of_a_completely_covered_period_is_unchanged_and_says_so()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(FakeBookkeepingReportFactsProvider.Complete()));
+        var gst = GstWith(bookkeeping);
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+        var apiResult = await gst.Handle(filter, CancellationToken.None);
+
+        var table = await Sut(bookkeeping: bookkeeping, gstAccountingAid: gst).Handle("gst", filter, CancellationToken.None);
+
+        var header = table.Rows[0].ToList();
+        var values = table.Rows[1];
+        string Column(string name) => values[header.IndexOf(name)];
+        Assert.Equal(Invariant(apiResult.TaxableSales), Column("TaxableSales"));
+        Assert.Equal(Invariant(apiResult.GstOnSales), Column("GstOnSales"));
+        Assert.Equal(Invariant(apiResult.TaxableFees), Column("TaxableFees"));
+        Assert.Equal(Invariant(apiResult.GstOnFees), Column("GstOnFees"));
+        Assert.Equal(Invariant(apiResult.NetGst), Column("NetGst"));
+        Assert.Equal("Complete", Column("SalesDataAvailability"));
+        Assert.Equal("Complete", Column("FeeDataAvailability"));
+        Assert.Equal("Complete", Column("NetGstAvailability"));
+    }
+
+    [Fact]
+    public async Task Bookkeeping_export_reports_missing_provider_figures_as_states_and_keeps_the_local_ones_exact()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(NoProviderData()));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        var header = table.Rows[0].ToList();
+        var values = table.Rows[1];
+        string Column(string name) => values[header.IndexOf(name)];
+        Assert.Equal(header.Count, values.Count);
+
+        foreach (var column in new[]
+        {
+            "GrossSales", "CardSales", "CashSales", "CardTransactions", "CashTransactions", "COGS",
+            "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "SiteCommission"
+        })
+        {
+            Assert.Equal("Missing", Column(column));
+            Assert.NotEqual("0", Column(column));
+        }
+
+        Assert.Equal("Missing", Column("SalesDataAvailability"));
+        Assert.Equal("Missing", Column("FeeDataAvailability"));
+        Assert.Equal("Missing", Column("CombinedDataAvailability"));
+
+        // Delivery, package and operating-expense figures come from the business's own records and
+        // are never labelled with a provider state (AGENTS.md § Nayax processing fees and GST).
+        Assert.Equal("2", Column("DeliveryCosts"));
+        Assert.Equal("1", Column("PackageCosts"));
+        Assert.Equal("1", Column("OtherOperatingExpenses"));
+    }
+
+    [Fact]
+    public async Task Bookkeeping_export_of_a_completely_covered_period_keeps_every_figure_as_the_api_reported_it()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete(sales: 250m, cost: 90m)));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+        var apiResult = await bookkeeping.Handle(filter, CancellationToken.None);
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        var header = table.Rows[0].ToList();
+        var values = table.Rows[1];
+        string Column(string name) => values[header.IndexOf(name)];
+        Assert.Equal(Invariant(apiResult.Sales), Column("GrossSales"));
+        Assert.Equal(Invariant(apiResult.CardSales), Column("CardSales"));
+        Assert.Equal(Invariant(apiResult.CashSales), Column("CashSales"));
+        Assert.Equal(Invariant(apiResult.CostOfGoods!.Value), Column("COGS"));
+        Assert.Equal(Invariant(apiResult.NayaxFeesIncludingGst), Column("NayaxFeeIncGST"));
+        Assert.Equal(Invariant(apiResult.NetSettlement), Column("NetSettlement"));
+        Assert.Equal(Invariant(apiResult.SiteCommission), Column("SiteCommission"));
+        Assert.Equal("Complete", Column("SalesDataAvailability"));
+        Assert.Equal("Complete", Column("FeeDataAvailability"));
+        Assert.Equal("Complete", Column("CombinedDataAvailability"));
+    }
+
     [Fact]
     public async Task Unsupported_transaction_report_name_throws()
     {

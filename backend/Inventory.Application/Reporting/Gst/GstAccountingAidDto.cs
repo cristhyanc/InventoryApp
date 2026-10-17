@@ -70,7 +70,9 @@ public record GstAccountingAidDto(
 
     /// <summary>
     /// The availability of <see cref="NetGst"/>, which subtracts both provider figures and is
-    /// therefore only as complete as the weaker of them. It is separate from
+    /// therefore only as complete as the weaker of them - the value
+    /// <see cref="ReportProviderAvailabilityDto.Combined"/> already carries, reported again here
+    /// under the name of the figure a reader is looking at. It is separate from
     /// <see cref="PurchaseGstIncomplete"/>, which is about unclassified purchase components: net GST
     /// can be incomplete for either reason, or both.
     /// </summary>

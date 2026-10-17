@@ -26,6 +26,16 @@ public sealed record ReportAvailabilityDto(string State, DateTime? AsOfUtc)
         new(availability.State.ToString(), availability.AsOfUtc);
 
     /// <summary>
+    /// Reads a reported state back into the Domain value, so a rule about states stays the Domain
+    /// policy's rather than a second comparison written beside it. An unrecognised name becomes the
+    /// least complete answer: a state this code cannot interpret must never license a zero.
+    /// </summary>
+    public ReportAvailability ToDomain() =>
+        new(Enum.TryParse<ReportAvailabilityState>(State, out var state)
+            ? state
+            : ReportAvailabilityState.Missing, AsOfUtc);
+
+    /// <summary>
     /// The conservative default an unset availability carries. It is deliberately not
     /// <c>Complete</c>: a state nothing decided must never license presenting a zero as a real zero.
     /// </summary>
@@ -46,8 +56,29 @@ public sealed record ReportAvailabilityDto(string State, DateTime? AsOfUtc)
 /// Governs every figure derived from imported settlement data: the Nayax processing fees excluding
 /// and including GST, and the GST on those fees.
 /// </param>
-public sealed record ReportProviderAvailabilityDto(ReportAvailabilityDto Sales, ReportAvailabilityDto Fees)
+/// <param name="Combined">
+/// Governs every figure that depends on <b>both</b> families, which is the least complete of them by
+/// <see cref="ReportAvailabilityPolicy.LeastComplete"/>: net profit and its margin, direct profit
+/// and its margin, the net card settlement and the total of operating costs. A derived figure is
+/// only as trustworthy as its weakest input, and this is decided once on the server so no
+/// presentation has to combine two states itself (AGENTS.md § Architecture rules: one authoritative
+/// calculation feeds every presentation).
+/// </param>
+public sealed record ReportProviderAvailabilityDto(
+    ReportAvailabilityDto Sales, ReportAvailabilityDto Fees, ReportAvailabilityDto Combined)
 {
     public static ReportProviderAvailabilityDto Undecided { get; } =
-        new(ReportAvailabilityDto.Undecided, ReportAvailabilityDto.Undecided);
+        new(ReportAvailabilityDto.Undecided, ReportAvailabilityDto.Undecided, ReportAvailabilityDto.Undecided);
+
+    /// <summary>
+    /// Reports the two decided families together with the combined state the Domain policy derives
+    /// from them, so the combination is never written twice.
+    /// </summary>
+    public static ReportProviderAvailabilityDto From(ReportAvailability sales, ReportAvailability fees) =>
+        new(ReportAvailabilityDto.From(sales), ReportAvailabilityDto.From(fees),
+            ReportAvailabilityDto.From(ReportAvailabilityPolicy.LeastComplete(sales, fees)));
+
+    /// <summary>The same, from two already-reported states.</summary>
+    public static ReportProviderAvailabilityDto From(ReportAvailabilityDto sales, ReportAvailabilityDto fees) =>
+        From(sales.ToDomain(), fees.ToDomain());
 }

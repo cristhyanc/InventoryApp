@@ -50,6 +50,40 @@ public readonly record struct ReportCoverageRange(DateTime FromUtc, DateTime ToU
 {
     /// <summary>A range that accounts for no time at all, which no coverage decision may rest on.</summary>
     public bool IsEmpty => ToUtc <= FromUtc;
+
+    /// <summary>
+    /// The fewest ranges that account for exactly the same time as <paramref name="ranges"/>, in
+    /// order. This is the one merge in the application, used both when coverage is recorded and when
+    /// a report decides a state, so the two can never disagree about what a set of intervals proves.
+    ///
+    /// <para>Overlapping and exactly touching ranges become one range: two successful runs that meet
+    /// at an instant leave nothing uncovered between them. A <b>gap is never bridged</b> - that is
+    /// the whole point. Nothing proves the time between two proven intervals was ever retrieved, so
+    /// the result keeps them as separate ranges and the period containing them is not complete.
+    /// Empty and inverted ranges account for no time and are dropped.</para>
+    /// </summary>
+    public static List<ReportCoverageRange> Merge(IEnumerable<ReportCoverageRange> ranges)
+    {
+        ArgumentNullException.ThrowIfNull(ranges);
+
+        var ordered = ranges.Where(range => !range.IsEmpty)
+            .OrderBy(range => range.FromUtc).ThenBy(range => range.ToUtc).ToList();
+        var merged = new List<ReportCoverageRange>(ordered.Count);
+
+        foreach (var range in ordered)
+        {
+            if (merged.Count > 0 && range.FromUtc <= merged[^1].ToUtc)
+            {
+                if (range.ToUtc > merged[^1].ToUtc)
+                    merged[^1] = merged[^1] with { ToUtc = range.ToUtc };
+                continue;
+            }
+
+            merged.Add(range);
+        }
+
+        return merged;
+    }
 }
 
 /// <summary>

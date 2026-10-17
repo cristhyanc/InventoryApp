@@ -113,8 +113,7 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             DirectProfit = profit.DirectProfit,
             DirectMarginPercent = profit.DirectMarginPercent,
             NayaxProcessingFees = facts.ProcessingFees,
-            ProviderAvailability = new ReportProviderAvailabilityDto(
-                ReportAvailabilityDto.From(salesAvailability), ReportAvailabilityDto.From(feesAvailability))
+            ProviderAvailability = ReportProviderAvailabilityDto.From(salesAvailability, feesAvailability)
         };
     }
 

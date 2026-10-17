@@ -20,8 +20,13 @@ const missing: ReportAvailability = { state: 'Missing', asOfUtc: null, isComplet
 const unverified: ReportAvailability = { state: 'Unverified', asOfUtc: null, isComplete: false };
 const staleTo18July: ReportAvailability = { state: 'Stale', asOfUtc: '2026-07-18T06:00:00Z', isComplete: false };
 
+/** The severity order the server combines states by, mirrored here only to build fixtures. */
+const severity: Record<ReportAvailability['state'], number> = {
+  Missing: 0, Unverified: 1, Stale: 2, Complete: 3,
+};
+
 function availability(sales: ReportAvailability, fees: ReportAvailability): ReportProviderAvailability {
-  return { sales, fees };
+  return { sales, fees, combined: severity[fees.state] < severity[sales.state] ? fees : sales };
 }
 
 describe('report availability formatting', () => {
@@ -134,6 +139,85 @@ describe('BookkeepingReportComponent provider availability (issue #730)', () => 
 
     expect(host.querySelector('[data-testid="sales-availability"]')).toBeNull();
     expect(host.querySelector('[data-testid="nayax-fees"]')!.textContent).toContain('No provider data');
+  });
+
+  /**
+   * The headline cards were never the whole report. Every section that shows a provider-dependent
+   * figure has to follow the same rule, or a reader scrolls past the banner into a Card Settlement
+   * or Cash Reconciliation section that still says $0.00.
+   */
+  const everyProviderFigure = [
+    'gross-sales', 'gross-profit', 'net-profit', 'net-margin', 'nayax-fees', 'site-commission',
+    'settlement-card-sales', 'settlement-fees', 'net-reimbursement', 'reconciliation-cash-sales',
+  ];
+
+  it('shows no $0.00 for any provider figure anywhere in the report when both families are missing', async () => {
+    const host = await renderBookkeeping(bookkeeping({ providerAvailability: availability(missing, missing) }));
+
+    for (const id of everyProviderFigure) {
+      const cell = host.querySelector(`[data-testid="${id}"]`);
+      expect(cell).not.toBeNull();
+      expect(cell!.textContent).toContain('No provider data');
+      expect(cell!.textContent).not.toContain('$0.00');
+      expect(cell!.textContent).not.toContain('0.0%');
+    }
+
+    // The business's own figures stay exact and unlabelled, including their total.
+    expect(host.querySelector('[data-testid="delivery-costs"]')!.textContent).toContain('$12.50');
+    expect(host.querySelector('[data-testid="package-costs"]')!.textContent).toContain('$3.25');
+    expect(host.querySelector('[data-testid="total-operating-costs"]')!.textContent).toContain('$55.75');
+  });
+
+  it('shows no unmeasured zero anywhere when the period is only unverified', async () => {
+    const host = await renderBookkeeping(bookkeeping({ providerAvailability: availability(unverified, unverified) }));
+
+    for (const id of everyProviderFigure) {
+      const cell = host.querySelector(`[data-testid="${id}"]`);
+      expect(cell!.textContent).toContain('Unverified');
+      expect(cell!.textContent).not.toContain('$0.00');
+    }
+  });
+
+  it('keeps every real stale figure visible and labels the unmeasured ones, section by section', async () => {
+    const host = await renderBookkeeping(bookkeeping({
+      sales: 880, cardSales: 700, cashSales: 180, grossProfit: 540,
+      netProfit: 300, netMarginPercent: 34.1, siteCommission: 20,
+      nayaxFeesIncludingGst: 50, netSettlement: 650,
+      providerAvailability: availability(staleTo18July, staleTo18July)
+    }));
+
+    const text = (id: string) => host.querySelector(`[data-testid="${id}"]`)!.textContent ?? '';
+    expect(text('settlement-card-sales')).toContain('$700.00');
+    expect(text('settlement-fees')).toContain('$50.00');
+    expect(text('net-reimbursement')).toContain('$650.00');
+    expect(text('reconciliation-cash-sales')).toContain('$180.00');
+    expect(text('site-commission')).toContain('$20.00');
+    expect(text('net-profit')).toContain('$300.00');
+    expect(text('net-margin')).toContain('34.1%');
+    expect(host.querySelector('[data-testid="sales-availability"]')!.textContent).toContain('As of 18 July 2026');
+  });
+
+  it('takes the least complete of both families for a figure that depends on both', async () => {
+    // Card sales were read end to end; the settlement file never arrived. The net reimbursement
+    // subtracts one from the other, so it cannot be reported as complete.
+    const host = await renderBookkeeping(bookkeeping({
+      sales: 500, cardSales: 400, netSettlement: 0, nayaxFeesIncludingGst: 0,
+      providerAvailability: availability(complete, missing)
+    }));
+
+    expect(host.querySelector('[data-testid="settlement-card-sales"]')!.textContent).toContain('$400.00');
+    expect(host.querySelector('[data-testid="net-reimbursement"]')!.textContent).toContain('No provider data');
+  });
+
+  it('never reads a figure as complete when an older response reported no combined state', async () => {
+    // A response from before the combined state existed must fall back to a family's own state,
+    // never to "complete": a state nothing decided may not license a zero.
+    const host = await renderBookkeeping(bookkeeping({
+      providerAvailability: { sales: missing, fees: missing } as ReportProviderAvailability
+    }));
+
+    expect(host.querySelector('[data-testid="net-reimbursement"]')!.textContent).toContain('No provider data');
+    expect(host.querySelector('[data-testid="net-profit"]')!.textContent).toContain('No provider data');
   });
 });
 

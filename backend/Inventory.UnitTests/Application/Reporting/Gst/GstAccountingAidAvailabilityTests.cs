@@ -31,7 +31,7 @@ public class GstAccountingAidAvailabilityTests
             DataQuality: new ReportingDataQualityDto(), NayaxFeesExGst: 5m)
         {
             OperatingExpenseGst = 0.5m,
-            ProviderAvailability = new ReportProviderAvailabilityDto(sales, fees),
+            ProviderAvailability = ReportProviderAvailabilityDto.From(sales, fees),
         };
 
     private static Task<GstAccountingAidDto> Report(BookkeepingReportDto bookkeeping, GstReportFacts facts) =>

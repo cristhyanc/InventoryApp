@@ -18,7 +18,15 @@ public enum ProviderDataSource
     /// <summary>The live rolling-window sales synchronization (<c>SyncLatestNayaxSales</c>).</summary>
     SalesSync = 1,
 
-    /// <summary>An uploaded transaction export (<c>ImportNayaxSales</c>).</summary>
+    /// <summary>
+    /// An uploaded transaction export (<c>ImportNayaxSales</c>).
+    ///
+    /// <para>Part of the vocabulary, and read as a sales source wherever coverage is interpreted,
+    /// but <b>nothing writes it today</b>: a transaction export declares neither its range nor its
+    /// scope, so importing one proves no interval of business-wide coverage. See
+    /// <c>ImportNayaxSales</c> for why, and do not reintroduce a range derived from the instants a
+    /// workbook happens to contain.</para>
+    /// </summary>
     SalesFileImport = 2,
 
     /// <summary>An imported settlement/reimbursement file (<c>ImportPendingReimbursementXmlFiles</c>).</summary>

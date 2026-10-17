@@ -36,14 +36,18 @@ export interface ReportAvailability {
 
 /**
  * The availability of a report's provider-sourced figures, split by the data each one comes from.
- * `sales` governs sales, the card/cash split, COGS, the profit figures, estimated GST on sales,
- * site commission and net settlement; `fees` governs the Nayax processing fees and their GST. A
- * figure the business records itself - delivery, packaging, operating expenses, purchase GST -
- * carries no provider state and stays visible and exact.
+ * `sales` governs sales, the card/cash split, their counts, COGS, gross profit, estimated GST on
+ * sales and site commission; `fees` governs the Nayax processing fees and their GST; `combined` is
+ * the least complete of the two, decided on the server, and governs every figure that depends on
+ * both - net and direct profit and their margins, the net card settlement, total operating costs
+ * and net GST. A figure the business records itself - delivery, packaging, operating expenses,
+ * purchase GST - carries no provider state and stays visible and exact.
  */
 export interface ReportProviderAvailability {
   sales: ReportAvailability;
   fees: ReportAvailability;
+  /** Optional so an older response, which reported only the two families, still parses. */
+  combined?: ReportAvailability;
 }
 
 export interface NayaxProcessingFeeResult {

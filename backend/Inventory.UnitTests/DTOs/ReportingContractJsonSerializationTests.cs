@@ -67,7 +67,7 @@ public class ReportingContractJsonSerializationTests
         // family, and the state travels as its name rather than an enum number so a renumbered
         // enum cannot silently change what a stored response meant.
         var availability = document.RootElement.GetProperty("providerAvailability");
-        Assert.Equal(["sales", "fees"], availability.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(["sales", "fees", "combined"], availability.EnumerateObject().Select(p => p.Name));
         Assert.Equal(["state", "asOfUtc", "isComplete"],
             availability.GetProperty("sales").EnumerateObject().Select(p => p.Name));
         Assert.Equal(JsonValueKind.String, availability.GetProperty("sales").GetProperty("state").ValueKind);

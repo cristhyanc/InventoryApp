@@ -37,7 +37,7 @@ public static class ReportAvailabilityPolicy
         if (periodEndExclusiveUtc <= periodStartUtc)
             return new ReportAvailability(ReportAvailabilityState.Complete, null);
 
-        var merged = Merge(Clip(coverage, periodStartUtc, periodEndExclusiveUtc));
+        var merged = ReportCoverageRange.Merge(Clip(coverage, periodStartUtc, periodEndExclusiveUtc));
 
         if (merged.Count == 0)
             return new ReportAvailability(
@@ -82,30 +82,5 @@ public static class ReportAvailabilityPolicy
             if (!clipped.IsEmpty)
                 yield return clipped;
         }
-    }
-
-    /// <summary>
-    /// Merges overlapping and touching ranges into the fewest that cover the same time. Touching
-    /// counts as one range: two consecutive successful runs that meet exactly leave no uncovered
-    /// instant between them, so the period must not be reported as having a gap there.
-    /// </summary>
-    private static List<ReportCoverageRange> Merge(IEnumerable<ReportCoverageRange> clipped)
-    {
-        var ordered = clipped.OrderBy(range => range.FromUtc).ThenBy(range => range.ToUtc).ToList();
-        var merged = new List<ReportCoverageRange>(ordered.Count);
-
-        foreach (var range in ordered)
-        {
-            if (merged.Count > 0 && range.FromUtc <= merged[^1].ToUtc)
-            {
-                if (range.ToUtc > merged[^1].ToUtc)
-                    merged[^1] = merged[^1] with { ToUtc = range.ToUtc };
-                continue;
-            }
-
-            merged.Add(range);
-        }
-
-        return merged;
     }
 }
