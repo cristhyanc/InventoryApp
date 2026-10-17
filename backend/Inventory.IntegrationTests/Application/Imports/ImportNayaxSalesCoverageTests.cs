@@ -65,7 +65,8 @@ public class ImportNayaxSalesCoverageTests
         new(new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db),
-            Mock.Of<Inventory.Application.Costing.IRebuildProductCost>());
+            Mock.Of<Inventory.Application.Costing.IRebuildProductCost>(),
+            InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself());
 
     private static NayaxSalesFileInput Csv(string content) =>
         new("sales.csv", () => new MemoryStream(Encoding.UTF8.GetBytes(content)));

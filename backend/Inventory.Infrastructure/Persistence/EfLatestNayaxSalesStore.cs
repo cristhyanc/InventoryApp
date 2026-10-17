@@ -29,6 +29,15 @@ namespace Inventory.Infrastructure.Persistence;
 /// overwritten - and neither is its stored instant, which is what makes re-reading the rolling
 /// last-sales window unable to shift a sale a second time (issue #380).
 ///
+/// The one identity rule that did change is where a payload item's <c>NayaxProductID</c> is resolved
+/// (issue #745, parent #329 decision A2b): through the <c>ProductExternalIds</c> link table, by
+/// <see cref="Inventory.Application.Nayax.INayaxProductLinkStore"/>, instead of by comparing it with
+/// <c>Product.Id</c>. For data that predates the link table nothing changes - issue #732's backfill
+/// linked every product to the row with the same id - and a Nayax id with no link is an unknown
+/// product, exactly as an unmatched id already was. The <em>stored</em>
+/// <c>NayaxSales.NayaxProductId</c> column is still read as the local product id this
+/// synchronization writes onto a matched sale; #747 (A2c) and #734 (A3) own that column's readers.
+///
 /// The one behavioural change issue #380 made here is which payload field the stored instant comes
 /// from: <c>NayaxSales.MachineAuthorizationTime</c> is a persisted true UTC instant, so it is written
 /// from the authoritative <c>AuthorizationDateTimeGMT</c> value through
@@ -42,15 +51,18 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
     private readonly AppDbContext _db;
     private readonly ICostSale _saleCosting;
     private readonly IRebuildProductCost _inventoryCostRebuild;
+    private readonly INayaxProductLinkStore _productLinks;
 
     public EfLatestNayaxSalesStore(
         AppDbContext db,
         ICostSale saleCosting,
-        IRebuildProductCost inventoryCostRebuild)
+        IRebuildProductCost inventoryCostRebuild,
+        INayaxProductLinkStore productLinks)
     {
         _db = db;
         _saleCosting = saleCosting;
         _inventoryCostRebuild = inventoryCostRebuild;
+        _productLinks = productLinks;
     }
 
     public async Task<LatestNayaxSalesPersistResult> PersistLatestSalesAsync(
@@ -63,11 +75,26 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
         var candidates = (await _db.Products.AsNoTracking().ToListAsync(cancellationToken))
             .Select(product => new ProductMatchCandidate(product.Id, product.Name))
             .ToList();
+
+        // The batch's Nayax product ids are resolved to local product ids once, through the one
+        // lookup over the ProductExternalIds link table (issue #745, parent #329 decision A2b),
+        // rather than compared with Product.Id - which only ever worked because the local key *is*
+        // the Nayax id. Read after the catalogue read and before the per-sale work, in sequence with
+        // it: both land on the request's own scoped AppDbContext, which supports one operation at a
+        // time (docs/architecture.md § Concurrency inside one request).
+        var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
+            sales
+                .Where(sale => sale.NayaxProductId.HasValue)
+                .Select(sale => sale.NayaxProductId!.Value)
+                .Distinct()
+                .ToList(),
+            cancellationToken);
+
         foreach (var sale in sales)
         {
-            var matchedProductId = ProductMatcher.Match(
+            var matchedProductId = ProductMatcher.MatchLinked(
                 candidates,
-                sale.NayaxProductId,
+                LocalProductId(sale.NayaxProductId, localProductIdByNayaxId),
                 sale.ProductName);
             var existing = await _db.NayaxSales
                 .FirstOrDefaultAsync(x => x.TransactionID == sale.TransactionID, cancellationToken);
@@ -107,9 +134,9 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
             var enriched = false;
             if (!existing.NayaxProductId.HasValue)
             {
-                var existingMatch = ProductMatcher.Match(
+                var existingMatch = ProductMatcher.MatchLinked(
                     candidates,
-                    sale.NayaxProductId,
+                    LocalProductId(sale.NayaxProductId, localProductIdByNayaxId),
                     sale.ProductName ?? existing.ProductName);
                 if (existingMatch is not null)
                 {
@@ -131,6 +158,13 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                     cancellationToken: cancellationToken);
                 if (NayaxTransactionStatusClassifier.IsCompletedSale(existing.TransactionStatusId))
                 {
+                    // Deliberately the stored column, read as the local product id this
+                    // synchronization writes once it has matched one (above) - not as a Nayax id to
+                    // resolve again (issue #745). Resolving it through the link table would turn the
+                    // local product a stored sale already names into an unknown one, which would
+                    // silently stop replaying that product's inventory cost. The stored column's own
+                    // mixed provenance - the uploaded export writes the raw remote id into it - is
+                    // what #747 (A2c) and #734 (A3) own.
                     matchedProductId ??= ProductMatcher.Match(
                         candidates, existing.NayaxProductId, existing.ProductName);
                     if (matchedProductId is not null &&
@@ -185,4 +219,17 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                 "The latest Nayax sales synchronization could not rebuild every affected product's inventory cost. " +
                 string.Join(" ", failures));
     }
+
+    /// <summary>
+    /// The local product a payload item's <c>NayaxProductID</c> names, or <see langword="null"/>
+    /// when this business holds no Nayax link for it - an unknown product, handled exactly as an
+    /// unmatched id already was: the sale is still imported, still visible and left for the name
+    /// fallback and then the uncosted path, never attached to the product whose local id happens to
+    /// equal the remote one (issue #745).
+    /// </summary>
+    private static long? LocalProductId(
+        long? nayaxProductId, IReadOnlyDictionary<long, long> localProductIdByNayaxId) =>
+        nayaxProductId is long id && localProductIdByNayaxId.TryGetValue(id, out var localProductId)
+            ? localProductId
+            : null;
 }

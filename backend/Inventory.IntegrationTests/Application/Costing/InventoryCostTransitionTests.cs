@@ -356,7 +356,16 @@ public class InventoryCostTransitionTests
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
         return TestSalesSync.UseCase(
-            nayax, new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild));
+            nayax,
+            new EfLatestNayaxSalesStore(
+                db,
+                TestCostingUseCases.CostSale(db, rebuild),
+                rebuild,
+                // The links issue #732's backfill recorded for data that already existed - every
+                // Nayax id names the local product with the same id - so these costing cases keep
+                // asserting the same matches while the store resolves them through the link lookup
+                // (issue #745) instead of comparing the remote id with Product.Id.
+                InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()));
     }
 
     private static async Task<NayaxSales> SaleAsync(AppDbContext db, long transactionId) =>

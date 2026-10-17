@@ -96,6 +96,11 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
                 UpdatedAt = created,
             });
             await seed.SaveChangesAsync();
+            // The link issue #732's backfill recorded for a row that already existed. Since issue
+            // #745 it is what makes this an *existing* product for the snapshot entry below; the
+            // local id and the Nayax id are the same number here, as the backfill wrote them.
+            seed.ProductExternalIds.Add(NayaxProductLink(100));
+            await seed.SaveChangesAsync();
         }
 
         await Apply(new NayaxProductCatalogImport(
@@ -130,6 +135,10 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
         using (var seed = TestAppDbContext.For(_options, 1))
         {
             seed.Categories.Add(new Category { Id = 10, Name = "Local name", Description = "Local description" });
+            await seed.SaveChangesAsync();
+            // The backfilled link (issue #732), which is what names this category for the group id
+            // in the snapshot below since issue #745.
+            seed.CategoryExternalIds.Add(NayaxCategoryLink(10));
             await seed.SaveChangesAsync();
         }
 
@@ -238,11 +247,20 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
     }
 
     /// <summary>
-    /// A row that predates the link tables and was never backfilled - a product restored from an
-    /// older backup, say - is linked by the next import rather than left behind.
+    /// A local row that carries no Nayax link is not claimed by a snapshot id that merely equals its
+    /// key (issue #745): identity comes from the link table, and a row this import creates is still
+    /// keyed by the Nayax id until #735 (A4), so the two collide on the primary key.
+    ///
+    /// <para>That is deliberate, and it is what the issue asks for: the alternative is merging a
+    /// remote product into whichever local row happens to hold its number, which is a silent
+    /// financial-data error rather than a visible failure. The refusal is named and actionable, and
+    /// nothing is written - the import runs in one <c>SaveChanges</c> - so a human can link or
+    /// re-key the row and import again. Issue #732's backfill linked every row that existed when the
+    /// link tables arrived, so reaching this state needs a row restored from an older backup or
+    /// created locally with a colliding key.</para>
     /// </summary>
     [Fact]
-    public async Task An_updated_row_that_has_no_link_yet_gets_one()
+    public async Task An_unlinked_local_row_is_not_claimed_by_an_equal_nayax_id()
     {
         using (var seed = TestAppDbContext.For(_options, 1))
         {
@@ -251,14 +269,19 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
             await seed.SaveChangesAsync();
         }
 
-        await Apply(new NayaxProductCatalogImport(
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => Apply(new NayaxProductCatalogImport(
             [new ImportedProductCategory(10, "Snacks", "Snacks")],
             [new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10)],
-            ImportedAt));
+            ImportedAt)));
+
+        Assert.Contains("has no provider link in this business", exception.Message);
 
         using var verify = TestAppDbContext.For(_options, 1);
-        Assert.Equal("100", (await verify.ProductExternalIds.SingleAsync()).ExternalId);
-        Assert.Equal("10", (await verify.CategoryExternalIds.SingleAsync()).ExternalId);
+        var product = await verify.Products.AsNoTracking().SingleAsync();
+        Assert.Equal("Old name", product.Name);
+        Assert.Equal("Snacks", (await verify.Categories.AsNoTracking().SingleAsync()).Name);
+        Assert.Empty(await verify.ProductExternalIds.AsNoTracking().ToListAsync());
+        Assert.Empty(await verify.CategoryExternalIds.AsNoTracking().ToListAsync());
     }
 
     /// <summary>
@@ -281,6 +304,27 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
         Assert.Equal(100L, (await verify.ProductExternalIds.SingleAsync()).ProductId);
         Assert.Equal(10L, (await verify.CategoryExternalIds.SingleAsync()).CategoryId);
     }
+
+    /// <summary>
+    /// A Nayax product link in the shape issue #732's backfill wrote for pre-existing data: the
+    /// Nayax id and the local id are the same number.
+    /// </summary>
+    private static ProductExternalId NayaxProductLink(long id) =>
+        new()
+        {
+            Provider = ExternalProvider.Nayax,
+            ExternalId = NayaxExternalId.From(id),
+            ProductId = id,
+        };
+
+    /// <summary>The category half of <see cref="NayaxProductLink"/>.</summary>
+    private static CategoryExternalId NayaxCategoryLink(long id) =>
+        new()
+        {
+            Provider = ExternalProvider.Nayax,
+            ExternalId = NayaxExternalId.From(id),
+            CategoryId = id,
+        };
 
     private async Task Apply(NayaxProductCatalogImport import)
     {

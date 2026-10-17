@@ -38,7 +38,15 @@ public class SyncLatestNayaxSalesTests
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
         return TestSalesSync.UseCase(
-            nayax, new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild));
+            nayax,
+            new EfLatestNayaxSalesStore(
+                db,
+                TestCostingUseCases.CostSale(db, rebuild),
+                rebuild,
+                // The real link table over the same context, so the resolution these cases run
+                // through is the production one (issue #745); the cases that are about it seed links
+                // with ids that differ (SyncLatestNayaxSalesNayaxLinkTests).
+                new EfNayaxProductLinkStore(db)));
     }
 
     [Fact]

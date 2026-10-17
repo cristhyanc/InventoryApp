@@ -34,7 +34,11 @@ public class SyncLatestNayaxSalesCoverageTests
         var rebuild = TestCostingUseCases.Rebuild(db);
         return TestSalesSync.UseCase(
             nayax,
-            new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild),
+            new EfLatestNayaxSalesStore(
+                db,
+                TestCostingUseCases.CostSale(db, rebuild),
+                rebuild,
+                InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
             new FakeClock(RunAt),
             coverage);
     }
