@@ -1,4 +1,4 @@
-import { NayaxProcessingFeeResult, ReportQuality } from '../../shared/models/reporting.models';
+import { NayaxProcessingFeeResult, ReportProviderAvailability, ReportQuality } from '../../shared/models/reporting.models';
 
 export interface BookkeepingReport {
   from: string; to: string; financialYear: string; sales: number; costOfGoods?: number | null;
@@ -20,4 +20,13 @@ export interface BookkeepingReport {
   nayaxProcessingRate?: number;
   nayaxProcessingFees?: NayaxProcessingFeeResult;
   structuredOperatingExpenses?: number; operatingExpenseGst?: number; operatingExpensesByCategory?: Record<string, number>;
+  /**
+   * How well recorded provider coverage accounts for this period (issue #730). `sales` governs
+   * sales, the card/cash split, COGS, gross profit and site commission; `fees` governs the Nayax
+   * processing fees and their GST; `combined` governs the figures that depend on both - net and
+   * direct profit and their margins, the net card settlement and the total of operating costs.
+   * Delivery, packaging and operating expenses are this business's own records and carry no state.
+   * Optional because an older API response does not carry it.
+   */
+  providerAvailability?: ReportProviderAvailability;
 }

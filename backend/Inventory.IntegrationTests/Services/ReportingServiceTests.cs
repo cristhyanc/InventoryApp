@@ -18,6 +18,7 @@ using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Reporting;
+using Inventory.Domain.Reporting.Availability;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Reporting;
@@ -830,14 +831,29 @@ public class ReportingRegressionTests
         var values = lines[1].Trim('"').Split("\",\"");
         var row = header.Zip(values, (h, v) => (h, v)).ToDictionary(x => x.h, x => x.v);
 
+        // Every measured figure is the API's own value, never re-derived by the export.
         Assert.Equal(report.Sales.ToString(CultureInfo.InvariantCulture), row["GrossSales"]);
         Assert.Equal(report.NetProfit!.Value.ToString(CultureInfo.InvariantCulture), row["NetProfit"]);
         Assert.Equal(report.GstOnSales.ToString(CultureInfo.InvariantCulture), row["GstOnSales"]);
-        Assert.Equal(report.GstOnFees.ToString(CultureInfo.InvariantCulture), row["GstOnFees"]);
+        // The business's own receipt costs carry no provider state and stay exact.
         Assert.Equal(report.DeliveryCosts.ToString(CultureInfo.InvariantCulture), row["DeliveryCosts"]);
         Assert.Equal(report.PackageCosts.ToString(CultureInfo.InvariantCulture), row["PackageCosts"]);
-        Assert.Equal(report.NetSettlement.ToString(CultureInfo.InvariantCulture), row["NetSettlement"]);
-        Assert.Equal(report.SiteCommission.ToString(CultureInfo.InvariantCulture), row["SiteCommission"]);
+
+        // No coverage was ever recorded for this period, so the provider figures that come out at
+        // zero carry their state in the export exactly as the API and the UI show it (issue #730):
+        // an exported zero must never be readable as a measured zero. Parity is with the API's
+        // availability-aware answer, not with a bare number the API no longer claims.
+        Assert.Equal(nameof(ReportAvailabilityState.Unverified), report.ProviderAvailability.Sales.State);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Fees.State);
+        Assert.Equal(0m, report.GstOnFees);
+        Assert.Equal(0m, report.NetSettlement);
+        Assert.Equal(0m, report.SiteCommission);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), row["GstOnFees"]);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), row["NetSettlement"]);
+        Assert.Equal(nameof(ReportAvailabilityState.Unverified), row["SiteCommission"]);
+        Assert.Equal(nameof(ReportAvailabilityState.Unverified), row["SalesDataAvailability"]);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), row["FeeDataAvailability"]);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), row["CombinedDataAvailability"]);
     }
 
     [Fact]

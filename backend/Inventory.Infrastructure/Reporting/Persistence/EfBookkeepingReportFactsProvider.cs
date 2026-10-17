@@ -2,6 +2,8 @@ using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Commissions;
 using Inventory.Application.NayaxProcessingFees;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
+using Inventory.Domain.Reporting.Availability;
 using Inventory.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -79,6 +81,8 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             ? commissions.Machines.GetValueOrDefault(machineId!.Value).IsComplete
             : commissions.IsComplete;
 
+        var coverage = await CoverageAsync(from, endExclusive, cancellationToken);
+
         return new BookkeepingReportFacts(
             GrossSales: grossSales,
             CardSales: card?.Sales ?? 0m,
@@ -110,7 +114,46 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             RefundedTransactionCount: statuses.Count(x => NayaxTransactionStatusClassifier.Classify(x) == NayaxTransactionStatus.Refunded),
             DeclinedOrCancelledTransactionCount: statuses.Count(x => NayaxTransactionStatusClassifier.Classify(x) == NayaxTransactionStatus.CancelledOrDeclined),
             UnknownStatusTransactionCount: statuses.Count(x => x is not null && NayaxTransactionStatusClassifier.Classify(x) == NayaxTransactionStatus.Unknown),
-            MissingStatusTransactionCount: statuses.Count(x => x is null));
+            MissingStatusTransactionCount: statuses.Count(x => x is null))
+        {
+            SalesCoverage = coverage.Sales,
+            SettlementCoverage = coverage.Settlement,
+            // Every stored sale in scope, whatever its status, counted from the same list the
+            // status diagnostics above use rather than with a second query. A period holding only
+            // cancelled rows has sales data and a gross total of zero, so this must not be derived
+            // from an amount (issue #730).
+            ContainsSalesRows = statuses.Count > 0,
+        };
+    }
+
+    /// <summary>
+    /// The provider coverage ranges overlapping the requested period (issue #730), grouped by what
+    /// they account for: sale instants, from a successful synchronization or a committed sales file
+    /// import, and settlement periods, from a committed settlement import.
+    ///
+    /// <para>No machine predicate, because coverage is about whether provider data was retrieved for
+    /// the business at all - a machine filter narrows which stored rows a figure counts, not which
+    /// runs happened. No provider predicate either: every connected provider's data feeds the same
+    /// combined figures today, and a provider filter is explicitly a later change (parent #329, P5).
+    /// Reads go through the tenant query filters on <see cref="AppDbContext"/>; there is no business
+    /// predicate here, by design (AGENTS.md § Tenant ownership and data isolation).</para>
+    /// </summary>
+    private async Task<(IReadOnlyList<ReportCoverageRange> Sales, IReadOnlyList<ReportCoverageRange> Settlement)>
+        CoverageAsync(DateTime from, DateTime endExclusive, CancellationToken cancellationToken)
+    {
+        var rows = await _db.ProviderDataCoverages.AsNoTracking()
+            .Where(x => x.FromUtc < endExclusive && x.ToUtc > from)
+            .Select(x => new { x.Source, x.FromUtc, x.ToUtc })
+            .ToListAsync(cancellationToken);
+
+        List<ReportCoverageRange> Ranges(params ProviderDataSource[] sources) =>
+            rows.Where(x => sources.Contains(x.Source))
+                .Select(x => new ReportCoverageRange(x.FromUtc, x.ToUtc))
+                .ToList();
+
+        return (
+            Ranges(ProviderDataSource.SalesSync, ProviderDataSource.SalesFileImport),
+            Ranges(ProviderDataSource.SettlementImport));
     }
 
     private async Task<(decimal Delivery, decimal Package)> ReceiptCostsAsync(DateTime from, DateTime endExclusive, CancellationToken cancellationToken)

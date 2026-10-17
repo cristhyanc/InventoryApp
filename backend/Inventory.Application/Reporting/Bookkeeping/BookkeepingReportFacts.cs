@@ -1,4 +1,5 @@
 using Inventory.Application.Reporting.Shared;
+using Inventory.Domain.Reporting.Availability;
 
 namespace Inventory.Application.Reporting.Bookkeeping;
 
@@ -53,4 +54,28 @@ public sealed record BookkeepingReportFacts(
     int RefundedTransactionCount,
     int DeclinedOrCancelledTransactionCount,
     int UnknownStatusTransactionCount,
-    int MissingStatusTransactionCount);
+    int MissingStatusTransactionCount)
+{
+    /// <summary>
+    /// Every provider coverage range overlapping the requested period that accounts for sale
+    /// instants - a successful sales synchronization or a committed sales file import (issue #730).
+    /// Unordered and expected to overlap: successive successful runs claim overlapping windows by
+    /// design, and <c>ReportAvailabilityPolicy</c> clips and merges them.
+    /// </summary>
+    public IReadOnlyList<ReportCoverageRange> SalesCoverage { get; init; } = [];
+
+    /// <summary>
+    /// The same, for the reimbursement periods committed settlement imports accounted for, which is
+    /// what the processing-fee figures rest on.
+    /// </summary>
+    public IReadOnlyList<ReportCoverageRange> SettlementCoverage { get; init; } = [];
+
+    /// <summary>
+    /// Whether the requested business, period and machine scope holds any stored provider sale at
+    /// all, counted before the completed-sale filter. It is what separates "nothing is recorded and
+    /// nothing covered this period" from "rows exist that no coverage accounts for"; it is
+    /// deliberately not derived from <see cref="GrossSales"/>, because a period holding only
+    /// cancelled rows has sales data and a gross sales total of zero.
+    /// </summary>
+    public bool ContainsSalesRows { get; init; }
+}

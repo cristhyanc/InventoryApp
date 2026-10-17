@@ -62,7 +62,15 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       imports: [ProductNeedsOrderingComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getLowStock: () => of(products), update } },
+        {
+          provide: ProductService,
+          useValue: {
+            // Machine-aware, the mode a business with a usable provider gets (issue #726): the
+            // storage-only listing and its label are this page's provider-optional spec's.
+            getLowStock: () => of({ products, mode: 'MachineAware', machineNeedUnavailableReason: null }),
+            update
+          }
+        },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: SupplierService, useValue: { getAll: () => of([]) } },
         { provide: SupplierOrderService, useValue: { create } },
