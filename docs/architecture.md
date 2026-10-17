@@ -8938,6 +8938,23 @@ reconciliation. The transactions export is the one that substitutes no amount: e
 stored transaction, so the row's existence is the measurement; what the file could not otherwise say
 is whether those rows are all of the period's, which is what its two state columns report.
 
+**And an empty download says it too.** Repeating the state on every data row leaves one gap: the
+three per-record reports — transaction sales, product profitability and machine profitability —
+produce a row only where sales exist, so a result with no rows had nowhere to put its state and
+downloaded as column headings alone, where `Missing` or `Unverified` is indistinguishable from a
+`Complete` period that genuinely sold nothing. Those three therefore append **one** trailing
+metadata row when, and only when, they have no data row at all: `ReportExportTable.NoRowsLabel`
+(`NO ROWS`) in the first column, the report's own availability cells in its trailing availability
+columns — two for the single-state reports, five for machine profitability — and every other cell
+empty, built once by `AvailabilityExportCells.NoRowsRow`. It is the marked-row convention the daily
+and reconciliation exports already use for their `TOTAL` row; those two always carry a totals row,
+so they were never stateless, and bookkeeping, GST and the dashboard are single-row reports. CSV and
+XLSX need no separate rule, because both encode this one table: the row is the second line of the
+file and the second row of the sheet, identically. The alternative — inventing a transaction,
+product or machine row to hang the metadata on — was rejected outright: a fabricated record in a
+financial download is worse than the missing label it would fix. An export that *has* rows is
+completely unchanged.
+
 **Site Commissions answers "unavailable" instead of erroring.** A site is known only from the live
 Nayax fleet read's `CustomerID`, so `GetSiteCommissionReport` previously threw whenever the provider
 was unusable — and because `EfReportingSharedQueries.GetMachineCommissionsAsync` composes it, that

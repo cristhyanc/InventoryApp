@@ -50,6 +50,18 @@ internal static class TestReportCoverage
     };
 
     /// <summary>
+    /// Rows exist and no coverage accounts for them: the "there is something, and coverage does not
+    /// account for it" case. It is the state an uploaded transaction export leaves behind, and it is
+    /// distinct from <see cref="Missing"/> - which is what makes an empty report's state worth
+    /// carrying into its download at all.
+    /// </summary>
+    internal static ReportCoverageFacts Unverified() => Missing() with
+    {
+        ContainsSalesRows = true,
+        ContainsSettlementRows = true,
+    };
+
+    /// <summary>
     /// Covered without a gap from the period start up to <paramref name="asOfUtc"/> and no further -
     /// the shape previously imported sales leave behind after a provider is disconnected. The data
     /// is still there, and still reported, labelled "as of" that instant.
@@ -57,5 +69,19 @@ internal static class TestReportCoverage
     internal static ReportCoverageFacts StaleSales(DateTime asOfUtc) => Complete() with
     {
         SalesCoverage = [new ReportCoverageRange(PeriodStart, asOfUtc)],
+    };
+
+    /// <summary>
+    /// The coverage shape that decides a named state in both families, for a test parameterised by
+    /// the state it expects. <see cref="ReportAvailabilityState.Stale"/> is deliberately absent: it
+    /// carries an instant, so a test about it names that instant itself through
+    /// <see cref="StaleSales"/>.
+    /// </summary>
+    internal static ReportCoverageFacts Of(string state) => state switch
+    {
+        nameof(ReportAvailabilityState.Missing) => Missing(),
+        nameof(ReportAvailabilityState.Unverified) => Unverified(),
+        nameof(ReportAvailabilityState.Complete) => Complete(),
+        _ => throw new ArgumentOutOfRangeException(nameof(state), state, "No coverage shape for that state."),
     };
 }

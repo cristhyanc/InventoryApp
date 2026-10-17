@@ -22,6 +22,11 @@ namespace Inventory.Application.Reporting.Export;
 ///   <item>A figure the business records itself - delivery, packaging, operating expenses, purchase
 ///   input GST - never passes through here: it carries no provider state and stays visible and
 ///   exact (AGENTS.md § Nayax processing fees and GST).</item>
+///   <item>A result with no data rows at all still reports its state, through
+///   <see cref="NoRowsRow"/>: the rule covers an empty row list too, because an empty download is
+///   read as "nothing sold" by exactly the same reader (AGENTS.md § Nayax processing fees and
+///   GST: "an absent machine, an absent product and an empty transaction list are reported with
+///   the state behind them").</item>
 /// </list>
 /// </summary>
 internal static class AvailabilityExportCells
@@ -49,4 +54,28 @@ internal static class AvailabilityExportCells
     /// </summary>
     internal static string AsOfUtc(ReportAvailabilityDto availability) =>
         availability.AsOfUtc?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? string.Empty;
+
+    /// <summary>
+    /// The one trailing metadata row a per-record report with no data rows at all carries, so the
+    /// report-level availability survives an empty download instead of being lost with the rows
+    /// that would have held it (issue #731; see <see cref="ReportExportTable.NoRowsLabel"/> for why
+    /// this shape and not a fabricated record).
+    /// </summary>
+    /// <param name="header">
+    /// The report's header row, whose width this row matches and whose trailing columns the
+    /// availability cells line up with.
+    /// </param>
+    /// <param name="availabilityCells">
+    /// The report's own availability cells, in the order its trailing availability columns declare -
+    /// two for the single-state reports, five for machine profitability.
+    /// </param>
+    internal static List<string> NoRowsRow(IReadOnlyList<string> header, params string[] availabilityCells)
+    {
+        var blankCells = header.Count - 1 - availabilityCells.Length;
+        var row = new List<string>(header.Count) { ReportExportTable.NoRowsLabel };
+        for (var i = 0; i < blankCells; i++)
+            row.Add(string.Empty);
+        row.AddRange(availabilityCells);
+        return row;
+    }
 }

@@ -180,6 +180,76 @@ public class RemainingReportExportAvailabilityTests
     }
 
     [Fact]
+    public async Task Transactions_export_with_rows_carries_no_metadata_row()
+    {
+        // The metadata row below exists only for a result that has nothing else to carry its state;
+        // a report with rows keeps exactly its header and its records.
+        var table = await Sut(TestReportCoverage.Missing())
+            .Handle("transactions", new TransactionSalesFilterDto(From, To), CancellationToken.None);
+
+        Assert.Equal(2, table.Rows.Count);
+        Assert.DoesNotContain(ReportExportTable.NoRowsLabel, table.Rows[^1]);
+    }
+
+    [Theory]
+    [InlineData(nameof(ReportAvailabilityState.Missing))]
+    [InlineData(nameof(ReportAvailabilityState.Unverified))]
+    [InlineData(nameof(ReportAvailabilityState.Complete))]
+    public async Task Transactions_export_with_no_rows_still_reports_its_state(string state)
+    {
+        var table = await EmptyReportExportComposition.Empty(TestReportCoverage.Of(state))
+            .Handle("transactions", new TransactionSalesFilterDto(From, To), CancellationToken.None);
+
+        MetadataRowOf(table, stateColumns: 2);
+        Assert.Equal(state, Cell(table, "SalesDataAvailability"));
+        Assert.Equal(string.Empty, Cell(table, "SalesDataAsOfUtc"));
+    }
+
+    [Theory]
+    [InlineData(nameof(ReportAvailabilityState.Missing))]
+    [InlineData(nameof(ReportAvailabilityState.Unverified))]
+    [InlineData(nameof(ReportAvailabilityState.Complete))]
+    public async Task Product_profitability_export_with_no_rows_still_reports_its_state(string state)
+    {
+        var table = await EmptyReportExportComposition.Empty(TestReportCoverage.Of(state))
+            .Handle("product-profitability", Filter, CancellationToken.None);
+
+        MetadataRowOf(table, stateColumns: 2);
+        Assert.Equal(state, Cell(table, "SalesDataAvailability"));
+        Assert.Equal(string.Empty, Cell(table, "SalesDataAsOfUtc"));
+    }
+
+    [Theory]
+    [InlineData(nameof(ReportAvailabilityState.Missing))]
+    [InlineData(nameof(ReportAvailabilityState.Unverified))]
+    [InlineData(nameof(ReportAvailabilityState.Complete))]
+    public async Task Machine_profitability_export_with_no_rows_still_reports_every_state(string state)
+    {
+        var table = await EmptyReportExportComposition.Empty(TestReportCoverage.Of(state))
+            .Handle("machine-profitability", Filter, CancellationToken.None);
+
+        MetadataRowOf(table, stateColumns: 5);
+        Assert.Equal(state, Cell(table, "SalesDataAvailability"));
+        Assert.Equal(state, Cell(table, "FeeDataAvailability"));
+        Assert.Equal(state, Cell(table, "CombinedDataAvailability"));
+    }
+
+    /// <summary>
+    /// The one trailing row an empty result carries: the fixed label, the report's state columns, and
+    /// nothing else at all - no invented transaction, product or machine (issue #731).
+    /// </summary>
+    private static void MetadataRowOf(ReportExportTable table, int stateColumns)
+    {
+        var header = table.Rows[0];
+        var row = Assert.Single(table.Rows.Skip(1));
+
+        Assert.Equal(header.Count, row.Count);
+        Assert.Equal(ReportExportTable.NoRowsLabel, row[0]);
+        for (var i = 1; i < header.Count - stateColumns; i++)
+            Assert.Equal(string.Empty, row[i]);
+    }
+
+    [Fact]
     public async Task Every_remaining_export_keeps_its_header_and_rows_the_same_width()
     {
         var sut = Sut(TestReportCoverage.Missing());

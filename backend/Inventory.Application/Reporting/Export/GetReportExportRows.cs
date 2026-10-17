@@ -106,6 +106,12 @@ public sealed class GetReportExportRows
             Number(x.CommissionAmount), Number(x.TransactionStatusId), x.TransactionStatus, x.IsCompleted.ToString(),
             AvailabilityExportCells.State(availability), AvailabilityExportCells.AsOfUtc(availability)
         }));
+        // With no transaction at all there is no data row to carry those columns, and a download of
+        // headings alone cannot say whether the period was unaccounted for or genuinely sold
+        // nothing. One marked metadata row states it instead, fabricating no transaction.
+        if (value.Rows.Count == 0)
+            rows.Add(AvailabilityExportCells.NoRowsRow(rows[0],
+                AvailabilityExportCells.State(availability), AvailabilityExportCells.AsOfUtc(availability)));
         return new ReportExportTable(rows, "Transactions");
     }
 
@@ -273,6 +279,13 @@ public sealed class GetReportExportRows
             var machineCombined = value.ProviderAvailability.Combined;
             var rows = new[] { new List<string> { "MachineId", "MachineName", "Sales", "CardSales", "CashSales", "Quantity", "CostOfGoods", "GrossProfit", "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "CommissionPercent", "SiteCommission", "DirectProfit", "DirectMarginPercent", "Transactions", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader, FeeDataAvailabilityHeader, FeeDataAsOfUtcHeader, CombinedDataAvailabilityHeader } }
                 .Concat(value.Rows.Select(x => new List<string> { x.MachineId.ToString(), x.MachineName, AvailabilityExportCells.Amount(x.Sales, machineSales), AvailabilityExportCells.Amount(x.CardSales, machineSales), AvailabilityExportCells.Amount(x.CashSales, machineSales), AvailabilityExportCells.Amount(x.Quantity, machineSales), AvailabilityExportCells.Amount(x.CostOfGoods, machineSales), AvailabilityExportCells.Amount(x.GrossProfit, machineSales), AvailabilityExportCells.Amount(x.NayaxProcessingFees.TotalFeeExGst, machineFees), AvailabilityExportCells.Amount(x.NayaxProcessingFees.TotalFeeGst, machineFees), AvailabilityExportCells.Amount(x.NayaxProcessingFees.TotalFeeIncGst, machineFees), AvailabilityExportCells.Amount(x.NayaxProcessingFees.ActualFeeIncGst, machineFees), AvailabilityExportCells.Amount(x.NayaxProcessingFees.EstimatedFeeIncGst, machineCombined), AvailabilityExportCells.Amount(x.NayaxProcessingFees.EstimatedCardTransactionCount, machineCombined), x.NayaxProcessingFees.HasEstimatedFees.ToString(), AvailabilityExportCells.Amount(x.CommissionPercent, machineSales), AvailabilityExportCells.Amount(x.SiteCommission, machineSales), AvailabilityExportCells.Amount(x.DirectProfit, machineCombined), AvailabilityExportCells.Amount(x.DirectMarginPercent, machineCombined), AvailabilityExportCells.Amount(x.TransactionCount, machineSales), AvailabilityExportCells.State(machineSales), AvailabilityExportCells.AsOfUtc(machineSales), AvailabilityExportCells.State(machineFees), AvailabilityExportCells.AsOfUtc(machineFees), AvailabilityExportCells.State(machineCombined) })).ToList();
+            // An absent machine is the figure a reader is most likely to misread as "nothing
+            // happened", so a result with no machine row still states its three families.
+            if (value.Rows.Count == 0)
+                rows.Add(AvailabilityExportCells.NoRowsRow(rows[0],
+                    AvailabilityExportCells.State(machineSales), AvailabilityExportCells.AsOfUtc(machineSales),
+                    AvailabilityExportCells.State(machineFees), AvailabilityExportCells.AsOfUtc(machineFees),
+                    AvailabilityExportCells.State(machineCombined)));
             return new ReportExportTable(rows, "Report");
         }
         if (report is "gst" or "gst-accounting")
@@ -313,6 +326,11 @@ public sealed class GetReportExportRows
         var productSales = products.SalesAvailability;
         var productRows = new[] { new List<string> { "Product", "Sales", "Quantity", "CostOfGoods", "GrossProfit", "MarginPercent", "Transactions", "Unmapped", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader } }
             .Concat(products.Rows.Select(x => new List<string> { x.ProductName, AvailabilityExportCells.Amount(x.Sales, productSales), AvailabilityExportCells.Amount(x.Quantity, productSales), AvailabilityExportCells.Amount(x.CostOfGoods, productSales), AvailabilityExportCells.Amount(x.GrossProfit, productSales), AvailabilityExportCells.Amount(x.MarginPercent, productSales), AvailabilityExportCells.Amount(x.TransactionCount, productSales), x.IsUnmapped.ToString(), AvailabilityExportCells.State(productSales), AvailabilityExportCells.AsOfUtc(productSales) })).ToList();
+        // The same for an absent product: an empty product list is reported with the state behind
+        // it, never left to read as "nothing sold".
+        if (products.Rows.Count == 0)
+            productRows.Add(AvailabilityExportCells.NoRowsRow(productRows[0],
+                AvailabilityExportCells.State(productSales), AvailabilityExportCells.AsOfUtc(productSales)));
         return new ReportExportTable(productRows, "Report");
     }
 

@@ -52,7 +52,8 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         }
     }
 
-    public static TransactionSalesReportFacts Empty() => Facts([]);
+    public static TransactionSalesReportFacts Empty(ReportCoverageFacts? coverage = null) =>
+        Facts([], coverage: coverage);
 
     public static TransactionSalesReportFactsRow CompletedCardRow(
         long transactionId = 1,
