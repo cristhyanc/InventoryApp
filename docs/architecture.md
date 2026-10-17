@@ -3394,13 +3394,18 @@ composes the one shared `NayaxStatusBannerComponent`
 that is the workflow a Manager or Operator actually triggers). It is **frontend only**: it adds no
 endpoint and decides no rule of its own.
 
-**It reads the same status the wizard reads, once, and adds nothing to it.** The banner calls
-`NayaxConnectionService.status()` (`GET …/nayax-connection/status`, issue #537, `Dashboard.View` -
-every role) on its own `ngOnInit` and shows nothing until that answer is known. It is hidden while
-the status is `Ready` and while the read could not be answered at all - a page's own data load
-already reports its own failure, and a banner built on a probe nobody could answer would only add a
-second, possibly wrong, explanation beside it - and shown for every other published status
-(`NotConfigured`, `PendingPermissions`, `NeedsAttention`).
+**It reads the same status the wizard reads, once, and adds nothing to it.** The status comes from
+`GET …/nayax-connection/status` (issue #537, `Dashboard.View` - every role) and the banner shows
+nothing until that answer is known. It is hidden while the status is `Ready` and while the read could
+not be answered at all - a page's own data load already reports its own failure, and a banner built
+on a probe nobody could answer would only add a second, possibly wrong, explanation beside it - and
+shown for every other published status (`NotConfigured`, `PendingPermissions`, `NeedsAttention`).
+Since issue #728 the banner takes that answer from the application-wide
+`ProviderAvailabilityService` rather than calling `NayaxConnectionService.status()` itself, so the
+three or four banners a screen can hold, and the filters and fields beside them, state one answer
+from one read - see [Shared provider availability and error-versus-empty
+states](#shared-provider-availability-and-error-versus-empty-states-issue-728). Its displayed
+behaviour is unchanged.
 
 **Who sees the setup link is `Integration.Manage`, not a role string.** That capability is the one
 `RoleCapabilities` grants to an Owner alone, so the banner reads it through
@@ -3636,6 +3641,7 @@ The frontend is an application boundary in its own right. It owns navigation, in
 | `app.component.*` | Application shell: header with the sidebar collapse control and the signed-in user control, the sidebar, the routed page region, MSAL redirect/account handling, and the toast/loading hosts |
 | `layout/` | Primary navigation: `navigation.ts` (the navigation data, each destination's capability, and its pure active-route rules), `sidebar-nav.component.*`, `user-menu.component.ts` |
 | `access/` | What the signed-in member may do (issue #528) and which account state they are in (issue #529): the capability vocabulary, the cached `GET /api/me/access` and `GET /api/me/account-state` reads, the two route guards, the "access not allowed" and "access unavailable" pages, and the interceptors that keep the caches current and show the global `403` notice |
+| `provider/` | Whether this business's Nayax connection is usable: the published availability vocabulary and its wording (issue #727), the application-wide session-cached signal, the shared `409 nayax_not_connected` handling path and the one machine/site list load (issue #728) |
 | `app.routes.ts` | Product, stock, supplier, machine, site, purchase, report, expense, and administration routes, each with the capability its page needs |
 | `components/` | Routed feature pages plus a small set of shared components |
 | `services/` | Typed HTTP calls, runtime configuration, toast state, and feature-specific client behavior |
@@ -5684,6 +5690,125 @@ same global `:focus-visible` outline every other link uses (see [Application she
 navigation](#application-shell-and-navigation-issue-391) and `styles.scss`); nothing here needs a
 bespoke focus style.
 
+### Shared provider availability and error-versus-empty states (issue #728)
+
+Child E1 of issue #329 (decision P9), after the dashboard's own answer in
+[issue #727](#provider-optional-dashboard-and-needs-ordering-screens-issue-727). It gives the
+frontend **one** answer to "is this business's Nayax connection usable", **one** handling path for
+the `409` that says it is not, and it stops five screens presenting a failed machine or site request
+as an empty list. It is frontend only: no endpoint, no contract and no rule of its own.
+
+**`ProviderAvailabilityService` is the one answer, read once per session.**
+`frontend/inventory-app/src/app/provider/provider-availability.service.ts` calls
+`GET /api/settings/nayax-connection/status` (`Dashboard.View`, so every role may read it) and shares
+the result (`shareReplay`, the same shape `BusinessService` uses for the current business): however
+many banners, filters and forms want it, the endpoint is asked a single time. `load()` emits only a
+**settled** answer, so no screen renders a decision that has not been made. A read that failed emits
+`unknown` and drops the shared attempt, so the next screen asks again.
+
+**The answer has one overall state and two per-feature ones.** `ProviderConnection` is `usable`,
+`needsAttention`, `notConnected` or `unknown`. `providerConnectionOf` is a translation of
+`Inventory.Domain.Nayax.NayaxConnectionStatusGate` and not a second opinion - `Ready` and
+`PendingPermissions` are the two usable states because that gate says so, and a status name this
+build has never heard of is `unknown` rather than usable, for the same reason the gate is an
+allow-list. `ProviderFeature` then answers per **kind** of dependency, not per page:
+
+- `liveFleet` - anything whose figures come from a live Nayax read: the machine fleet, the site list,
+  the pick list, Sync Restock. It needs credentials the gate will use, so `needsAttention` refuses it.
+- `providerRecords` - anything that only needs Nayax to be *part of* this business: the "Nayax Sync
+  Restock" source of an already-recorded stock movement, the "Nayax monthly fee" expense category.
+  `needsAttention` **keeps** it, because stored credentials that stopped working are still a Nayax
+  account the business pays for and records expenses against.
+
+Keeping `needsAttention` apart from `notConnected` is the whole reason the overall state exists:
+the two mean opposite things to a business, and collapsing them would withhold the Nayax fee category
+from a business that does pay a Nayax monthly fee. **Both per-feature answers fail open while the
+state is `unknown`**, matching the banner and issue #727: withholding a connected business's machine
+filter because one probe failed is a worse error than showing a filter whose own request then reports
+its own failure.
+
+**The connection changes in exactly one place, so that is the one place the signal is refreshed.**
+`NayaxConnectionWizardComponent` calls `accept(state)` with the state the server returned from its
+status read, its save and its re-test (issues #537, #538), which replaces the shared answer without
+spending another request. `reset()` drops it for a change of the business this tab resolves - a
+support-session start, end or expiry - called from `SupportSessionService.applyBusinessContextChange`
+beside `BusinessService.reset()` (issues #669, #670), because the cached answer is about one
+business's connection and a support view resolves no Nayax credentials at all (issue #551).
+
+**`noteRefusal` is the one HTTP handling path for the two `409` availability codes.** It returns the
+`NayaxUnavailability` a refusal stated (`nayax_not_connected` / `nayax_permission_not_granted`,
+worded by `provider/nayax-availability.ts` since issue #727) and `null` for every other failure - a
+transport failure, a `502` from a real Nayax outage, a `403` about the caller's own access - which
+stays an **error**, because reporting one of those as "Nayax is not connected" would describe a
+connection nobody tested. A not-connected refusal also **replaces** the shared answer, taking the
+status out of the refusal's own `nayaxConnectionStatus` extension (issue #520): the one `409` covers
+"nothing stored" and "stored and known not to work" alike, so the code on its own cannot tell them
+apart, and a refusal that published no recognised status records nothing rather than guessing.
+
+**`loadProviderList` is the one machine/site list load**
+(`frontend/inventory-app/src/app/provider/provider-list-load.ts`). It reads the shared answer, does
+**not send** a request the provider cannot answer, and reports exactly one of three outcomes that a
+page may never confuse:
+
+| Outcome | When | What a page does |
+| --- | --- | --- |
+| `listed` | the request answered | render the control; an empty list is a legitimate empty list |
+| `unavailable` | the shared answer refuses the feature, or the request came back with one of the two `409` codes | **hide** the control - a filter over a list that cannot exist is not a filter |
+| `failed` | anything else | render an **error in place of** the control |
+
+Before this, each page subscribed to `MachineService.getAll()` and assigned `[]` on failure - or, on
+the Pick List, had no error handler at all - so a refused request, a transport failure and a business
+with no machines were all presented as the same thing: an empty dropdown that silently widens what
+the page reports on.
+
+**Where it is used, and what each screen hides.**
+
+- **Pick List** (`PickListComponent`) is entirely a live fleet read, so `unavailable` replaces the
+  machine selection, the "Selected Machines" card and the matrix with the one
+  `nayaxUnavailableMessage` sentence for "The pick list". "No machines selected yet" and "Select at
+  least one machine to build a pick list" are claims about this business's *selection*, not about
+  Nayax. A `failed` machine read says so instead.
+- **Report filters** (`ReportFiltersComponent` over `ReportPageBase`, plus
+  `TransactionSalesReportComponent`, which does not extend it) hide the Machine select when there are
+  no machines to filter by and show `machinesError` in its place when the read failed. Apply keeps its
+  right alignment either way. **Site Commissions** does the same for its Site select over
+  `SiteService.getAll()`, which is a live fleet read too.
+- **Stock History** (`StockHistoryPageComponent`) keeps its two provider-dependent filters apart: the
+  **machine** filter needs a machine list (`liveFleet`) and stays hidden until machines exist - which
+  is what issue #746 (G2b) will change by listing locally recorded machines - while the **"Nayax Sync
+  Restock" source** option needs only `providerRecords`, because the movements it selects are already
+  recorded locally. The table keeps labelling a Nayax-sourced movement whatever the filter offers.
+- **The stock adjustment form** (`StockAdjustmentFormComponent`) takes the page's machine list as an
+  input and reads an **empty** list as "no machine list is available": the field is hidden rather than
+  offering "— None —" alone, and a machine staged before the list went away is dropped rather than
+  submitted against a list the page can no longer show.
+- **Expenses** (`OperatingExpenseComponent`) hides its machine field the same way, and without
+  `providerRecords` it stops offering "Nayax monthly fee" for a **new** expense and drops the Nayax
+  sentence from its subtitle. An expense already recorded under that category **keeps** it - in the
+  table, in the Category filter and on the edit form, which offers the category whenever the expense
+  being edited carries it - because a recorded expense is a fact about the past and this page must
+  never quietly reclassify one.
+
+**What is deliberately not here.** The home Dashboard and Needs Ordering keep issue #727's own
+answer, derived from the summary and the reorder listing they already fetch: those responses are
+authoritative about the cards beside them, and a second probe would be a second answer that could
+disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b), and the menu is
+issue #729 (E2).
+
+**What proves it.** `provider/provider-availability.service.spec.ts` covers the status derivation,
+the one-read-per-session cache, the retry after a failed read, `accept`, `reset`, and every refusal
+`noteRefusal` must and must not claim an answer for.
+`provider/provider-list-load.spec.ts` covers the three outcomes, the request that is not sent, the
+per-feature difference between `liveFleet` and `providerRecords`, and the failures that stay errors.
+`pick-list.component.provider-optional.spec.ts`,
+`stock-history-page.component.provider-optional.spec.ts`,
+`operating-expense.component.provider-optional.spec.ts` and `reports/report-provider-optional.spec.ts`
+cover each screen's hidden control, its error state, and the empty list neither may be confused with;
+`stock-adjustment-form.component.spec.ts` covers the machine field and the dropped staged machine;
+`nayax-connection-wizard.component.spec.ts` covers the signal being refreshed by a save and a
+re-test; `nayax-status-banner.component.spec.ts` covers three banners costing one read; and
+`support-session.service.spec.ts` covers the answer being forgotten on a context transition.
+
 ### Target feature boundaries
 
 Keep Angular standalone and migrate incrementally toward feature-local code:
@@ -6924,11 +7049,12 @@ that response whose every figure comes from the live fleet, so a real card means
 and a withheld one carries the reason it was not. `DashboardComponent.providerAvailability`
 (`DashboardProviderAvailability`) is that answer: `usable`, `notConnected`, `permissionNotGranted`,
 `supportView`, or `unknown` before the summary has been read and after one that failed. The
-business's Nayax **connection status** is deliberately not consulted:
-`GET /api/settings/nayax-connection/status` needs `Integration.Manage`, which an Operator or a
-Manager reading this page does not have, and a second probe would be a second answer that could
-disagree with the cards beside it. The application-wide availability signal every other screen will
-share is issue #728; this page's own is deliberately local until then.
+business's Nayax **connection status** is deliberately not consulted: a second probe would be a
+second answer that could disagree with the cards beside it, and the summary is what those cards are
+actually built from. Issue #728 added the application-wide signal every **other** screen shares
+([Shared provider availability and error-versus-empty
+states](#shared-provider-availability-and-error-versus-empty-states-issue-728)); this page and Needs
+Ordering keep their own for that reason, and did not change.
 
 **Only `notConnected` hides anything**, and what it hides is everything on the page whose every
 figure is about machines: the "Sales this week" and "Needs refill" cards and the Sites and Machines
