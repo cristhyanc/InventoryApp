@@ -106,35 +106,27 @@ public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImpor
         // The local id is still the remote one here, which is what makes the link derivable without
         // matching anything. #735 (A4) is where a new row stops being keyed that way, and this is
         // the write that has to be in place before it can be.
-        var newCategoryLinks = new List<CategoryExternalId>();
-        foreach (var category in import.Categories)
-        {
-            var externalId = NayaxExternalId.From(category.Id);
-            if (linkedCategories.Add(externalId))
+        var newCategoryLinks = import.Categories
+            .Select(category => (category.Id, ExternalId: NayaxExternalId.From(category.Id)))
+            .Where(candidate => linkedCategories.Add(candidate.ExternalId))
+            .Select(candidate => new CategoryExternalId
             {
-                newCategoryLinks.Add(new CategoryExternalId
-                {
-                    Provider = ExternalProvider.Nayax,
-                    ExternalId = externalId,
-                    CategoryId = category.Id,
-                });
-            }
-        }
+                Provider = ExternalProvider.Nayax,
+                ExternalId = candidate.ExternalId,
+                CategoryId = candidate.Id,
+            })
+            .ToList();
 
-        var newProductLinks = new List<ProductExternalId>();
-        foreach (var entry in import.Products)
-        {
-            var externalId = NayaxExternalId.From(entry.Id);
-            if (linkedProducts.Add(externalId))
+        var newProductLinks = import.Products
+            .Select(entry => (entry.Id, ExternalId: NayaxExternalId.From(entry.Id)))
+            .Where(candidate => linkedProducts.Add(candidate.ExternalId))
+            .Select(candidate => new ProductExternalId
             {
-                newProductLinks.Add(new ProductExternalId
-                {
-                    Provider = ExternalProvider.Nayax,
-                    ExternalId = externalId,
-                    ProductId = entry.Id,
-                });
-            }
-        }
+                Provider = ExternalProvider.Nayax,
+                ExternalId = candidate.ExternalId,
+                ProductId = candidate.Id,
+            })
+            .ToList();
 
         if (newCategories.Count > 0) _db.Categories.AddRange(newCategories);
         if (newProducts.Count > 0) _db.Products.AddRange(newProducts);
