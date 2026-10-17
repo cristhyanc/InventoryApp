@@ -1,3 +1,5 @@
+using Inventory.Application.Reporting.Shared;
+
 namespace Inventory.Application.Reporting.ProductProfitability;
 
 /// <summary>
@@ -8,7 +10,16 @@ namespace Inventory.Application.Reporting.ProductProfitability;
 /// </summary>
 public sealed record ProductProfitabilityReportFacts(
     IReadOnlyList<ProductProfitabilitySaleGroupFacts> SaleGroups,
-    IReadOnlyList<ProductProfitabilityCatalogueEntry> Catalogue);
+    IReadOnlyList<ProductProfitabilityCatalogueEntry> Catalogue)
+{
+    /// <summary>
+    /// How well recorded provider coverage accounts for this period's stored sales (issue #731,
+    /// extending issue #730's model to this report). Only the sales family is relevant: every figure
+    /// in this report - sales, quantity, cost of goods, gross profit and the margin - is derived
+    /// from stored provider sales, and no settlement import feeds any of them.
+    /// </summary>
+    public ReportCoverageFacts Coverage { get; init; } = new();
+}
 
 /// <summary>
 /// One raw Nayax product identifier/name group's already-aggregated sales facts, before matching

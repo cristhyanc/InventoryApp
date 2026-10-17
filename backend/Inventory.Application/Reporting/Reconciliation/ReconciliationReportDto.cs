@@ -52,4 +52,16 @@ public record ReconciliationReportDto(
     public int MissingStatusTransactionCount { get; init; }
     public IReadOnlyList<ReconciliationPeriodDto> PeriodRows { get; init; } = Array.Empty<ReconciliationPeriodDto>();
     public ReconciliationTotalsDto? Totals { get; init; }
+
+    /// <summary>
+    /// How well recorded provider coverage accounts for this period's provider-sourced figures
+    /// (issue #731, under issue #730's model). <c>Sales</c> governs the recorded vending, card and
+    /// cash sales and their transaction counts; <c>Fees</c> governs the Nayax-reported gross card
+    /// sales and count, the processing fees and their GST, the other fees and the actual net
+    /// reimbursement; <c>Combined</c> governs the differences, the expected net reimbursement and
+    /// the reconciliation statuses, which compare the two sides. Only <c>Complete</c> permits a zero
+    /// in the figures it governs to be presented as a real zero - and a difference of <c>0.00</c>
+    /// between two sides that were never both measured is the most misleading zero in this report.
+    /// </summary>
+    public ReportProviderAvailabilityDto ProviderAvailability { get; init; } = ReportProviderAvailabilityDto.Undecided;
 }

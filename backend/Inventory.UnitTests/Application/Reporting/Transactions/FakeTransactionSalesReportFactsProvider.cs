@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
+using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting.Transactions;
+using InventoryApi.Tests.Application.Reporting.Shared;
 using EffectiveFeeRate = Inventory.Domain.FinancialConfiguration.EffectiveNayaxFeeRate;
 
 namespace InventoryApi.Tests.Application.Reporting.Transactions;
@@ -30,8 +32,14 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         IReadOnlyList<TransactionSalesCatalogueEntry>? productCatalogue = null,
         IReadOnlyList<EffectiveFeeRate>? feeRates = null,
         IReadOnlyList<EffectiveCommissionAgreement>? commissionAgreements = null,
-        bool siteMappingUnavailable = false) => new(
-        Stream(rows), productCatalogue ?? [], feeRates ?? [], commissionAgreements ?? [], siteMappingUnavailable);
+        bool siteMappingUnavailable = false,
+        ReportCoverageFacts? coverage = null) => new(
+        Stream(rows), productCatalogue ?? [], feeRates ?? [], commissionAgreements ?? [], siteMappingUnavailable)
+        {
+            // Fully accounted for unless a test replaces it, so a test about something else is
+            // never incidentally about provider coverage (issue #731).
+            Coverage = coverage ?? TestReportCoverage.Complete()
+        };
 
     public static async IAsyncEnumerable<TransactionSalesReportFactsRow> Stream(
         IEnumerable<TransactionSalesReportFactsRow> rows, [EnumeratorCancellation] CancellationToken cancellationToken = default)

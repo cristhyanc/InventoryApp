@@ -77,6 +77,7 @@
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\ProductProfitability\FakeProductProfitabilityReportFactsProvider.cs" Link="Application\Reporting\ProductProfitability\FakeProductProfitabilityReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\ProductProfitability\FakeProductPurchaseCostFactsProvider.cs" Link="Application\Reporting\ProductProfitability\FakeProductPurchaseCostFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Reconciliation\FakeReconciliationReportFactsProvider.cs" Link="Application\Reporting\Reconciliation\FakeReconciliationReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\Shared\TestReportCoverage.cs" Link="Application\Reporting\Shared\TestReportCoverage.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Transactions\FakeTransactionSalesReportFactsProvider.cs" Link="Application\Reporting\Transactions\FakeTransactionSalesReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Stock\FakeStockAdjustmentStore.cs" Link="Application\Stock\FakeStockAdjustmentStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Suppliers\FakeSupplierStore.cs" Link="Application\Suppliers\FakeSupplierStore.cs" />

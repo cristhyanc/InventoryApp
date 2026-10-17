@@ -8872,10 +8872,102 @@ classification; the fee availability state is what reports that the fee figures 
 
 The table starts empty and is deliberately not backfilled: a coverage row is evidence that one run
 retrieved one range, and no such evidence exists for anything that happened before the table did.
-Periods before this ships therefore report `Unverified` — which is exactly what they are. Reports
-other than these two — daily, reconciliation, transactions, machine/product profitability, the
-dashboard — and their exports keep their current behaviour until #731 (F2); the report provider
+Periods before this ships therefore report `Unverified` — which is exactly what they are. Issue #731
+(F2, below) extends the same model to every other sales-based report and export; the report provider
 filter arrives with the second provider (parent #329, P5).
+
+### Report availability across the remaining sales reports (issue #731)
+
+Issue #731 (F2 of parent #329, decision P9) applies the model above to the reports #730 deliberately
+left alone: daily, transactions, reconciliation, product profitability, machine profitability and
+`/api/reports/dashboard`, their CSV/XLSX exports, and Site Commissions. **No financial formula
+changes and no figure moves**; what changes is that an unaccounted-for period is no longer presented
+as a measured zero, and that an unusable provider no longer fails the whole report.
+
+**One shared facts carrier and one shared query.** The six reports do not each carry four loose
+coverage fields. `Inventory.Application.Reporting.Shared.ReportCoverageFacts` holds the coverage the
+period rests on — the two source families' ranges, whether the period holds sales rows and whether
+it holds settlement rows — **and the period instants themselves**, because the adapter that queried
+the rows is the only thing that knows which window it filtered them by, and a coverage range may
+only be compared with the window the figures were measured over. The daily report selects sales
+between business-day midnights; the others between plain calendar-date bounds. Its `Availability()`
+and `SalesAvailability()` call the Domain policy and nothing else, and a record carrying no period
+reports `ReportProviderAvailabilityDto.Undecided` — deliberately `Unverified`, never `Complete`.
+`EfReportingSharedQueries.CoverageFactsAsync` is the one coverage query every reporting adapter
+calls, including the bookkeeping one #730 introduced, so the reports cannot read coverage
+differently. It takes no machine predicate (coverage is about whether provider data was retrieved
+for the business at all) and no provider predicate (P5).
+
+**Two families or one, decided by what each report actually shows.** A figure is never labelled by
+evidence that does not feed it, so the contract differs by report on purpose:
+
+| Report | Reports | Which state governs what |
+| --- | --- | --- |
+| Daily | `ProviderAvailability` | sales: gross sales, card/cash, counts, COGS, gross profit, margin · fees: the imported and net reimbursement · combined: the reconciliation status |
+| Reconciliation | `ProviderAvailability` | sales: recorded vending/card/cash sales and counts · fees: Nayax-reported gross and count, the processing and other fees, the actual net reimbursement · combined: every difference, the expected net and the statuses |
+| Machine profitability | `ProviderAvailability` | sales: each machine's sales, quantity, COGS, gross profit, margin, commission, and the machine list itself · fees: the actual Nayax fees · combined: direct profit and its margin |
+| Dashboard | `ProviderAvailability` | the bookkeeping report's own three states, republished — see below |
+| Product profitability | `SalesAvailability` | one state: every figure, and the product list itself. Nothing here comes from a settlement import, and the Last/Lowest purchase costs are the business's own records |
+| Transaction sales | `SalesAvailability` | one state: every total. The per-transaction fee is an effective-dated estimate over stored card transactions, not an imported settlement amount |
+
+The dashboard **republishes** `bookkeeping.ProviderAvailability` rather than deciding its own: it
+already composes that report for every provider figure it shows, so a second decision could only
+disagree with the first. Its machine, product and unmapped-product counts are distinct counts over
+the same completed sales — not a catalogue size — so they carry the sales state too.
+
+**One wording, in one place.** `Inventory.Application.Reporting.Shared.ReportAvailabilityNotes`
+holds the sentence for each non-complete state, and every report (bookkeeping included, which is
+where the wording came from) adds its notes through it, naming only the two things that genuinely
+differ: which of its figures the state governs, and what "nothing at all" means for that family. A
+complete period adds nothing, exactly as issue #476 established. A list which is empty because the
+period has no rows is named in those notes on purpose — an absent machine, an absent product and an
+empty transaction list are the figures a reader is most likely to misread as "nothing happened".
+
+**An empty list is not a measured zero either.** Machine profitability, product profitability and
+transaction sales produce a row only where sales exist, so these pages say why the table is empty
+rather than leaving an empty table to speak for itself.
+
+**The exports carry the same flags as their source report.** Every one of the six goes through
+`AvailabilityExportCells` — only `Complete` coverage prints a zero as a zero, a real non-zero amount
+stays exact beside the state columns, and a figure the business records itself never passes through
+it. The state columns are repeated on every row, header excepted, because a downloaded row is read
+on its own: `SalesDataAvailability`/`SalesDataAsOfUtc` on all six, plus
+`FeeDataAvailability`/`FeeDataAsOfUtc`/`CombinedDataAvailability` on daily, machine profitability and
+the dashboard, and `SettlementDataAvailability`/`SettlementDataAsOfUtc`/`CombinedDataAvailability` on
+reconciliation. The transactions export is the one that substitutes no amount: each row there is one
+stored transaction, so the row's existence is the measurement; what the file could not otherwise say
+is whether those rows are all of the period's, which is what its two state columns report.
+
+**Site Commissions answers "unavailable" instead of erroring.** A site is known only from the live
+Nayax fleet read's `CustomerID`, so `GetSiteCommissionReport` previously threw whenever the provider
+was unusable — and because `EfReportingSharedQueries.GetMachineCommissionsAsync` composes it, that
+exception took the bookkeeping, GST, dashboard and machine profitability reports down with it. It now
+catches exactly the two per-feature availability answers issue #726 established for reorder —
+`NayaxNotConnectedException` (no credentials an ordinary operation may use) and
+`NayaxPermissionNotGrantedException` (usable credentials, and Nayax refused this read) — and returns
+`SiteCommissionReport.Unavailable(from, to, reason)`: no rows, and the reason. Everything else still
+propagates: a transport failure, a cancellation, a `401` and the support-session refusal
+(`SupportSessionNayaxUnavailableException`, issue #551) are outages, not businesses without sites,
+and nothing here writes a connection status. A fleet read that succeeds and finds no site-mapped
+machine stays an **available** report with no rows — a different answer, and the two must not
+collapse into each other.
+
+`SiteCommissionUnavailableReason`/`SiteCommissionUnavailableReasons` publish the two codes
+(`NayaxNotConnected`, `PermissionNotGranted`), written out rather than taken from the enum member and
+spelled exactly as `MachineNeedUnavailableReasons` spells the same two answers, so a client meets one
+vocabulary. `GET /api/site-commissions` answers `200` with `isAvailable: false`, the code and one
+explanatory sentence; the Angular page shows that sentence instead of a table, because an empty table
+there reads as "no site is owed anything". Inside the reporting adapter, an unavailable commission
+report makes commission **incomplete** rather than zero, so the direct and net profit figures it
+gates come out unavailable — the established rule, not a new one (`AGENTS.md` § Site commissions: no
+agreement is a valid zero-commission case).
+
+**The frontend helpers are shared too.** `ReportPageBase.salesState()`/`feeState()`/`combinedState()`
+read either contract shape, `providerIncomplete()` decides whether a page shows its banner, and
+`countOrState` joins `moneyOrState`/`percentOrState` for a transaction count, a quantity or a machine
+count — a count of `0` with no coverage behind it reads as "nothing happened here" just as `$0.00`
+does, and must not be formatted as currency. Every page keeps one banner saying the provider side is
+incomplete and the business's own records are not.
 
 ### Provider identity link tables (issue #732)
 

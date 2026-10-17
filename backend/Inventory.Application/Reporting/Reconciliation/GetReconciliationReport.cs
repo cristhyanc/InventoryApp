@@ -70,6 +70,11 @@ public sealed class GetReconciliationReport
         if (unstatedFeeGstPeriods.Count > 0)
             qualityNotes.Add($"Imported fee rows for {PeriodScope(unstatedFeeGstPeriods)} do not state a GST percentage; " +
                 "fee GST is taken from the imported GST-inclusive and GST-exclusive fee amounts, and is $0.00 where only one of them was imported.");
+        // How well recorded provider coverage accounts for this period (issue #731, under issue
+        // #730's model), decided by the one Domain policy from the sources that feed each side of
+        // the reconciliation.
+        var availability = facts.Coverage.Availability();
+        ReportAvailabilityNotes.AddBoth(qualityNotes, availability, SalesFigures, SettlementFigures);
         var quality = ReportingQuality.Conditional(
             missingStatus: facts.NullStatusTransactionCount > 0 || facts.UnknownStatusTransactionCount > 0,
             historicalCostUnavailable: false,
@@ -110,9 +115,17 @@ public sealed class GetReconciliationReport
             SettlementStatus = totals.SettlementStatus,
             Status = totals.Status,
             PeriodRows = periodRows,
-            Totals = totals
+            Totals = totals,
+            ProviderAvailability = availability
         };
     }
+
+    /// <summary>The recorded side of the reconciliation, named for this report's own columns.</summary>
+    public const string SalesFigures = "Recorded vending, card and cash sales and their transaction counts";
+
+    /// <summary>The imported side, and the comparisons that rest on it.</summary>
+    public const string SettlementFigures =
+        "The Nayax-reported gross card sales, the processing fees, the net reimbursement and every difference against them";
 
     private static ReconciliationPeriodDto BuildPeriodRow(ReconciliationPeriodFacts period, bool isMachineFiltered, decimal tolerance)
     {

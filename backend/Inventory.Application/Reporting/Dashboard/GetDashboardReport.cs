@@ -57,6 +57,13 @@ public sealed class GetDashboardReport
             qualityNotes.Add($"Commission configuration is incomplete; {(isMachineFiltered ? "direct profit" : "net profit")} is unavailable.");
         qualityNotes.AddRange(facts.CommissionWarnings);
 
+        // The bookkeeping report already decided how well recorded provider coverage accounts for
+        // this period (issue #730); this report composes that one for every provider figure it
+        // shows, so it republishes those states rather than deciding them a second time (issue
+        // #731). The notes are named for this report's own cards.
+        var availability = bookkeeping.ProviderAvailability;
+        ReportAvailabilityNotes.AddBoth(qualityNotes, availability, SalesFigures, FeeFigures);
+
         var quality = ReportingQuality.Quality(
             missingStatus: true,
             historicalCostUnavailable: !bookkeeping.IsCogsComplete,
@@ -97,7 +104,16 @@ public sealed class GetDashboardReport
             DirectMarginPercent = bookkeeping.DirectMarginPercent,
             StructuredOperatingExpenses = bookkeeping.StructuredOperatingExpenses,
             OperatingExpenseGst = bookkeeping.OperatingExpenseGst,
-            NayaxProcessingFees = bookkeeping.NayaxProcessingFees
+            NayaxProcessingFees = bookkeeping.NayaxProcessingFees,
+            ProviderAvailability = availability
         };
     }
+
+    /// <summary>The sales-sourced figures this summary shows, named for its own cards.</summary>
+    public const string SalesFigures =
+        "Sales, the card/cash split, quantity, cost of goods, gross profit and site commission";
+
+    /// <summary>The settlement-sourced figures it shows.</summary>
+    public const string FeeFigures =
+        "Nayax fees, the actual reimbursement and the reimbursement reconciliation";
 }

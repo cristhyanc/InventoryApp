@@ -61,6 +61,12 @@ public sealed class GetDailyReport
             qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
         AddStatusQualityNotes(qualityNotes, totalsFacts);
 
+        // How well recorded provider coverage accounts for this period (issue #731, under issue
+        // #730's model). The two families are decided separately from the sources that feed them,
+        // by the one Domain policy; this report never applies a second "looks empty" rule.
+        var availability = facts.Coverage.Availability();
+        ReportAvailabilityNotes.AddBoth(qualityNotes, availability, SalesFigures, ReimbursementFigures);
+
         var quality = ReportingQuality.Quality(
             missingStatus: totalsFacts.NullStatusTransactionCount > 0 || totalsFacts.UnknownStatusTransactionCount > 0,
             historicalCostUnavailable: !totalsFacts.IsCogsComplete,
@@ -69,8 +75,19 @@ public sealed class GetDailyReport
             containsUnmappedProducts: false,
             notes: qualityNotes);
 
-        return new DailyReportDto(range.From, range.ToDate, rows, quality, totals);
+        return new DailyReportDto(range.From, range.ToDate, rows, quality, totals)
+        {
+            ProviderAvailability = availability
+        };
     }
+
+    /// <summary>The sales-sourced figures this report shows, named for its own columns.</summary>
+    public const string SalesFigures =
+        "Gross sales, the card/cash split, cost of goods and gross profit";
+
+    /// <summary>The settlement-sourced figures it shows.</summary>
+    public const string ReimbursementFigures =
+        "The imported reimbursement, the net reimbursement and the reconciliation status";
 
     private static DailyReportRowDto BuildRow(DailyReportDayFacts day)
     {

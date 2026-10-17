@@ -34,7 +34,21 @@ export interface SiteCommissionMachine { machineId: number; machineName: string;
 export interface SiteCommissionProduct { productName: string; totalVends: number; totalSales: number; }
 export interface CommissionPayment { id: number; siteId: number; periodStart: string; periodEnd: string; paymentDate: string; amount: number; notes?: string; }
 export interface SiteCommissionRow { siteId: number; siteName: string; periodStart: string; periodEnd: string; frequency: string; basis: string; grossSales: number; cardSales: number; cashSales: number; eligibleSales: number; commissionRate: number; commissionDue: number; paid: number; outstanding: number; dueDate?: string; status: string; machines: SiteCommissionMachine[]; products: SiteCommissionProduct[]; payments: CommissionPayment[]; dataQuality?: string; }
-export interface SiteCommissionReport { from: string; to: string; rows: SiteCommissionRow[]; }
+/**
+ * The site commission report, which carries its own availability answer rather than a coverage
+ * state (issue #731). A site is known only from the live Nayax machine fleet, so when the provider
+ * is not usable there is nothing to calculate: the API answers `200` with `isAvailable: false` and
+ * an empty row list that must never be read as "no site is owed anything".
+ */
+export interface SiteCommissionReport {
+  from: string; to: string; rows: SiteCommissionRow[];
+  /** Absent on an older response, which only ever returned an available report. */
+  isAvailable?: boolean;
+  /** `NayaxNotConnected` or `PermissionNotGranted`; a code to branch on, never a sentence to show. */
+  unavailableReason?: string | null;
+  /** The one sentence that explains an unavailable report. */
+  unavailableDetail?: string | null;
+}
 export interface SiteCommissionAgreement { id?: number; siteId: number; effectiveFrom: string; effectiveTo?: string | null; commissionRate: number; frequency: number; basis: number; paymentDueDaysAfterPeriodEnd?: number | null; }
 export interface SaleCostingBackfillResult {
   costedCount: number;
