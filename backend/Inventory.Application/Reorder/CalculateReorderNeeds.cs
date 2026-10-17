@@ -28,6 +28,32 @@ namespace Inventory.Application.Reorder;
 /// <c>Inventory.Infrastructure.Nayax.NayaxUpstreamException</c> at the HTTP adapter) or caller
 /// cancellation propagates out of <see cref="Handle"/> unchanged rather than being absorbed into a
 /// partial result, so a partial aggregate is never presented as a complete one.
+///
+/// <para><b>Two explicit modes, because a sales provider is optional</b> (issue #726, under #329).
+/// Stock-storage management is this application's own purpose: reorder alerts are about storage
+/// stock, thresholds, restock targets and outstanding supplier orders, and only the machines'
+/// current replenishment need comes from Nayax. So this use case answers in
+/// <see cref="ReorderMode.MachineAware"/> when it accounted for the whole fleet, and in
+/// <see cref="ReorderMode.StorageOnly"/> - with the reason - when the fleet is unavailable to this
+/// business, instead of failing the request and taking the local sections of the Dashboard, the
+/// reorder-alert list and Needs Ordering down with it.</para>
+///
+/// <para><b>Exactly two answers degrade, and both are availability answers about a feature</b>
+/// (issue #329, decision P9), which is the same line <c>GetMachineStockReconciliation</c> already
+/// draws: <see cref="NayaxNotConnectedException"/> (the business has no credentials an ordinary
+/// operation may use - nothing stored, <c>NotConfigured</c>, or the <c>NeedsAttention</c> the status
+/// gate refuses) and <see cref="NayaxPermissionNotGrantedException"/> (the credentials are usable and
+/// Nayax refused this read for lack of permission). Availability is per feature, so a 403 on either
+/// fleet read makes <em>reorder</em> storage-only and says so, and still writes no connection
+/// status.</para>
+///
+/// <para><b>Everything else is still an error, including mid-fleet</b> (issue #726). A transport
+/// failure, a cancellation, a <c>401</c> that closes the gate part-way through the fan-out and the
+/// support-session refusal (<c>SupportSessionNayaxUnavailableException</c>, issue #551) all
+/// propagate: a fleet that was half read is an outage, not a smaller fleet, and must never be
+/// published as a complete machine-aware result or quietly relabelled storage-only. The mode is
+/// decided before the fan-out, from the fleet read, and only a permission refusal can change it
+/// afterwards.</para>
 /// </summary>
 public sealed class CalculateReorderNeeds
 {
@@ -65,7 +91,21 @@ public sealed class CalculateReorderNeeds
 
     public async Task<ReorderNeedsResult> Handle(CancellationToken cancellationToken)
     {
-        var machines = await _nayax.GetMachinesAsync(cancellationToken);
+        List<NayaxMachine> machines;
+        try
+        {
+            machines = await _nayax.GetMachinesAsync(cancellationToken);
+        }
+        catch (NayaxNotConnectedException)
+        {
+            // No usable connection for this business, and no request reached Nayax: the credential
+            // provider refuses before the stored connection is read.
+            return await StorageOnlyAsync(MachineNeedUnavailableReason.NayaxNotConnected, cancellationToken);
+        }
+        catch (NayaxPermissionNotGrantedException)
+        {
+            return await StorageOnlyAsync(MachineNeedUnavailableReason.PermissionNotGranted, cancellationToken);
+        }
 
         var machineReplenishmentNeedByProductId = new ConcurrentDictionary<long, int>();
 
@@ -74,6 +114,15 @@ public sealed class CalculateReorderNeeds
         // (issue #459) - does not fan out across the fleet a second time. A concurrent collection,
         // because the fan-out below writes to it from several machine requests at once.
         var selections = new ConcurrentBag<MachineSelectionStock>();
+
+        // Set by whichever machine request Nayax refuses for lack of permission, and read after the
+        // fan-out has completed. A refusal is not thrown out of the loop body, deliberately: a
+        // permission answer is not a failure, and letting it fault the parallel loop would wrap it
+        // beside the sibling cancellations the loop then raises, leaving the caller to pick the
+        // availability answer out of an aggregate. It is read at the top of the body too, so the
+        // remaining machines are skipped rather than refused one by one - a 403 is the token's
+        // scopes, so every one of them would be refused the same way.
+        var permissionRefused = false;
 
         await Parallel.ForEachAsync(
             machines,
@@ -84,7 +133,20 @@ public sealed class CalculateReorderNeeds
             },
             async (machine, machineCancellationToken) =>
             {
-                var machineProducts = await _nayax.GetMachineProductsAsync(machine.MachineID, machineCancellationToken);
+                if (Volatile.Read(ref permissionRefused))
+                    return;
+
+                List<NayaxMachineProduct> machineProducts;
+                try
+                {
+                    machineProducts = await _nayax.GetMachineProductsAsync(machine.MachineID, machineCancellationToken);
+                }
+                catch (NayaxPermissionNotGrantedException)
+                {
+                    Volatile.Write(ref permissionRefused, true);
+                    return;
+                }
+
                 foreach (var machineProduct in machineProducts)
                 {
                     // The machine the request was made for, not the payload's own nullable MachineID
@@ -105,10 +167,18 @@ public sealed class CalculateReorderNeeds
                 }
             });
 
+        if (permissionRefused)
+        {
+            // Everything read before the refusal is discarded rather than reported: a fleet this
+            // business is not allowed to read is a storage-only answer, never a partial one.
+            return await StorageOnlyAsync(MachineNeedUnavailableReason.PermissionNotGranted, cancellationToken);
+        }
+
         var onOrderQuantityByProductId = await _outstandingOrders.GetOutstandingQuantitiesByProductAsync(cancellationToken);
 
         return new ReorderNeedsResult(machineReplenishmentNeedByProductId, onOrderQuantityByProductId)
         {
+            Mode = ReorderMode.MachineAware,
             MachineIds = machines.Select(machine => machine.MachineID).Distinct().Order().ToList(),
             // Ordered, so the same fleet always produces the same result whatever order the
             // concurrent requests happened to complete in.
@@ -118,4 +188,13 @@ public sealed class CalculateReorderNeeds
                 .ToList(),
         };
     }
+
+    /// <summary>
+    /// The storage-only answer: the outstanding supplier-order quantities, which are a local fact and
+    /// are read exactly as they are in machine-aware mode, and no machine need at all.
+    /// </summary>
+    private async Task<ReorderNeedsResult> StorageOnlyAsync(
+        MachineNeedUnavailableReason reason, CancellationToken cancellationToken) =>
+        ReorderNeedsResult.StorageOnly(
+            await _outstandingOrders.GetOutstandingQuantitiesByProductAsync(cancellationToken), reason);
 }

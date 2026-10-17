@@ -12,6 +12,7 @@ using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Application.Businesses;
 using InventoryApi.Adapters.Businesses;
+using InventoryApi.Adapters.Mapping;
 using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
 using InventoryApi.Adapters.Onboarding;
@@ -279,7 +280,12 @@ builder.Services.AddCors(options =>
     {
         policy.WithOrigins("http://localhost:4200", "https://red-island-0c128c000.7.azurestaticapps.net")
               .AllowAnyHeader()
-              .AllowAnyMethod();
+              .AllowAnyMethod()
+              // A browser client can read only the response headers a CORS policy exposes, so the
+              // reorder-alert listing's additive metadata (issue #726) is listed here. These are the
+              // same already-allowed origins and the same already-allowed methods: nothing new may
+              // call the API, and the only thing exposed is the mode a response was produced in.
+              .WithExposedHeaders(ReorderListingMetadataHeaders.All);
     });
 });
 
