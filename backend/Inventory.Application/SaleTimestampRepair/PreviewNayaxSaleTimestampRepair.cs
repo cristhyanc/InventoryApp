@@ -31,11 +31,12 @@ public sealed class PreviewNayaxSaleTimestampRepair
         INayaxSaleTimestampRepairStore store,
         INayaxLynxClient nayax,
         INayaxSalesWorkbookReader workbook,
+        INayaxProductLinkStore productLinks,
         IBusinessCalendar calendar,
         IClock clock)
     {
         _store = store;
-        _projection = new NayaxSaleTimestampRepairProjection(store, nayax, workbook, calendar, clock);
+        _projection = new NayaxSaleTimestampRepairProjection(store, nayax, workbook, productLinks, calendar, clock);
     }
 
     /// <summary>

@@ -10,6 +10,7 @@ using Moq;
 using Xunit;
 
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
 
 namespace InventoryApi.Tests.Services;
 
@@ -62,6 +63,7 @@ public class NayaxTransactionStatusTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         using var db = TestAppDbContext.Unrestricted(options);
         db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 10, CostingQuantity = 10, InventoryValue = 21m, AverageUnitCost = 2.10m });
+        db.ProductExternalIds.Add(NayaxLink(10));
         db.StockAdjustments.Add(new StockAdjustment
         {
             ProductId = 10,
@@ -122,6 +124,7 @@ public class NayaxTransactionStatusTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         using var db = TestAppDbContext.Unrestricted(options);
         db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 10, CostingQuantity = 10, InventoryValue = 21m, AverageUnitCost = 2.10m });
+        db.ProductExternalIds.Add(NayaxLink(10));
         db.StockAdjustments.Add(new StockAdjustment
         {
             ProductId = 10,
@@ -162,4 +165,18 @@ public class NayaxTransactionStatusTests
 
     private static NayaxSalesFileInput File(string csv) =>
         new("sales.csv", () => new MemoryStream(Encoding.UTF8.GetBytes(csv)));
+
+    /// <summary>
+    /// A product's Nayax link in the shape issue #732's backfill recorded for existing data - the
+    /// Nayax id mapped to the local row with the same id. Since issue #747 the costing path resolves
+    /// a stored sale's <c>NayaxProductId</c> through it instead of comparing it with
+    /// <c>Product.Id</c>.
+    /// </summary>
+    private static ProductExternalId NayaxLink(long productId) =>
+        new()
+        {
+            Provider = ExternalProvider.Nayax,
+            ExternalId = NayaxExternalId.From(productId),
+            ProductId = productId,
+        };
 }

@@ -3,6 +3,7 @@ using Inventory.Application.Tenancy;
 using Inventory.Domain.Costing;
 using Inventory.Domain.Exceptions;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -322,6 +323,15 @@ public class InventoryCostRepairUseCaseTests
         var db = TestAppDbContext.Unrestricted(
             new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
         db.Products.Add(new Product { Id = ProductId, Name = "Coke Zero", QuantityInStock = 10 });
+        // The product's Nayax link, in the shape issue #732's backfill recorded for existing data:
+        // since issue #747 the cost replay reads it to decide which stored sales belong to the
+        // product, instead of comparing their NayaxProductId with Product.Id.
+        db.ProductExternalIds.Add(new ProductExternalId
+        {
+            Provider = ExternalProvider.Nayax,
+            ExternalId = NayaxExternalId.From(ProductId),
+            ProductId = ProductId,
+        });
         db.InventoryCostTransitionBaselines.Add(new InventoryCostTransitionBaseline
         {
             ProductId = ProductId,

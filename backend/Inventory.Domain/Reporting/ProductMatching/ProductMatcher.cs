@@ -21,11 +21,12 @@ public static class ProductMatcher
     ///
     /// <para>A caller that holds a Nayax id coming from Nayax data resolves it through the
     /// <c>ProductExternalIds</c> link table first and uses <see cref="MatchLinked"/> instead (issues
-    /// #733 and #745). What is still matched here is a <em>stored</em> <c>NayaxSales.NayaxProductId</c>
-    /// value, which the latest-sales synchronization writes as the local product id it matched, so
-    /// re-resolving it as a Nayax id would turn a known local product into an unknown one: the
-    /// costing, timestamp-repair and reporting paths that read that column are #747 (A2c) and #734
-    /// (A3).</para>
+    /// #733, #745 and #747). What is still matched here is a <em>stored</em>
+    /// <c>NayaxSales.NayaxProductId</c> value read by a path that has not been converted yet: the
+    /// latest-sales synchronization's enrichment of an already stored sale and the uploaded import's
+    /// tracking of the product a stored sale is moving off, both of which write that column as a local
+    /// product id (#745), the machine-stock ledger, and the reporting queries of #734 (A3). Since
+    /// #747 the costing and timestamp-repair paths read it through the link instead.</para>
     /// </summary>
     public static long? Match(IEnumerable<ProductMatchCandidate> candidates, long? nayaxProductId, string? nayaxProductName)
     {
@@ -35,7 +36,7 @@ public static class ProductMatcher
 
     /// <summary>
     /// The same matching rule for a Nayax product id that has already been resolved through the
-    /// provider identity link table (issue #745, parent #329 decision A2b):
+    /// provider identity link table (issues #745 and #747, parent #329 decisions A2b and A2c):
     /// <paramref name="linkedProductId"/> is the <em>local</em> product id a
     /// <c>ProductExternalIds</c> link named, or <see langword="null"/> when the business holds no
     /// Nayax link for that id.

@@ -34,6 +34,7 @@ internal sealed class NayaxSaleTimestampRepairProjection
     private readonly INayaxSaleTimestampRepairStore _store;
     private readonly INayaxLynxClient _nayax;
     private readonly INayaxSalesWorkbookReader _workbook;
+    private readonly INayaxProductLinkStore _productLinks;
     private readonly IBusinessCalendar _calendar;
     private readonly IClock _clock;
 
@@ -41,12 +42,14 @@ internal sealed class NayaxSaleTimestampRepairProjection
         INayaxSaleTimestampRepairStore store,
         INayaxLynxClient nayax,
         INayaxSalesWorkbookReader workbook,
+        INayaxProductLinkStore productLinks,
         IBusinessCalendar calendar,
         IClock clock)
     {
         _store = store;
         _nayax = nayax;
         _workbook = workbook;
+        _productLinks = productLinks;
         _calendar = calendar;
         _clock = clock;
     }
@@ -263,12 +266,30 @@ internal sealed class NayaxSaleTimestampRepairProjection
     /// sales' old and new instants. Only a completed sale consumes costed inventory, and only a sale
     /// matched to a local product has inventory to replay; an unmatched one stays visible through its
     /// own row and its costing provenance instead.
+    ///
+    /// <para>Each sale's stored Nayax product id is resolved through this business's
+    /// <c>ProductExternalIds</c> link (issue #747, parent #329 decision A2c) rather than compared with
+    /// <c>Product.Id</c> - which only ever worked because the local key *is* the Nayax id. A Nayax id
+    /// with no link is an unknown product, handled exactly as an unmatched id already was: the name
+    /// fallback still runs, the sale is still examined, reported and repaired, and no product's
+    /// costing is replayed for it - never the product whose local id happens to equal the remote one.
+    /// The links are read once for the whole plan, after the catalogue read and in sequence with it,
+    /// because both land on the request's own scoped persistence context
+    /// (docs/architecture.md § Concurrency inside one request).</para>
     /// </summary>
     private async Task<IReadOnlyList<NayaxSaleTimestampRepairProduct>> BuildAffectedProductsAsync(
         IReadOnlyList<NayaxSaleTimestampDecision> decisions,
         IReadOnlyList<ProductMatchCandidate> candidates,
         CancellationToken cancellationToken)
     {
+        var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
+            decisions
+                .Where(decision => decision.Sale.NayaxProductId.HasValue)
+                .Select(decision => decision.Sale.NayaxProductId!.Value)
+                .Distinct()
+                .ToList(),
+            cancellationToken);
+
         var earliest = new Dictionary<long, DateTime>();
         foreach (var decision in decisions)
         {
@@ -276,7 +297,10 @@ internal sealed class NayaxSaleTimestampRepairProjection
                 || !NayaxTransactionStatusClassifier.IsCompletedSale(decision.Sale.TransactionStatusId))
                 continue;
 
-            var productId = ProductMatcher.Match(candidates, decision.Sale.NayaxProductId, decision.Sale.ProductName);
+            var productId = ProductMatcher.MatchLinked(
+                candidates,
+                LocalProductId(decision.Sale.NayaxProductId, localProductIdByNayaxId),
+                decision.Sale.ProductName);
             if (productId is null)
                 continue;
 
@@ -305,6 +329,16 @@ internal sealed class NayaxSaleTimestampRepairProjection
             })
             .ToList();
     }
+
+    /// <summary>
+    /// The local product a stored sale's Nayax product id names, or <see langword="null"/> when this
+    /// business holds no Nayax link for it (issue #747).
+    /// </summary>
+    private static long? LocalProductId(
+        long? nayaxProductId, IReadOnlyDictionary<long, long> localProductIdByNayaxId) =>
+        nayaxProductId is long id && localProductIdByNayaxId.TryGetValue(id, out var localProductId)
+            ? localProductId
+            : null;
 
     /// <summary>
     /// Transactions an export carries that this business holds no sale for. They are missing sales,

@@ -7,6 +7,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Time;
 using Inventory.Domain.Costing;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -578,6 +579,16 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
             db.Products.Add(product);
             await db.SaveChangesAsync();
 
+            // The product's Nayax link, in the shape issue #732's backfill recorded for existing
+            // data: since issue #747 the cost replay reads it to decide which stored sales belong to
+            // the product, instead of comparing their NayaxProductId with Product.Id.
+            db.ProductExternalIds.Add(new ProductExternalId
+            {
+                BusinessId = businessId,
+                Provider = ExternalProvider.Nayax,
+                ExternalId = NayaxExternalId.From(product.Id),
+                ProductId = product.Id,
+            });
             db.InventoryCostTransitionBaselines.Add(new InventoryCostTransitionBaseline
             {
                 BusinessId = businessId,

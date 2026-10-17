@@ -3,6 +3,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.ProductMatching;
+using InventoryApi.Tests.Application.Nayax;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Xunit;
@@ -26,7 +27,7 @@ public class SaleCostingUseCaseTests
         var rebuild = LedgerCost(10, 1.50m);
         var sale = Sale(1, productId: 10, nayaxCost: 1.20m, unitCost: 0.90m, status: SaleCostStatus.Costed);
 
-        var cost = await new CostSale(store, rebuild.Object).Handle(sale);
+        var cost = await CostSaleUseCase(store, rebuild.Object).Handle(sale);
 
         Assert.Null(cost);
         rebuild.Verify(x => x.GetAverageUnitCostAtAsync(
@@ -39,7 +40,7 @@ public class SaleCostingUseCaseTests
         var store = new FakeStore(Product(10, "Snack"));
         var sale = Sale(1, productId: 10, nayaxCost: 1.20m, unitCost: 0.90m, status: SaleCostStatus.Costed);
 
-        var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale, force: true);
+        var cost = await CostSaleUseCase(store, LedgerCost(10, 1.50m).Object).Handle(sale, force: true);
 
         Assert.Equal(new SaleCostAssignment(1.50m, SaleCostStatus.Costed, SaleCostOrigin.InventoryLedger), cost);
     }
@@ -50,7 +51,7 @@ public class SaleCostingUseCaseTests
         var store = new FakeStore(Product(10, "Snack"));
         var sale = Sale(1, productId: 10, nayaxCost: 1.20m, unitCost: null, status: SaleCostStatus.Costed);
 
-        var cost = await new CostSale(store, LedgerCost(10, null).Object).Handle(sale);
+        var cost = await CostSaleUseCase(store, LedgerCost(10, null).Object).Handle(sale);
 
         Assert.Equal(new SaleCostAssignment(1.20m, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport), cost);
     }
@@ -62,7 +63,7 @@ public class SaleCostingUseCaseTests
         var rebuild = LedgerCost(10, 1.50m);
         var sale = Sale(1, productId: 99, nayaxCost: null, productName: "Unknown drink");
 
-        var cost = await new CostSale(store, rebuild.Object).Handle(sale);
+        var cost = await CostSaleUseCase(store, rebuild.Object).Handle(sale);
 
         Assert.Equal(new SaleCostAssignment(null, SaleCostStatus.Error, SaleCostOrigin.Unknown), cost);
         rebuild.Verify(x => x.GetAverageUnitCostAtAsync(
@@ -75,7 +76,7 @@ public class SaleCostingUseCaseTests
         var store = new FakeStore(Product(10, "Snack"));
         var sale = Sale(1, productId: 99, nayaxCost: 1.10m, productName: "Unknown drink");
 
-        var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale);
+        var cost = await CostSaleUseCase(store, LedgerCost(10, 1.50m).Object).Handle(sale);
 
         Assert.Equal(new SaleCostAssignment(1.10m, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport), cost);
     }
@@ -86,7 +87,7 @@ public class SaleCostingUseCaseTests
         var store = new FakeStore(Product(10, "Snack"));
         var sale = Sale(1, productId: null, nayaxCost: null, productName: "Snack (3.00)");
 
-        var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale);
+        var cost = await CostSaleUseCase(store, LedgerCost(10, 1.50m).Object).Handle(sale);
 
         Assert.Equal(new SaleCostAssignment(1.50m, SaleCostStatus.Costed, SaleCostOrigin.InventoryLedger), cost);
     }
@@ -97,7 +98,7 @@ public class SaleCostingUseCaseTests
         var store = new FakeStore(Product(10, "Snack")) { Cutoffs = { [10] = SaleAt } };
         var sale = Sale(1, productId: 10, nayaxCost: null);
 
-        var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale);
+        var cost = await CostSaleUseCase(store, LedgerCost(10, 1.50m).Object).Handle(sale);
 
         Assert.Equal(new SaleCostAssignment(null, SaleCostStatus.Pending, SaleCostOrigin.Unknown), cost);
     }
@@ -109,7 +110,7 @@ public class SaleCostingUseCaseTests
         var sale = Sale(1, productId: 10, nayaxCost: 1.10m, unitCost: 1m, status: SaleCostStatus.Costed,
             transactionStatusId: NayaxTransactionStatusIds.Refunded);
 
-        var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale, force: true);
+        var cost = await CostSaleUseCase(store, LedgerCost(10, 1.50m).Object).Handle(sale, force: true);
 
         Assert.Equal(new SaleCostAssignment(null, SaleCostStatus.Pending, SaleCostOrigin.Unknown), cost);
     }
@@ -126,7 +127,7 @@ public class SaleCostingUseCaseTests
                 Sale(3, productId: 10, nayaxCost: 1m, unitCost: 1m, status: SaleCostStatus.Costed),
             },
         };
-        var backfill = new BackfillSaleCosts(store, new CostSale(store, LedgerCost(10, 1.50m).Object));
+        var backfill = new BackfillSaleCosts(store, CostSaleUseCase(store, LedgerCost(10, 1.50m).Object));
 
         var dryRun = await backfill.Handle(dryRun: true);
 
@@ -156,7 +157,7 @@ public class SaleCostingUseCaseTests
                 Sale(2, productId: 10, nayaxCost: null),
             },
         };
-        var backfill = new BackfillSaleCosts(store, new CostSale(store, LedgerCost(10, 1.50m).Object));
+        var backfill = new BackfillSaleCosts(store, CostSaleUseCase(store, LedgerCost(10, 1.50m).Object));
 
         var result = await backfill.Handle(dryRun: false);
 
@@ -168,7 +169,7 @@ public class SaleCostingUseCaseTests
     public async Task Repeating_an_applied_backfill_yields_the_same_costs()
     {
         var store = new FakeStore(Product(10, "Snack")) { Sales = { Sale(1, productId: 10, nayaxCost: 1m) } };
-        var backfill = new BackfillSaleCosts(store, new CostSale(store, LedgerCost(10, 1.50m).Object));
+        var backfill = new BackfillSaleCosts(store, CostSaleUseCase(store, LedgerCost(10, 1.50m).Object));
 
         await backfill.Handle(dryRun: false, force: true);
         var first = store.Staged[1];
@@ -190,7 +191,7 @@ public class SaleCostingUseCaseTests
                 Sale(3, productId: null, nayaxCost: null, productName: "Snack"),
             },
         };
-        var useCase = new CostPendingSales(store, new CostSale(store, LedgerCost(10, 1.50m).Object));
+        var useCase = CostPendingSalesUseCase(store, LedgerCost(10, 1.50m).Object);
 
         var costed = await useCase.Handle(productId: 10);
 
@@ -205,7 +206,7 @@ public class SaleCostingUseCaseTests
     {
         var store = new FakeStore(Product(10, "Snack"));
 
-        Assert.Equal(0, await new CostPendingSales(store, new CostSale(store, LedgerCost(10, 1m).Object)).Handle());
+        Assert.Equal(0, await CostPendingSalesUseCase(store, LedgerCost(10, 1m).Object).Handle());
         Assert.Equal(0, store.SaveCount);
     }
 
@@ -223,7 +224,7 @@ public class SaleCostingUseCaseTests
                 Sale(5, productId: 10, nayaxCost: 1.30m, unitCost: 0.90m, status: SaleCostStatus.Costed),
             },
         };
-        var backfill = new BackfillNayaxHistoricalSaleCosts(store);
+        var backfill = HistoricalBackfill(store);
 
         var dryRun = await backfill.Handle(dryRun: true);
 
@@ -249,7 +250,7 @@ public class SaleCostingUseCaseTests
             Sales = { Sale(5, productId: 10, nayaxCost: 1.30m, unitCost: 0.90m, status: SaleCostStatus.Costed) },
         };
 
-        var result = await new BackfillNayaxHistoricalSaleCosts(store).Handle(dryRun: false, force: true);
+        var result = await HistoricalBackfill(store).Handle(dryRun: false, force: true);
 
         Assert.Equal(1, result.SalesWouldBeCosted);
         Assert.Equal(new SaleCostAssignment(1.30m, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport), store.Staged[5]);
@@ -269,7 +270,7 @@ public class SaleCostingUseCaseTests
             },
         };
 
-        var result = await new BackfillNayaxHistoricalSaleCosts(store).Handle(
+        var result = await HistoricalBackfill(store).Handle(
             dryRun: false, from: from, to: to, productId: 10);
 
         Assert.Equal(new CompletedSaleSelection(false, from, to), store.LastSelection);
@@ -289,7 +290,10 @@ public class SaleCostingUseCaseTests
             .AddApplicationServices()
             .AddSingleton(nayax.Object)
             .AddSingleton<ISaleCostingStore>(store)
-            .AddSingleton(Mock.Of<IInventoryCostLedgerStore>());
+            .AddSingleton(Mock.Of<IInventoryCostLedgerStore>())
+            // The Nayax product link store is an Infrastructure registration, so the Application-only
+            // container gets the #732 backfill's link shape instead (issue #747).
+            .AddSingleton<INayaxProductLinkStore>(FakeNayaxProductLinkStore.EveryIdLinkedToItself());
         await using var provider = services.BuildServiceProvider();
         await using var scope = provider.CreateAsyncScope();
 
@@ -304,7 +308,105 @@ public class SaleCostingUseCaseTests
         nayax.VerifyNoOtherCalls();
     }
 
+    // ------------------------------------------------- Nayax product links (#747)
+
+    /// <summary>
+    /// Issue #747, parent #329 decision A2c: a sale's stored Nayax product id names the local product
+    /// its <c>ProductExternalIds</c> link names, not the catalogue row whose own id equals it. The
+    /// link here maps 777 to local product 10, and the sale's product name is one no catalogue row
+    /// carries, so only the link can reach it.
+    /// </summary>
+    [Fact]
+    public async Task A_sale_is_costed_from_the_product_its_Nayax_link_names()
+    {
+        var store = new FakeStore(Product(10, "Snack"));
+        var sale = Sale(1, productId: 777, nayaxCost: null, productName: "Mystery Bar");
+
+        var cost = await CostSaleUseCase(
+                store,
+                LedgerCost(10, 1.50m).Object,
+                FakeNayaxProductLinkStore.Linking((NayaxProductId: 777, LocalProductId: 10)))
+            .Handle(sale);
+
+        Assert.Equal(new SaleCostAssignment(1.50m, SaleCostStatus.Costed, SaleCostOrigin.InventoryLedger), cost);
+    }
+
+    /// <summary>
+    /// The other half of the rule: a catalogue row whose own id equals the sale's Nayax id, with no
+    /// link to it, is not that product. The sale is left uncosted and in error - the state an
+    /// unmatched product already produced - never costed from that row's inventory ledger.
+    /// </summary>
+    [Fact]
+    public async Task A_product_whose_id_equals_an_unlinked_Nayax_id_does_not_cost_the_sale()
+    {
+        var store = new FakeStore(Product(777, "Unrelated product"));
+        var sale = Sale(1, productId: 777, nayaxCost: null, productName: "Mystery Bar");
+
+        var cost = await CostSaleUseCase(
+                store, LedgerCost(777, 1.50m).Object, FakeNayaxProductLinkStore.Linking())
+            .Handle(sale);
+
+        Assert.Equal(new SaleCostAssignment(null, SaleCostStatus.Error, SaleCostOrigin.Unknown), cost);
+    }
+
+    /// <summary>
+    /// The product filters of the two batch costing runs name a <em>local</em> product id, so the
+    /// sale whose Nayax id links to it is the one selected - and the one whose Nayax id merely equals
+    /// another catalogue row's key is not.
+    /// </summary>
+    [Fact]
+    public async Task The_product_filters_select_the_sale_whose_Nayax_id_links_to_that_product()
+    {
+        var links = FakeNayaxProductLinkStore.Linking((NayaxProductId: 777, LocalProductId: 10));
+        var pendingStore = new FakeStore(Product(10, "Snack"), Product(888, "Unrelated product"))
+        {
+            Sales =
+            {
+                Sale(1, productId: 777, nayaxCost: null, productName: "Mystery Bar"),
+                Sale(2, productId: 888, nayaxCost: 1m, productName: "Other mystery bar"),
+            },
+        };
+        var backfillStore = new FakeStore(Product(10, "Snack"), Product(888, "Unrelated product"))
+        {
+            Sales =
+            {
+                Sale(1, productId: 777, nayaxCost: 1.10m, productName: "Mystery Bar"),
+                Sale(2, productId: 888, nayaxCost: 1.20m, productName: "Other mystery bar"),
+            },
+        };
+
+        var costed = await CostPendingSalesUseCase(pendingStore, LedgerCost(10, 1.50m).Object, links)
+            .Handle(productId: 10);
+        var backfilled = await HistoricalBackfill(backfillStore, links).Handle(dryRun: false, productId: 10);
+
+        Assert.Equal(1, costed);
+        Assert.Equal([1L], pendingStore.Staged.Keys);
+        Assert.Equal(1, backfilled.SalesReviewed);
+        Assert.Equal([1L], backfillStore.Staged.Keys);
+    }
+
     private static ProductMatchCandidate Product(long id, string name) => new(id, name);
+
+    /// <summary>
+    /// The sale-costing use case over the fake store. The default link shape is the one issue #732's
+    /// backfill recorded - every Nayax id linked to the local product with the same id - which is
+    /// what every assertion written before issue #747 is against; a test about the lookup itself
+    /// passes links whose ids differ.
+    /// </summary>
+    private static CostSale CostSaleUseCase(
+        ISaleCostingStore store, IRebuildProductCost rebuild, INayaxProductLinkStore? productLinks = null) =>
+        new(store, rebuild, productLinks ?? FakeNayaxProductLinkStore.EveryIdLinkedToItself());
+
+    private static CostPendingSales CostPendingSalesUseCase(
+        ISaleCostingStore store, IRebuildProductCost rebuild, INayaxProductLinkStore? productLinks = null) =>
+        new(
+            store,
+            CostSaleUseCase(store, rebuild, productLinks),
+            productLinks ?? FakeNayaxProductLinkStore.EveryIdLinkedToItself());
+
+    private static BackfillNayaxHistoricalSaleCosts HistoricalBackfill(
+        ISaleCostingStore store, INayaxProductLinkStore? productLinks = null) =>
+        new(store, productLinks ?? FakeNayaxProductLinkStore.EveryIdLinkedToItself());
 
     private static Mock<IRebuildProductCost> LedgerCost(long productId, decimal? cost)
     {

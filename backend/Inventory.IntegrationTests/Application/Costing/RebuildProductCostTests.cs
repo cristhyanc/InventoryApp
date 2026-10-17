@@ -1,5 +1,6 @@
 using Inventory.Application.Costing;
 using Inventory.Domain.Costing;
+using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -527,8 +528,26 @@ public class RebuildProductCostTests
         public void StageProductPosition(InventoryCostLedger ledger, ProductCostPosition position) => StagedPosition = position;
     }
 
-    private static AppDbContext CreateDb() =>
-        TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+    /// <summary>
+    /// An empty costing database in which the one product every test here uses is already linked to
+    /// the Nayax product id its sales carry. That is the shape issue #732's backfill recorded for
+    /// data that existed before the link tables - one link per product, mapping each Nayax id to the
+    /// row with the same id - and since issue #747 it is what the cost replay reads to decide which
+    /// sales belong to a product, instead of comparing the stored id with <c>Product.Id</c>.
+    /// </summary>
+    private static AppDbContext CreateDb()
+    {
+        var db = TestAppDbContext.Unrestricted(
+            new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        db.ProductExternalIds.Add(new ProductExternalId
+        {
+            Provider = ExternalProvider.Nayax,
+            ExternalId = NayaxExternalId.From(1),
+            ProductId = 1,
+        });
+        db.SaveChanges();
+        return db;
+    }
 
     private static StockAdjustment Movement(long productId, int quantity, decimal? unitCost, StockAdjustmentReason reason, DateTime effectiveAt) =>
         new()

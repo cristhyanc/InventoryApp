@@ -92,7 +92,7 @@ public class EfInventoryCostingAdaptersTenancyTests
         var options = await SeedTwoBusinessesAsync(connection);
 
         await using var db = TestAppDbContext.For(options, BusinessA);
-        var store = new EfInventoryCostLedgerStore(db);
+        var store = new EfInventoryCostLedgerStore(db, TestCostingUseCases.ProductLinks(db));
 
         var ledger = await store.LoadAsync(ProductA, forUpdate: false, CancellationToken.None);
         Assert.NotNull(ledger);
@@ -118,7 +118,8 @@ public class EfInventoryCostingAdaptersTenancyTests
 
         await using var db = TestAppDbContext.Denied(options);
 
-        Assert.Null(await new EfInventoryCostLedgerStore(db).LoadAsync(ProductA, forUpdate: true, CancellationToken.None));
+        Assert.Null(await new EfInventoryCostLedgerStore(db, TestCostingUseCases.ProductLinks(db))
+            .LoadAsync(ProductA, forUpdate: true, CancellationToken.None));
         Assert.Null(await new EfInventoryMovementStore(db).GetCostStateAsync(ProductA, CancellationToken.None));
     }
 

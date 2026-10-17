@@ -1,3 +1,4 @@
+using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.ProductMatching;
 
@@ -23,16 +24,27 @@ public interface ICostSale
 /// transaction-level Nayax <c>Product Cost Price</c>; otherwise uncosted - an error when the
 /// product is unmatched or the Nayax cost is negative, pending when no cost is known yet. A
 /// negative cost is never applied and no cost is inferred from the product's current price.
+///
+/// <para><strong>The sale's Nayax product id is resolved through the provider identity link</strong>
+/// (issue #747, parent #329 decision A2c), by <see cref="INayaxProductLinkStore"/>, instead of being
+/// compared with <c>Product.Id</c> - which only ever worked because the local key *is* the Nayax id.
+/// A Nayax id this business holds no link for is an unknown product, handled exactly as an unmatched
+/// id already was: the name fallback still runs and a sale that matches nothing is still left
+/// uncosted and visible, never costed from the product whose local id happens to equal the remote
+/// one. Data that predates the link table is unaffected, because issue #732's backfill linked every
+/// product to the row with the same id.</para>
 /// </summary>
 public sealed class CostSale : ICostSale
 {
     private readonly ISaleCostingStore _store;
     private readonly IRebuildProductCost _rebuild;
+    private readonly INayaxProductLinkStore _productLinks;
 
-    public CostSale(ISaleCostingStore store, IRebuildProductCost rebuild)
+    public CostSale(ISaleCostingStore store, IRebuildProductCost rebuild, INayaxProductLinkStore productLinks)
     {
         _store = store;
         _rebuild = rebuild;
+        _productLinks = productLinks;
     }
 
     public async Task<SaleCostAssignment?> Handle(
@@ -50,9 +62,13 @@ public sealed class CostSale : ICostSale
             sale.UnitCostAtSale.HasValue && sale.CostOfGoodsSold.HasValue)
             return null;
 
-        var productId = ProductMatcher.Match(
-            await _store.GetProductCandidatesAsync(cancellationToken),
-            sale.NayaxProductId,
+        // Awaited in sequence, never beside each other: both land on the request's own scoped
+        // persistence context, which supports one operation at a time
+        // (docs/architecture.md § Concurrency inside one request).
+        var candidates = await _store.GetProductCandidatesAsync(cancellationToken);
+        var productId = ProductMatcher.MatchLinked(
+            candidates,
+            await LocalProductIdAsync(sale.NayaxProductId, cancellationToken),
             sale.ProductName);
 
         var baselineCutoff = productId is null
@@ -71,5 +87,19 @@ public sealed class CostSale : ICostSale
             null,
             productId is null || sale.NayaxProductCostPrice < 0 ? SaleCostStatus.Error : SaleCostStatus.Pending,
             SaleCostOrigin.Unknown);
+    }
+
+    /// <summary>
+    /// The local product the sale's stored Nayax product id names, or <see langword="null"/> when
+    /// this business holds no Nayax link for it - an unknown identity, left to the name fallback and
+    /// then to the uncosted path (issue #747). A sale carrying no Nayax id reads no link at all.
+    /// </summary>
+    private async Task<long?> LocalProductIdAsync(long? nayaxProductId, CancellationToken cancellationToken)
+    {
+        if (nayaxProductId is not long nayaxId)
+            return null;
+
+        var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync([nayaxId], cancellationToken);
+        return localProductIdByNayaxId.TryGetValue(nayaxId, out var localProductId) ? localProductId : null;
     }
 }

@@ -8886,8 +8886,8 @@ connected, and has room for exactly one provider's answer. Issue #732 (child A1 
 P1) adds the place a provider id belongs instead — and does only that. No existing id, foreign key
 or behaviour changes, and that slice read no link: the live-machine features resolve through one in
 #733 (A2, below), the sale paths, the catalogue import and catalogue reconciliation in #745 (A2b,
-below), and costing and timestamp repair (#747, A2c) and the reporting queries (#734, A3) still read
-`Product.Id` as a Nayax id. Database-generated ids for new rows are #735 (A4).
+below), costing and sale timestamp repair in #747 (A2c, below), and the reporting queries (#734, A3)
+still read `Product.Id` as a Nayax id. Database-generated ids for new rows are #735 (A4).
 
 **Two tables, one shape.** `ProductExternalIds` and `CategoryExternalIds` each carry `BusinessId`,
 `Provider`, `ExternalId` and the local row's id behind their own surrogate key. Both are ordinary
@@ -9030,17 +9030,66 @@ financial data, which is the thing this slice exists to end. Issue #732's backfi
 that existed when the link tables arrived, so reaching that state needs a row restored from an older
 backup or created locally under a colliding key.
 
-**The stored `NayaxSales.NayaxProductId` column is deliberately still read as it was.** Its
+**Two reads of the stored `NayaxSales.NayaxProductId` column stayed as they were in this slice.** Its
 provenance is mixed: the latest-sales sync writes the *local* product id it matched, while the
 uploaded export writes the row's raw remote id. Re-resolving that column as a Nayax id would turn the
 local product a synchronized sale already names into an unknown one and silently stop replaying its
-inventory cost, so the two reads of it that remain — the sync's enrichment of an already stored sale,
-and the import's tracking of the product a stored sale is about to be moved off — keep comparing it
-with `Product.Id`. Settling that column's meaning belongs to the paths that own it: costing and
-timestamp repair (#747, A2c) and the reporting queries (#734, A3).
+inventory cost, so the sync's enrichment of an already stored sale, and the import's tracking of the
+product a stored sale is about to be moved off, keep comparing it with `Product.Id`. The paths that
+*read* that column for their own decisions are a separate slice each: costing and sale timestamp
+repair are #747 (A2c, below) and the reporting queries are #734 (A3).
 
 The settlement (pending reimbursement XML) import carries no product or group identifier at all, so
 there is nothing in it to resolve.
+
+### Resolving Nayax product ids in costing and sale timestamp repair (issue #747)
+
+Issue #747 (child A2c of #329) is the same lookup change for the two paths that read a *stored*
+sale's `NayaxSales.NayaxProductId` to decide which local product's money it is: historical sale
+costing, including the cost replay the inventory-cost transition and the costing repair run, and the
+Nayax sale timestamp repair. Like #733 and #745 it changes identity resolution and nothing else — no
+endpoint, response shape, costing rule, rounding, provenance, cost value or COGS value moves — and a
+business whose data predates the link tables sees identical results, because the #732 backfill
+recorded one link per existing product mapping each Nayax id to the local row with the same id.
+
+| Path | What is resolved | What an unlinked Nayax id means |
+| --- | --- | --- |
+| Sale costing (`CostSale`) | the sale's stored `NayaxProductId`, through `INayaxProductLinkStore`, before the Domain matcher's identity step | an unknown product: the name fallback still runs, and a sale that matches nothing is left uncosted — `Error` with no cost, exactly as an unmatched product already produced — never costed from the inventory ledger of the product whose local id happens to equal it |
+| The two batch costing runs (`CostPendingSales`, `BackfillNayaxHistoricalSaleCosts`) | every loaded sale's stored `NayaxProductId`, once per run, so the optional product filter names a *local* product | the sale is simply not selected by a filtered run; an unfiltered run still costs it through `CostSale` above |
+| Cost replay (`EfInventoryCostLedgerStore`, read by `RebuildProductCost` for the transition apply, the costing repair and every sales path) | every completed sale's stored `NayaxProductId`, once per ledger read | the sale belongs to no product's replay: it consumes no costed unit and is not recosted, exactly as an id no catalogue row carried already did |
+| Sale timestamp repair (`NayaxSaleTimestampRepairProjection`) | each examined decision's stored `NayaxProductId`, once per plan | no product is reported as affected and none is replayed. The repair's own authority is unchanged: the sale is still examined, reported and re-dated — it is one column, and a product match was never required to write it |
+
+Three things are worth stating explicitly.
+
+**A raw provider identifier and a previously stored local product id are not the same thing, and this
+column holds both.** The uploaded transaction export writes the row's raw remote `NayaxProductID`;
+the latest-sales synchronization writes the *local* product id it matched, falling back to the remote
+id when it matched nothing. Reading the column as a Nayax id is therefore right for the export's rows
+and, today, harmless for the synchronization's, because `Product.Id` still *is* the Nayax id and
+every product carries a link from that id to itself — so a stored local product id resolves back to
+the same product. It is the two writers, not these readers, that make the column ambiguous; settling
+that is #735 (A4), where a new product stops being keyed by the remote id. Until then a local product
+with no Nayax link at all — one created locally after the #732 backfill, or restored from an older
+backup — is reached here by the unambiguous name match rather than by its key, which is the same
+fallback an unmatched id has always taken.
+
+**No cost value or COGS value changes for existing data, and the tests say so by value.**
+`SaleCostingNayaxLinkTests` and `NayaxSaleTimestampRepairNayaxLinkTests` run the real use cases over
+relational SQLite and the real link store: a product linked to its own id produces the same unit cost,
+COGS, costing status, cost provenance and costing position the fixture produced before the change,
+while a product reached only through a link whose Nayax id differs produces exactly those same values.
+The negative case is the one that moves, and deliberately: a local product whose own id equals an
+unrelated Nayax id no longer has its stock consumed, its average cost spent or its history recosted by
+a sale that was never its.
+
+**No Nayax group id is read here.** Neither path reads a `ProductGroupID`: a sale carries a product
+identifier and a name, and a category is reached through the local `Product.CategoryId`.
+`CategoryExternalIds` keeps its one reader, the catalogue import of #745.
+
+**What is still left.** The reporting queries — the transaction sales report, the product
+profitability report and the dashboard/report fact providers — and the machine-stock ledger still
+compare the stored column with `Product.Id`; they are #734 (A3). The sync's enrichment step and the
+import's stored-row tracking described above stay with #745, for the reason given there.
 
 ### Nayax product catalogue import (issue #300)
 

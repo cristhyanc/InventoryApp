@@ -1,4 +1,5 @@
 using Inventory.Application.Costing;
+using Inventory.Application.Nayax;
 using Inventory.Domain.Costing;
 using Inventory.Domain.Reporting.ProductMatching;
 using Inventory.Infrastructure.Data;
@@ -23,12 +24,27 @@ namespace Inventory.Infrastructure.Persistence;
 /// row it came from, so <see cref="StageReplay"/> writes the outcome
 /// <see cref="RebuildProductCost"/> decided back onto exactly that tracked row. It never saves, never
 /// opens a transaction and applies no costing rule of its own.
+///
+/// The one identity rule that did change is how a stored sale's <c>NayaxProductId</c> becomes a local
+/// product (issue #747, parent #329 decision A2c): through the <c>ProductExternalIds</c> link table,
+/// by <see cref="INayaxProductLinkStore"/>, instead of by comparing it with <c>Product.Id</c> - which
+/// only ever worked because the local key *is* the Nayax id. A Nayax id this business holds no link
+/// for is an unknown product, exactly as an unmatched id already was: the name fallback still runs,
+/// and a sale that matches nothing takes no part in the product's cost replay rather than consuming
+/// the inventory of the product whose local id happens to equal the remote one. Data that predates
+/// the link table is unaffected, because issue #732's backfill linked every product to the row with
+/// the same id.
 /// </summary>
 public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
 {
     private readonly AppDbContext _db;
+    private readonly INayaxProductLinkStore _productLinks;
 
-    public EfInventoryCostLedgerStore(AppDbContext db) => _db = db;
+    public EfInventoryCostLedgerStore(AppDbContext db, INayaxProductLinkStore productLinks)
+    {
+        _db = db;
+        _productLinks = productLinks;
+    }
 
     public async Task<InventoryCostLedger?> LoadAsync(long productId, bool forUpdate, CancellationToken cancellationToken)
     {
@@ -41,11 +57,10 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
         var saleQuery = forUpdate ? _db.NayaxSales.AsQueryable() : _db.NayaxSales.AsNoTracking();
         var adjustments = await adjustmentQuery.Where(x => x.ProductId == productId).ToListAsync(cancellationToken);
         var candidates = await ProductCandidatesAsync(cancellationToken);
-        var sales = (await saleQuery
-                .Where(EfNayaxSalesQueries.CompletedSalePredicate)
-                .ToListAsync(cancellationToken))
-            .Where(s => ProductMatcher.Match(candidates, s.NayaxProductId, s.ProductName) == productId)
-            .ToList();
+        var completed = await saleQuery
+            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
+            .ToListAsync(cancellationToken);
+        var sales = await SalesOfProductAsync(completed, candidates, productId, cancellationToken);
         var repairs = await LoadRepairsAsync(productId, asOf: null, cancellationToken);
         var baseline = await _db.InventoryCostTransitionBaselines.AsNoTracking()
             .Where(x => x.ProductId == productId)
@@ -65,12 +80,11 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
             .Where(x => x.ProductId == productId && x.EffectiveAt <= asOf)
             .ToListAsync(cancellationToken);
         var candidates = await ProductCandidatesAsync(cancellationToken);
-        var sales = (await _db.NayaxSales.AsNoTracking()
-                .Where(EfNayaxSalesQueries.CompletedSalePredicate)
-                .Where(s => s.MachineAuthorizationTime <= asOf)
-                .ToListAsync(cancellationToken))
-            .Where(s => ProductMatcher.Match(candidates, s.NayaxProductId, s.ProductName) == productId)
-            .ToList();
+        var completed = await _db.NayaxSales.AsNoTracking()
+            .Where(EfNayaxSalesQueries.CompletedSalePredicate)
+            .Where(s => s.MachineAuthorizationTime <= asOf)
+            .ToListAsync(cancellationToken);
+        var sales = await SalesOfProductAsync(completed, candidates, productId, cancellationToken);
         var repairs = await LoadRepairsAsync(productId, asOf, cancellationToken);
         var baseline = await _db.InventoryCostTransitionBaselines.AsNoTracking()
             .Where(x => x.ProductId == productId && x.CutoffAt <= asOf)
@@ -79,6 +93,49 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
 
         return EfInventoryCostLedger.Create(product, adjustments, sales, repairs, baseline);
     }
+
+    /// <summary>
+    /// The completed sales that belong to <paramref name="productId"/>, resolving each one's stored
+    /// Nayax product id through the <c>ProductExternalIds</c> link before the Domain matcher's
+    /// identity step (issue #747). The links are read once for the whole history, after the sales
+    /// read and in sequence with it: both land on the request's own scoped <see cref="AppDbContext"/>,
+    /// which supports one operation at a time (docs/architecture.md § Concurrency inside one request).
+    ///
+    /// <para>A Nayax id with no link names no local product, so the sale falls back to the
+    /// unambiguous name match and, failing that, belongs to no product's replay - exactly as an id no
+    /// catalogue row carried already did.</para>
+    /// </summary>
+    private async Task<List<NayaxSales>> SalesOfProductAsync(
+        List<NayaxSales> completed,
+        IReadOnlyList<ProductMatchCandidate> candidates,
+        long productId,
+        CancellationToken cancellationToken)
+    {
+        var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
+            completed
+                .Where(s => s.NayaxProductId.HasValue)
+                .Select(s => s.NayaxProductId!.Value)
+                .Distinct()
+                .ToList(),
+            cancellationToken);
+
+        return completed
+            .Where(s => ProductMatcher.MatchLinked(
+                candidates,
+                LocalProductId(s.NayaxProductId, localProductIdByNayaxId),
+                s.ProductName) == productId)
+            .ToList();
+    }
+
+    /// <summary>
+    /// The local product a stored sale's Nayax product id names, or <see langword="null"/> when this
+    /// business holds no Nayax link for it (issue #747).
+    /// </summary>
+    private static long? LocalProductId(
+        long? nayaxProductId, IReadOnlyDictionary<long, long> localProductIdByNayaxId) =>
+        nayaxProductId is long id && localProductIdByNayaxId.TryGetValue(id, out var localProductId)
+            ? localProductId
+            : null;
 
     /// <summary>
     /// The business's product catalogue as the Domain <see cref="ProductMatcher"/> consumes it,

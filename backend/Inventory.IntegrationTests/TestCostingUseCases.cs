@@ -15,23 +15,29 @@ namespace InventoryApi.Tests;
 internal static class TestCostingUseCases
 {
     public static RebuildProductCost Rebuild(AppDbContext db) =>
-        new(new EfInventoryCostLedgerStore(db));
+        new(new EfInventoryCostLedgerStore(db, ProductLinks(db)));
 
     public static RecordInventoryMovement RecordMovement(AppDbContext db) =>
         new(new EfInventoryMovementStore(db));
 
+    /// <summary>
+    /// The real Nayax product link store over the same context (issues #733 and #747), so a costing
+    /// path resolves a stored sale's Nayax product id exactly as production does.
+    /// </summary>
+    public static INayaxProductLinkStore ProductLinks(AppDbContext db) => new EfNayaxProductLinkStore(db);
+
     /// <summary>The sale-costing use case (issue #297), with the ledger rebuild over <paramref name="db"/> unless one is given.</summary>
     public static CostSale CostSale(AppDbContext db, IRebuildProductCost? rebuild = null) =>
-        new(new EfSaleCostingStore(db), rebuild ?? Rebuild(db));
+        new(new EfSaleCostingStore(db), rebuild ?? Rebuild(db), ProductLinks(db));
 
     public static CostPendingSales CostPendingSales(AppDbContext db, IRebuildProductCost? rebuild = null) =>
-        new(new EfSaleCostingStore(db), CostSale(db, rebuild));
+        new(new EfSaleCostingStore(db), CostSale(db, rebuild), ProductLinks(db));
 
     public static BackfillSaleCosts BackfillSaleCosts(AppDbContext db, IRebuildProductCost? rebuild = null) =>
         new(new EfSaleCostingStore(db), CostSale(db, rebuild));
 
     public static BackfillNayaxHistoricalSaleCosts BackfillNayaxHistoricalSaleCosts(AppDbContext db) =>
-        new(new EfSaleCostingStore(db));
+        new(new EfSaleCostingStore(db), ProductLinks(db));
 
     /// <summary>The inventory-cost transition use cases (issue #298), on the system clock unless one is given.</summary>
     public static PreviewInventoryCostTransition PreviewTransition(AppDbContext db, INayaxLynxClient nayax, IClock? clock = null) =>
@@ -43,7 +49,7 @@ internal static class TestCostingUseCases
 
     /// <summary>The costing-repair use cases (issue #359), on the system clock unless one is given.</summary>
     public static PreviewInventoryCostRepair PreviewRepair(AppDbContext db) =>
-        new(new EfInventoryCostRepairStore(db), new EfInventoryCostLedgerStore(db));
+        new(new EfInventoryCostRepairStore(db), new EfInventoryCostLedgerStore(db, ProductLinks(db)));
 
     public static ApplyInventoryCostRepair ApplyRepair(
         AppDbContext db,
@@ -52,7 +58,7 @@ internal static class TestCostingUseCases
         IClock? clock = null) =>
         new(
             new EfInventoryCostRepairStore(db),
-            new EfInventoryCostLedgerStore(db),
+            new EfInventoryCostLedgerStore(db, ProductLinks(db)),
             rebuild ?? Rebuild(db),
             actors,
             clock ?? new SystemClock());

@@ -3,6 +3,7 @@ using Inventory.Domain.Exceptions;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Application.Nayax;
+using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Models;
 using InventoryApi.Tests.Application.SalesSync;
 using Microsoft.EntityFrameworkCore;
@@ -371,10 +372,29 @@ public class InventoryCostTransitionTests
     private static async Task<NayaxSales> SaleAsync(AppDbContext db, long transactionId) =>
         await db.NayaxSales.SingleAsync(sale => sale.TransactionID == transactionId);
 
-    private static AppDbContext CreateDb() =>
-        TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
+    /// <summary>
+    /// An empty database in which the two products these tests use are already linked to the Nayax
+    /// product ids their sales carry - the shape issue #732's backfill recorded for existing data,
+    /// and what issue #747 made the cost replay read instead of comparing a stored
+    /// <c>NayaxProductId</c> with <c>Product.Id</c>.
+    /// </summary>
+    private static AppDbContext CreateDb()
+    {
+        var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
+        db.ProductExternalIds.AddRange(NayaxLink(10), NayaxLink(20));
+        db.SaveChanges();
+        return db;
+    }
+
+    private static ProductExternalId NayaxLink(long productId) =>
+        new()
+        {
+            Provider = ExternalProvider.Nayax,
+            ExternalId = NayaxExternalId.From(productId),
+            ProductId = productId,
+        };
 
     private static Mock<INayaxLynxClient> NayaxWithStock(long productId)
     {

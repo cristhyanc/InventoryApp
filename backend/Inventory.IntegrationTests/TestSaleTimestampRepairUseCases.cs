@@ -33,6 +33,7 @@ internal static class TestSaleTimestampRepairUseCases
             new EfNayaxSaleTimestampRepairStore(db),
             nayax,
             workbook ?? new ClosedXmlNayaxSalesWorkbookReader(),
+            TestCostingUseCases.ProductLinks(db),
             ZonedBusinessCalendar.ForTimeZone(clock, FixedSydneyTime.SydneyTimeZoneId),
             clock);
 
