@@ -3,6 +3,7 @@ using Inventory.Application.Reporting.Gst;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Purchases;
+using Inventory.Domain.Reporting.Availability;
 using Inventory.Domain.Reporting.Gst;
 using Xunit;
 
@@ -17,8 +18,15 @@ public class GetGstAccountingAidTests
         Fees: nayaxFeesExGst, NetSettlement: sales - nayaxFeesExGst, GstOnSales: gstOnSales, GstOnFees: gstOnFees,
         DataQuality: new ReportingDataQualityDto(), NayaxFeesExGst: nayaxFeesExGst)
         {
-            OperatingExpenseGst = operatingExpenseGst
+            OperatingExpenseGst = operatingExpenseGst,
+            // A complete bookkeeping result is one whose provider coverage accounted for the whole
+            // period (issue #730), so these tests stay about the GST derivation rather than about
+            // availability; GstAccountingAidAvailabilityTests covers the other three states.
+            ProviderAvailability = new ReportProviderAvailabilityDto(CompleteAvailability, CompleteAvailability)
         };
+
+    private static readonly ReportAvailabilityDto CompleteAvailability =
+        new(nameof(ReportAvailabilityState.Complete), null);
 
     [Fact]
     public async Task Derives_taxable_sales_and_net_gst_from_the_bookkeeping_reports_own_gst_figures()

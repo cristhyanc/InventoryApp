@@ -2,7 +2,10 @@ import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { ConfigService } from './config.service';
-import { NayaxProcessingFeeResult, ReportQuality, ReportingFilter } from '../features/reports/shared/models/reporting.models';
+import {
+  NayaxProcessingFeeResult, ReportAvailability, ReportAvailabilityState, ReportProviderAvailability,
+  ReportQuality, ReportingFilter,
+} from '../features/reports/shared/models/reporting.models';
 import { BookkeepingReport } from '../features/reports/bookkeeping/models/bookkeeping-report.model';
 import { DashboardReport } from '../features/reports/dashboard/models/dashboard-report.model';
 import { DailyReport, DailyRow, DailyTotals } from '../features/reports/daily/models/daily-report.model';
@@ -19,6 +22,7 @@ import {
 
 export {
   ReportingFilter, ReportQuality, NayaxProcessingFeeResult,
+  ReportAvailabilityState, ReportAvailability, ReportProviderAvailability,
   BookkeepingReport, DashboardReport, DailyRow, DailyTotals, DailyReport,
   ReconciliationPeriod, ReconciliationTotals, ReconciliationReport,
   MachineRow, MachineReport, ProductRow, ProductReport, GstReport,

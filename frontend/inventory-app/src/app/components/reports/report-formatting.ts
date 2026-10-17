@@ -1,3 +1,5 @@
+import { ReportAvailability } from '../../features/reports/shared/models/reporting.models';
+
 const currencyFormatter = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' });
 
 /**
@@ -15,4 +17,48 @@ export function moneyOrUnavailable(value: number | null | undefined, unavailable
 
 export function percentOrUnavailable(value: number | null | undefined, suffix = '', unavailableLabel = '—'): string {
   return value == null ? unavailableLabel : `${value.toFixed(1)}%${suffix}`;
+}
+
+/**
+ * The "as of" instant is rendered in UTC on purpose (issue #730). It is the moment a successful
+ * synchronization or import reached, not a business day, so it must not be shifted into the
+ * browser's zone - which would also contradict the rule that business dates come from the
+ * business's own configured zone and never from the browser (AGENTS.md § Reporting dates).
+ */
+const asOfFormatter = new Intl.DateTimeFormat('en-AU', {
+  timeZone: 'UTC', day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+});
+
+/**
+ * The short label for a provider figure family whose coverage is not complete (issue #730), or an
+ * empty string when it is complete (or when the API did not report a state at all, which an older
+ * response may not).
+ */
+export function availabilityBadge(availability?: ReportAvailability | null): string {
+  switch (availability?.state) {
+    case 'Missing':
+      return 'No provider data';
+    case 'Stale':
+      return availability.asOfUtc
+        ? `As of ${asOfFormatter.format(new Date(availability.asOfUtc))} UTC`
+        : 'Not covered to the period end';
+    case 'Unverified':
+      return 'Unverified';
+    default:
+      return '';
+  }
+}
+
+/**
+ * A provider-sourced amount, or the availability state in its place.
+ *
+ * A zero is only ever printed when coverage says the period was read end to end. In every other
+ * state an amount of zero is indistinguishable from "we never read this", so the state is shown
+ * instead - which is the whole point of issue #730 and of the repository rule that unavailable
+ * financial values are never rendered as `0` (AGENTS.md § Frontend rules). A non-zero amount in an
+ * incomplete state is real partial data and stays visible, with its badge beside it.
+ */
+export function moneyOrState(value: number | null | undefined, availability?: ReportAvailability | null): string {
+  if (!availability || availability.state === 'Complete') return moneyOrUnavailable(value, 'Unavailable');
+  return value == null || value === 0 ? availabilityBadge(availability) : money(value);
 }

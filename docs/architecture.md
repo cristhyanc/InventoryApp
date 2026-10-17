@@ -960,6 +960,7 @@ Contains stable business language and deterministic rules:
 - Financial-year/date-range value types where appropriate.
 - Pure reporting calculations such as GST extraction, gross profit, and margins.
 - Purchase GST classification vocabulary, the purchase input-GST rule, its reporting-period aggregation and the purchase line identity rule (`Inventory.Domain.Gst`, `Purchases.PurchaseGstPolicy`, `Reporting.Gst.PurchaseInputGstPolicy`, `Purchases.PurchaseLineIdentityPolicy`; see [Purchase GST classification](#purchase-gst-classification-issue-429) and [Purchase input GST in the GST accounting aid](#purchase-input-gst-in-the-gst-accounting-aid-issue-432)).
+- The provider vocabulary and the report availability rule (`Inventory.Domain.Providers.ExternalProvider`/`ProviderDataSource`, `Inventory.Domain.Reporting.Availability.ReportAvailabilityPolicy`; see [Provider identity link tables](#provider-identity-link-tables-issue-732) and [Report availability model](#report-availability-model-issue-730)).
 
 It must not reference ASP.NET Core, EF Core, HTTP, filesystem APIs, ClosedXML, configuration, or concrete Nayax clients.
 
@@ -8575,6 +8576,89 @@ run them against a parent key that did not exist yet.
 **The import keeps the links true.** `EfNayaxProductCatalogImportStore` writes a Nayax link for
 every product and category in the snapshot that has none, and leaves an existing link exactly as it
 is; it still sets `Id` from the Nayax id, which #735 (A4) changes.
+
+### Report availability model (issue #730)
+
+Reports used to answer "no sales this month" and "nobody has read this month's sales" with the same
+figure: `0`. Nothing in the application could tell the two apart, because nothing recorded which
+period a run or a file actually covered — the sales synchronization reads a rolling `lastSales`
+window per machine, and settlement imports were recorded per file with no period at all. Issue #730
+(parent #329, decision P9) adds the missing evidence and the one rule that reads it.
+
+**The evidence: `ProviderDataCoverages`.** One additive, tenant-owned, append-only table
+(`Inventory.Infrastructure.Models.ProviderDataCoverage`). A row says: for this business, this
+`ExternalProvider` and this `ProviderDataSource`, every provider record whose instant falls in the
+half-open range `[FromUtc, ToUtc)` is now stored — and `RecordedAtUtc` says when the run that
+claimed it finished. `Source` is part of the row rather than implied, because the three routes
+account for different things: `SalesSync` and `SalesFileImport` account for sale instants, and
+`SettlementImport` for the reimbursement periods the provider itself reported, so a settlement file
+arriving never makes the sales figures complete. There is no unique constraint and no update path:
+successive successful runs legitimately claim overlapping ranges, and the policy below merges them.
+
+**A row is written only for work that fully succeeded**, through the narrow Application port
+`IProviderDataCoverageStore`:
+
+- `SyncLatestNayaxSales` claims `[the latest machine window start, the instant it began reading)`.
+  The *latest* of the per-machine window starts is the only defensible lower bound, because the
+  business-wide claim needs every machine's window to reach back that far; a machine whose window
+  returned nothing constrains it not at all, since "the last N sales" being empty is the provider
+  saying that machine has nothing to miss. The write is last, after every machine was read and the
+  whole batch was persisted and replayed, so a run that failed, was cancelled or failed for one
+  machine records nothing. A batch holding a sale with no authoritative `AuthorizationDateTimeGMT`
+  also records nothing, because the store does not import such a row and the run therefore did not
+  account for its own range; so does a run in which no machine returned a single dated sale, which
+  is evidence of nothing at all.
+- `ImportNayaxSales` claims `[earliest stored instant, latest stored instant)` — the only range a
+  transaction export proves, since Nayax publishes no requested-period metadata with one. A file
+  with even one skipped row was not committed whole and claims nothing, and a cost replay that
+  throws never reaches the write.
+- `ImportPendingReimbursementXmlFiles` claims `[earliest ReimbursementStartDate, the midnight after
+  the latest ReimbursementEndDate)` for each file, immediately after that file's graph is
+  committed. Those dates are the provider's own statement of the period it settles, never the
+  payout date and never the import instant (§ Reimbursements and reconciliation in `AGENTS.md`). A
+  file that declares no period, a duplicate, and an unreadable file all claim nothing.
+
+**The rule: `Inventory.Domain.Reporting.Availability.ReportAvailabilityPolicy`.** Given a period,
+the coverage overlapping it and whether the period holds any provider data, it clips and merges the
+ranges and returns exactly one of four states:
+
+| State | When | What it means for a zero |
+| --- | --- | --- |
+| `Complete` | merged coverage spans the whole period | a zero is a real zero — this is the only such state |
+| `Stale` | covered without a gap from the period start to a point before its end, reported "as of" that instant | the figures are complete up to that instant and say nothing after it |
+| `Unverified` | data exists that coverage does not account for: it predates coverage recording, or a failed or partial run left a gap | real partial data, not known to be all of it |
+| `Missing` | no coverage and no data | the figures are absent, not zero |
+
+The states are answers, never labels on each other, and `ReportAvailabilityState` is numbered in
+severity order (`Missing = 0` … `Complete = 3`) so a figure derived from several sources takes the
+least complete of them through `LeastComplete` — and so a state nothing decided can never read as
+complete. "Does the period hold data" is counted from stored rows before the completed-sale filter,
+not from an amount: a period holding only cancelled rows has sales data and a gross total of zero.
+
+**What the reports do with it.** `GetBookkeepingReport` decides two states per period — sales, from
+`SalesSync` + `SalesFileImport` coverage; fees, from `SettlementImport` coverage — adds a
+conditional data-quality note for each one that is not complete, and returns both in
+`BookkeepingReportDto.ProviderAvailability`. `GetGstAccountingAid` reports the same two states and
+adds `NetGstAvailability`, the least complete of them, because net GST subtracts both. The state
+travels as the enum's **name**, so a renumbered enum cannot silently change what a stored response
+meant. Which figures each state governs is written out on the two DTOs; the short version is that
+every provider-sourced figure carries one and every figure the business records itself — delivery
+and package costs, operating expenses and their GST, purchase input GST — carries none and stays
+visible and exact. The Angular reports render `moneyOrState`, which prints the state instead of a
+figure wherever an incomplete period's amount would otherwise read as a bare `$0.00`, and a badge
+beside a real partial amount; both pages show one banner saying the provider side is incomplete and
+the business's own records are not.
+
+**One behaviour change beyond labelling:** the GST accounting aid no longer raises the
+"GST classification missing" warning when no settlement file has been imported at all. That flag is
+about imported reimbursement rows, and a period with none has no rows to be missing a
+classification; the fee availability state is what reports that the fee figures are unavailable.
+
+The table starts empty and is deliberately not backfilled: a coverage row is evidence that one run
+retrieved one range, and no such evidence exists for anything that happened before the table did.
+Periods before this ships therefore report `Unverified` — which is exactly what they are. Reports
+other than these two, and the CSV/XLSX exports, keep their current behaviour until #731 (F2); the
+report provider filter arrives with the second provider (parent #329, P5).
 
 ### Nayax product catalogue import (issue #300)
 

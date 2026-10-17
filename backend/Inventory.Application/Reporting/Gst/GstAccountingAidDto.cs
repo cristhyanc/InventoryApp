@@ -52,4 +52,27 @@ public record GstAccountingAidDto(
     /// altogether. The accompanying <c>DataQuality.Notes</c> entry says which cause applies.
     /// </summary>
     public bool PurchaseGstIncomplete { get; init; }
+
+    /// <summary>
+    /// How well recorded provider coverage accounts for this period's provider-sourced GST figures
+    /// (issue #730, parent #329 decision P9). <see cref="ReportProviderAvailabilityDto.Sales"/>
+    /// governs <see cref="TaxableSales"/> and <see cref="GstOnSales"/>;
+    /// <see cref="ReportProviderAvailabilityDto.Fees"/> governs <see cref="TaxableFees"/> and
+    /// <see cref="GstOnFees"/>.
+    ///
+    /// <see cref="OperatingExpenseGst"/>, <see cref="PurchaseLineGst"/>,
+    /// <see cref="PurchaseChargeGst"/> and <see cref="InventoryPurchaseGst"/> are this business's
+    /// own recorded data, never a provider's, so they stay visible and exact however incomplete the
+    /// provider figures are.
+    /// </summary>
+    public ReportProviderAvailabilityDto ProviderAvailability { get; init; } =
+        ReportProviderAvailabilityDto.Undecided;
+
+    /// <summary>
+    /// The availability of <see cref="NetGst"/>, which subtracts both provider figures and is
+    /// therefore only as complete as the weaker of them. It is separate from
+    /// <see cref="PurchaseGstIncomplete"/>, which is about unclassified purchase components: net GST
+    /// can be incomplete for either reason, or both.
+    /// </summary>
+    public ReportAvailabilityDto NetGstAvailability { get; init; } = ReportAvailabilityDto.Undecided;
 }

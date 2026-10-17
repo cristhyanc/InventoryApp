@@ -2,6 +2,7 @@ import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ActivatedRoute } from '@angular/router';
 import { Observable } from 'rxjs';
+import { ReportAvailability } from '../../features/reports/shared/models/reporting.models';
 import { MachineService } from '../../services/machine.service';
 import { ReportingFilter, ReportingService, BookkeepingReport } from '../../services/reporting.service';
 import { ReportPageBase } from './report-page.base';
@@ -25,10 +26,17 @@ import { IconComponent } from '../shared/icon.component';
     @if (loading) { <div class="card"><div class="card-body text-center"><span class="value-muted">Loading report...</span></div></div> }
     @else if (error) { <div class="alert alert-danger">{{ error }}</div> }
     @else if (report) {
+      @if (providerNotice(report); as notice) {
+        <div class="alert alert-warning" role="status" data-testid="provider-availability">
+          <p class="alert-title">{{ notice.title }}</p>
+          <p>{{ notice.detail }}</p>
+        </div>
+      }
       <section class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <article class="stat-card">
-          <div class="stat-card-head"><div class="stat-card-content"><p class="stat-card-label">Gross Sales</p><p class="stat-card-value">{{ money(report.sales) }}</p></div><span class="icon-tile icon-tile-dark"><app-icon name="attach_money" /></span></div>
-          <p class="stat-card-footer"><span class="value-muted">Card {{ money(report.cardSales) }} · Cash {{ money(report.cashSales) }}</span></p>
+          <div class="stat-card-head"><div class="stat-card-content"><p class="stat-card-label">Gross Sales</p><p class="stat-card-value" data-testid="gross-sales">{{ moneyOrState(report.sales, salesAvailability(report)) }}</p></div><span class="icon-tile icon-tile-dark"><app-icon name="attach_money" /></span></div>
+          <p class="stat-card-footer"><span class="value-muted">Card {{ moneyOrState(report.cardSales, salesAvailability(report)) }} · Cash {{ moneyOrState(report.cashSales, salesAvailability(report)) }}</span></p>
+          @if (availabilityBadge(salesAvailability(report)); as badge) {<p class="stat-card-footer"><span class="value-muted" data-testid="sales-availability">{{ badge }}</span></p>}
         </article>
         <article class="stat-card">
           <div class="stat-card-head"><div class="stat-card-content"><p class="stat-card-label">Gross Profit</p><p class="stat-card-value">{{ moneyOrUnavailable(report.grossProfit) }}</p></div><span class="icon-tile icon-tile-dark"><app-icon name="bar_chart" /></span></div>
@@ -44,10 +52,10 @@ import { IconComponent } from '../shared/icon.component';
       </section>
       @if (machineId) { <p class="value-muted">Net profit is unavailable because shared business overhead is not allocated to individual machines.</p> }
       <div class="grid gap-5 lg:grid-cols-2">
-        <section class="card"><div class="card-header"><h2 class="card-title">Cost of Sales</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Gross Sales</span><strong>{{ money(report.sales) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Card Sales</span><strong>{{ money(report.cardSales) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Cash Sales</span><strong>{{ money(report.cashSales) }}</strong></div><div class="flex justify-between"><span>COGS</span><strong>{{ report.isCogsComplete === false ? 'Partial ' + money(report.partialCostOfGoods) : money(report.costOfGoods) }}</strong></div>@if (report.isCogsComplete === false) {<div class="text-md-warning-text">{{ report.uncostedTransactionCount }} completed sale(s) uncosted ({{ money(report.uncostedSalesAmount) }})</div>}<div class="flex justify-between border-t border-md-gray-200 pt-3"><span class="font-semibold">Gross Profit</span><strong>{{ moneyOrUnavailable(report.grossProfit) }}</strong></div><div class="flex justify-between"><span class="value-muted">Gross Margin</span><strong>{{ report.grossProfit == null ? 'Profit unavailable' : (margin(report.sales, report.grossProfit) | number:'1.1-1') + '%' }}</strong></div></div></section>
-        <section class="card"><div class="card-header"><h2 class="card-title">Operating Costs</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Total Nayax Processing Fees</span><strong>{{ money(report.nayaxFeesIncludingGst) }}</strong></div><div class="pl-2"><span class="value-muted">@if (report.nayaxProcessingFees?.hasEstimatedFees) { {{ money(report.nayaxProcessingFees?.actualFeeIncGst) }} actual · {{ money(report.nayaxProcessingFees?.estimatedFeeIncGst) }} estimated } @else {Actual}</span></div><div class="flex justify-between"><span>Site Commission</span><strong>{{ money(report.siteCommission) }}</strong></div><div class="flex justify-between"><span>Delivery Costs</span><strong>{{ money(report.deliveryCosts) }}</strong></div><div class="flex justify-between"><span>Package Costs</span><strong>{{ money(report.packageCosts) }}</strong></div>@for (entry of categoryEntries(report); track entry[0]) {<div class="flex justify-between"><span>{{ categoryLabel(entry[0]) }}</span><strong>{{ money(entry[1]) }}</strong></div>}<div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Total Operating Costs</span><strong>{{ money(totalOperatingCosts(report)) }}</strong></div></div></section>
+        <section class="card"><div class="card-header"><h2 class="card-title">Cost of Sales</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Gross Sales</span><strong>{{ moneyOrState(report.sales, salesAvailability(report)) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Card Sales</span><strong>{{ moneyOrState(report.cardSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Cash Sales</span><strong>{{ moneyOrState(report.cashSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between"><span>COGS</span><strong>{{ report.isCogsComplete === false ? 'Partial ' + money(report.partialCostOfGoods) : moneyOrState(report.costOfGoods, salesAvailability(report)) }}</strong></div>@if (report.isCogsComplete === false) {<div class="text-md-warning-text">{{ report.uncostedTransactionCount }} completed sale(s) uncosted ({{ money(report.uncostedSalesAmount) }})</div>}<div class="flex justify-between border-t border-md-gray-200 pt-3"><span class="font-semibold">Gross Profit</span><strong>{{ moneyOrUnavailable(report.grossProfit) }}</strong></div><div class="flex justify-between"><span class="value-muted">Gross Margin</span><strong>{{ report.grossProfit == null ? 'Profit unavailable' : (margin(report.sales, report.grossProfit) | number:'1.1-1') + '%' }}</strong></div></div></section>
+        <section class="card"><div class="card-header"><h2 class="card-title">Operating Costs</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Total Nayax Processing Fees</span><strong data-testid="nayax-fees">{{ moneyOrState(report.nayaxFeesIncludingGst, feesAvailability(report)) }}</strong></div><div class="pl-2"><span class="value-muted">@if (availabilityBadge(feesAvailability(report)); as badge) { <span data-testid="fees-availability">{{ badge }}</span> } @else if (report.nayaxProcessingFees?.hasEstimatedFees) { {{ money(report.nayaxProcessingFees?.actualFeeIncGst) }} actual · {{ money(report.nayaxProcessingFees?.estimatedFeeIncGst) }} estimated } @else {Actual}</span></div><div class="flex justify-between"><span>Site Commission</span><strong>{{ money(report.siteCommission) }}</strong></div><div class="flex justify-between"><span>Delivery Costs</span><strong>{{ money(report.deliveryCosts) }}</strong></div><div class="flex justify-between"><span>Package Costs</span><strong>{{ money(report.packageCosts) }}</strong></div>@for (entry of categoryEntries(report); track entry[0]) {<div class="flex justify-between"><span>{{ categoryLabel(entry[0]) }}</span><strong>{{ money(entry[1]) }}</strong></div>}<div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Total Operating Costs</span><strong>{{ money(totalOperatingCosts(report)) }}</strong></div></div></section>
         <section class="card lg:col-span-2"><div class="card-header"><h2 class="card-title">Nayax Card Settlement</h2></div><div class="card-body max-w-xl space-y-3"><div class="flex justify-between"><span>Card Sales</span><strong>{{ money(report.cardSales) }}</strong></div><div class="flex justify-between"><span>- Nayax Fees</span><strong>{{ money(report.nayaxFeesIncludingGst) }}</strong></div><div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Net Reimbursement</span><strong>{{ money(report.netSettlement) }}</strong></div></div><div class="card-footer">Net reimbursement is the amount paid by Nayax for card sales and is not business profit.</div></section>
-        <section class="card"><div class="card-header"><h2 class="card-title">GST</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>GST on Sales (estimated)</span><strong>{{ money(report.gstOnSales) }}</strong></div><p class="value-muted" data-testid="gst-on-sales-estimate">Estimated GST on sales - assumes all included sales are taxable at 10% (GST-inclusive).</p><div class="flex justify-between"><span>GST on Nayax Fees</span><strong>{{ money(report.gstOnFees) }}</strong></div></div></section>
+        <section class="card"><div class="card-header"><h2 class="card-title">GST</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>GST on Sales (estimated)</span><strong>{{ moneyOrState(report.gstOnSales, salesAvailability(report)) }}</strong></div><p class="value-muted" data-testid="gst-on-sales-estimate">Estimated GST on sales - assumes all included sales are taxable at 10% (GST-inclusive).</p><div class="flex justify-between"><span>GST on Nayax Fees</span><strong>{{ moneyOrState(report.gstOnFees, feesAvailability(report)) }}</strong></div></div></section>
         <section class="card"><div class="card-header"><h2 class="card-title">Cash Reconciliation</h2></div><div class="card-body"><div class="flex justify-between"><span>Cash Sales</span><strong>{{ money(report.cashSales) }}</strong></div></div><div class="card-footer">Cash collection data is not currently recorded.</div></section>
       </div>
       @if (excludedTransactions(report).length) {
@@ -100,4 +108,31 @@ export class BookkeepingReportComponent extends ReportPageBase<BookkeepingReport
   }
   categoryLabel(category: string): string { return category.replace(/([a-z])([A-Z])/g, '$1 $2'); }
   totalOperatingCosts(report: BookkeepingReport): number { return (report.nayaxFeesIncludingGst ?? 0) + (report.siteCommission ?? 0) + (report.deliveryCosts ?? 0) + (report.packageCosts ?? 0) + (report.structuredOperatingExpenses ?? report.otherOperatingExpenses ?? 0); }
+
+  /** The state the API decided for every figure derived from stored provider sales (issue #730). */
+  salesAvailability(report: BookkeepingReport): ReportAvailability | undefined {
+    return report.providerAvailability?.sales;
+  }
+
+  /** The state the API decided for every figure derived from imported settlement data. */
+  feesAvailability(report: BookkeepingReport): ReportAvailability | undefined {
+    return report.providerAvailability?.fees;
+  }
+
+  /**
+   * The single banner that says this period's provider figures are not a measured zero. The
+   * business's own delivery, packaging and operating-expense figures are unaffected and stay exact,
+   * which is the part a reader most needs told when the provider side is incomplete.
+   */
+  providerNotice(report: BookkeepingReport): { title: string; detail: string } | null {
+    const incomplete = [this.salesAvailability(report), this.feesAvailability(report)]
+      .filter(availability => availability && availability.state !== 'Complete');
+    if (!incomplete.length) return null;
+    return {
+      title: 'Incomplete: provider data does not cover this whole period.',
+      detail: 'Sales, the card/cash split, cost of goods and Nayax fees are shown with their state instead of a '
+        + 'figure wherever nothing was recorded - they are not a measured zero. Delivery, packaging and operating '
+        + 'expenses come from your own records and are unaffected.'
+    };
+  }
 }

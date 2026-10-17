@@ -44,4 +44,22 @@ public record BookkeepingReportDto(
     public decimal? DirectProfit { get; init; }
     public decimal? DirectMarginPercent { get; init; }
     public NayaxProcessingFeeResult NayaxProcessingFees { get; init; } = new(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null);
+
+    /// <summary>
+    /// How well recorded provider coverage accounts for this period's provider-sourced figures
+    /// (issue #730, parent #329 decision P9). <see cref="ReportProviderAvailabilityDto.Sales"/>
+    /// governs <see cref="Sales"/>, <see cref="CardSales"/>, <see cref="CashSales"/>, their
+    /// transaction counts, <see cref="CostOfGoods"/>/<see cref="PartialCostOfGoods"/>,
+    /// <see cref="GstOnSales"/>, <see cref="SiteCommission"/>, <see cref="NetSettlement"/> and every
+    /// profit and margin built on them; <see cref="ReportProviderAvailabilityDto.Fees"/> governs
+    /// <see cref="Fees"/>, <see cref="NayaxFeesExGst"/>, <see cref="NayaxFeesIncludingGst"/> and
+    /// <see cref="GstOnFees"/>. The locally recorded figures - delivery and package costs, operating
+    /// expenses and their GST - come from this business's own records and carry no provider state:
+    /// they stay visible and exact whatever the provider data looks like.
+    ///
+    /// A state other than <c>Complete</c> means the amounts shown are not known to be all of them,
+    /// so a presentation must show the state rather than the number's zero.
+    /// </summary>
+    public ReportProviderAvailabilityDto ProviderAvailability { get; init; } =
+        ReportProviderAvailabilityDto.Undecided;
 }
