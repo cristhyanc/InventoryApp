@@ -2,6 +2,7 @@ using System.Text.Json;
 using Inventory.Application.Imports;
 using Inventory.Application.Time;
 using InventoryApi.Controllers;
+using InventoryApi.Tests.Application.Providers;
 using InventoryApi.Tests.Swagger;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
@@ -47,7 +48,8 @@ public class ImportsControllerPendingXmlTests
                 Mock.Of<INayaxSalesImportStore>(),
                 Mock.Of<Inventory.Application.Costing.ICostSale>(),
                 Mock.Of<Inventory.Application.Costing.IRebuildProductCost>()),
-            new ImportPendingReimbursementXmlFiles(source.Object, store.Object, Mock.Of<IClock>()));
+            new ImportPendingReimbursementXmlFiles(
+                source.Object, store.Object, Mock.Of<IClock>(), new FakeProviderDataCoverageStore()));
 
         var result = await controller.ImportPendingXmlFiles(CancellationToken.None);
 

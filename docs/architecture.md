@@ -960,6 +960,7 @@ Contains stable business language and deterministic rules:
 - Financial-year/date-range value types where appropriate.
 - Pure reporting calculations such as GST extraction, gross profit, and margins.
 - Purchase GST classification vocabulary, the purchase input-GST rule, its reporting-period aggregation and the purchase line identity rule (`Inventory.Domain.Gst`, `Purchases.PurchaseGstPolicy`, `Reporting.Gst.PurchaseInputGstPolicy`, `Purchases.PurchaseLineIdentityPolicy`; see [Purchase GST classification](#purchase-gst-classification-issue-429) and [Purchase input GST in the GST accounting aid](#purchase-input-gst-in-the-gst-accounting-aid-issue-432)).
+- The provider vocabulary and the report availability rule (`Inventory.Domain.Providers.ExternalProvider`/`ProviderDataSource`, `Inventory.Domain.Reporting.Availability.ReportAvailabilityPolicy`; see [Provider identity link tables](#provider-identity-link-tables-issue-732) and [Report availability model](#report-availability-model-issue-730)).
 
 It must not reference ASP.NET Core, EF Core, HTTP, filesystem APIs, ClosedXML, configuration, or concrete Nayax clients.
 
@@ -8743,6 +8744,130 @@ The import side of that flow (`POST api/imports/pending-xml`) is the
   import](#nayax-product-catalogue-import-issue-300)) and the uploaded sales import under issue #301
   (see [Uploaded transaction export import](#uploaded-transaction-export-import-issue-301)), which
   deleted `ImportService`/`IImportService` entirely.
+
+### Report availability model (issue #730)
+
+Reports used to answer "no sales this month" and "nobody has read this month's sales" with the same
+figure: `0`. Nothing in the application could tell the two apart, because nothing recorded which
+period a run or a file actually covered — the sales synchronization reads a rolling `lastSales`
+window per machine, and settlement imports were recorded per file with no period at all. Issue #730
+(parent #329, decision P9) adds the missing evidence and the one rule that reads it.
+
+**The evidence: `ProviderDataCoverages`.** One additive, tenant-owned, append-only table
+(`Inventory.Infrastructure.Models.ProviderDataCoverage`). A row says: for this business, this
+`ExternalProvider` and this `ProviderDataSource`, every provider record whose instant falls in the
+half-open range `[FromUtc, ToUtc)` is now stored — and `RecordedAtUtc` says when the run that
+claimed it finished. `Source` is part of the row rather than implied, because the three routes
+account for different things: `SalesSync` and `SalesFileImport` account for sale instants, and
+`SettlementImport` for the reimbursement periods the provider itself reported, so a settlement file
+arriving never makes the sales figures complete. There is no unique constraint and no update path:
+successive successful runs legitimately claim overlapping ranges, and the merge below joins them.
+
+**A claim needs range *and* scope evidence.** A coverage row is a business-wide statement, so the
+run that writes it has to be able to say both how far its range reaches and that it covered the
+whole business inside that range. That is why `SalesFileImport` is part of the vocabulary but
+nothing writes it (below): a transaction export declares neither.
+
+**A row is written only for work that fully succeeded**, through the narrow Application port
+`IProviderDataCoverageStore`:
+
+- `SyncLatestNayaxSales` claims `[the latest machine window start, the instant it began reading)`.
+  The *latest* of the per-machine window starts is the only defensible lower bound, because the
+  business-wide claim needs every machine's window to reach back that far; a machine whose window
+  returned nothing constrains it not at all, since "the last N sales" being empty is the provider
+  saying that machine has nothing to miss. The write is last, after every machine was read and the
+  whole batch was persisted and replayed, so a run that failed, was cancelled or failed for one
+  machine records nothing. A batch holding a sale with no authoritative `AuthorizationDateTimeGMT`
+  also records nothing, because the store does not import such a row and the run therefore did not
+  account for its own range; so does a run in which no machine returned a single dated sale, which
+  is evidence of nothing at all.
+- `ImportNayaxSales` claims **nothing at all**, however completely it imported. Importing every row
+  of a workbook says what was stored; it does not say the workbook held every transaction of the
+  span those rows cover. The upload is a file a person exported from Nayax Core and it declares
+  neither its range nor its scope — it may have been filtered to one machine, one payment type or
+  one site — and the authoritative contract carries no requested-period metadata either
+  (`GET /v1/machines/{MachineID}/lastSales` takes only a machine id and returns no window boundary;
+  verified against the Nayax developer portal). Recording the interval between the earliest and
+  latest imported instants, as the first implementation of this issue did, would therefore claim
+  business-wide completeness for time nothing accounted for. The imported sales are reported in
+  full and their period stays `Unverified` until a fully successful synchronization covers it.
+  **Do not reintroduce a range derived from the instants a workbook happens to contain.**
+- `ImportPendingReimbursementXmlFiles` claims the periods the file **proves**, one coverage row per
+  proven interval, immediately after that file's graph is committed. Each reimbursement row declares
+  its own `[ReimbursementStartDate, the midnight after ReimbursementEndDate)` — the provider's own
+  statement of what that row settles, never the payout date and never the import instant
+  (§ Reimbursements and reconciliation in `AGENTS.md`) — and only a row carrying **both** dates
+  declares an interval. Overlapping and exactly touching rows merge into one range through
+  `ReportCoverageRange.Merge`; a **gap between two rows is never bridged**, because a file settling
+  July and September proves nothing about August. Pooling the earliest start with the latest end, as
+  the first implementation did, claimed exactly those unsettled days. The claim is business-wide
+  because the row is: a reimbursement row is the operator account's own statement for its period,
+  carrying the account's company name, customer id and device counts with every device it settles
+  nested beneath it, and `EfReportingSharedQueries.ImportedSummaryAsync` sums the reports' fee
+  figures from exactly those rows and devices — so coverage claims the same scope as the figures it
+  governs. A file that declares no period, a duplicate, and an unreadable file all claim nothing.
+
+**One merge, used in both places: `ReportCoverageRange.Merge`.** Overlapping and exactly touching
+ranges become one range, because two successful runs that meet at an instant leave nothing uncovered
+between them; a gap is never bridged. It is the Domain's single implementation, called where coverage
+is recorded as well as where a report decides a state, so the two cannot disagree about what a set of
+intervals proves.
+
+**The rule: `Inventory.Domain.Reporting.Availability.ReportAvailabilityPolicy`.** Given a period,
+the coverage overlapping it and whether the period holds any provider data, it clips and merges the
+ranges and returns exactly one of four states:
+
+| State | When | What it means for a zero |
+| --- | --- | --- |
+| `Complete` | merged coverage spans the whole period | a zero is a real zero — this is the only such state |
+| `Stale` | covered without a gap from the period start to a point before its end, reported "as of" that instant | the figures are complete up to that instant and say nothing after it |
+| `Unverified` | data exists that coverage does not account for: it predates coverage recording, or a failed or partial run left a gap | real partial data, not known to be all of it |
+| `Missing` | no coverage and no data | the figures are absent, not zero |
+
+The states are answers, never labels on each other, and `ReportAvailabilityState` is numbered in
+severity order (`Missing = 0` … `Complete = 3`) so a figure derived from several sources takes the
+least complete of them through `LeastComplete` — and so a state nothing decided can never read as
+complete. "Does the period hold data" is counted from stored rows before the completed-sale filter,
+not from an amount: a period holding only cancelled rows has sales data and a gross total of zero.
+
+**What the reports do with it.** `GetBookkeepingReport` decides two states per period — sales, from
+`SalesSync` + `SalesFileImport` coverage; fees, from `SettlementImport` coverage — derives a third,
+`Combined`, as the least complete of the two, adds a conditional data-quality note for each family
+that is not complete, and returns all three in `BookkeepingReportDto.ProviderAvailability`.
+`GetGstAccountingAid` reports the same block and repeats the combined state as `NetGstAvailability`,
+under the name of the figure a reader is looking at, because net GST subtracts both. The combination
+is made once, on the server, by the Domain `LeastComplete` rule — no presentation combines two
+states itself. The state travels as the enum's **name**, so a renumbered enum cannot silently change
+what a stored response meant. Which figures each state governs is written out on the two DTOs; the
+short version is that every provider-sourced figure carries one, a figure depending on both families
+(net and direct profit and their margins, the net card settlement, total operating costs, net GST)
+carries the combined one, and every figure the business records itself — delivery and package costs,
+operating expenses and their GST, purchase input GST — carries none and stays visible and exact.
+
+**Every surface follows the same rule, including the exports.** The Angular reports render
+`moneyOrState`/`percentOrState`, which print the state instead of a figure wherever an incomplete
+period's amount would otherwise read as a bare `$0.00` or `0.0%`, and a badge beside a real partial
+amount; that applies to every provider-dependent figure in every section of both pages, not only the
+headline cards. Both pages show one banner saying the provider side is incomplete and the business's
+own records are not. The bookkeeping and GST CSV/XLSX exports apply the identical rule through
+`Inventory.Application.Reporting.Export.AvailabilityExportCells` and add explicit
+`SalesDataAvailability`/`SalesDataAsOfUtc`/`FeeDataAvailability`/`FeeDataAsOfUtc` columns, plus
+`CombinedDataAvailability` on bookkeeping and `NetGstAvailability` and `DataQualityNotes` on GST — an
+exported file is read away from the application and pasted into a working paper, so it is the surface
+where an unlabelled `0` does the most damage. A status count stays a plain count there, as it is a
+statement about the stored rows themselves and the report's own UI shows it that way.
+
+**One behaviour change beyond labelling:** the GST accounting aid no longer raises the
+"GST classification missing" warning when no settlement file has been imported at all. That flag is
+about imported reimbursement rows, and a period with none has no rows to be missing a
+classification; the fee availability state is what reports that the fee figures are unavailable.
+
+The table starts empty and is deliberately not backfilled: a coverage row is evidence that one run
+retrieved one range, and no such evidence exists for anything that happened before the table did.
+Periods before this ships therefore report `Unverified` — which is exactly what they are. Reports
+other than these two — daily, reconciliation, transactions, machine/product profitability, the
+dashboard — and their exports keep their current behaviour until #731 (F2); the report provider
+filter arrives with the second provider (parent #329, P5).
 
 ### Provider identity link tables (issue #732)
 

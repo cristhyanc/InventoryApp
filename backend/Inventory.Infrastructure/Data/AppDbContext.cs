@@ -86,6 +86,13 @@ public class AppDbContext : DbContext
     /// </summary>
     public DbSet<ProductExternalId> ProductExternalIds => Set<ProductExternalId>();
     public DbSet<CategoryExternalId> CategoryExternalIds => Set<CategoryExternalId>();
+
+    /// <summary>
+    /// What each fully successful provider sync or committed import actually accounted for (issue
+    /// #730). Append-only, overlapping by design, and the one evidence a report has for telling an
+    /// empty period apart from an unread one; see <see cref="ProviderDataCoverage"/>.
+    /// </summary>
+    public DbSet<ProviderDataCoverage> ProviderDataCoverages => Set<ProviderDataCoverage>();
     public DbSet<StockAdjustment> StockAdjustments => Set<StockAdjustment>();
     public DbSet<Purchase> Receipts => Set<Purchase>();
     public DbSet<NayaxSales> NayaxSales => Set<NayaxSales>();
@@ -191,6 +198,7 @@ public class AppDbContext : DbContext
         ConfigureMemberInvites(modelBuilder);
         ConfigureSupportSessions(modelBuilder);
         ConfigureProviderLinks(modelBuilder);
+        ConfigureProviderDataCoverage(modelBuilder);
 
         modelBuilder.Entity<Product>()
             .Property(p => p.UnitPrice)
@@ -966,6 +974,28 @@ public class AppDbContext : DbContext
             .HasForeignKey(link => new { link.BusinessId, link.CategoryId })
             .HasPrincipalKey(category => new { category.BusinessId, category.Id })
             .OnDelete(DeleteBehavior.Cascade);
+    }
+
+    /// <summary>
+    /// Maps the provider data coverage record (issue #730, parent #329 decision P9).
+    ///
+    /// <para>No uniqueness constraint, deliberately. Two successful runs legitimately claim
+    /// overlapping - even identical - ranges, because each one read a rolling window that reaches
+    /// back past the previous run; a unique index would reject the second and silently turn a
+    /// successful run into no evidence at all. Duplication is harmless here because the availability
+    /// policy merges ranges rather than counting them.</para>
+    ///
+    /// <para>The index is the shape every read has: this business's rows of one provider and source,
+    /// ordered by where their range starts. The tenant query filter supplies the business predicate,
+    /// so <c>BusinessId</c> leads the index for the same reason it does on every other owned table.</para>
+    /// </summary>
+    private static void ConfigureProviderDataCoverage(ModelBuilder modelBuilder)
+    {
+        var coverage = modelBuilder.Entity<ProviderDataCoverage>();
+
+        coverage.Property(x => x.Provider).IsRequired();
+        coverage.Property(x => x.Source).IsRequired();
+        coverage.HasIndex(x => new { x.BusinessId, x.Provider, x.Source, x.FromUtc });
     }
 
     /// <summary>

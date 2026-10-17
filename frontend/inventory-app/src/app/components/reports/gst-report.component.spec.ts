@@ -71,8 +71,9 @@ describe('GstReportComponent purchase input GST (issue #432)', () => {
   it('displays the net GST the API calculated and never recalculates it in the browser', async () => {
     const { component } = await render(report({ netGst: -1.23, inventoryPurchaseGst: 11.23 }));
 
-    const netGstCard = component.cards(component.report!).find(card => card[0].startsWith('Estimated GST payable'));
-    expect(netGstCard![1]).toBe(-1.23);
+    const netGstCard = component.cards(component.report!).find(card => card.key === 'net-gst');
+    expect(netGstCard!.label).toBe('Estimated GST payable');
+    expect(netGstCard!.value).toBe(-1.23);
   });
 
   it('renders the data-quality notes the API supplied', async () => {

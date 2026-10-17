@@ -1,5 +1,8 @@
 using Inventory.Application.Nayax;
+using Inventory.Application.Providers;
 using Inventory.Application.Tenancy;
+using Inventory.Application.Time;
+using Inventory.Domain.Providers;
 
 namespace Inventory.Application.SalesSync;
 
@@ -49,6 +52,12 @@ public sealed record NayaxSalesSyncOutcome
 /// and the database untouched. The business is resolved from the authenticated actor's membership,
 /// never from the request, because the allowance belongs to the business whose Nayax account and
 /// rows the run would spend.</para>
+///
+/// <para><strong>A fully successful run records what it covered</strong> (issue #730, parent #329
+/// decision P9), through <see cref="IProviderDataCoverageStore"/>. That record is the only thing
+/// that lets a report tell "no sales" apart from "no sales data", so it is written last and only
+/// once everything above succeeded: a failed, cancelled or partly read run leaves no coverage, and
+/// the gap it leaves is reported as unverified rather than as a measured zero.</para>
 /// </summary>
 public sealed class SyncLatestNayaxSales
 {
@@ -56,17 +65,23 @@ public sealed class SyncLatestNayaxSales
     private readonly ILatestNayaxSalesStore _store;
     private readonly NayaxSalesSyncRateLimiter _rateLimiter;
     private readonly ICurrentBusinessProvider _currentBusiness;
+    private readonly IProviderDataCoverageStore _coverage;
+    private readonly IClock _clock;
 
     public SyncLatestNayaxSales(
         INayaxLynxClient nayax,
         ILatestNayaxSalesStore store,
         NayaxSalesSyncRateLimiter rateLimiter,
-        ICurrentBusinessProvider currentBusiness)
+        ICurrentBusinessProvider currentBusiness,
+        IProviderDataCoverageStore coverage,
+        IClock clock)
     {
         _nayax = nayax;
         _store = store;
         _rateLimiter = rateLimiter;
         _currentBusiness = currentBusiness;
+        _coverage = coverage;
+        _clock = clock;
     }
 
     public async Task<NayaxSalesSyncOutcome> Handle(CancellationToken cancellationToken = default)
@@ -81,22 +96,79 @@ public sealed class SyncLatestNayaxSales
             return NayaxSalesSyncOutcome.RateLimited(retryAfter);
         }
 
+        // Taken before the first read, so the range this run may claim never reaches past an instant
+        // a sale could still have been authorized at while the run was reading.
+        var readStartedAtUtc = _clock.UtcNow;
+
         var machines = await _nayax.GetMachinesAsync(cancellationToken);
 
         // Every machine's latest sales are read before anything is persisted, so the batch is stored
         // in one save: a machine read that fails part-way through does not leave half a refresh
-        // imported, exactly as the single save at the end of the former private method did.
+        // imported, exactly as the single save at the end of the former private method did. It also
+        // means a machine that fails leaves no coverage at all (issue #730): the exception
+        // propagates from here, before the coverage write below.
         var sales = new List<NayaxLastSalesReport>();
+        var windowStarts = new List<DateTime>();
+        var everyReadSaleHasAnInstant = true;
         foreach (var machine in machines)
-            sales.AddRange(await _nayax.GetMachineLastSalesAsync(machine.MachineID, cancellationToken));
+        {
+            var machineSales = await _nayax.GetMachineLastSalesAsync(machine.MachineID, cancellationToken);
+            sales.AddRange(machineSales);
+
+            var instants = machineSales.Select(sale => sale.AuthorizationInstantUtc).ToList();
+            everyReadSaleHasAnInstant &= instants.TrueForAll(instant => instant.HasValue);
+
+            // The earliest sale this machine's rolling window returned is the furthest back the
+            // window demonstrably reaches for it. A machine that returned nothing constrains the
+            // claim not at all: "the last N sales" being empty is the provider saying this machine
+            // has no sales to miss.
+            var earliest = instants.Where(instant => instant.HasValue).Select(instant => instant!.Value).ToList();
+            if (earliest.Count > 0)
+                windowStarts.Add(earliest.Min());
+        }
 
         var persisted = await _store.PersistLatestSalesAsync(sales, cancellationToken);
-        if (persisted.EarliestCompletedSaleByProductId.Count == 0)
-            return NayaxSalesSyncOutcome.Completed;
+        if (persisted.EarliestCompletedSaleByProductId.Count > 0)
+            await _store.RebuildInventoryCostsAsync(
+                persisted.EarliestCompletedSaleByProductId, cancellationToken);
 
-        await _store.RebuildInventoryCostsAsync(
-            persisted.EarliestCompletedSaleByProductId, cancellationToken);
+        await RecordCoverageAsync(windowStarts, everyReadSaleHasAnInstant, readStartedAtUtc, cancellationToken);
 
         return NayaxSalesSyncOutcome.Completed;
+    }
+
+    /// <summary>
+    /// Records what this run accounted for (issue #730), and only ever after every machine was read
+    /// and the whole batch was persisted and replayed - a run that threw anywhere above never gets
+    /// here, which is exactly the rule that a partial run records no coverage.
+    ///
+    /// <para>The range claimed is <c>[the latest machine window start, the instant reading began)</c>.
+    /// Every machine's window has to reach back at least that far for the business-wide claim "every
+    /// sale in this range is now stored" to hold, so the <em>latest</em> of the per-machine window
+    /// starts is the only defensible lower bound. Successive runs overlap, because each window
+    /// normally reaches back further than the previous run's end, and the availability policy merges
+    /// them into one contiguous coverage.</para>
+    ///
+    /// <para>Two cases claim nothing rather than guessing. A payload item carrying no authoritative
+    /// instant is not imported at all by the store, so a batch containing one did not account for
+    /// its own range. And a run in which no machine returned a single dated sale has no evidence of
+    /// how far any window reaches - it knows only that the windows were empty, not what period that
+    /// covers - so it records nothing and the period stays unverified rather than falsely complete.</para>
+    /// </summary>
+    private async Task RecordCoverageAsync(
+        List<DateTime> windowStarts,
+        bool everyReadSaleHasAnInstant,
+        DateTime readStartedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        if (!everyReadSaleHasAnInstant || windowStarts.Count == 0)
+            return;
+
+        var from = windowStarts.Max();
+        if (from >= readStartedAtUtc)
+            return;
+
+        await _coverage.RecordAsync(
+            ExternalProvider.Nayax, ProviderDataSource.SalesSync, from, readStartedAtUtc, cancellationToken);
     }
 }

@@ -49,6 +49,18 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 ///   is deliberately *not* applied here: that sync can never reconsider a sale it has already
 ///   stored, whereas re-uploading the export runs this import again, so failing loudly and
 ///   staging nothing is still the right answer. Whole-import atomicity is a separate change.</item>
+///   <item><b>This import records no provider data coverage</b> (issue #730, parent #329 decision
+///   P9). Importing every row of a workbook successfully says what was stored; it does not say that
+///   the workbook held every transaction of the span those rows cover. The upload is a file a person
+///   exported from Nayax Core, and it carries no statement of its own range or scope: it may have
+///   been filtered to one machine, one payment type, one site or any other criterion, and the
+///   authoritative <c>lastSales</c> contract carries no requested-period or scope metadata either
+///   (verified against the Nayax developer portal: <c>GET /v1/machines/{MachineID}/lastSales</c>
+///   takes only a machine id and returns no window boundary). Deriving a covered interval from the
+///   earliest and latest instants it happens to contain would therefore claim completeness for time
+///   nothing accounted for - precisely the false zero this coverage record exists to prevent. The
+///   imported sales are reported in full and their period stays <c>Unverified</c> until a fully
+///   successful synchronization covers it.</item>
 /// </list>
 /// </summary>
 public sealed class ImportNayaxSales

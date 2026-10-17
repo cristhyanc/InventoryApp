@@ -1,6 +1,7 @@
 using System.Globalization;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting;
+using Inventory.Domain.Reporting.Availability;
 using Inventory.Domain.Reporting.Bookkeeping;
 
 namespace Inventory.Application.Reporting.Bookkeeping;
@@ -65,6 +66,17 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             qualityNotes.Add($"Commission configuration is incomplete; {(isMachineFiltered ? "direct profit" : "net profit")} is unavailable.");
         qualityNotes.AddRange(facts.CommissionWarnings);
 
+        // How well recorded provider coverage accounts for this period (issue #730). The two
+        // families are decided separately, from the sources that actually feed them: sale instants
+        // for the sales figures, imported reimbursement periods for the fee figures. A settlement
+        // file arriving never makes the sales figures complete, and vice versa.
+        var salesAvailability = ReportAvailabilityPolicy.Decide(
+            range.From, range.EndExclusive, facts.SalesCoverage, facts.ContainsSalesRows);
+        var feesAvailability = ReportAvailabilityPolicy.Decide(
+            range.From, range.EndExclusive, facts.SettlementCoverage, facts.ImportedContainsRows);
+        AddAvailabilityNote(qualityNotes, salesAvailability, SalesFigures, "no sales data is recorded for it");
+        AddAvailabilityNote(qualityNotes, feesAvailability, FeeFigures, "no settlement data is imported for it");
+
         // Conditional, scope-derived diagnostics (issue #476): every note above comes from a fact in
         // the requested business, date range and machine scope, and the calculation methodology this
         // report used lives in its "How this report is calculated" help instead. An empty note list
@@ -100,7 +112,42 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             OperatingExpensesByCategory = facts.OperatingExpensesByCategory,
             DirectProfit = profit.DirectProfit,
             DirectMarginPercent = profit.DirectMarginPercent,
-            NayaxProcessingFees = facts.ProcessingFees
+            NayaxProcessingFees = facts.ProcessingFees,
+            ProviderAvailability = ReportProviderAvailabilityDto.From(salesAvailability, feesAvailability)
         };
+    }
+
+    private const string SalesFigures = "Sales, the card/cash split, cost of goods and profit";
+    private const string FeeFigures = "Nayax processing fees and the GST on them";
+
+    /// <summary>
+    /// The one wording of each non-complete availability state, shared by the figure families so a
+    /// reader is told the same thing about a gap wherever it is (issue #730). A complete period adds
+    /// nothing: an empty note list means no problem was detected, exactly as issue #476 established.
+    ///
+    /// The stale note prints a UTC instant rather than a business date on purpose. It is the moment
+    /// coverage reaches, not a business day, and the business reporting timezone governs which day a
+    /// sale belongs to - not how an "as of" instant is spelled (AGENTS.md § Reporting dates and
+    /// filters).
+    /// </summary>
+    private static void AddAvailabilityNote(
+        List<string> notes, ReportAvailability availability, string figures, string missingReason)
+    {
+        switch (availability.State)
+        {
+            case ReportAvailabilityState.Missing:
+                notes.Add($"{figures} are unavailable for this period: {missingReason}, and no synchronization or import covered it. The figures shown are not a measured zero.");
+                break;
+            case ReportAvailabilityState.Stale:
+                notes.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{figures} are accounted for only as of {availability.AsOfUtc:yyyy-MM-dd HH:mm} UTC; the rest of this period has not been covered by a successful synchronization or import."));
+                break;
+            case ReportAvailabilityState.Unverified:
+                notes.Add($"{figures} are not accounted for across the whole period: the data predates coverage recording, or a failed or partial run left a gap. The amounts shown may be incomplete.");
+                break;
+            case ReportAvailabilityState.Complete:
+            default:
+                break;
+        }
     }
 }
