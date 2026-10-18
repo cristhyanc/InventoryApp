@@ -5,8 +5,12 @@ namespace InventoryApi.Tests.Application.Products;
 
 public class UpdateProductTests
 {
-    private static ProductUpdateFields ValidFields(int lowStockThreshold = 5, int restockTo = 10) =>
-        new("SKU-1", null, lowStockThreshold, restockTo, "unit", null, true);
+    private static ProductUpdateFields ValidFields(
+        int lowStockThreshold = 5,
+        int restockTo = 10,
+        string? name = "Coke",
+        decimal unitPrice = 2.50m) =>
+        new(name, "SKU-1", null, unitPrice, lowStockThreshold, restockTo, "unit", null, null, true);
 
     [Fact]
     public async Task Handle_UpdatesTheProduct_WhenFieldsAreValid()
@@ -59,6 +63,72 @@ public class UpdateProductTests
 
         Assert.Equal(UpdateProductOutcome.NotFound, result.Outcome);
         Assert.Null(store.LastUpdatedId);
+    }
+
+    /// <summary>
+    /// Issue #736: the name, the selling price and the category reach the store, because a business
+    /// without a sales provider maintains its own catalogue and this is the only place those three
+    /// fields can be changed.
+    /// </summary>
+    [Fact]
+    public async Task Handle_PassesTheNamePriceAndCategoryToTheStore()
+    {
+        var store = new FakeProductStore([1]);
+
+        var result = await new UpdateProduct(store).Handle(
+            1,
+            new ProductUpdateFields("Coke Zero", "SKU-1", null, 4.25m, 5, 10, "can", 9, null, true),
+            CancellationToken.None);
+
+        Assert.Equal(UpdateProductOutcome.Success, result.Outcome);
+        Assert.Equal(("Coke Zero", 4.25m, (long?)9), (
+            store.LastUpdated!.Name, store.LastUpdated.UnitPrice, store.LastUpdated.CategoryId));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    public async Task Handle_RejectsAMissingName_WithoutPersisting(string? name)
+    {
+        var store = new FakeProductStore([1]);
+
+        var result = await new UpdateProduct(store).Handle(1, ValidFields(name: name), CancellationToken.None);
+
+        Assert.Equal(UpdateProductOutcome.Invalid, result.Outcome);
+        Assert.Equal(Inventory.Domain.Products.ProductCataloguePolicy.NameRequiredMessage, result.ValidationError);
+        Assert.Null(store.LastUpdatedId);
+    }
+
+    [Fact]
+    public async Task Handle_RejectsANegativeUnitPrice_WithoutPersisting()
+    {
+        var store = new FakeProductStore([1]);
+
+        var result = await new UpdateProduct(store).Handle(
+            1, ValidFields(unitPrice: -1m), CancellationToken.None);
+
+        Assert.Equal(UpdateProductOutcome.Invalid, result.Outcome);
+        Assert.Equal(
+            Inventory.Domain.Products.ProductCataloguePolicy.NegativeUnitPriceMessage,
+            result.ValidationError);
+        Assert.Null(store.LastUpdatedId);
+    }
+
+    /// <summary>
+    /// A refusal the store decided from stored data - a provider-managed field, a category of
+    /// another business - reaches the caller as its own message, not as a generic failure and not as
+    /// a success. What each refusal means is proved against the real adapter in
+    /// <c>InventoryApi.Tests.Adapters.Persistence.EfProductCatalogueWriteTests</c>.
+    /// </summary>
+    [Fact]
+    public async Task Handle_ReportsTheStoresOwnRefusal()
+    {
+        var store = new FakeProductStore([1]) { RefusalToReturn = "This product's name is managed by Nayax." };
+
+        var result = await new UpdateProduct(store).Handle(1, ValidFields(), CancellationToken.None);
+
+        Assert.Equal(UpdateProductOutcome.Invalid, result.Outcome);
+        Assert.Equal("This product's name is managed by Nayax.", result.ValidationError);
     }
 
     [Fact]

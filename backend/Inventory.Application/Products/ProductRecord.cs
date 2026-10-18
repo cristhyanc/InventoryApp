@@ -37,6 +37,18 @@ public sealed record ProductRecord
     public IReadOnlyList<ProductStockAdjustmentRecord> StockAdjustments { get; init; } = [];
 
     /// <summary>
+    /// Whether the business's sales provider names this product - that is, whether the row carries an
+    /// <c>ExternalProductId</c> (issue #736). It is the fact, not the identifier: a provider's id is
+    /// integration state that no reader of a product needs, and
+    /// <c>Inventory.Domain.Providers.ProviderManagedCatalogueFields</c> turns this one bit into the
+    /// fields a client must lock and the refusal a local edit of one gets.
+    ///
+    /// <para>Not <c>required</c>: a read path that does not resolve it leaves it <c>false</c>, which
+    /// is what every product of a business with no provider is.</para>
+    /// </summary>
+    public bool IsProviderManaged { get; init; }
+
+    /// <summary>
     /// Units the machines currently need refilled from storage. Zero unless a caller resolved the
     /// live machine fleet (<see cref="ListLowStockProducts"/>), exactly as the former
     /// <c>ProductService.GetAll</c>/<c>Get</c> left it unset.

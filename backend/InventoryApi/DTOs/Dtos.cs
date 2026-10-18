@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 // Imported for StockAdjustmentDto.Reason only - the temporary compatibility exception documented on
 // that record (issue #305). No other DTO in this file names the persistence model.
 using Inventory.Infrastructure.Models;
@@ -6,6 +8,20 @@ using Inventory.Domain.Gst;
 
 namespace InventoryApi.DTOs;
 
+/// <summary>
+/// The product a client posts to <c>POST /api/products</c> (issue #736, parent #329 decision P2).
+/// The record itself predates the route: products only ever arrived through the Nayax catalogue
+/// import, so a business without a sales provider had no catalogue at all.
+///
+/// <para><c>CategoryId</c> is a <c>long</c>, like the category key it names: since issue #735 a
+/// category's id is assigned by the database, so it is not bounded by the Nayax group ids the
+/// previous <c>int</c> happened to fit. Widening a request field accepts every value it accepted
+/// before.</para>
+///
+/// <para>No owning business, and no provider id: the business comes from the caller's membership
+/// (AGENTS.md § Tenant ownership and data isolation), and <c>ExternalProductId</c> is written only
+/// by a provider import or the catalogue review (issue #738).</para>
+/// </summary>
 public record ProductCreateDto(
     string Name,
     string? Sku,
@@ -15,12 +31,21 @@ public record ProductCreateDto(
     int LowStockThreshold,
     int RestockTo,
     string? Unit,
-    int? CategoryId,
+    long? CategoryId,
     int? SupplierId,
     bool IsActive,
     decimal? InitialUnitCost = null
 );
 
+/// <summary>
+/// The product a client puts to <c>PUT /api/products/{id}</c>.
+///
+/// <para>Since issue #736 the action binds <c>Name</c>, <c>UnitPrice</c> and <c>CategoryId</c> as
+/// well, which this record always carried and the action ignored. For a product the business's sales
+/// provider names, a <em>change</em> to the name or the category is refused with <c>400</c> and a
+/// message naming that provider; sending the stored values back is not a change, and the price and
+/// every other field here stay editable for every product.</para>
+/// </summary>
 public record ProductUpdateDto(
     string Name,
     string? Sku,
@@ -29,7 +54,7 @@ public record ProductUpdateDto(
     int LowStockThreshold,
     int RestockTo,
     string? Unit,
-    int? CategoryId,
+    long? CategoryId,
     int? SupplierId,
     bool IsActive
 );
@@ -69,9 +94,32 @@ public record RestockCostSuggestionDto(
     DateTime? PurchaseDate
 );
 
+/// <summary>
+/// The category a client posts to <c>POST /api/categories</c> or puts to
+/// <c>PUT /api/categories/{id}</c> (issue #736). A category has nothing else: its provider id is
+/// written only by a provider import or the catalogue review (issue #738), and its products point at
+/// it rather than being listed here.
+/// </summary>
 public record CategoryDto(string Name, string? Description);
 
-public record CategoryResponse(long Id, string Name, string? Description);
+/// <summary>
+/// The wire shape of a category: on <c>/api/categories</c>, and as the nested <c>category</c> of a
+/// product.
+///
+/// <para><see cref="ProviderManagedFields"/> (issue #736) names the fields the business's sales
+/// provider manages on this category - <c>["name"]</c> for a category the provider named, an empty
+/// array for a local one - so a client locks exactly the inputs the server will refuse. It is
+/// <see langword="null"/>, and then omitted from the JSON entirely, wherever a category is carried
+/// as part of another resource: the nested <c>category</c> of a product is a snapshot of a pinned
+/// payload (<c>InventoryApi.Tests.DTOs.ProductJsonContractTests</c>) and is not an editing surface,
+/// so it says nothing about locks rather than saying "none".</para>
+/// </summary>
+public record CategoryResponse(
+    long Id,
+    string Name,
+    string? Description,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<string>? ProviderManagedFields = null);
 
 public record SupplierDto(string Name, string? ContactName, string? Phone, string? Email, string? Address);
 

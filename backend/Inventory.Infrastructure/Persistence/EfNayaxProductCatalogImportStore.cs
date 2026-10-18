@@ -154,6 +154,16 @@ public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImpor
     }
 
     /// <summary>
+    /// The business's products that carry no <c>ExternalProductId</c> - the manually maintained rows
+    /// this import cannot recognise (issue #736). Scoped to the caller's business by the central
+    /// query filters, like every other read here, and untracked because it is a count.
+    /// </summary>
+    public Task<int> CountProductsWithNoProviderIdAsync(CancellationToken cancellationToken) =>
+        _db.Products
+            .AsNoTracking()
+            .CountAsync(product => product.ExternalProductId == null, cancellationToken);
+
+    /// <summary>
     /// Refuses to run at all unless the current business's sales provider is Nayax (issue #759).
     ///
     /// <para>The external id columns this import reads and writes hold the id issued by

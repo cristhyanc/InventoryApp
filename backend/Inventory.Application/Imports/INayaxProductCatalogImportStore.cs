@@ -30,6 +30,17 @@ public interface INayaxProductCatalogImportStore
     /// source-state reconciliation).
     /// </summary>
     Task ApplyAsync(NayaxProductCatalogImport import, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// How many of the business's products carry no <c>ExternalProductId</c> - the products this
+    /// import cannot recognise, because it identifies a product only by the provider's own id
+    /// (issue #736, parent #329 decision P2).
+    ///
+    /// <para>It is a count rather than a yes/no because the refusal says how many rows are in the
+    /// way, and it is read before the remote catalogue, so a business the import would duplicate
+    /// never reaches Nayax at all.</para>
+    /// </summary>
+    Task<int> CountProductsWithNoProviderIdAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>

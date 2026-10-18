@@ -85,6 +85,10 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
         RestockTo = product.RestockTo,
         Unit = product.Unit,
         IsActive = product.IsActive,
+        // Whether the business's sales provider names this product, never the id itself (issue
+        // #736): a provider's identifier is integration state, and what a reader of the catalogue
+        // needs is which fields are locked.
+        IsProviderManaged = product.ExternalProductId is not null,
         CreatedAt = product.CreatedAt,
         UpdatedAt = product.UpdatedAt,
         CategoryId = product.CategoryId,
