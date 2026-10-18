@@ -854,7 +854,7 @@ InventoryApp/
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
 │   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, the three Imports use cases (ImportPendingReimbursementXmlFiles, ImportNayaxProductCatalog, ImportNayaxSales) with their source/reader/store ports, Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
 │   ├── Inventory.Infrastructure/    Data/AppDbContext.cs and Data/BusinessOwnershipEnforcer.cs, Models/ (EF entities and enums), Migrations/ (SQLite schema history) — all since issue #307; Reporting.Persistence.Ef<Feature>…FactsProvider (the ten reporting EF fact providers), Reporting.Persistence.EfReportingSharedQueries and Data.EfNayaxSalesQueries — all since issue #308; Persistence.Ef<Feature>Store/Provider (every other EF persistence adapter) and Persistence.NayaxSaleCosting — all since issue #309; Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client) and Nayax.NayaxCatalogSnapshotProvider, SystemClock/CurrentBusinessCalendar/ZonedBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), FileSystemPendingReimbursementXmlSource and ClosedXmlNayaxSalesWorkbookReader (Inventory.Infrastructure.Imports), Reporting.ReportExportFileWriter (CSV/XLSX byte encoding), Sites.SiteNameResolver, the verified-snapshot blob uploader (Inventory.Infrastructure.Backups); other features not yet migrated
-│   │   ├── Data/                    AppDbContext, tenant query filters, BusinessOwnershipEnforcer, EfNayaxSalesQueries
+│   │   ├── Data/                    AppDbContext, tenant query filters, BusinessOwnershipEnforcer, EfNayaxSalesQueries, EfSalesProviderQueries
 │   │   ├── Migrations/              SQLite schema history and AppDbContextModelSnapshot
 │   │   ├── Models/                  EF entities and enums
 │   │   ├── Persistence/             Every non-reporting EF adapter behind an Application persistence port (issue #309)
@@ -960,7 +960,7 @@ Contains stable business language and deterministic rules:
 - Financial-year/date-range value types where appropriate.
 - Pure reporting calculations such as GST extraction, gross profit, and margins.
 - Purchase GST classification vocabulary, the purchase input-GST rule, its reporting-period aggregation and the purchase line identity rule (`Inventory.Domain.Gst`, `Purchases.PurchaseGstPolicy`, `Reporting.Gst.PurchaseInputGstPolicy`, `Purchases.PurchaseLineIdentityPolicy`; see [Purchase GST classification](#purchase-gst-classification-issue-429) and [Purchase input GST in the GST accounting aid](#purchase-input-gst-in-the-gst-accounting-aid-issue-432)).
-- The provider vocabulary and the report availability rule (`Inventory.Domain.Providers.ExternalProvider`/`ProviderDataSource`, `Inventory.Domain.Reporting.Availability.ReportAvailabilityPolicy`; see [Provider identity link tables](#provider-identity-link-tables-issue-732) and [Report availability model](#report-availability-model-issue-730)).
+- The provider vocabulary and the report availability rule (`Inventory.Domain.Providers.ExternalProvider`/`ProviderDataSource`, `Inventory.Domain.Reporting.Availability.ReportAvailabilityPolicy`; see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-and-759) and [Report availability model](#report-availability-model-issue-730)).
 
 It must not reference ASP.NET Core, EF Core, HTTP, filesystem APIs, ClosedXML, configuration, or concrete Nayax clients.
 
@@ -2572,6 +2572,14 @@ stores and infers nothing — moving the existing configured credential is the h
 starts with no row at all, which is what `NotConfigured` means.
 `BusinessNayaxConnections` is deliberately **not** on the [platform diagnostics](#platform-diagnostics-issue-336)
 allow-list and must not be added to it.
+
+**Storing the credential also records the business's sales provider** (issue #759).
+`SaveCredentialAsync` claims `Business.SalesProvider = Nayax` while that column is empty, in the same
+transaction as the credential, and refuses the save when the business already sells through a
+different provider — a business has one sales provider, and switching it is a separate design (#761).
+That belongs to this one port rather than to each of its callers, so no path can store credentials
+without recording the provider they belong to. See
+[Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-and-759).
 
 **Encryption lives in Infrastructure, behind `INayaxTokenProtector`.** `AesGcmNayaxTokenProtector`
 encrypts with AES-256-GCM, a fresh random nonce per encryption, and stores
@@ -7280,7 +7288,8 @@ import rules extracted from the former `MachineService.SaveMachinesLastSalesAsyn
 by `TransactionID`, Nayax product matching (through the Domain `ProductMatcher` directly since issue
 #301 removed the `NayaxProductMatcher` wrapper; the candidate selection, the name fallback and the
 business scoping are unchanged, and since issue #745 a payload item's `NayaxProductID` is resolved
-through this business's `ProductExternalIds` link instead of being compared with `Product.Id` - see
+through the id recorded on this business's product (`Product.ExternalProductId` since issue #759)
+instead of being compared with `Product.Id` - see
 [Resolving Nayax ids in the sale paths, the catalogue import and
 reconciliation](#resolving-nayax-ids-in-the-sale-paths-the-catalogue-import-and-reconciliation-issue-745)),
 the settlement-value completed/cancelled default,
@@ -8809,10 +8818,11 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   are classified by the Domain `NayaxTransactionStatusClassifier` and products matched by the Domain
   `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` on the store's candidate projection;
   neither status identifiers nor matching rules are reimplemented. Since issue #745 a row's remote
-  `NayaxProductID` is resolved to a local product through this business's `ProductExternalIds` link
-  (read once per import through `INayaxProductLinkStore`) before that matcher's name fallback, rather
-  than compared with `Product.Id`; an id with no link is an unknown product, handled exactly as an
-  unmatched id already was. An export carrying no data row at
+  `NayaxProductID` is resolved to a local product through the id recorded on this business's product
+  (`Product.ExternalProductId` since issue #759, read once per import through
+  `INayaxProductLinkStore`) before that matcher's name fallback, rather than compared with
+  `Product.Id`; an id recorded on no product is an unknown product, handled exactly as an unmatched
+  id already was. An export carrying no data row at
   all reads nothing and writes nothing, not even the catalogue.
 - **Workbook/CSV parsing** sits behind the `INayaxSalesWorkbookReader` port, implemented by
   `Inventory.Infrastructure.Imports.ClosedXmlNayaxSalesWorkbookReader` - a real Infrastructure
@@ -9191,73 +9201,101 @@ count — a count of `0` with no coverage behind it reads as "nothing happened h
 does, and must not be formatted as currency. Every page keeps one banner saying the provider side is
 incomplete and the business's own records are not.
 
-### Provider identity link tables (issue #732)
+### Provider identity on the local row (issues #732 and #759)
 
 `Product.Id` and `Category.Id` *are* the Nayax `NayaxProductID` and `ProductGroupID`: the catalogue
 import below writes the remote identifier as the local primary key. A local key that another system
 issues is global rather than per business, cannot be chosen at all by a business with no provider
 connected, and has room for exactly one provider's answer. Issue #732 (child A1 of #329, decision
-P1) adds the place a provider id belongs instead — and does only that. No existing id, foreign key
-or behaviour changes, and that slice read no link: the live-machine features resolve through one in
-#733 (A2, below), the sale paths, the catalogue import and catalogue reconciliation in #745 (A2b,
-below), and costing and timestamp repair (#747, A2c) and the reporting queries (#734, A3) still read
-`Product.Id` as a Nayax id. Database-generated ids for new rows are #735 (A4).
+P1) added the place a provider id belongs instead — two link tables, `ProductExternalIds` and
+`CategoryExternalIds`, each carrying `BusinessId`, `Provider`, the opaque text `ExternalId` and the
+local row's id — and issue #759 (A1b) **moved that id onto the local row**, because decision P1 was
+revised on 18 October 2026: a business has zero or one sales provider, so a column of every mapping
+saying which provider issued it was answering a question that has one answer per business.
 
-**Two tables, one shape.** `ProductExternalIds` and `CategoryExternalIds` each carry `BusinessId`,
-`Provider`, `ExternalId` and the local row's id behind their own surrogate key. Both are ordinary
-tenant-owned entities (`IBusinessOwned`), so the central mechanism in `AppDbContext` gives each its
-required business key, its `BusinessId` index and its global query filter, and
-`BusinessOwnershipEnforcer` stamps every insert — a link is business data like any other, and this
-is not a new kind of table.
+Nothing else about identity changed with it: `Product.Id`/`Category.Id` are still the Nayax ids until
+#735 (A4), the one lookup and its callers behave exactly as before, and costing and timestamp repair
+(#747, A2c) and the reporting queries (#734, A3) still read `Product.Id` as a Nayax id.
 
-**`ExternalId` is opaque text.** It is stored as written and compared exactly; shared code never
-parses it and never assumes it is numeric, which is what lets a later provider that issues a GUID
-or a code need no schema change. `Inventory.Domain.Providers.NayaxExternalId` is the one place a
-Nayax numeric id becomes that text (`From`) and is read back from it (`TryParse`), in the invariant
-decimal form — the Lynx contract declares `NayaxProductID` as `integer<int64>` and `ProductGroupID`
-as `integer<int32>`, so both fit a `long`. `Inventory.Domain.Providers.ExternalProvider` names the
-issuer and has one member, `Nayax = 1`; it is numbered from 1 so an unwritten column is not a
-provider by default.
+**One provider per business, and it is fixed once set.** `Business.SalesProvider` is a nullable
+`Inventory.Domain.Providers.ExternalProvider`: null means no provider at all, and inventory —
+purchases, stock, costing, the business's own expenses — works fully without one. Storing a
+provider's credentials is the one thing that sets it: `INayaxConnectionStore.SaveCredentialAsync`
+claims `Nayax` inside the credential save's own transaction, with a conditional
+`UPDATE … WHERE SalesProvider IS NULL` so two simultaneous first saves end as one claim, then reads
+the row back and refuses the save through `Inventory.Domain.Providers.SalesProviderPolicy` when the
+business already sells through a different provider. The claim lives in that one port rather than in
+each caller, so no path can store credentials without recording the provider they belong to, and
+neither can land without the other. Nothing changes it afterwards: no endpoint writes it, and
+`BusinessSalesProviderEnforcer` refuses every change — including clearing it — on `SaveChanges`,
+beside the other business enforcers. Switching provider is a separate design (#761), because it would
+have to decide what happens to every external id, sale and coverage row the previous provider issued.
+Because nothing can switch it, every external id a business holds belongs to its one provider, which
+is what makes a single column enough.
 
-**Two uniqueness rules, saying different things.** `(BusinessId, Provider, ExternalId)` is unique:
-one provider id names at most one local row. It is scoped by business for the reason every
-constraint over an externally supplied value is (see [Tenant ownership](#tenant-ownership-issue-64))
-— two operators' catalogues may legitimately both contain product 100, and a global index would let
-whichever imported first deny the other its own id. `(BusinessId, Provider, ProductId)` /
-`(BusinessId, Provider, CategoryId)` is unique as well: a local row carries at most one id per
-provider, so "which Nayax product is this?" has one answer. A second provider is a second row, never
-a replacement.
+**The external id is opaque text, and a column.** `Product.ExternalProductId` and
+`Category.ExternalCategoryId` are nullable text of at most `ExternalId.MaxLength` characters, stored
+as written and compared exactly; shared code never parses one and never assumes it is numeric, which
+is what lets a later provider that issues a GUID or a code need no schema change.
+`Inventory.Domain.Providers.NayaxExternalId` is the one place a Nayax numeric id becomes that text
+(`From`) and is read back from it (`TryParse`), in the invariant decimal form — the Lynx contract
+declares `NayaxProductID` as `integer<int64>` and `ProductGroupID` as `integer<int32>`, so both fit a
+`long`. `ExternalProvider` names the issuer and has one member, `Nayax = 1`; it is numbered from 1 so
+an unwritten column is not a provider by default.
 
-**A link cannot cross a business, and the database is what says so.** Each link's foreign key is the
-pair `(BusinessId, local id)` against the `(BusinessId, Id)` alternate key added to `Products` and
-`Categories`, with `ON DELETE CASCADE`. Application validation alone was explicitly not enough here:
-a link is what will later resolve a remote identifier to a local product, and a link that crossed a
-business would resolve one business's sale onto another's product. The cascade is the second half of
-the same statement — a link is part of the row it names, so deleting a product or category takes its
-provider ids with it rather than leaving a mapping to nothing.
+**Unique per business, among the rows that have one.** The index on `(BusinessId, ExternalProductId)`
+/ `(BusinessId, ExternalCategoryId)` is unique and **filtered** on `IS NOT NULL`. Both halves are
+deliberate. Per business, for the reason every constraint over an externally supplied value is (see
+[Tenant ownership](#tenant-ownership-issue-64)) — two operators' catalogues may legitimately both
+contain product 100, and a global index would let whichever imported first deny the other its own id.
+Filtered, because "this row has no provider id" is a real state that every row of a business with no
+provider is in, and a plain unique index would allow exactly one such row per business. There is
+deliberately no uniqueness the other way round: a local row holds at most one provider id because the
+column is single-valued, which is the simplification this model exists for.
 
-Two consequences of that alternate key are worth knowing. The migration that adds it rebuilds
-`Products` and `Categories`, because SQLite cannot add a constraint to an existing table; EF copies
-every row by name and `Id` is each table's `INTEGER PRIMARY KEY`, so every key value and every
-foreign key into those tables still resolves afterwards (`AddProviderIdentityLinksMigrationTests`
-asserts it on a seeded database). And `BusinessId` is now part of a key of `Product` and `Category`,
-so EF refuses outright to modify it on a tracked entity, before `BusinessOwnershipEnforcer`'s
-immutability rule is reached — the same rule as everywhere else, enforced earlier and harder, and
-not a path any request could take in the first place, since `BusinessId` is never bound from input.
+**Nothing can cross a business any more, by construction.** The id is on the row it belongs to, so it
+cannot name another business's row and cannot outlive a deleted one — the composite foreign key and
+cascade the link tables needed have nothing left to guard. The `(BusinessId, Id)` alternate keys that
+#732 added to `Products` and `Categories` stay until #760 drops the tables that use them, and with
+them the two consequences worth knowing: the migration that added them rebuilt both tables (SQLite
+cannot add a constraint in place), and `BusinessId` being part of a key means EF refuses outright to
+modify it on a tracked entity, before `BusinessOwnershipEnforcer`'s immutability rule is reached.
 
-**The backfill claims nothing it cannot see.** `AddProviderIdentityLinks` inserts one Nayax link per
-existing product and category, with that row's own `BusinessId` and `CAST(Id AS TEXT)` as the
-`ExternalId` — the mapping the import already made true, not a match on names or prices. It is
-additive and ignored by code already running in production, which is what lets it apply at
-Production startup ahead of the slices that read a link. The alternate keys are a separate, earlier
-migration (`AddProductAndCategoryBusinessKeys`) so the rebuild happens *before* those inserts: the
-SQLite generator defers a pending rebuild to the end of the migration it occurs in, which would have
-run them against a parent key that did not exist yet.
+**The migration copies, verifies, and refuses rather than guessing.** `AddProviderIdentityColumns`
+adds the three columns and two indexes, sets `SalesProvider = Nayax` for every business with a
+`BusinessNayaxConnection` row, any provider link or any stored Nayax sale (and leaves every other
+business with none), then copies each `Provider = Nayax` link row into its local row's column. Before
+copying it checks the three things the column model needs — a link names a row in its own business, a
+business holds an external id once, a row carries at most one — and **aborts with the rule it broke**
+rather than copying something ambiguous; each is guaranteed by the link tables' own constraints, and
+checked anyway because SQLite enforces foreign keys only while `PRAGMA foreign_keys` is on, so a
+restored backup or an out-of-band write could leave a state they would have refused. After copying it
+verifies that every Nayax link equals its row's column, aborts on any difference, and records the
+counts and the instant in `ProviderIdentityColumnVerifications`, which exists so #760 can confirm the
+verification happened before it drops the tables. That table is deliberately not part of the EF
+model: it is evidence about a migration, read by a migration, and no application code touches it.
+`AddProviderIdentityColumnsMigrationTests` covers the copy, the three refusals and the recorded
+verification.
 
-**The import keeps the links true.** `EfNayaxProductCatalogImportStore` writes a Nayax link for
-every product and category in the snapshot that has none, and leaves an existing link exactly as it
-is; it still sets `Id` from the Nayax id, which #735 (A4) changes. Since #745 the same adapter also
-*reads* those links as the identity of a snapshot entry (below).
+**The link tables are not dropped in this release, and are not read either.** Production applies
+migrations at startup, through `DatabaseSchemaStartup` (AGENTS.md § Database and migrations), so when
+this migration lands the code already running there is still reading `ProductExternalIds` and
+`CategoryExternalIds`; dropping them in the same release would break it. Nothing reads or writes them
+after this change — `ProviderLinkTableDisuseTests` scans the production projects and fails if anything
+does — and #760 drops both once this release is in production.
+
+**Rollback policy.** Once this release has written external ids only to the columns, rolling back to
+code that reads the link tables is **not supported**: the tables stop being kept up to date, so that
+code would see a catalogue frozen at the moment of the release. A recovery goes forward with a fix.
+The migration's `Down` exists to undo the schema, not to make that rollback safe.
+
+**The import keeps the column true.** `EfNayaxProductCatalogImportStore` writes
+`ExternalProductId`/`ExternalCategoryId` on every product and category in the snapshot that carries
+none, and leaves an existing one exactly as it is — it is the same id, and rewriting it would be the
+one way the import could move an identifier between rows. It still sets `Id` from the Nayax id, which
+#735 (A4) changes, and it refuses to run at all for a business whose `SalesProvider` is not Nayax,
+rather than recording Nayax ids in a column another system's ids would be read from. Since #745 the
+same adapter also *reads* those ids as the identity of a snapshot entry (below).
 
 ### Resolving a Nayax product id to a local product (issue #733)
 
@@ -9265,26 +9303,29 @@ Every feature that reads a machine's live selections gets `NayaxProductID` value
 contract's "unique identifier of the product in the Nayax system" (`GET
 /v1/machines/{MachineID}/machineProducts`, `integer<int64>`, nullable). They used to be compared
 with `Product.Id` directly, which worked only because the local key *was* the Nayax id. Issue #733
-(child A2 of #329) makes those features read the `ProductExternalIds` link table instead. It is a
-lookup change and nothing else: no endpoint, response shape, calculation or stored value changes,
-and because the #732 backfill recorded one link per existing product mapping each Nayax id to the
-local row with the same id, a business whose data predates the link table sees identical results.
+(child A2 of #329) makes those features read the recorded provider id instead —
+`Product.ExternalProductId` since #759 moved it onto the row. It is a lookup change and nothing else:
+no endpoint, response shape, calculation or stored value changes, and because the #732 backfill
+recorded each product's Nayax id as the one it was keyed by and #759's migration copied that onto the
+row, a business whose data predates either sees identical results.
 
 **One narrow port, read at the edge.** `Inventory.Application.Nayax.INayaxProductLinkStore` answers
 one question — the local product id for each of these Nayax product ids, keyed by the Nayax id —
 and `Inventory.Infrastructure.Persistence.EfNayaxProductLinkStore` implements it over
-`ProductExternalIds` alone, selecting on `Provider = Nayax` and the exact `ExternalId` text that
-`NayaxExternalId.From` produces. It never joins `Products`: the link already carries the local id,
-and the composite foreign key behind it is what guarantees that row exists in the same business. The
-read is scoped by the ordinary tenant query filters, so one business's link is never an answer to
-another's question, and a stored `ExternalId` that the one Nayax conversion could not have written
-matches nothing rather than being read as the number inside it.
+`Product.ExternalProductId` alone, matching the exact text that `NayaxExternalId.From` produces. One
+statement does it: `EfSalesProviderQueries.ProductsIdentifiedBy` adds the condition that the row's
+owning business sells through Nayax, because the column holds the id of whichever provider the
+business has and does not say which that was. A business with no provider, or with another one,
+resolves nothing — the answer every caller already handles as an unknown product. The read is scoped
+by the ordinary tenant query filters, so one business's product is never an answer to another's
+question, and a stored id that the one Nayax conversion could not have written matches nothing rather
+than being read as the number inside it.
 
 The translation happens where Nayax data enters the application, so every persistence port
 downstream of it speaks local product ids only — `IMachineStockEventStore.GetStorageProductsAsync`
 changed from taking Nayax ids to taking local ones for exactly that reason. The six paths:
 
-| Path | Where the id is resolved | What an unlinked Nayax id means |
+| Path | Where the id is resolved | What an unresolved Nayax id means |
 | --- | --- | --- |
 | Reorder (`CalculateReorderNeeds`) | after the fleet fan-out, before the outstanding-order read | the selection carries no product id, the same state a selection with no `NayaxProductID` already carried; it is summed into no product's replenishment need and the Domain refill rules skip it as unmapped |
 | Pick List (`GetPickList`) | after the fan-out, before the storage read | the selection is excluded from the result, as one with no local catalogue row already was |
@@ -9294,21 +9335,21 @@ changed from taking Nayax ids to taking local ones for exactly that reason. The 
 | Sync Restock (`SyncMachineStockFromNayax`) | after the machine-products read, before the storage read | the MDB position resolves to no local product, which is `NayaxMachineStockMatchPolicy`'s existing "no local product is mapped to Nayax product …" Needs Review branch, so no inventory ever moves for it |
 | Machine stock (`NayaxMachineStockObservationSource`) | in the adapter that translates the slots | the slot is dropped, as one whose product was not in the caller's catalogue already was |
 
-In every case an unlinked id is treated as an unknown product, never matched to the local product
+In every case an unresolved id is treated as an unknown product, never matched to the local product
 whose id happens to be the same number. That is the point of the change: in a business created after
 #735, a local key and a Nayax id that coincide are a coincidence.
 
-**Each link read is awaited on its own.** All of these use cases run a concurrent Nayax fan-out and
+**Each lookup is awaited on its own.** All of these use cases run a concurrent Nayax fan-out and
 then one or more reads on the request's scoped `AppDbContext`, which supports a single operation at
 a time, and since issue #520 each remote call resolves the business's credentials through that same
-context (issue #667). The link read is therefore awaited after the fan-out has completed and in
+context (issue #667). The lookup is therefore awaited after the fan-out has completed and in
 sequence with the other database reads, never beside them;
 `NayaxParallelCredentialAccessTests` pins that for the reorder and site-dashboard fan-outs over the
-real adapters, with the link resolved through the real link table.
+real adapters, with the id resolved from the real product row.
 
 **No Nayax group id is resolved here.** None of these paths reads a `ProductGroupID`: a category is
-reached through the local `Product.CategoryId`. `CategoryExternalIds` gained its one reader in #745
-(A2b), the catalogue import, below.
+reached through the local `Product.CategoryId`. `Category.ExternalCategoryId` has one reader, added
+in #745 (A2b): the catalogue import, below.
 
 ### Resolving Nayax ids in the sale paths, the catalogue import and reconciliation (issue #745)
 
@@ -9316,15 +9357,15 @@ Issue #745 (child A2b of #329) is the same lookup change for the paths that read
 Nayax data rather than a machine's live selections: the two sale paths, the catalogue import and the
 catalogue source-state reconciliation. Like #733 it changes identity resolution and nothing else — no
 endpoint, response shape, calculation, stored amount or import rule moves — and a business whose data
-predates the link tables sees identical results, because the #732 backfill recorded one link per
-existing product and category mapping each Nayax id to the local row with the same id.
+predates it sees identical results, because the #732 backfill recorded each product's and category's
+Nayax id as the one it was keyed by and #759's migration copied that onto the row.
 
-| Path | What is resolved | What an unlinked Nayax id means |
+| Path | What is resolved | What an unresolved Nayax id means |
 | --- | --- | --- |
 | Latest-sales sync (`EfLatestNayaxSalesStore`) | each payload item's `NayaxProductID`, once per batch through `INayaxProductLinkStore`, before the per-sale work | an unknown product: the name fallback still runs, and a sale that matches nothing is still imported, stays visible, is left uncosted and replays no product's inventory cost — exactly as an unmatched id already was |
 | Uploaded sales export (`ImportNayaxSales`) | each row's `NayaxProductID`, once per import through the same port | the same: the row is imported and counted, stays visibly uncosted, and no inventory cost is replayed for it |
-| Catalogue import (`EfNayaxProductCatalogImportStore`) | each entry's `NayaxProductID` through `ProductExternalIds`, each group's and each product's `ProductGroupID` through `CategoryExternalIds` | a new row (still keyed by the Nayax id until #735) with its link; for a product's group, no local category at all, so the product is imported uncategorised |
-| Catalogue reconciliation (`EfLocalCatalogSnapshotProvider`) | the local product snapshot is built *from* the links, so each product is reported under the Nayax id that names it | a local product with no link has no Nayax identity and takes no part in the comparison: it is a product Nayax never named, not one Nayax stopped returning |
+| Catalogue import (`EfNayaxProductCatalogImportStore`) | each entry's `NayaxProductID` through `Product.ExternalProductId`, each group's and each product's `ProductGroupID` through `Category.ExternalCategoryId`, both read from the rows the import already has in hand | a new row (still keyed by the Nayax id until #735) carrying that id; for a product's group, no local category at all, so the product is imported uncategorised |
+| Catalogue reconciliation (`EfLocalCatalogSnapshotProvider`) | the local product snapshot is built *from* the recorded ids, so each product is reported under the Nayax id it carries | a local product with no recorded id has no provider identity and takes no part in the comparison: it is a product Nayax never named, not one Nayax stopped returning |
 
 Three things are worth stating explicitly.
 
@@ -9332,17 +9373,17 @@ Three things are worth stating explicitly.
 the product endpoint's `ProductGroupID` as `integer<int32>`, nullable, "the unique identifier of the
 product group to which the product belongs" (`GET /v1/operators/{OperatorID}/products`), and the
 group endpoint issues ids from that same space (`GET /v1/operators/{ActorID}/productGroups`), which
-is what makes `CategoryExternalIds` the answer for both. A category the same snapshot creates joins
-the lookup immediately, so a first import still categorises its products.
+is what makes one column — `Category.ExternalCategoryId` — the answer for both. A category the same
+snapshot creates joins the lookup immediately, so a first import still categorises its products.
 
-**An unlinked local row is not claimed by a Nayax id that merely equals its key.** In the catalogue
-import that is a conflict with nowhere to go while a created row is still keyed by the Nayax id: the
-adapter refuses the entry by name, nothing is written (the import is one `SaveChanges`), and a human
-links or re-keys the local row and imports again. Merging the two instead would write a remote
-product's catalogue fields onto whichever local row happened to hold its number — a silent error in
-financial data, which is the thing this slice exists to end. Issue #732's backfill linked every row
-that existed when the link tables arrived, so reaching that state needs a row restored from an older
-backup or created locally under a colliding key.
+**A local row with no recorded id is not claimed by a Nayax id that merely equals its key.** In the
+catalogue import that is a conflict with nowhere to go while a created row is still keyed by the Nayax
+id: the adapter refuses the entry by name, nothing is written (the import is one `SaveChanges`), and a
+human records the id on the local row or re-keys it and imports again. Merging the two instead would
+write a remote product's catalogue fields onto whichever local row happened to hold its number — a
+silent error in financial data, which is the thing this slice exists to end. Issue #732's backfill, and
+the #759 copy that followed it, recorded an id for every row that existed, so reaching that state needs
+a row restored from an older backup or created locally under a colliding key.
 
 **The stored `NayaxSales.NayaxProductId` column is deliberately still read as it was.** Its
 provenance is mixed: the latest-sales sync writes the *local* product id it matched, while the
@@ -9401,18 +9442,20 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   stopped returning is never removed (that drift is reported by the catalog reconciliation report
   below). Every row an import creates or updates now carries the same import instant, taken once
   from the shared `Inventory.Application.Time.IClock` port instead of a per-row `DateTime.UtcNow`.
-- Since issue #732 the import also writes the provider identity link for every product and category
-  in the snapshot that does not already have one, and keeps an existing link untouched (see
-  [Provider identity link tables](#provider-identity-link-tables-issue-732)). It is the only writer
-  of a Nayax link besides that issue's backfill, and it still sets `Id` from the Nayax id — #735
-  (A4) is where a new row stops being keyed that way.
-- Since issue #745 those links are also what *identifies* a snapshot entry: the product an entry
-  updates is the one its `ProductExternalIds` link names, a group becomes a new category only when
-  this business has no `CategoryExternalIds` link for it, and a product's `CategoryId` is the local
+- Since issue #732 the import also records the provider identity of every product and category in the
+  snapshot that does not already carry one — on the row itself since issue #759 — and leaves an
+  existing one untouched (see
+  [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-and-759)). It is
+  the only writer of a Nayax id besides those issues' migrations, it refuses to run at all for a
+  business whose `SalesProvider` is not Nayax, and it still sets `Id` from the Nayax id — #735 (A4) is
+  where a new row stops being keyed that way.
+- Since issue #745 those recorded ids are also what *identifies* a snapshot entry: the product an
+  entry updates is the one carrying its `NayaxProductID`, a group becomes a new category only when no
+  category of this business carries that group id, and a product's `CategoryId` is the local
   category its Nayax `ProductGroupID` resolves to (null when the group is unknown) rather than the
-  group id written straight through. An unlinked local row whose key equals an incoming Nayax id is
-  refused by name instead of being merged into, and an unresolvable group no longer leaves a product
-  pointing at a category that merely shares its number. See [Resolving Nayax ids in the sale paths,
+  group id written straight through. A local row with no recorded id whose key equals an incoming Nayax
+  id is refused by name instead of being merged into, and an unresolvable group no longer leaves a
+  product pointing at a category that merely shares its number. See [Resolving Nayax ids in the sale paths,
   the catalogue import and
   reconciliation](#resolving-nayax-ids-in-the-sale-paths-the-catalogue-import-and-reconciliation-issue-745).
 - Reads and writes are scoped to the caller's business by the central `AppDbContext` query filters
@@ -9459,14 +9502,16 @@ therefore ordinary history: once the latest local name agrees with Nayax again t
 `Present`, and a later disagreement still surfaces as `MappingChanged` instead of being masked by a
 permanent conflict.
 
-A local product's Nayax identity is its `ProductExternalIds` link since issue #745, so
-`EfLocalCatalogSnapshotProvider` builds the local product snapshot from those links and reports each
-product under the Nayax id that names it rather than under `Product.Id` (see
+A local product's Nayax identity is the id recorded on it since issue #745
+(`Product.ExternalProductId` since issue #759), so `EfLocalCatalogSnapshotProvider` builds the local
+product snapshot from those ids and reports each product under the Nayax id it carries rather than
+under `Product.Id` (see
 [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300), which already never
 removes a local product Nayax stops returning, and
 [Resolving Nayax ids in the sale paths, the catalogue import and
 reconciliation](#resolving-nayax-ids-in-the-sale-paths-the-catalogue-import-and-reconciliation-issue-745)).
-A product with no link therefore takes no part in the comparison at all: it has no Nayax identity, so
+A product with no recorded id therefore takes no part in the comparison at all: it has no provider
+identity, so
 it is neither `MissingRemotely` nor `Added` - it is simply not part of Nayax's catalogue. Machines
 have no persisted entity at all - the
 machine dashboard use cases build a machine as a live
@@ -9538,8 +9583,8 @@ that meaning.
    reads the machine's MDB positions from the same live `INayaxLynxClient.GetMachineProductsAsync`
    projection `Inventory.Application.Machines.ListMachineProducts` already uses, and the deterministic Domain rule
    `Inventory.Domain.Nayax.NayaxMachineStockMatchPolicy` resolves the parsed MDB to its
-   `NayaxProductID` and then to the local product that Nayax id is linked to — through
-   `ProductExternalIds`, since issue #733 (see
+   `NayaxProductID` and then to the local product that carries that Nayax id — through
+   `Product.ExternalProductId`, since issues #733 and #759 (see
    [Resolving a Nayax product id](#resolving-a-nayax-product-id-to-a-local-product-issue-733)),
    rather than by reading the remote id as `Product.Id`. The alert's product name is only a
    tolerant validation check, normalised through the same authoritative

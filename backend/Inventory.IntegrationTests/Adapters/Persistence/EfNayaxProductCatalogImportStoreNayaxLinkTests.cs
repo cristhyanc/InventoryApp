@@ -12,18 +12,20 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
 /// Relational coverage for the identity the Nayax catalogue import resolves (issue #745, parent
-/// #329 decision A2b): a snapshot entry names a local product or category through this business's
-/// <c>ProductExternalIds</c>/<c>CategoryExternalIds</c> link, and a product's Nayax
-/// <c>ProductGroupID</c> becomes a local <c>CategoryId</c> the same way.
+/// #329 decision A2b): a snapshot entry names a local product or category through the provider id
+/// recorded on that row - <c>Product.ExternalProductId</c>/<c>Category.ExternalCategoryId</c> since
+/// issue #759 - and a product's Nayax <c>ProductGroupID</c> becomes a local <c>CategoryId</c> the
+/// same way.
 ///
-/// Every fixture here links a Nayax id to a local id with a <strong>different</strong> value, which
-/// is the only shape that can tell the link lookup apart from the coincidence it replaces -
+/// Every fixture here records a Nayax id on a local row with a <strong>different</strong> key, which
+/// is the only shape that can tell the recorded id apart from the coincidence it replaces -
 /// <c>Product.Id</c>/<c>Category.Id</c> still being the Nayax id until #735 (A4). These are
 /// deliberately written before that divergence exists, so the resolution is pinned while the
-/// backfilled links are all id-to-id, exactly as the issue asks.
+/// migrated ids are all id-to-id, exactly as the issue asks.
 ///
-/// SQLite, not an in-memory provider: the insert/update split, the primary keys, the link tables'
-/// unique indexes and the <c>Products.CategoryId</c> foreign key are all part of what is asserted.
+/// SQLite, not an in-memory provider: the insert/update split, the primary keys, the filtered unique
+/// indexes over the external id columns and the <c>Products.CategoryId</c> foreign key are all part
+/// of what is asserted.
 /// </summary>
 public class EfNayaxProductCatalogImportStoreNayaxLinkTests : IDisposable
 {
@@ -40,8 +42,7 @@ public class EfNayaxProductCatalogImportStoreNayaxLinkTests : IDisposable
 
         using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
-        setup.Businesses.Add(
-            new Business { Id = 1, Name = "Vending A", Status = BusinessStatus.Active, CreatedAtUtc = DateTime.UtcNow });
+        setup.Businesses.Add(NayaxBusiness(1, "Vending A"));
         setup.SaveChanges();
     }
 
@@ -52,20 +53,37 @@ public class EfNayaxProductCatalogImportStoreNayaxLinkTests : IDisposable
     }
 
     /// <summary>
-    /// The acceptance criterion for category identity: the group's products land on the linked local
-    /// category, no second category is created, and a local category whose own id happens to equal
-    /// the group id is neither used nor updated.
+    /// Both businesses in these fixtures sell through Nayax (issue #759), which is what makes the
+    /// recorded external ids Nayax ids.
+    /// </summary>
+    private static Business NayaxBusiness(int id, string name) => new()
+    {
+        Id = id,
+        Name = name,
+        Status = BusinessStatus.Active,
+        SalesProvider = ExternalProvider.Nayax,
+        CreatedAtUtc = DateTime.UtcNow,
+    };
+
+    /// <summary>
+    /// The acceptance criterion for category identity: the group's products land on the local
+    /// category that carries the group id, no second category is created, and a local category whose
+    /// own id happens to equal the group id is neither used nor updated.
     /// </summary>
     [Fact]
-    public async Task A_products_group_resolves_to_the_linked_local_category()
+    public async Task A_products_group_resolves_to_the_local_category_that_carries_the_group_id()
     {
         using (var seed = TestAppDbContext.For(_options, 1))
         {
             seed.Categories.AddRange(
-                new Category { Id = 55, Name = "Snacks", Description = "The linked category" },
+                new Category
+                {
+                    Id = 55,
+                    ExternalCategoryId = NayaxExternalId.From(10),
+                    Name = "Snacks",
+                    Description = "The category the group id names",
+                },
                 new Category { Id = 10, Name = "Unrelated", Description = "Shares the group's number only" });
-            await seed.SaveChangesAsync();
-            seed.CategoryExternalIds.Add(CategoryLink(nayaxGroupId: 10, localCategoryId: 55));
             await seed.SaveChangesAsync();
         }
 
@@ -78,32 +96,38 @@ public class EfNayaxProductCatalogImportStoreNayaxLinkTests : IDisposable
         var product = await verify.Products.SingleAsync();
         Assert.Equal(55, product.CategoryId);
 
-        // No third category: the group was already linked, so nothing was created for it.
+        // No third category: the group id already named one, so nothing was created for it.
         Assert.Equal(
             new long[] { 10, 55 },
             await verify.Categories.OrderBy(category => category.Id).Select(category => category.Id).ToArrayAsync());
         var unrelated = await verify.Categories.SingleAsync(category => category.Id == 10);
         Assert.Equal("Unrelated", unrelated.Name);
         Assert.Equal("Shares the group's number only", unrelated.Description);
-        var linked = await verify.Categories.SingleAsync(category => category.Id == 55);
-        Assert.Equal("Snacks", linked.Name);
-        Assert.Equal("The linked category", linked.Description);
+        Assert.Null(unrelated.ExternalCategoryId);
+        var named = await verify.Categories.SingleAsync(category => category.Id == 55);
+        Assert.Equal("Snacks", named.Name);
+        Assert.Equal("The category the group id names", named.Description);
     }
 
     /// <summary>
-    /// The same rule for the product itself: the snapshot entry updates the product its link names,
-    /// and the local product whose id equals the remote one is left exactly as it is.
+    /// The same rule for the product itself: the snapshot entry updates the product that carries its
+    /// Nayax id, and the local product whose key equals the remote one is left exactly as it is.
     /// </summary>
     [Fact]
-    public async Task A_snapshot_entry_updates_the_product_its_link_names()
+    public async Task A_snapshot_entry_updates_the_product_that_carries_its_nayax_id()
     {
         using (var seed = TestAppDbContext.For(_options, 1))
         {
             seed.Products.AddRange(
-                new Product { Id = 5001, Name = "Old name", UnitPrice = 1m, QuantityInStock = 7 },
+                new Product
+                {
+                    Id = 5001,
+                    ExternalProductId = NayaxExternalId.From(100),
+                    Name = "Old name",
+                    UnitPrice = 1m,
+                    QuantityInStock = 7,
+                },
                 new Product { Id = 100, Name = "Unrelated", UnitPrice = 9m, QuantityInStock = 2 });
-            await seed.SaveChangesAsync();
-            seed.ProductExternalIds.Add(ProductLink(nayaxProductId: 100, localProductId: 5001));
             await seed.SaveChangesAsync();
         }
 
@@ -113,27 +137,27 @@ public class EfNayaxProductCatalogImportStoreNayaxLinkTests : IDisposable
             ImportedAt));
 
         using var verify = TestAppDbContext.For(_options, 1);
-        var linked = await verify.Products.SingleAsync(product => product.Id == 5001);
-        Assert.Equal("Chips", linked.Name);
-        Assert.Equal(3.50m, linked.UnitPrice);
-        Assert.Equal(ImportedAt, linked.UpdatedAt);
-        Assert.Equal(7, linked.QuantityInStock);
+        var named = await verify.Products.SingleAsync(product => product.Id == 5001);
+        Assert.Equal("Chips", named.Name);
+        Assert.Equal(3.50m, named.UnitPrice);
+        Assert.Equal(ImportedAt, named.UpdatedAt);
+        Assert.Equal(7, named.QuantityInStock);
 
         var unrelated = await verify.Products.SingleAsync(product => product.Id == 100);
         Assert.Equal("Unrelated", unrelated.Name);
         Assert.Equal(9m, unrelated.UnitPrice);
         Assert.NotEqual(ImportedAt, unrelated.UpdatedAt);
+        Assert.Null(unrelated.ExternalProductId);
 
-        // Nothing was created: the Nayax id named a product already, and the unrelated row keeps its
-        // own (single) link state.
+        // Nothing was created, and the recorded id stayed where it was: the Nayax id named a product
+        // already.
         Assert.Equal(2, await verify.Products.CountAsync());
-        var link = await verify.ProductExternalIds.SingleAsync();
-        Assert.Equal(("100", 5001L), (link.ExternalId, link.ProductId));
+        Assert.Equal("100", named.ExternalProductId);
     }
 
     /// <summary>
-    /// A category this snapshot creates is immediately the answer for the products in that group:
-    /// the created row's link joins the lookup in the same unit of work, so a first import still
+    /// A category this snapshot creates is immediately the answer for the products in that group: the
+    /// created row's external id joins the lookup in the same unit of work, so a first import still
     /// categorises its products.
     /// </summary>
     [Fact]
@@ -147,16 +171,16 @@ public class EfNayaxProductCatalogImportStoreNayaxLinkTests : IDisposable
         using var verify = TestAppDbContext.For(_options, 1);
         var product = await verify.Products.SingleAsync();
         Assert.Equal(10, product.CategoryId);
-        Assert.Equal("10", (await verify.CategoryExternalIds.SingleAsync()).ExternalId);
+        Assert.Equal("10", (await verify.Categories.SingleAsync()).ExternalCategoryId);
     }
 
     /// <summary>
-    /// A group id this business has no link for - and that the snapshot's own group list does not
-    /// carry either - is an unknown category, so the product is imported uncategorised rather than
-    /// pointed at whichever local category happens to hold that number.
+    /// A group id no local category carries - and that the snapshot's own group list does not carry
+    /// either - is an unknown category, so the product is imported uncategorised rather than pointed
+    /// at whichever local category happens to hold that number.
     /// </summary>
     [Fact]
-    public async Task An_unlinked_group_id_leaves_the_product_uncategorised()
+    public async Task An_unrecorded_group_id_leaves_the_product_uncategorised()
     {
         using (var seed = TestAppDbContext.For(_options, 1))
         {
@@ -176,30 +200,28 @@ public class EfNayaxProductCatalogImportStoreNayaxLinkTests : IDisposable
     }
 
     /// <summary>
-    /// Another business's link resolves nothing here. The lookup is the ordinary tenant-filtered
-    /// read, and the link's own composite foreign key keeps it inside its business, so the snapshot
-    /// creates this business's own product and link instead of reaching across.
+    /// Another business's recorded id resolves nothing here. The lookup is the ordinary
+    /// tenant-filtered read and the id is stored on a row that belongs to one business, so the
+    /// snapshot creates this business's own product carrying its own copy of the id instead of
+    /// reaching across - which is also why the uniqueness rule is per business.
     /// </summary>
     [Fact]
-    public async Task Another_businesss_link_is_not_an_answer_for_this_business()
+    public async Task Another_businesss_recorded_id_is_not_an_answer_for_this_business()
     {
         using (var setup = TestAppDbContext.Unrestricted(_options))
         {
-            setup.Businesses.Add(new Business
-            {
-                Id = 2,
-                Name = "Vending B",
-                Status = BusinessStatus.Active,
-                CreatedAtUtc = DateTime.UtcNow,
-            });
+            setup.Businesses.Add(NayaxBusiness(2, "Vending B"));
             await setup.SaveChangesAsync();
         }
 
         using (var other = TestAppDbContext.For(_options, 2))
         {
-            other.Products.Add(new Product { Id = 5001, Name = "Business B product" });
-            await other.SaveChangesAsync();
-            other.ProductExternalIds.Add(ProductLink(nayaxProductId: 100, localProductId: 5001));
+            other.Products.Add(new Product
+            {
+                Id = 5001,
+                ExternalProductId = NayaxExternalId.From(100),
+                Name = "Business B product",
+            });
             await other.SaveChangesAsync();
         }
 
@@ -210,30 +232,12 @@ public class EfNayaxProductCatalogImportStoreNayaxLinkTests : IDisposable
 
         using var verify = TestAppDbContext.For(_options, 1);
         var created = await verify.Products.SingleAsync();
-        Assert.Equal(100, created.Id);
-        Assert.Equal("Chips", created.Name);
-        var link = await verify.ProductExternalIds.SingleAsync();
-        Assert.Equal((1, "100", 100L), (link.BusinessId, link.ExternalId, link.ProductId));
+        Assert.Equal((100L, "Chips", "100"), (created.Id, created.Name, created.ExternalProductId));
 
         using var verifyOther = TestAppDbContext.For(_options, 2);
-        Assert.Equal("Business B product", (await verifyOther.Products.SingleAsync()).Name);
+        var untouched = await verifyOther.Products.SingleAsync();
+        Assert.Equal(("Business B product", "100"), (untouched.Name, untouched.ExternalProductId));
     }
-
-    private static ProductExternalId ProductLink(long nayaxProductId, long localProductId) =>
-        new()
-        {
-            Provider = ExternalProvider.Nayax,
-            ExternalId = NayaxExternalId.From(nayaxProductId),
-            ProductId = localProductId,
-        };
-
-    private static CategoryExternalId CategoryLink(long nayaxGroupId, long localCategoryId) =>
-        new()
-        {
-            Provider = ExternalProvider.Nayax,
-            ExternalId = NayaxExternalId.From(nayaxGroupId),
-            CategoryId = localCategoryId,
-        };
 
     private async Task Apply(NayaxProductCatalogImport import)
     {

@@ -1,6 +1,8 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
+using Inventory.Domain.Exceptions;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -25,6 +27,11 @@ namespace Inventory.Infrastructure.Persistence;
 /// applies the same query filter to the statement's source query, and this adapter additionally
 /// refuses to run at all without a single resolved business - an unscoped context would otherwise
 /// be the one way an <c>UPDATE</c> here could reach every business's row.
+///
+/// The one row outside <c>BusinessNayaxConnections</c> it writes is the business's own
+/// <c>SalesProvider</c>, and only while that is empty (issue #759): storing a provider's credentials
+/// is what records that the business sells through it, so the two belong in one transaction rather
+/// than in two callers that both have to remember. See <see cref="ClaimSalesProviderAsync"/>.
 ///
 /// Encrypting and decrypting the token is <see cref="INayaxTokenProtector"/>'s job. This adapter
 /// never writes a plaintext token to the database and never logs one: the only values its log event
@@ -292,6 +299,12 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
             ? await _db.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false)
             : null;
 
+        // Inside the transaction, and before the credential is written: storing a provider's
+        // credentials is what records that the business sells through it, and a save refused because
+        // the business already sells through a different provider must leave nothing behind
+        // (issue #759).
+        await ClaimSalesProviderAsync(businessId, cancellationToken).ConfigureAwait(false);
+
         // The update comes first, and increments the revision in the database rather than from a
         // value this process read, so two overlapping saves both count and the row that remains is
         // wholly the one that committed last - never a mix of the two.
@@ -325,6 +338,53 @@ public sealed class EfNayaxConnectionStore : INayaxConnectionStore, IDisposable
         }
 
         return saved;
+    }
+
+    /// <summary>
+    /// Records that this business sells through Nayax, while it has no sales provider yet, and
+    /// refuses the save when it already has a different one (issue #759).
+    ///
+    /// <para><strong>The claim and the comparison are one conditional statement plus the read of its
+    /// result</strong>, not a read followed by a decision: the <c>UPDATE</c> carries
+    /// <c>SalesProvider IS NULL</c> in its <c>WHERE</c> clause, so it can only ever fill an empty
+    /// column and two simultaneous first saves end as one claim. What the row holds afterwards is
+    /// then read back and judged by the one Domain rule
+    /// (<see cref="SalesProviderPolicy.MayStoreCredentialsFor"/>) - so a provider another caller
+    /// claimed a moment ago refuses this save rather than being overwritten by it. Nothing here can
+    /// change a provider that is set, which is what makes the column write-once
+    /// (<see cref="BusinessSalesProviderEnforcer"/> covers the tracked-entity path for the same
+    /// reason).</para>
+    ///
+    /// <para><c>Businesses</c> is not tenant-owned and carries no query filter, so the business
+    /// predicate is written out here. The id is the context's own resolved scope - the same value the
+    /// credential row is stamped with - and never one a request supplied.</para>
+    /// </summary>
+    /// <exception cref="DomainConflictException">
+    /// The business already sells through another provider, so these credentials are not stored; the
+    /// transaction this runs in is left uncommitted and nothing is written.
+    /// </exception>
+    private async Task ClaimSalesProviderAsync(int businessId, CancellationToken cancellationToken)
+    {
+        await _db.Businesses
+            .Where(business => business.Id == businessId && business.SalesProvider == null)
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(
+                    business => business.SalesProvider, ExternalProvider.Nayax),
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        var salesProvider = await _db.Businesses
+            .AsNoTracking()
+            .Where(business => business.Id == businessId)
+            .Select(business => business.SalesProvider)
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!SalesProviderPolicy.MayStoreCredentialsFor(salesProvider, ExternalProvider.Nayax))
+        {
+            throw new DomainConflictException(
+                SalesProviderPolicy.RefusalMessage(salesProvider!.Value, ExternalProvider.Nayax));
+        }
     }
 
     /// <inheritdoc />

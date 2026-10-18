@@ -111,7 +111,26 @@ public class AddProviderIdentityLinksMigrationTests
 
             // The rebuild moved every row across unchanged: ids, ownership, the catalogue fields and
             // the costing state.
-            var products = await after.Products.OrderBy(product => product.Id).ToListAsync();
+            //
+            // Projected rather than materialised as the entity, because this upgrade test
+            // deliberately stands on a schema older than the current model: it must read the columns
+            // this migration is about, not every column a later migration added
+            // (`Product.ExternalProductId` and `Category.ExternalCategoryId`, issue #759). The
+            // assertions are unchanged.
+            var products = await after.Products
+                .OrderBy(product => product.Id)
+                .Select(product => new
+                {
+                    product.Id,
+                    product.BusinessId,
+                    product.Name,
+                    product.Sku,
+                    product.CategoryId,
+                    product.CostingQuantity,
+                    product.InventoryValue,
+                    product.AverageUnitCost,
+                })
+                .ToListAsync();
             Assert.Equal(
                 [(100L, 1, "Chips", "CHIP-1", 10L, 12, 13.20m, 1.10m), (200L, 2, "Cola", "COLA-1", 11L, 5, 10.00m, 2.00m)],
                 products.Select(product => (
@@ -124,7 +143,10 @@ public class AddProviderIdentityLinksMigrationTests
                     product.InventoryValue,
                     product.AverageUnitCost)));
 
-            var categories = await after.Categories.OrderBy(category => category.Id).ToListAsync();
+            var categories = await after.Categories
+                .OrderBy(category => category.Id)
+                .Select(category => new { category.Id, category.BusinessId, category.Name })
+                .ToListAsync();
             Assert.Equal(
                 [(10L, 1, "Snacks"), (11L, 2, "Drinks")],
                 categories.Select(category => (category.Id, category.BusinessId, category.Name)));

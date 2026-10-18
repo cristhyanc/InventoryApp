@@ -43,13 +43,13 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 ///   <see cref="NayaxTransactionStatusClassifier"/> and products matched by the Domain
 ///   <see cref="ProductMatcher"/>; neither status identifiers nor matching rules are reimplemented
 ///   here.</item>
-///   <item>An imported row's remote <c>NayaxProductID</c> names a local product only through this
-///   business's <c>ProductExternalIds</c> link, read once per import through
-///   <see cref="INayaxProductLinkStore"/> (issue #745). An id with no link is an unknown product,
-///   handled exactly as an unmatched id already was: the sale is still imported and stays visibly
-///   uncosted, and no product's inventory cost is replayed for it. Nothing changes for data that
-///   predates the link table, because issue #732's backfill linked every product to the row with the
-///   same id.</item>
+///   <item>An imported row's remote <c>NayaxProductID</c> names a local product only through the
+///   provider id this business recorded on that product, read once per import through
+///   <see cref="INayaxProductLinkStore"/> (issue #745). An id recorded on no product is an unknown
+///   product, handled exactly as an unmatched id already was: the sale is still imported and stays
+///   visibly uncosted, and no product's inventory cost is replayed for it. Nothing changes for data
+///   that predates it, because issue #732's backfill recorded every product's Nayax id as the one it
+///   was keyed by and issue #759's migration copied that onto the product row.</item>
 ///   <item>The sales are saved first, the affected products' costs are replayed next, and the
 ///   replayed costs are saved last. A fatal data-quality failure in that replay therefore
 ///   propagates with the rebuilt costs unsaved, exactly as the legacy import behaved. The
@@ -128,7 +128,7 @@ public sealed class ImportNayaxSales
         var candidates = await _store.GetProductCandidatesAsync(cancellationToken);
 
         // The export's Nayax product ids are resolved to local product ids once, through the one
-        // lookup over the ProductExternalIds link table (issue #745, parent #329 decision A2b),
+        // lookup over the recorded provider ids (issue #745, parent #329 decision A2b),
         // instead of being compared with Product.Id - which only ever worked because the local key
         // *is* the Nayax id. Awaited in sequence with the catalogue read above and the per-row reads
         // below: they all land on the request's own scoped context
@@ -250,8 +250,8 @@ public sealed class ImportNayaxSales
 
     /// <summary>
     /// Records the product the row just imported affected, resolving its remote
-    /// <c>NayaxProductID</c> through the <c>ProductExternalIds</c> link (issue #745): a Nayax id this
-    /// business has no link for names no local product, and is never taken to mean the product whose
+    /// <c>NayaxProductID</c> through the provider id recorded on the product (issue #745): a Nayax id
+    /// this business recorded nowhere names no local product, and is never taken to mean the product whose
     /// local id happens to equal it. The name fallback is unchanged, so a row carrying no usable id
     /// still reaches the product it names.
     /// </summary>
@@ -310,7 +310,7 @@ public sealed class ImportNayaxSales
 
     /// <summary>
     /// The local product an imported row's <c>NayaxProductID</c> names, or <see langword="null"/>
-    /// when this business holds no Nayax link for it.
+    /// when this business has recorded that Nayax id on no product.
     /// </summary>
     private static long? LocalProductId(
         long? nayaxProductId, IReadOnlyDictionary<long, long> localProductIdByNayaxId) =>

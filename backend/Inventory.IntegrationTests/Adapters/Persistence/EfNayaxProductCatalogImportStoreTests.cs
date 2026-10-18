@@ -32,8 +32,16 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
 
         using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
-        setup.Businesses.Add(
-            new Business { Id = 1, Name = "Vending A", Status = BusinessStatus.Active, CreatedAtUtc = DateTime.UtcNow });
+        // The business sells through Nayax (issue #759), which is what storing its Nayax credentials
+        // records and what makes the external id columns this import reads and writes Nayax ids.
+        setup.Businesses.Add(new Business
+        {
+            Id = 1,
+            Name = "Vending A",
+            Status = BusinessStatus.Active,
+            SalesProvider = ExternalProvider.Nayax,
+            CreatedAtUtc = DateTime.UtcNow,
+        });
         setup.SaveChanges();
     }
 
@@ -78,9 +86,14 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
         var created = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         using (var seed = TestAppDbContext.For(_options, 1))
         {
+            // The Nayax id issue #732's backfill recorded for a row that already existed, as issue
+            // #759's migration copied it onto the row. Since issue #745 it is what makes this an
+            // *existing* product for the snapshot entry below; the local id and the Nayax id are the
+            // same number here, as the backfill wrote them.
             seed.Products.Add(new Product
             {
                 Id = 100,
+                ExternalProductId = NayaxExternalId.From(100),
                 Name = "Old name",
                 Description = "Old description",
                 Sku = "SKU-100",
@@ -95,11 +108,6 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
                 CreatedAt = created,
                 UpdatedAt = created,
             });
-            await seed.SaveChangesAsync();
-            // The link issue #732's backfill recorded for a row that already existed. Since issue
-            // #745 it is what makes this an *existing* product for the snapshot entry below; the
-            // local id and the Nayax id are the same number here, as the backfill wrote them.
-            seed.ProductExternalIds.Add(NayaxProductLink(100));
             await seed.SaveChangesAsync();
         }
 
@@ -134,11 +142,15 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
     {
         using (var seed = TestAppDbContext.For(_options, 1))
         {
-            seed.Categories.Add(new Category { Id = 10, Name = "Local name", Description = "Local description" });
-            await seed.SaveChangesAsync();
-            // The backfilled link (issue #732), which is what names this category for the group id
-            // in the snapshot below since issue #745.
-            seed.CategoryExternalIds.Add(NayaxCategoryLink(10));
+            // The backfilled Nayax id (issue #732, on the row since #759), which is what names this
+            // category for the group id in the snapshot below since issue #745.
+            seed.Categories.Add(new Category
+            {
+                Id = 10,
+                ExternalCategoryId = NayaxExternalId.From(10),
+                Name = "Local name",
+                Description = "Local description",
+            });
             await seed.SaveChangesAsync();
         }
 
@@ -222,12 +234,12 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
     }
 
     /// <summary>
-    /// The import is the one writer of a Nayax link outside the backfill (issue #732): a row it
-    /// creates must arrive already linked, or the catalogue would grow rows the later lookups
-    /// (#733, #745, #747, #734) cannot resolve even though the id is sitting in the snapshot.
+    /// The import is the one writer of a provider id outside the migrations (issues #732 and #759): a
+    /// row it creates must arrive already carrying it, or the catalogue would grow rows the later
+    /// lookups (#733, #745, #747, #734) cannot resolve even though the id is sitting in the snapshot.
     /// </summary>
     [Fact]
-    public async Task A_created_product_and_category_arrive_with_their_nayax_link()
+    public async Task A_created_product_and_category_arrive_with_their_nayax_id_recorded()
     {
         await Apply(new NayaxProductCatalogImport(
             [new ImportedProductCategory(10, "Snacks", "Snacks")],
@@ -235,32 +247,46 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
             ImportedAt));
 
         using var verify = TestAppDbContext.For(_options, 1);
-        var productLink = await verify.ProductExternalIds.SingleAsync();
-        Assert.Equal(
-            (1, ExternalProvider.Nayax, "100", 100L),
-            (productLink.BusinessId, productLink.Provider, productLink.ExternalId, productLink.ProductId));
+        var product = await verify.Products.SingleAsync();
+        Assert.Equal((1, "100"), (product.BusinessId, product.ExternalProductId));
 
-        var categoryLink = await verify.CategoryExternalIds.SingleAsync();
-        Assert.Equal(
-            (1, ExternalProvider.Nayax, "10", 10L),
-            (categoryLink.BusinessId, categoryLink.Provider, categoryLink.ExternalId, categoryLink.CategoryId));
+        var category = await verify.Categories.SingleAsync();
+        Assert.Equal((1, "10"), (category.BusinessId, category.ExternalCategoryId));
     }
 
     /// <summary>
-    /// A local row that carries no Nayax link is not claimed by a snapshot id that merely equals its
-    /// key (issue #745): identity comes from the link table, and a row this import creates is still
-    /// keyed by the Nayax id until #735 (A4), so the two collide on the primary key.
+    /// The link tables issue #732 added are no longer written (issue #759): they stay in the schema
+    /// only until #760 drops them, and a row this import creates must leave them exactly as it found
+    /// them - otherwise they would start to look maintained again.
+    /// </summary>
+    [Fact]
+    public async Task An_import_writes_no_provider_link_row()
+    {
+        await Apply(new NayaxProductCatalogImport(
+            [new ImportedProductCategory(10, "Snacks", "Snacks")],
+            [new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10)],
+            ImportedAt));
+
+        using var verify = TestAppDbContext.For(_options, 1);
+        Assert.Empty(await verify.ProductExternalIds.AsNoTracking().ToListAsync());
+        Assert.Empty(await verify.CategoryExternalIds.AsNoTracking().ToListAsync());
+    }
+
+    /// <summary>
+    /// A local row that carries no external id is not claimed by a snapshot id that merely equals its
+    /// key (issue #745): identity comes from the recorded provider id, and a row this import creates
+    /// is still keyed by the Nayax id until #735 (A4), so the two collide on the primary key.
     ///
     /// <para>That is deliberate, and it is what the issue asks for: the alternative is merging a
     /// remote product into whichever local row happens to hold its number, which is a silent
     /// financial-data error rather than a visible failure. The refusal is named and actionable, and
-    /// nothing is written - the import runs in one <c>SaveChanges</c> - so a human can link or
-    /// re-key the row and import again. Issue #732's backfill linked every row that existed when the
-    /// link tables arrived, so reaching this state needs a row restored from an older backup or
-    /// created locally with a colliding key.</para>
+    /// nothing is written - the import runs in one <c>SaveChanges</c> - so a human can record the id
+    /// on the row or re-key it and import again. Issue #732's backfill, and the #759 copy that
+    /// followed it, recorded an id for every row that existed, so reaching this state needs a row
+    /// restored from an older backup or created locally with a colliding key.</para>
     /// </summary>
     [Fact]
-    public async Task An_unlinked_local_row_is_not_claimed_by_an_equal_nayax_id()
+    public async Task A_local_row_with_no_external_id_is_not_claimed_by_an_equal_nayax_id()
     {
         using (var seed = TestAppDbContext.For(_options, 1))
         {
@@ -274,23 +300,22 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
             [new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10)],
             ImportedAt)));
 
-        Assert.Contains("has no provider link in this business", exception.Message);
+        Assert.Contains("is recorded on no", exception.Message);
 
         using var verify = TestAppDbContext.For(_options, 1);
         var product = await verify.Products.AsNoTracking().SingleAsync();
-        Assert.Equal("Old name", product.Name);
-        Assert.Equal("Snacks", (await verify.Categories.AsNoTracking().SingleAsync()).Name);
-        Assert.Empty(await verify.ProductExternalIds.AsNoTracking().ToListAsync());
-        Assert.Empty(await verify.CategoryExternalIds.AsNoTracking().ToListAsync());
+        Assert.Equal(("Old name", null), (product.Name, product.ExternalProductId));
+        var category = await verify.Categories.AsNoTracking().SingleAsync();
+        Assert.Equal(("Snacks", null), (category.Name, category.ExternalCategoryId));
     }
 
     /// <summary>
-    /// Repeating an import is the normal operator action, and the link is kept rather than
-    /// rewritten: a second row would break the one-link-per-product rule, and rewriting the one
-    /// that exists would be a write with nothing to change.
+    /// Repeating an import is the normal operator action, and the recorded id is kept rather than
+    /// rewritten: it is the same id, and rewriting it would be the one way this import could move an
+    /// identifier between rows.
     /// </summary>
     [Fact]
-    public async Task A_repeated_import_keeps_the_existing_link()
+    public async Task A_repeated_import_keeps_the_recorded_nayax_id()
     {
         var import = new NayaxProductCatalogImport(
             [new ImportedProductCategory(10, "Snacks", "Snacks")],
@@ -301,30 +326,47 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
         await Apply(import);
 
         using var verify = TestAppDbContext.For(_options, 1);
-        Assert.Equal(100L, (await verify.ProductExternalIds.SingleAsync()).ProductId);
-        Assert.Equal(10L, (await verify.CategoryExternalIds.SingleAsync()).CategoryId);
+        Assert.Equal("100", (await verify.Products.SingleAsync()).ExternalProductId);
+        Assert.Equal("10", (await verify.Categories.SingleAsync()).ExternalCategoryId);
     }
 
     /// <summary>
-    /// A Nayax product link in the shape issue #732's backfill wrote for pre-existing data: the
-    /// Nayax id and the local id are the same number.
+    /// The external id columns hold the id issued by the business's own sales provider (issue #759),
+    /// so a business that does not sell through Nayax is refused by name rather than having Nayax
+    /// ids written into a column another system's ids would be read from. It cannot happen while
+    /// storing Nayax credentials is what sets the provider - which is exactly why the refusal is
+    /// explicit instead of assumed.
     /// </summary>
-    private static ProductExternalId NayaxProductLink(long id) =>
-        new()
+    [Fact]
+    public async Task An_import_into_a_business_that_does_not_sell_through_Nayax_is_refused()
+    {
+        using (var withoutProvider = TestAppDbContext.Unrestricted(_options))
         {
-            Provider = ExternalProvider.Nayax,
-            ExternalId = NayaxExternalId.From(id),
-            ProductId = id,
-        };
+            withoutProvider.Businesses.Add(new Business
+            {
+                Id = 2,
+                Name = "Vending B",
+                Status = BusinessStatus.Active,
+                CreatedAtUtc = DateTime.UtcNow,
+            });
+            await withoutProvider.SaveChangesAsync();
+        }
 
-    /// <summary>The category half of <see cref="NayaxProductLink"/>.</summary>
-    private static CategoryExternalId NayaxCategoryLink(long id) =>
-        new()
-        {
-            Provider = ExternalProvider.Nayax,
-            ExternalId = NayaxExternalId.From(id),
-            CategoryId = id,
-        };
+        using var db = TestAppDbContext.For(_options, 2);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new EfNayaxProductCatalogImportStore(db).ApplyAsync(
+                new NayaxProductCatalogImport(
+                    [new ImportedProductCategory(10, "Snacks", "Snacks")],
+                    [new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10)],
+                    ImportedAt),
+                CancellationToken.None));
+
+        Assert.Contains("sales provider is not Nayax", exception.Message);
+
+        using var verify = TestAppDbContext.For(_options, 2);
+        Assert.Empty(await verify.Products.AsNoTracking().ToListAsync());
+        Assert.Empty(await verify.Categories.AsNoTracking().ToListAsync());
+    }
 
     private async Task Apply(NayaxProductCatalogImport import)
     {
