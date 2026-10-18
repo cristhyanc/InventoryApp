@@ -1,0 +1,89 @@
+<section class="card" data-testid="machine-latest-sales">
+  <div class="card-header">
+    <div>
+      <h2 class="card-title">Latest sales</h2>
+      <!-- The window is Nayax's own "most recent sales" for this machine. It is deliberately not
+           described with a date range or a row count: the documented endpoint guarantees neither,
+           and this is not the machine's complete sales history. -->
+      <!-- Kept to what an operator needs to know (the owner's review of PR #771): the window is a
+           rolling one, and refreshing only re-reads it. That it imports no sale and touches no stock
+           or cost is a structural guarantee of the read, recorded in `docs/architecture.md`
+           § Machine latest sales rather than explained on screen. -->
+      <p class="text-md-body value-muted">
+        The most recent sales Nayax reports for this machine, newest first. This is Nayax's rolling
+        latest-sales window, not this machine's complete sales history. Refreshing only re-reads it;
+        nothing is saved.
+      </p>
+    </div>
+    <button
+      type="button"
+      class="btn btn-secondary"
+      data-testid="refresh-latest-sales"
+      [disabled]="loading || !hasMachine"
+      (click)="refresh()">
+      {{ loading ? 'Refreshing…' : 'Refresh' }}
+    </button>
+  </div>
+
+  <div class="card-body">
+    @if (loading) {
+      <output class="alert alert-info block" data-testid="latest-sales-loading" aria-live="polite">
+        Loading the latest sales for this machine…
+      </output>
+    }
+
+    @if (!loading && error) {
+      <p class="text-md-body text-md-danger-text" data-testid="latest-sales-error" role="alert">{{ error }}</p>
+    }
+
+    @if (!loading && !error && latest && !latest.isAvailable) {
+      <!-- A business with no sales provider is information, not a fault; an unusable connection or
+           a refused permission is something an operator can act on. Neither is ever presented as
+           "this machine has sold nothing". -->
+      <div
+        class="alert"
+        [ngClass]="isNoProvider(latest) ? 'alert-info' : 'alert-warning'"
+        [attr.data-testid]="'latest-sales-unavailable-' + latest.unavailableReason">
+        {{ latest.unavailableDetail }}
+      </div>
+    }
+
+    @if (isEmpty) {
+      <p class="text-md-body value-muted" data-testid="latest-sales-empty">
+        Nayax reports no sales for this machine in its latest-sales window.
+      </p>
+    }
+
+    @if (!loading && !error && latest && latest.isAvailable && latest.sales.length > 0) {
+      <div class="overflow-x-auto">
+        <table class="table">
+          <caption class="sr-only">The latest sales Nayax reports for this machine, newest first.</caption>
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell">Sale date and time</th>
+              <th scope="col" class="table-cell">Product reported by Nayax</th>
+              <th scope="col" class="table-cell">Payment method</th>
+              <th scope="col" class="table-cell">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (sale of latest.sales; track sale.transactionId) {
+              <tr class="table-row">
+                <!-- Rendered in the current business's own time zone from the true instant the API
+                     sent; "Not reported" rather than a defaulted date when Nayax carried none. -->
+                <td class="table-cell">
+                  {{ (sale.saleDateTimeUtc | businessDateTime) || 'Not reported' }}
+                </td>
+                <td class="table-cell">{{ sale.productName || 'Not reported' }}</td>
+                <td class="table-cell">{{ sale.paymentMethod || 'Not reported' }}</td>
+                <td class="table-cell" [ngClass]="canViewFinancials ? '' : 'value-muted'">
+                  {{ amountLabel(sale) }}
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </div>
+</section>

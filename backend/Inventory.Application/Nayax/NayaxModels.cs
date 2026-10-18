@@ -133,6 +133,18 @@ public class NayaxLastSalesReport
 
     public decimal SettlementValue { get; set; }
 
+    /// <summary>
+    /// The currency the transaction was conducted in, as Nayax reports it (<c>CurrencyCode</c>,
+    /// documented <c>string | null</c>). Added by issue #768 so the machine page can label the
+    /// amount it shows with the currency the provider actually reported rather than assuming one.
+    ///
+    /// <para>Read only by <see cref="Machines.GetMachineLatestSales"/>. The sales synchronization,
+    /// the uploaded-export import and costing do not read it and store nothing from it, so adding
+    /// it changes no persisted value and no accounting figure.</para>
+    /// </summary>
+    [JsonPropertyName("CurrencyCode")]
+    public string? CurrencyCode { get; set; }
+
     public string? PaymentMethod { get; set; }
 
     public string? ProductName { get; set; }

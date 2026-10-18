@@ -10162,6 +10162,145 @@ Scheduling this sync automatically, writing to Nayax, auto-creating purchases/re
 insufficient-storage shortfall, and auto-deciding the accounting/tax treatment of a negative
 discrepancy are all explicitly out of scope for this feature.
 
+### Machine latest sales (issue #768)
+
+Opening a machine shows its most recent Nayax sales first, with the machine's product table in a
+second tab. The read boundary is one endpoint, one Application use case and one response mapper, and
+every one of the five decisions below is made in exactly one of them.
+
+**The read boundary.** `GET api/machines/{id}/latest-sales` →
+`Inventory.Application.Machines.GetMachineLatestSales` → the existing
+`INayaxLynxClient.GetMachineLastSalesAsync` adapter. The use case's **only** dependency is that
+client, which is what makes the feature read-only structurally rather than by convention: it holds
+no persistence port, no costing service and no stock writer, so it cannot import a sale, deduct
+storage, recost inventory or apply a stock event — the things `SyncLatestNayaxSales` does with the
+very same adapter call. The machine is identified by the same `MachineID` every other
+`api/machines/{id}` endpoint uses today and is passed straight through; [issue
+#741](#provider-identity-on-the-local-row-issues-732-759-and-735) repoints all of them together, and
+until it does, this endpoint cannot drift onto a different machine from `GET api/machines/{id}`.
+
+**The verified contract.** `GET /v1/machines/{MachineID}/lastSales` ("Get Last Sales for Machine by
+MachineID") was looked up in the Nayax developer portal's own reference on 18 October 2026, before
+any field was accepted (AGENTS.md § Nayax contract verification). Two findings shape this read:
+
+- **The documented response declares no transaction status.** The portal's field list for this
+  endpoint has no status of any kind, so the Sales tab shows none. The shared
+  `NayaxLastSalesReport.TransactionStatusId` that the sales synchronization reads is not part of the
+  documented `lastSales` contract, and presenting it as approved/refunded/cancelled would be a
+  financial claim with no authority behind it. The difference is handled inside this read's own
+  mapping: the field is simply not on `MachineLatestSale`, and the shared DTO is unchanged for the
+  import and costing paths that do read it.
+- **`SettlementValue` is documented `number<double>` and non-nullable**, which is how the shared DTO
+  already declares it, so a reported `0` here is a measured zero rather than an absent value. The
+  only new field is `CurrencyCode` (documented `string | null`), added to the shared DTO and read by
+  this use case alone — nothing persists it, so no import, cost or report figure changes.
+
+**The response is an allow-list, not a projection.** `MachineLatestSale` and
+`MachineLatestSaleResponse` carry exactly the sale's instant, the reported product name, the payment
+method, the amount and the currency. The masked card number, the CLI, the payment-service
+transaction and provider ids and the card brand that the real payload carries, and the
+transaction-level `ProductCostPrice` the shared DTO holds for costing, are on neither record and
+reach neither the response nor a log; publishing one would mean adding it to those records
+deliberately. `MachineLatestSalesApiTests` proves this over the real documented payload, through the
+real `NayaxLynxClient` with only the socket replaced.
+
+**Financial authorization is the #698 pattern, applied in the response mapping.** The endpoint stays
+open to every role that may operate inventory — seeing what a machine has been dispensing is
+restocking work — and `MachineLatestSalesResponseMapper` withholds the figures from a caller without
+`Dashboard.ViewFinancials` instead. Such a caller still receives every sale's date and time,
+reported product name and payment method, and `null` — never `0` — for the amount and the currency
+that labels it; the decision comes from `CurrentCapabilities` through
+`FinancialFigureVisibility.Withhold`, the one expression every mapper that withholds an amount
+shares. No role's permissions change, and the Angular panel only chooses the sentence to show in
+that column. See [Operator-readable financial
+disclosure](#operator-readable-financial-disclosure-issue-700), whose standing guard accounts for
+`MachineLatestSaleResponse.SaleAmount` by name.
+
+**Timestamps.** The sale instant is `AuthorizationDateTimeGMT`, read through
+`NayaxLastSalesReport.AuthorizationInstantUtc` — the one normalization of a Nayax timestamp into a
+true UTC instant (issue #471) — and `null` when the payload carried no usable value, which stays
+distinguishable from a sale at `DateTime.MinValue`. The machine-local `MachineAuthorizationTime` is
+never read as an instant and is not on the response at all. The API publishes the UTC instant and the
+Angular panel renders it through `BusinessDateTimePipe`, in the current business's own configured
+IANA zone (issue #499) — never the browser's.
+
+**The amount is rendered in the currency Nayax reported, and in no currency at all otherwise.** The
+documented response declares `CurrencyCode` as `string | null` and carries no currency symbol, so
+the panel renders a neutral number labelled with the reported code (`9.50 AUD`, `9.50 EUR`) and says
+`9.50 (currency not reported)` when the provider reported none. A `$` on these figures would be this
+application asserting a denomination the provider never stated, which is the same mistake as
+rendering an absent figure as `0`: the API deliberately preserves a null `CurrencyCode` rather than
+assuming one, and the UI must not undo that. This is a provider-reported figure, not one of this
+business's own records, so it is deliberately not formatted like the dollar amounts elsewhere on the
+page.
+
+**An unusable provider is an availability answer, not an error.** The use case turns three refusals
+into `MachineLatestSales.Unavailable(reason)`, published as `200` with `isAvailable: false` and a
+stable code, because each is a state of this business rather than a failure of the call:
+
+| Refusal | Code | What it means |
+| --- | --- | --- |
+| `NayaxNotConnectedException` with `NotConfigured` | `NoSalesProvider` | Nothing is stored for this business, which is exactly what having no sales provider is (issue #759): storing credentials is the one thing that claims `Business.SalesProvider`. Presented as information, not a fault — inventory and purchasing work fully without a provider. |
+| `NayaxNotConnectedException` with any other refused status | `NayaxNotConnected` | A configured connection the status gate refuses, including one a `401` has just moved to `NeedsAttention`. An operator reconnects Nayax. |
+| `NayaxPermissionNotGrantedException` | `PermissionNotGranted` | Usable credentials, and Nayax refused this read with `403`. One feature's answer: nothing here writes a connection status. |
+
+The last two codes are spelled exactly as the [reorder and
+dashboard](#provider-optional-reorder-and-dashboard-summary) and site-commission surfaces spell the
+same two answers, so a client meets one vocabulary. Everything else **propagates**: a transport
+failure, a cancellation and the support-session refusal
+(`SupportSessionNayaxUnavailableException` → `403 unavailable_in_support_view`, issue #551) are
+outages or refusals, not a machine that has sold nothing. A provider read that succeeds and returns
+nothing is an *available* answer with no sales, which is a fourth, different state. Credentials are
+the current business's own throughout: this read goes through `INayaxRequestCredentialProvider` like
+every other ordinary Nayax call, and nothing about them appears in the response.
+
+**The page composition.** `MachineLatestSalesComponent`
+(`components/machines/machine-latest-sales/`) owns the whole lifecycle of that one read — the
+request, the in-flight state that disables **Refresh**, the failure state, the three
+provider-unavailable states and the honest empty state — and `MachineDetailComponent` composes it as
+`<app-machine-latest-sales [machineId]="machine?.machineID">`, following the [page composition
+boundary](#page-composition-boundary-issue-191). Changing the machine switches the panel's inner
+request stream, so an in-flight read for the machine the operator navigated away from is
+unsubscribed and its late answer ignored, and the rows clear at the same moment — the shape issue
+#669 established for a superseded business context.
+
+The page itself owns only the tabs. **Sales** is first and is the tab every machine opens on
+(the owner's 18 October 2026 decision), **Products** is second, and they are an ARIA tab list with
+roving tabindex: the arrow keys move and select, `Home`/`End` jump to the ends, and each
+`role="tab"` button names its `role="tabpanel"` through `aria-controls`/`aria-labelledby`. The panels
+are **hidden rather than destroyed**, so switching back to Sales shows the window already read
+instead of calling Nayax again. The product table is read when Products is first opened for that
+machine and not on arrival, so opening a machine makes the latest-sales call and no machine-products
+call; it happens once per machine, and an applied Sync Restock reloads it only while that tab has
+been opened.
+
+**One read per machine means one request on the wire, which is a property of the bindings and not
+only of the intent.** The page holds the product rows and the read's state as its own fields, from a
+single subscription it owns, because the panel renders them twice — a row count beside the heading
+and the table itself — and two `| async` bindings over one cold `HttpClient` observable would issue
+the machine-products request twice, with the count read from a different subscription from the rows.
+The state is explicit and has four values (`not-requested`, `loading`, `loaded`, `failed`), so three
+different things can no longer be presented as "this machine has no products": a tab nobody has
+opened, a read still in flight, and a read that failed. Only `loaded` shows a count or the empty
+sentence, a failure is its own message in the panel rather than the page-level error line, and
+navigating to another machine **cancels** the outstanding read and returns the panel to
+`not-requested` — so the previous machine's rows cannot arrive late into the new machine's table. The
+regression tests count the requests that actually leave the rendered page, through
+`HttpTestingController` and the real `MachineService`, rather than counting calls into a service
+double.
+
+**Sync Restock stays a section of its own, outside both panels**: it is a write workflow
+rather than one of the page's two views of this machine, and [issue
+#744](#nayax-machine-stock-event-import-and-sync-restock-reconciliation-issue-183) owns the future
+consolidation of the per-product manual Restock controls, which this change leaves exactly where
+they are.
+
+**What this read does not promise.** The documented endpoint is "the most recent sales transactions
+for a specific machine" with no date range, no row count and no paging, so neither the API response
+nor the UI states one: the panel says it is Nayax's rolling latest-sales window and explicitly not
+the machine's complete sales history. Historical report redesign, automatic sales sync or import, and
+any stock or costing change are out of scope for this feature.
+
 ## Incremental migration plan
 
 Each step is a separate, passing pull request. Existing endpoints stay operational throughout.
