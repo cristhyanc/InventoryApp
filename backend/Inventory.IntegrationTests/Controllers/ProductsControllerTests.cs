@@ -296,6 +296,142 @@ public class ProductsControllerTests
         Assert.Equal(12, (await db.Products.FindAsync(1L))!.RestockTo);
     }
 
+    /// <summary>
+    /// The create route issue #736 added (parent #329 decision P2): a business with no sales
+    /// provider creates its own product, and the response is the created product under its new id,
+    /// in the same shape <c>GET</c> answers.
+    /// </summary>
+    [Fact]
+    public async Task Create_PersistsTheProduct_AndAnswersCreatedWithIt()
+    {
+        using var db = CreateDbContext();
+        db.Categories.Add(new Category { Id = 3, Name = "Drinks" });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Create(
+            new ProductCreateDto("Coke", "SKU-1", "A can", 3.50m, 0, 5, 10, "can", 3, null, true),
+            CancellationToken.None);
+
+        var created = Assert.IsType<CreatedAtActionResult>(result.Result);
+        var product = Assert.IsType<ProductResponse>(created.Value);
+        Assert.Equal(("Coke", 3.50m, (long?)3), (product.Name, product.UnitPrice, product.CategoryId));
+        Assert.Equal(nameof(ProductsController.Get), created.ActionName);
+        Assert.Equal(product.Id, (await db.Products.SingleAsync()).Id);
+    }
+
+    [Fact]
+    public async Task Create_WithNoName_ReturnsBadRequestAndPersistsNothing()
+    {
+        using var db = CreateDbContext();
+
+        var result = await CreateController(db).Create(
+            new ProductCreateDto("  ", null, null, 1m, 0, 5, 10, "unit", null, null, true),
+            CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Equal(Inventory.Domain.Products.ProductCataloguePolicy.NameRequiredMessage, badRequest.Value);
+        Assert.Empty(await db.Products.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Create_WithANegativePrice_ReturnsBadRequest()
+    {
+        using var db = CreateDbContext();
+
+        var result = await CreateController(db).Create(
+            new ProductCreateDto("Coke", null, null, -1m, 0, 5, 10, "unit", null, null, true),
+            CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Equal(
+            Inventory.Domain.Products.ProductCataloguePolicy.NegativeUnitPriceMessage,
+            badRequest.Value);
+    }
+
+    /// <summary>
+    /// The three fields the update route started accepting in issue #736. The refusals a
+    /// provider-linked product gets are proved against the real relational adapter in
+    /// <c>InventoryApi.Tests.Adapters.Persistence.EfProductCatalogueWriteTests</c>.
+    /// </summary>
+    [Fact]
+    public async Task Update_PersistsTheNameThePriceAndTheCategory()
+    {
+        using var db = CreateDbContext();
+        db.Categories.Add(new Category { Id = 3, Name = "Drinks" });
+        db.Products.Add(new Product { Id = 1, Name = "Coke", UnitPrice = 1m, LowStockThreshold = 5, RestockTo = 10 });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Update(
+            1, new ProductUpdateDto("Coke Zero", null, null, 4.25m, 5, 10, "can", 3, null, true));
+
+        Assert.IsType<NoContentResult>(result);
+        var product = await db.Products.FindAsync(1L);
+        Assert.Equal(("Coke Zero", 4.25m, (long?)3), (product!.Name, product.UnitPrice, product.CategoryId));
+    }
+
+    [Fact]
+    public async Task Update_WithNoName_ReturnsBadRequestAndChangesNothing()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Coke", LowStockThreshold = 5, RestockTo = 10 });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Update(
+            1, new ProductUpdateDto(null!, null, null, 1m, 5, 10, "unit", null, null, true));
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("Coke", (await db.Products.FindAsync(1L))!.Name);
+    }
+
+    /// <summary>
+    /// The catalogue response says which fields the business's sales provider manages, so the UI can
+    /// lock them: nothing for a product this business maintains itself, the name and the category
+    /// for one the provider named.
+    /// </summary>
+    [Fact]
+    public async Task GetAll_DeclaresWhichFieldsTheProviderManages()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Local", ExternalProductId = null });
+        await db.SaveChangesAsync();
+
+        var local = SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None));
+        Assert.Empty(local.ProviderManagedFields!);
+
+        db.Products.Single().ExternalProductId = "100";
+        await db.SaveChangesAsync();
+
+        var linked = SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None));
+        Assert.Equal(new[] { "name", "categoryId" }, linked.ProviderManagedFields!);
+    }
+
+    /// <summary>
+    /// A product with history is refused with <c>409</c> and the message naming what refers to it -
+    /// never a <c>204</c> that erased a stock movement through the cascade (issue #736).
+    /// </summary>
+    [Fact]
+    public async Task Delete_ProductWithHistory_ReturnsConflictWithTheRefusal()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Coke" });
+        await db.SaveChangesAsync();
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 1,
+            QuantityChange = 4,
+            QuantityAfter = 4,
+            Reason = StockAdjustmentReason.Restock,
+        });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Delete(1, CancellationToken.None);
+
+        var conflict = Assert.IsType<ConflictObjectResult>(result);
+        Assert.Contains("1 stock movement", (string)conflict.Value!, StringComparison.Ordinal);
+        Assert.True(await db.Products.AnyAsync(product => product.Id == 1));
+        Assert.Single(db.StockAdjustments);
+    }
+
     [Fact]
     public async Task Delete_ExistingProduct_ReturnsNoContent()
     {
@@ -303,7 +439,7 @@ public class ProductsControllerTests
         db.Products.Add(new Product { Id = 1, Name = "Coke" });
         await db.SaveChangesAsync();
 
-        Assert.IsType<NoContentResult>(await CreateController(db).Delete(1));
+        Assert.IsType<NoContentResult>(await CreateController(db).Delete(1, CancellationToken.None));
     }
 
     [Fact]
@@ -311,7 +447,7 @@ public class ProductsControllerTests
     {
         using var db = CreateDbContext();
 
-        Assert.IsType<NotFoundResult>(await CreateController(db).Delete(999));
+        Assert.IsType<NotFoundResult>(await CreateController(db).Delete(999, CancellationToken.None));
     }
 
     [Fact]

@@ -2,6 +2,8 @@ using System.Net;
 using Inventory.Application.Imports;
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
+using Inventory.Domain.Exceptions;
+using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Nayax;
 using Moq;
 using Xunit;
@@ -116,6 +118,43 @@ public class ImportNayaxProductCatalogTests
         Assert.Empty(store.Applied);
     }
 
+    /// <summary>
+    /// Issue #736 (parent #329 decision P2): a business holding products the import cannot recognise
+    /// is refused, with the count in the message, because the import identifies a product only by
+    /// the provider's own id and would create a duplicate of each of them. The refusal is a
+    /// <c>DomainConflictException</c>, which the HTTP boundary publishes as <c>409</c> with that
+    /// message, and it happens <strong>before</strong> the remote reads: no Nayax call is made and
+    /// nothing is applied.
+    /// </summary>
+    [Fact]
+    public async Task A_business_with_manual_products_is_refused_before_Nayax_is_called()
+    {
+        var store = new RecordingStore { ProductsWithNoProviderId = 3 };
+        var nayax = new Mock<INayaxLynxClient>(MockBehavior.Strict);
+
+        var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
+            new ImportNayaxProductCatalog(nayax.Object, store, new FixedClock(ImportedAt))
+                .Handle(CancellationToken.None));
+
+        Assert.Equal(ManualCatalogueImportPolicy.Refusal(3), refusal.Message);
+        Assert.Empty(store.Applied);
+        nayax.VerifyNoOtherCalls();
+    }
+
+    /// <summary>
+    /// A business whose products all carry the provider's id imports exactly as before: the refusal
+    /// is about the rows the import cannot recognise, not about the import.
+    /// </summary>
+    [Fact]
+    public async Task A_business_whose_products_all_carry_a_provider_id_still_imports()
+    {
+        var store = new RecordingStore { ProductsWithNoProviderId = 0 };
+
+        await Import(store, products: [], groups: []);
+
+        Assert.Single(store.Applied);
+    }
+
     [Fact]
     public async Task The_request_cancellation_token_reaches_both_Nayax_reads()
     {
@@ -149,11 +188,21 @@ public class ImportNayaxProductCatalogTests
     {
         public List<NayaxProductCatalogImport> Applied { get; } = [];
 
+        /// <summary>
+        /// How many products the business holds with no provider id (issue #736). Zero - a business
+        /// whose catalogue the provider manages entirely - is what every test here but the refusal
+        /// one exercises, because that is the state the import has always run in.
+        /// </summary>
+        public int ProductsWithNoProviderId { get; init; }
+
         public Task ApplyAsync(NayaxProductCatalogImport import, CancellationToken cancellationToken)
         {
             Applied.Add(import);
             return Task.CompletedTask;
         }
+
+        public Task<int> CountProductsWithNoProviderIdAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(ProductsWithNoProviderId);
     }
 
     private sealed class FixedClock : IClock
