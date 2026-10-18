@@ -1,4 +1,6 @@
 using Inventory.Application.Reporting.Reconciliation;
+using Inventory.Application.Reporting.Shared;
+using InventoryApi.Tests.Application.Reporting.Shared;
 
 namespace InventoryApi.Tests.Application.Reporting.Reconciliation;
 
@@ -60,7 +62,8 @@ public sealed class FakeReconciliationReportFactsProvider : IReconciliationRepor
         int declinedOrCancelledTransactionCount = 0,
         int unknownStatusTransactionCount = 0,
         int nullStatusTransactionCount = 0,
-        bool isMachineFiltered = false)
+        bool isMachineFiltered = false,
+        ReportCoverageFacts? coverage = null)
     {
         var resolvedPeriod = period ?? Period();
         return new ReconciliationReportFacts(
@@ -70,6 +73,11 @@ public sealed class FakeReconciliationReportFactsProvider : IReconciliationRepor
             resolvedPeriod.TotalTransactionCount, resolvedPeriod.CardTransactionCount, resolvedPeriod.CashTransactionCount,
             unknownPaymentTransactionCount, pendingTransactionCount, refundedTransactionCount,
             declinedOrCancelledTransactionCount, unknownStatusTransactionCount, nullStatusTransactionCount,
-            isMachineFiltered);
+            isMachineFiltered)
+        {
+            // Fully accounted for unless a test replaces it, so a test about something else is
+            // never incidentally about provider coverage (issue #731).
+            Coverage = coverage ?? TestReportCoverage.Complete()
+        };
     }
 }

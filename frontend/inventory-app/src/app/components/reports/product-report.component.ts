@@ -22,7 +22,17 @@ import { IconComponent } from '../shared/icon.component';
   @if (loading) { <div class="card"><div class="card-body text-center"><span class="value-muted">Loading report...</span></div></div> }
   @else if (error) { <div class="alert alert-danger">{{ error }}</div> }
   @else if (report) {
-    <div class="card overflow-x-auto"><table class="table"><thead class="table-head"><tr><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('productName')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('productName')">{{ sortLabel('Product', 'productName') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('categoryName')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('categoryName')">{{ sortLabel('Category', 'categoryName') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('quantity')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('quantity')">{{ sortLabel('Units', 'quantity') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('sales')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('sales')">{{ sortLabel('Revenue', 'sales') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('costOfGoods')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('costOfGoods')">{{ sortLabel('COGS', 'costOfGoods') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('grossProfit')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('grossProfit')">{{ sortLabel('Gross Profit', 'grossProfit') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('lastCost')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lastCost')">{{ sortLabel('Last Cost', 'lastCost') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('lowestCost')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lowestCost')">{{ sortLabel('Lowest Cost', 'lowestCost') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('savingPerUnit')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('savingPerUnit')">{{ sortLabel('Saving / unit', 'savingPerUnit') }}</button></th></tr></thead><tbody>@for (row of sortedRows; track row.productId ?? row.productName) {<tr class="table-row" [ngClass]="{ 'bg-md-warning/15': row.isUnmapped }"><td class="table-cell">{{ row.productName }} @if (row.isUnmapped) {<span class="text-md-warning-text">(Unmapped Nayax product)</span>}</td><td class="table-cell">{{ row.categoryName || '—' }}</td><td class="table-cell">{{ row.quantity }}</td><td class="table-cell"><div>{{ money(row.sales) }}</div><div class="value-muted">Card {{ money(row.cardRevenue) }} · Cash {{ money(row.cashRevenue) }}</div></td><td class="table-cell"><div [class.text-md-warning-text]="!row.isCogsComplete">{{ cogsDisplay(row) }}</div>@if (!row.isCogsComplete) {<div class="mt-1 text-md-warning-text" [title]="cogsHelpText()">{{ cogsHelpText() }}</div>}</td><td class="table-cell"><div [class.text-md-warning-text]="!row.isCogsComplete">{{ profitDisplay(row) }}</div>@if (row.isCogsComplete && row.marginPercent != null) {<div class="mt-1 value-muted">{{ row.marginPercent | number:'1.1-1' }}% margin</div>} @else if (!row.isCogsComplete) {<div class="mt-1 text-md-warning-text">{{ cogsHelpText() }}</div>}</td><td class="table-cell"><div>{{ lastCostDisplay(row) }}</div>@if (row.lastCost != null) {<div class="mt-1 value-muted">{{ supplierDisplay(row.lastCostSupplierName) }}</div>}</td><td class="table-cell"><div>{{ lowestCostDisplay(row) }}</div>@if (row.lowestCost != null) {<div class="mt-1 value-muted">{{ supplierDisplay(row.lowestCostSupplierName) }}</div>}</td><td class="table-cell">{{ savingDisplay(row) }}</td></tr>}</tbody></table></div>
+    @if (providerNotice(); as notice) {
+      <div class="alert alert-warning" role="status" data-testid="provider-availability">
+        <p class="alert-title">{{ notice.title }}</p>
+        <p>{{ notice.detail }}</p>
+      </div>
+    }
+    @if (quality().length) { <div class="alert alert-warning" data-testid="data-quality-notes"><p class="alert-title">Data quality notes</p><ul class="list-disc pl-5">@for (note of quality(); track note) {<li>{{ note }}</li>}</ul></div> }
+    <div class="card overflow-x-auto"><table class="table"><thead class="table-head"><tr><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('productName')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('productName')">{{ sortLabel('Product', 'productName') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('categoryName')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('categoryName')">{{ sortLabel('Category', 'categoryName') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('quantity')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('quantity')">{{ sortLabel('Units', 'quantity') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('sales')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('sales')">{{ sortLabel('Revenue', 'sales') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('costOfGoods')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('costOfGoods')">{{ sortLabel('COGS', 'costOfGoods') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('grossProfit')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('grossProfit')">{{ sortLabel('Gross Profit', 'grossProfit') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('lastCost')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lastCost')">{{ sortLabel('Last Cost', 'lastCost') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('lowestCost')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lowestCost')">{{ sortLabel('Lowest Cost', 'lowestCost') }}</button></th><th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('savingPerUnit')"><button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('savingPerUnit')">{{ sortLabel('Saving / unit', 'savingPerUnit') }}</button></th></tr></thead><tbody>@for (row of sortedRows; track row.productId ?? row.productName) {<tr class="table-row" [ngClass]="{ 'bg-md-warning/15': row.isUnmapped }"><td class="table-cell">{{ row.productName }} @if (row.isUnmapped) {<span class="text-md-warning-text">(Unmapped Nayax product)</span>}</td><td class="table-cell">{{ row.categoryName || '—' }}</td><td class="table-cell">{{ countOrState(row.quantity, salesState()) }}</td><td class="table-cell"><div>{{ moneyOrState(row.sales, salesState()) }}</div><div class="value-muted">Card {{ moneyOrState(row.cardRevenue, salesState()) }} · Cash {{ moneyOrState(row.cashRevenue, salesState()) }}</div></td><td class="table-cell"><div [class.text-md-warning-text]="!row.isCogsComplete">{{ cogsDisplay(row) }}</div>@if (!row.isCogsComplete) {<div class="mt-1 text-md-warning-text" [title]="cogsHelpText()">{{ cogsHelpText() }}</div>}</td><td class="table-cell"><div [class.text-md-warning-text]="!row.isCogsComplete">{{ profitDisplay(row) }}</div>@if (row.isCogsComplete && row.marginPercent != null) {<div class="mt-1 value-muted">{{ row.marginPercent | number:'1.1-1' }}% margin</div>} @else if (!row.isCogsComplete) {<div class="mt-1 text-md-warning-text">{{ cogsHelpText() }}</div>}</td><td class="table-cell"><div>{{ lastCostDisplay(row) }}</div>@if (row.lastCost != null) {<div class="mt-1 value-muted">{{ supplierDisplay(row.lastCostSupplierName) }}</div>}</td><td class="table-cell"><div>{{ lowestCostDisplay(row) }}</div>@if (row.lowestCost != null) {<div class="mt-1 value-muted">{{ supplierDisplay(row.lowestCostSupplierName) }}</div>}</td><td class="table-cell">{{ savingDisplay(row) }}</td></tr>}</tbody></table></div>
+    @if (!report.rows.length && availabilityBadge(salesState())) {
+      <p class="value-muted" data-testid="empty-product-list">{{ availabilityBadge(salesState()) }} - no product can be listed for this period, which is not the same as a period in which nothing sold.</p>
+    }
   }
 </div>
 ` })
@@ -33,9 +43,25 @@ export class ProductReportComponent extends ReportPageBase<ProductReport> {
   constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, provider: ProviderAvailabilityService) { super(route, reports, machines, provider); }
   request(filter: ReportingFilter): Observable<ProductReport> { return this.reports.products(filter); }
 
+  /**
+   * The single banner that says this period's figures are not a measured zero (issue #731). The
+   * Last/Lowest purchase costs beside each product come from this business's own purchase history
+   * and carry no provider state at all.
+   */
+  providerNotice(): { title: string; detail: string } | null {
+    if (!this.providerIncomplete()) return null;
+    return {
+      title: 'Incomplete: provider data does not cover this whole period.',
+      detail: 'A product with no recorded sales does not appear here at all, so an absent product - or an empty '
+        + 'table - is not a product that sold nothing. Revenue, units, cost of goods and gross profit are shown '
+        + 'with their state instead of a figure wherever nothing was recorded. The Last and Lowest purchase costs '
+        + 'come from your own purchase history and are unaffected.'
+    };
+  }
+
   cogsDisplay(row: ProductRow): string {
     if (row.isCogsComplete) {
-      return this.money(row.costOfGoods);
+      return this.moneyOrState(row.costOfGoods, this.salesState());
     }
 
     const costedTransactions = (row.transactionCount ?? 0) - (row.uncostedTransactionCount ?? 0);
@@ -48,7 +74,7 @@ export class ProductReportComponent extends ReportPageBase<ProductReport> {
 
   profitDisplay(row: ProductRow): string {
     if (row.isCogsComplete) {
-      return this.money(row.grossProfit);
+      return this.moneyOrState(row.grossProfit, this.salesState(), 'Profit unavailable');
     }
 
     return 'Unavailable';

@@ -68,6 +68,21 @@ export function moneyOrState(
 }
 
 /**
+ * A provider-sourced count or quantity, or the availability state in its place, by exactly the rule
+ * `moneyOrState` applies to an amount (issue #731). A transaction count, a quantity or a machine
+ * count of `0` with no coverage behind it reads as "nothing happened here", which nothing
+ * established - and unlike an amount it must not be formatted as currency.
+ */
+export function countOrState(
+  value: number | null | undefined,
+  availability?: ReportAvailability | null,
+  unavailableLabel = 'Unavailable'
+): string {
+  if (!availability || availability.state === 'Complete') return value == null ? unavailableLabel : `${value}`;
+  return value == null || value === 0 ? availabilityBadge(availability) : `${value}`;
+}
+
+/**
  * A provider-sourced percentage, or the availability state in its place, by exactly the rule
  * `moneyOrState` applies to an amount (issue #730). A margin of `0.0%` without coverage behind it
  * is the same false measurement as `$0.00`: it reads as "this period broke even", which nothing

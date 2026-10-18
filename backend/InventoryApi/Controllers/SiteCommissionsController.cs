@@ -90,7 +90,19 @@ public sealed class SiteCommissionsController : ControllerBase
                 HasConfigurationGap = row.HasConfigurationGap,
                 HasOverlap = row.HasOverlap,
                 UsesMultipleRates = row.UsesMultipleRates
-            }).ToList());
+            }).ToList())
+        {
+            // An unusable provider is this business's state, not a failed call (issue #731): the
+            // response is 200 and says the report is unavailable and why, rather than an error that
+            // tells the page nothing it can present.
+            IsAvailable = report.IsAvailable,
+            UnavailableReason = report.UnavailableReason is SiteCommissionUnavailableReason reason
+                ? SiteCommissionUnavailableReasons.Code(reason)
+                : null,
+            UnavailableDetail = report.UnavailableReason is SiteCommissionUnavailableReason detail
+                ? SiteCommissionUnavailableReasons.Describe(detail)
+                : null
+        };
     }
 
     [HttpGet("agreements")]

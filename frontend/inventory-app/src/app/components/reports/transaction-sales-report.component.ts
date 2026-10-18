@@ -6,6 +6,7 @@ import { MachineService } from '../../services/machine.service';
 import { ReportingService, TransactionSalesFilter, TransactionSalesReport, TransactionSalesRow } from '../../services/reporting.service';
 import { ReportFiltersComponent } from './report-filters.component';
 import { REPORT_MACHINE_FILTER_ERROR } from './report-page.base';
+import { availabilityBadge, moneyOrState } from './report-formatting';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 import { IconComponent } from '../shared/icon.component';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
@@ -38,13 +39,19 @@ import { loadProviderList } from '../../provider/provider-list-load';
   @if (loading) { <div class="card"><div class="card-body text-center"><span class="value-muted">Loading transactions...</span></div></div> }
   @else if (error) { <div class="alert alert-danger">{{ error }}</div> }
   @else if (report) {
+    @if (providerNotice(); as notice) {
+      <div class="alert alert-warning" role="status" data-testid="provider-availability">
+        <p class="alert-title">{{ notice.title }}</p>
+        <p>{{ notice.detail }}</p>
+      </div>
+    }
     @if (report.dataQuality.notes?.length) { <div class="alert alert-warning">@for (note of report.dataQuality.notes; track note) {<p>{{ note }}</p>}</div> }
     <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-      <div class="card card-body"><p class="stat-card-label">Sales</p><p class="font-semibold text-md-gray-800">{{ money(report.totals.sales) }}</p></div>
-      <div class="card card-body"><p class="stat-card-label">COGS</p><p class="font-semibold" [class.text-md-warning-text]="!report.totals.isCogsComplete" [class.text-md-gray-800]="report.totals.isCogsComplete">{{ report.totals.isCogsComplete ? money(report.totals.costOfGoods) : 'Incomplete' }}</p></div>
-      <div class="card card-body"><p class="stat-card-label">Gross Profit</p><p class="font-semibold" [class.text-md-warning-text]="report.totals.grossProfit == null" [class.text-md-gray-800]="report.totals.grossProfit != null">{{ moneyOrDash(report.totals.grossProfit) }}</p></div>
-      <div class="card card-body"><p class="stat-card-label">Direct Profit</p><p class="font-semibold" [class.text-md-warning-text]="report.totals.directProfit == null" [class.text-md-gray-800]="report.totals.directProfit != null">{{ moneyOrDash(report.totals.directProfit) }}</p></div>
-      <div class="card card-body"><p class="stat-card-label">Estimated fees (inc GST)</p><p class="font-semibold text-md-gray-800">{{ money(report.totals.estimatedFeeIncGst) }}</p></div>
+      <div class="card card-body"><p class="stat-card-label">Sales</p><p class="font-semibold text-md-gray-800" data-testid="totals-sales">{{ moneyOrState(report.totals.sales) }}</p>@if (availabilityBadge(); as badge) {<p class="value-muted" data-testid="sales-availability">{{ badge }}</p>}</div>
+      <div class="card card-body"><p class="stat-card-label">COGS</p><p class="font-semibold" [class.text-md-warning-text]="!report.totals.isCogsComplete" [class.text-md-gray-800]="report.totals.isCogsComplete">{{ report.totals.isCogsComplete ? moneyOrState(report.totals.costOfGoods) : 'Incomplete' }}</p></div>
+      <div class="card card-body"><p class="stat-card-label">Gross Profit</p><p class="font-semibold" [class.text-md-warning-text]="report.totals.grossProfit == null" [class.text-md-gray-800]="report.totals.grossProfit != null">{{ report.totals.grossProfit == null ? '—' : moneyOrState(report.totals.grossProfit) }}</p></div>
+      <div class="card card-body"><p class="stat-card-label">Direct Profit</p><p class="font-semibold" [class.text-md-warning-text]="report.totals.directProfit == null" [class.text-md-gray-800]="report.totals.directProfit != null">{{ report.totals.directProfit == null ? '—' : moneyOrState(report.totals.directProfit) }}</p></div>
+      <div class="card card-body"><p class="stat-card-label">Estimated fees (inc GST)</p><p class="font-semibold text-md-gray-800">{{ moneyOrState(report.totals.estimatedFeeIncGst) }}</p></div>
     </section>
     <div class="card overflow-x-auto sm:-mx-6"><table class="table min-w-[900px]">
       <thead class="table-head"><tr>@for (column of columns; track column.key) {<th scope="col" class="table-cell px-2">@if (column.sortable) {<button type="button" class="font-bold uppercase hover:underline" (click)="sort(column.key)">{{ column.label }} @if (filter.sortBy === column.key) {<span>{{ filter.sortDescending ? '↓' : '↑' }}</span>}</button>} @else {<span>{{ column.label }}</span>}</th>}<th scope="col" class="table-cell px-2">Fees / commission</th></tr></thead>
@@ -62,7 +69,7 @@ import { loadProviderList } from '../../provider/provider-list-load';
       </tr>}</tbody>
     </table></div>
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <span class="value-muted">{{ report.totalCount }} transaction{{ report.totalCount === 1 ? '' : 's' }} · {{ report.totals.completedTransactionCount }} completed</span>
+      <span class="value-muted" data-testid="transaction-count">{{ report.totalCount }} transaction{{ report.totalCount === 1 ? '' : 's' }} · {{ report.totals.completedTransactionCount }} completed@if (availabilityBadge(); as badge) { · {{ badge }}}</span>
       <div class="flex items-center gap-2"><label class="value-muted">Rows <select class="w-auto" [(ngModel)]="filter.pageSize" (ngModelChange)="changePageSize($event)"><option [ngValue]="50">50</option><option [ngValue]="100">100</option><option [ngValue]="250">250</option></select></label><button type="button" class="btn btn-sm btn-secondary" [disabled]="report.page <= 1" (click)="goTo(report.page - 1)">Previous</button><span class="value-muted">Page {{ report.page }} / {{ pages }}</span><button type="button" class="btn btn-sm btn-secondary" [disabled]="report.page >= pages" (click)="goTo(report.page + 1)">Next</button></div>
     </div>
   }
@@ -97,6 +104,36 @@ export class TransactionSalesReportComponent implements OnInit {
   export(format: 'csv' | 'xlsx'): void { this.reports.export('transactions', format, this.filter).subscribe(blob => { const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `transactions.${format}`; link.click(); URL.revokeObjectURL(url); }); }
   money(value: number | null | undefined): string { return new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(value ?? 0); }
   moneyOrDash(value: number | null | undefined): string { return value == null ? '—' : this.money(value); }
+
+  /**
+   * A total, or the availability state in place of a zero nothing measured (issue #731). The one
+   * shared rule, reused rather than rewritten here. Only the *totals* pass through it: each listed
+   * row is one stored transaction, so its own amounts are measurements and stay exact; what the
+   * state adds is whether those rows are all of them.
+   */
+  moneyOrState(value: number | null | undefined): string {
+    return moneyOrState(value, this.report?.salesAvailability, '—');
+  }
+
+  /** The short "not complete" label for the period's stored sales; '' when complete. */
+  availabilityBadge(): string {
+    return availabilityBadge(this.report?.salesAvailability);
+  }
+
+  /**
+   * The single banner that says this period's totals are not a measured zero, and that the listed
+   * rows may not be all of the period's transactions (issue #731).
+   */
+  providerNotice(): { title: string; detail: string } | null {
+    const availability = this.report?.salesAvailability;
+    if (!availability || availability.state === 'Complete') return null;
+    return {
+      title: 'Incomplete: provider data does not cover this whole period.',
+      detail: 'The transactions listed below are real and are shown exactly as recorded, but they are not known to '
+        + 'be all of this period\'s transactions, so the totals beside them may be incomplete. A total of $0.00 '
+        + 'here is not a measured zero.'
+    };
+  }
   cogsSource(row: TransactionSalesRow): string {
     if (row.costingStatus === 'Error') return 'Error';
     if (row.costOfGoods == null || row.costingStatus === 'Pending') return 'Pending';

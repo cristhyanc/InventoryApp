@@ -113,6 +113,12 @@ public sealed class GetProductProfitabilityReport : IGetProductProfitabilityRepo
         if (rows.Any(x => !x.IsCogsComplete))
             qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
 
+        // How well recorded provider coverage accounts for this period's stored sales (issue #731,
+        // under issue #730's model), decided by the one Domain policy. Only the sales family: no
+        // figure here comes from a settlement import.
+        var salesAvailability = facts.Coverage.SalesAvailability();
+        ReportAvailabilityNotes.Add(qualityNotes, salesAvailability, SalesFigures, ReportAvailabilityNotes.NoSalesData);
+
         var quality = ReportingQuality.Quality(
             missingStatus: true,
             historicalCostUnavailable: rows.Any(x => !x.IsCogsComplete),
@@ -121,6 +127,16 @@ public sealed class GetProductProfitabilityReport : IGetProductProfitabilityRepo
             containsUnmappedProducts: rows.Any(x => x.IsUnmapped),
             notes: qualityNotes);
 
-        return new ProductProfitabilityReportDto(range.From, range.ToDate, rows, quality);
+        return new ProductProfitabilityReportDto(range.From, range.ToDate, rows, quality)
+        {
+            SalesAvailability = salesAvailability
+        };
     }
+
+    /// <summary>
+    /// The figures this report shows, named for its own columns. The product list itself is named
+    /// too: an empty table is the figure a reader is most likely to misread as "nothing sold".
+    /// </summary>
+    public const string SalesFigures =
+        "Each product's sales, quantity, cost of goods and gross profit, and the list of products itself";
 }

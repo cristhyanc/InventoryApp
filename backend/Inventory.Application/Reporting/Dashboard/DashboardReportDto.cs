@@ -48,4 +48,19 @@ public record DashboardReportDto(
     public decimal? DirectProfit { get; init; }
     public decimal? DirectMarginPercent { get; init; }
     public NayaxProcessingFeeResult NayaxProcessingFees { get; init; } = new(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null);
+
+    /// <summary>
+    /// How well recorded provider coverage accounts for this period's provider-sourced figures
+    /// (issue #731, under issue #730's model). <c>Sales</c> governs sales, the card/cash split and
+    /// their counts, quantity, cost of goods, gross profit and margin, average sale and site
+    /// commission; <c>Fees</c> governs the Nayax fees and the actual reimbursement; <c>Combined</c>
+    /// governs net and direct profit and their margins and the expected-versus-actual reimbursement
+    /// difference and status. Delivery, packaging and operating expenses are this business's own
+    /// records and carry no state.
+    ///
+    /// <para>These are the states the bookkeeping report decided, republished rather than decided a
+    /// second time: this report composes that one for every figure above, so a second decision could
+    /// only ever disagree with it.</para>
+    /// </summary>
+    public ReportProviderAvailabilityDto ProviderAvailability { get; init; } = ReportProviderAvailabilityDto.Undecided;
 }

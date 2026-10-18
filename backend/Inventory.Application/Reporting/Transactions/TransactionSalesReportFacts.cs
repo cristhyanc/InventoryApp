@@ -1,3 +1,4 @@
+using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.Transactions;
 
@@ -18,7 +19,17 @@ public sealed record TransactionSalesReportFacts(
     IReadOnlyList<EffectiveCommissionAgreement> CommissionAgreements,
     // True when the live Nayax machine directory could not be retrieved, so SiteId/SiteName below
     // are unavailable for every row rather than genuinely unmapped.
-    bool SiteMappingUnavailable);
+    bool SiteMappingUnavailable)
+{
+    /// <summary>
+    /// How well recorded provider coverage accounts for this period's stored sales (issue #731,
+    /// extending issue #730's model to this report). Only the sales family is relevant: every
+    /// figure in this report is derived from the stored transactions themselves, including the
+    /// per-transaction fee, which is an effective-dated estimate and never an imported settlement
+    /// amount.
+    /// </summary>
+    public ReportCoverageFacts Coverage { get; init; } = new();
+}
 
 /// <summary>One raw transaction, before product matching and Domain fee/commission/profit derivation.</summary>
 public sealed record TransactionSalesReportFactsRow(

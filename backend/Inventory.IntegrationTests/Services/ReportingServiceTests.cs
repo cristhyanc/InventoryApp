@@ -17,6 +17,7 @@ using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Gst;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Reporting;
 using Inventory.Domain.Reporting.Availability;
 using Inventory.Domain.FinancialConfiguration;
@@ -49,6 +50,27 @@ public class ReportingRegressionTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
         return TestAppDbContext.Unrestricted(options);
+    }
+
+    /// <summary>
+    /// Records provider coverage spanning the requested dates end to end, so a test about a
+    /// financial formula or about export parity is not also a test about provider coverage
+    /// (issue #731). Without it these reports are correctly <c>Unverified</c>, and an export
+    /// replaces an unmeasured zero with that state - which is the behaviour the availability tests
+    /// assert and this one would otherwise trip over.
+    /// </summary>
+    private static async Task RecordFullCoverageAsync(AppDbContext db, DateTime from, DateTime to)
+    {
+        foreach (var source in new[] { ProviderDataSource.SalesSync, ProviderDataSource.SettlementImport })
+            db.ProviderDataCoverages.Add(new ProviderDataCoverage
+            {
+                Provider = ExternalProvider.Nayax,
+                Source = source,
+                FromUtc = from.Date.AddDays(-1),
+                ToUtc = to.Date.AddDays(2),
+                RecordedAtUtc = to.Date.AddDays(2),
+            });
+        await db.SaveChangesAsync();
     }
 
     private static ReportingHarness Reporting(AppDbContext db, INayaxLynxClient? nayaxLynxClient = null,
@@ -975,6 +997,7 @@ public class ReportingRegressionTests
             new NayaxSales { TransactionID = 400, MachineID = 10, MachineName = "Alpha", SettlementValue = 60m, PaymentMethod = "Credit Card", CostOfGoodsSold = 20m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
             new NayaxSales { TransactionID = 401, MachineID = 11, MachineName = "Beta", SettlementValue = 40m, PaymentMethod = "Cash", CostOfGoodsSold = null, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
         await db.SaveChangesAsync();
+        await RecordFullCoverageAsync(db, new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
 
         var service = Reporting(db);
         var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
@@ -1008,6 +1031,7 @@ public class ReportingRegressionTests
             new NayaxSales { TransactionID = 402, MachineID = 10, NayaxProductId = 1, ProductName = "Water", SettlementValue = 30m, CostOfGoodsSold = 10m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
             new NayaxSales { TransactionID = 403, MachineID = 10, NayaxProductId = 999, ProductName = "Unmapped Thing", SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
         await db.SaveChangesAsync();
+        await RecordFullCoverageAsync(db, new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
 
         var service = Reporting(db);
         var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
