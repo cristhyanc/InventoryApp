@@ -86,6 +86,42 @@ public class E2ETestAuthenticationCompositionTests
     }
 
     /// <summary>
+    /// Customer identity configuration must not reach into this host (issue #710). The E2E host
+    /// registers the synthetic scheme and nothing else whatever is configured: a filled
+    /// <c>ExternalId</c> section adds no second real scheme here, so the isolation of issue #46 is
+    /// not something a configuration value can widen.
+    /// </summary>
+    [Fact]
+    public void A_configured_customer_identity_tenant_adds_no_real_scheme_to_the_dedicated_environment()
+    {
+        var options = AuthenticationOptionsFor(E2ETestEnvironment.EnvironmentName, CustomerIdentityConfiguration);
+
+        Assert.Equal(
+            [E2ETestAuthenticationHandler.SchemeName],
+            options.Schemes.Select(scheme => scheme.Name).ToArray());
+    }
+
+    /// <summary>
+    /// The mirror image, for the same reason: outside that host a configured customer identity
+    /// tenant registers its own pinned scheme beside the workforce one and still never the
+    /// synthetic one.
+    /// </summary>
+    [Theory]
+    [InlineData("Production")]
+    [InlineData("Development")]
+    [InlineData("Testing")]
+    [InlineData("e2etest")]
+    public void A_configured_customer_identity_tenant_never_registers_the_synthetic_scheme(string environmentName)
+    {
+        var options = AuthenticationOptionsFor(environmentName, CustomerIdentityConfiguration);
+        var names = options.Schemes.Select(scheme => scheme.Name).ToArray();
+
+        Assert.DoesNotContain(E2ETestAuthenticationHandler.SchemeName, names);
+        Assert.Contains("Bearer", names);
+        Assert.Contains("ExternalIdBearer", names);
+    }
+
+    /// <summary>
     /// Selecting a synthetic actor is a closed, server-defined choice. An unknown key, a blank
     /// one, and a value that differs only in case name no actor at all, so a request cannot
     /// invent an identity even inside the E2E host.
@@ -119,12 +155,21 @@ public class E2ETestAuthenticationCompositionTests
         });
     }
 
-    private static AuthenticationOptions AuthenticationOptionsFor(string environmentName)
+    /// <summary>One complete customer identity tenant (issue #710); no real identifier.</summary>
+    private static readonly KeyValuePair<string, string?>[] CustomerIdentityConfiguration =
+    [
+        new("ExternalId:Instance", "https://contoso.ciamlogin.com/"),
+        new("ExternalId:TenantId", "9d6ff2a1-1f3e-4c6b-9a15-7b2c4f8e0d31"),
+        new("ExternalId:ClientId", "4f1c8e55-27b4-4a0e-9d7c-6a3f2b1e5c08"),
+    ];
+
+    private static AuthenticationOptions AuthenticationOptionsFor(
+        string environmentName, KeyValuePair<string, string?>[]? configuration = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddInventoryApiAuthentication(
-            new ConfigurationBuilder().Build(),
+            new ConfigurationBuilder().AddInMemoryCollection(configuration ?? []).Build(),
             new StubHostEnvironment(environmentName));
 
         using var provider = services.BuildServiceProvider();
