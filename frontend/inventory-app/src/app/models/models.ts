@@ -590,6 +590,52 @@ export interface NayaxMachineStockApplyResponse {
   results: NayaxStockEventApplyResult[];
 }
 
+/**
+ * Why a machine's latest provider sales could not be read (issue #768). `NoSalesProvider` is a
+ * business that has no sales provider at all (#759) and is **not** a failure; the other two are the
+ * same two per-feature availability answers the reorder and site-commission surfaces publish.
+ */
+export type MachineLatestSalesUnavailableReason =
+  | 'NoSalesProvider'
+  | 'NayaxNotConnected'
+  | 'PermissionNotGranted';
+
+/**
+ * One sale in a machine's latest Nayax sales window (issue #768).
+ *
+ * Every field is nullable because the provider reports it as nullable, or because the API withholds
+ * it. `saleAmount` and `currencyCode` are `null` for a role without `Dashboard.ViewFinancials` -
+ * the API withholds them, never sends `0` - and `saleDateTimeUtc` is `null` when the payload
+ * carried no usable instant. Never convert any of them to `0` or to an empty string: an absent
+ * value and a reported one have to stay distinguishable.
+ */
+export interface MachineLatestSale {
+  transactionId: number;
+  /** A true UTC instant, rendered in the current business's own time zone. */
+  saleDateTimeUtc: string | null;
+  productName: string | null;
+  paymentMethod: string | null;
+  saleAmount: number | null;
+  currencyCode: string | null;
+}
+
+/**
+ * The machine's latest provider sales (issue #768): the provider's own rolling window, newest
+ * first, or the reason there are none to show.
+ *
+ * `isAvailable: false` with an empty `sales` list means "nothing could be read" and must never be
+ * presented as "this machine has sold nothing"; an available result with an empty list is the
+ * honest empty state. The response carries no date range or row count, because the Nayax endpoint
+ * behind it guarantees neither.
+ */
+export interface MachineLatestSales {
+  machineId: number;
+  isAvailable: boolean;
+  unavailableReason: MachineLatestSalesUnavailableReason | null;
+  unavailableDetail: string | null;
+  sales: MachineLatestSale[];
+}
+
 export interface StockAdjustmentDto {
   quantityChange: number;
   reason: StockAdjustmentReason;

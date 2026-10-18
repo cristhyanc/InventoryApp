@@ -40,12 +40,58 @@
       }
     </div>
 
+    <!-- Sync Restock stays a section of its own, outside the two tab panels (issue #768): it is a
+         write workflow rather than one of the page's two views of this machine. -->
     <app-machine-restock-sync
       [machineId]="machine?.machineID"
       (restockApplied)="refreshProducts()">
     </app-machine-restock-sync>
 
-    <section class="mt-8 card">
+    <!-- The owner's two tabs (issue #768): Sales first and selected on arrival at every machine,
+         Products second. The panels are hidden rather than destroyed, so switching back to Sales
+         shows the window already read instead of calling Nayax again. -->
+    <div class="mt-8">
+      <div role="tablist" aria-label="Machine details views" class="flex gap-1 border-b border-md-gray-200">
+        @for (tab of tabs; track tab; let index = $index) {
+          <button
+            #tabButton
+            type="button"
+            role="tab"
+            class="px-4 py-2 text-md-body"
+            [id]="'machine-tab-' + tab"
+            [attr.data-testid]="'machine-tab-' + tab"
+            [attr.aria-controls]="'machine-panel-' + tab"
+            [attr.aria-selected]="activeTab === tab"
+            [tabindex]="activeTab === tab ? 0 : -1"
+            [ngClass]="activeTab === tab
+              ? 'border-b-2 border-md-info font-semibold text-md-info-text'
+              : 'value-muted'"
+            (click)="openTab(tab)"
+            (keydown)="onTabKeydown($event, index)">
+            {{ tabLabel(tab) }}
+          </button>
+        }
+      </div>
+
+      <section
+        id="machine-panel-sales"
+        role="tabpanel"
+        tabindex="0"
+        aria-labelledby="machine-tab-sales"
+        data-testid="machine-panel-sales"
+        class="mt-4"
+        [hidden]="activeTab !== 'sales'">
+        <app-machine-latest-sales [machineId]="machine?.machineID"></app-machine-latest-sales>
+      </section>
+
+      <section
+        id="machine-panel-products"
+        role="tabpanel"
+        tabindex="0"
+        aria-labelledby="machine-tab-products"
+        data-testid="machine-panel-products"
+        class="mt-4 card"
+        [hidden]="activeTab !== 'products'">
       <div class="card-header">
         <h2 class="card-title">Products for this machine</h2>
         <span class="text-md-body value-muted">{{ (products$ | async)?.length }} products found</span>
@@ -108,6 +154,7 @@
           </ng-template>
         </ng-container>
       </div>
-    </section>
+      </section>
+    </div>
   </ng-container>
 </div>

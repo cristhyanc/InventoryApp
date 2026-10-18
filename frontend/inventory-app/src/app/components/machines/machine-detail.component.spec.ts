@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute, provideRouter } from '@angular/router';
 import { Observable, of } from 'rxjs';
 import { MachineDetailComponent } from './machine-detail.component';
-import { Machine, Product } from '../../models/models';
+import { Machine, MachineLatestSales, Product } from '../../models/models';
 import { MachineService } from '../../services/machine.service';
 import { StockService } from '../../services/stock.service';
 import { ToastService } from '../../services/toast.service';
@@ -28,6 +28,11 @@ function breadcrumbServiceStub(): { setCurrentPageLabel: jest.Mock } & Breadcrum
   return { setCurrentPageLabel: jest.fn() } as unknown as { setCurrentPageLabel: jest.Mock } & BreadcrumbService;
 }
 
+/** An available window with no sales, for the Sales panel the page now composes (issue #768). */
+function emptyLatestSales(machineId = 7): MachineLatestSales {
+  return { machineId, isAvailable: true, unavailableReason: null, unavailableDetail: null, sales: [] };
+}
+
 describe('MachineDetailComponent product refresh', () => {
   it('reloads the machine products when the Sync Restock panel reports an applied restock', () => {
     const getProducts = jest.fn()
@@ -35,7 +40,8 @@ describe('MachineDetailComponent product refresh', () => {
       .mockReturnValueOnce(of([product(8)]));
     const machineService = {
       get: () => of({ machineID: 7 } as Machine),
-      getProducts
+      getProducts,
+      getLatestSales: () => of(emptyLatestSales())
     } as unknown as MachineService;
     const route = { paramMap: of(convertToParamMap({ id: '7' })) } as unknown as ActivatedRoute;
     const component = new MachineDetailComponent(
@@ -49,6 +55,8 @@ describe('MachineDetailComponent product refresh', () => {
     );
 
     component.ngOnInit();
+    // Products are read when that tab is first opened, not on arrival (issue #768).
+    component.openTab('products');
     let products: Product[] = [];
     component.products$.subscribe((p) => (products = p));
     expect(products[0].quantityInStock).toBe(10);
@@ -63,13 +71,125 @@ describe('MachineDetailComponent product refresh', () => {
 });
 
 /**
+ * The two tabs the owner asked for (issue #768): Sales first and selected on arrival at every
+ * machine, Products second and read only when it is opened.
+ */
+describe('MachineDetailComponent Sales and Products tabs (issue #768)', () => {
+  function component(getProducts = jest.fn(() => of([product(10)]))) {
+    const machineService = {
+      get: () => of({ machineID: 7 } as Machine),
+      getProducts,
+      getLatestSales: () => of(emptyLatestSales())
+    } as unknown as MachineService;
+    const route = { paramMap: of(convertToParamMap({ id: '7' })) } as unknown as ActivatedRoute;
+    const instance = new MachineDetailComponent(
+      route,
+      machineService,
+      {} as StockService,
+      {} as ToastService,
+      breadcrumbServiceStub(),
+      supportSessionStub(),
+      accessServiceStub()
+    );
+    instance.ngOnInit();
+    return { instance, getProducts };
+  }
+
+  it('opens on Sales, with Sales listed before Products', () => {
+    const { instance } = component();
+
+    expect(instance.activeTab).toBe('sales');
+    expect(instance.tabs).toEqual(['sales', 'products']);
+  });
+
+  /**
+   * The whole point of the lazy read: arriving on a machine makes the Sales request and the
+   * machine-products request is not made at all.
+   */
+  it('makes no machine-products request until the Products tab is opened', () => {
+    const { instance, getProducts } = component();
+
+    expect(getProducts).not.toHaveBeenCalled();
+
+    instance.openTab('products');
+
+    expect(getProducts).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not repeat the machine-products request when the tabs are switched again', () => {
+    const { instance, getProducts } = component();
+
+    instance.openTab('products');
+    instance.products$.subscribe();
+    instance.openTab('sales');
+    instance.openTab('products');
+    instance.products$.subscribe();
+
+    expect(getProducts).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Nothing to refresh while the table has never been shown, so an applied restock does not make a
+   * Nayax call for a tab nobody has opened; opening it later reads the current quantities anyway.
+   */
+  it('does not reload products after a restock while the Products tab has never been opened', () => {
+    const { instance, getProducts } = component();
+
+    instance.refreshProducts();
+
+    expect(getProducts).not.toHaveBeenCalled();
+  });
+
+  it('selects the tab an arrow key moves to', () => {
+    const { instance } = component();
+    const event = { key: 'ArrowRight', preventDefault: jest.fn() } as unknown as KeyboardEvent;
+
+    instance.onTabKeydown(event, 0);
+
+    expect(instance.activeTab).toBe('products');
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  it('wraps from the last tab back to the first, and Home and End jump to the ends', () => {
+    const { instance } = component();
+    const key = (name: string) => ({ key: name, preventDefault: jest.fn() }) as unknown as KeyboardEvent;
+
+    instance.onTabKeydown(key('ArrowRight'), 1);
+    expect(instance.activeTab).toBe('sales');
+
+    instance.onTabKeydown(key('End'), 0);
+    expect(instance.activeTab).toBe('products');
+
+    instance.onTabKeydown(key('Home'), 1);
+    expect(instance.activeTab).toBe('sales');
+
+    instance.onTabKeydown(key('ArrowLeft'), 0);
+    expect(instance.activeTab).toBe('products');
+  });
+
+  it('ignores a key the tab pattern does not use, leaving the selection and the default action alone', () => {
+    const { instance } = component();
+    const event = { key: 'a', preventDefault: jest.fn() } as unknown as KeyboardEvent;
+
+    instance.onTabKeydown(event, 0);
+
+    expect(instance.activeTab).toBe('sales');
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * The breadcrumb's live label for `/machines/:id` (issue #457): the already-loaded `machine$` data
  * this component already requests for its own page, never a second request made just for the
  * breadcrumb.
  */
 describe('MachineDetailComponent breadcrumb label', () => {
   function render(machine: Machine | null, id = '7'): { breadcrumbService: { setCurrentPageLabel: jest.Mock } } {
-    const machineService = { get: () => of(machine), getProducts: () => of([]) } as unknown as MachineService;
+    const machineService = {
+      get: () => of(machine),
+      getProducts: () => of([]),
+      getLatestSales: () => of(emptyLatestSales())
+    } as unknown as MachineService;
     const route = { paramMap: of(convertToParamMap({ id })) } as unknown as ActivatedRoute;
     const breadcrumbService = breadcrumbServiceStub();
     const component = new MachineDetailComponent(
@@ -114,7 +234,11 @@ describe('MachineDetailComponent Nayax status banner (issue #539)', () => {
         },
         {
           provide: MachineService,
-          useValue: { get: () => of({ machineID: 7 } as Machine), getProducts: () => of([]) }
+          useValue: {
+            get: () => of({ machineID: 7 } as Machine),
+            getProducts: () => of([]),
+            getLatestSales: () => of(emptyLatestSales())
+          }
         },
         { provide: StockService, useValue: {} },
         { provide: ToastService, useValue: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } },
@@ -163,7 +287,8 @@ describe('MachineDetailComponent write control during a support session (issue #
           provide: MachineService,
           useValue: {
             get: () => of({ machineID: 7 } as Machine),
-            getProducts: () => of([product(8)])
+            getProducts: () => of([product(8)]),
+            getLatestSales: () => of(emptyLatestSales())
           }
         },
         { provide: StockService, useValue: { adjust: stockAdjust } },
@@ -176,6 +301,10 @@ describe('MachineDetailComponent write control during a support session (issue #
     }).compileComponents();
 
     const fixture = TestBed.createComponent(MachineDetailComponent);
+    fixture.detectChanges(false);
+    // The product table lives in the Products tab, which is not the tab a machine opens on since
+    // issue #768, and its rows are only read once it is opened.
+    fixture.componentInstance.openTab('products');
     fixture.detectChanges(false);
     return { fixture, host: fixture.nativeElement as HTMLElement, stockAdjust };
   }
@@ -241,7 +370,8 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
                 currentWeekGrossRevenue: 444,
                 todayDirectProfit: 30
               } as Machine),
-            getProducts: () => of(products)
+            getProducts: () => of(products),
+            getLatestSales: () => of(emptyLatestSales())
           }
         },
         { provide: StockService, useValue: {} },
@@ -254,6 +384,9 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
     }).compileComponents();
 
     const fixture = TestBed.createComponent(MachineDetailComponent);
+    fixture.detectChanges(false);
+    // The product columns are in the Products tab (issue #768).
+    fixture.componentInstance.openTab('products');
     fixture.detectChanges(false);
     return fixture.nativeElement as HTMLElement;
   }
@@ -302,7 +435,8 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
                 currentWeekGrossRevenue: null,
                 todayDirectProfit: null
               } as Machine),
-            getProducts: () => of([fullProduct({ suggestedNetValue: null, suggestedPriceValue: null })])
+            getProducts: () => of([fullProduct({ suggestedNetValue: null, suggestedPriceValue: null })]),
+            getLatestSales: () => of(emptyLatestSales())
           }
         },
         { provide: StockService, useValue: {} },
@@ -316,6 +450,8 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
       .compileComponents()
       .then(() => {
         const fixture = TestBed.createComponent(MachineDetailComponent);
+        fixture.detectChanges(false);
+        fixture.componentInstance.openTab('products');
         fixture.detectChanges(false);
         return fixture.nativeElement as HTMLElement;
       });
