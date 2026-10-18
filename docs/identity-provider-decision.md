@@ -1,27 +1,34 @@
 # Customer identity: the Microsoft Entra External ID design (issue #709)
 
-**Status: approved design (merged with #709). § 5 is implemented by #710, and the SPA's authority
-selection and Google journey (§ 4 journey C, § 9, § 12) by #711; the rest is still design.** What
-ships today is the API's side of the trust decision — a second named bearer scheme pinned to one
-configured External ID tenant, behind an issuer-selecting policy scheme, with the multi-tenant
-workforce validator unchanged — plus the browser's side of journey C: an explicit authority choice
-at `/sign-in` with **Continue with Google**, a second MSAL configuration with its own client id and
-cache partition, and the `profile` scope named explicitly in the External ID token request. See
-[docs/architecture.md § Trusted issuers and the two bearer schemes](architecture.md#trusted-issuers-and-the-two-bearer-schemes-issue-710)
-and [§ The sign-in choice and the Google journey](architecture.md#the-sign-in-choice-and-the-google-journey-issue-711),
-and [README.md § Customer identity: a second trusted issuer](../README.md#customer-identity-a-second-trusted-issuer-issue-710)
-and [§ Signing in with Google](../README.md#signing-in-with-google-issue-711) for the behaviour of
-record, and § 16 below for what each task did and did not do.
+**Status: approved design (merged with #709). § 5 is implemented by #710, the SPA's authority
+selection and Google journey (§ 4 journey C, § 9, § 12) by #711, and the local email/password
+journey (§ 4 journey D) by #712; the rest is still design.** What ships today is the API's side of
+the trust decision — a second named bearer scheme pinned to one configured External ID tenant,
+behind an issuer-selecting policy scheme, with the multi-tenant workforce validator unchanged —
+plus the browser's side of journeys C and D: an explicit authority choice at `/sign-in` with one
+customer identity action, **Continue with Google or an email address**, a second MSAL configuration
+with its own client id and cache partition, the `profile` scope named explicitly in the External ID
+token request, and every credential step — registration, mailbox verification, sign-in and password
+reset — left on the provider's hosted pages. See
+[docs/architecture.md § Trusted issuers and the two bearer schemes](architecture.md#trusted-issuers-and-the-two-bearer-schemes-issue-710),
+[§ The sign-in choice and the Google journey](architecture.md#the-sign-in-choice-and-the-google-journey-issue-711)
+and [§ The local email and password journey](architecture.md#the-local-email-and-password-journey-issue-712),
+and [README.md § Customer identity: a second trusted issuer](../README.md#customer-identity-a-second-trusted-issuer-issue-710),
+[§ Signing in with Google](../README.md#signing-in-with-google-issue-711) and
+[§ Signing in with an email address and password](../README.md#signing-in-with-an-email-address-and-password-issue-712)
+for the behaviour of record, and § 16 below for what each task did and did not do.
 
-**Deferred, and not current behaviour:** the local email/password journey (#712) — journey D is not
-offered by the application, and journey B is not in v1 at all (§ 13 item 4) — identity linking
-(#713, deferred and not required under this recommendation), and the consolidated security, staging
-and rollback validation (#714). Both configuration sections are **empty in source control** — the
-API's `ExternalId` and the SPA's `externalIdSettings` — so a deployment no human has configured
-behaves exactly as it did before #710: workforce Microsoft Entra ID on the `common` authority, one
-MSAL authority in the SPA with no sign-in chooser and no Google action, `Microsoft.Identity.Web`
-validating bearer tokens on the API, and memberships bound to the validated Entra `(tid, oid)` claim
-pair.
+**Deferred, and not current behaviour:** journey B — Microsoft *through* External ID — which is not
+in v1 at all (§ 13 item 4), identity linking (#713, deferred and not required under this
+recommendation), and the consolidated security, staging and rollback validation (#714). Both
+configuration sections are **empty in source control** — the API's `ExternalId` and the SPA's
+`externalIdSettings` — so a deployment no human has configured behaves exactly as it did before
+#710: workforce Microsoft Entra ID on the `common` authority, one MSAL authority in the SPA with no
+sign-in chooser and no customer identity action, `Microsoft.Identity.Web` validating bearer tokens
+on the API, and memberships bound to the validated Entra `(tid, oid)` claim pair. Nothing about
+journeys C and D is verified against a provisioned tenant: § 14.2's staging verification of every
+supported journey, and the human configuration of the provider's recovery, MFA and anti-abuse
+controls, remain human steps that #714 consolidates.
 
 **Merging the pull request that adds this file is the human approval of the design** (issue #709's
 decision gate, under parent #708). Until it is merged, no downstream implementation subtask —
@@ -797,7 +804,7 @@ for people are identical to § 15.1.
 | **#709** (this) | Complete on merge; § 13's checklist is a separate human step before #710 | Design, decision table, threat model, rollout, rollback. No code |
 | **#710** (identity foundation and API token validation) | **Implemented** (see the implementation note below this table) | The `ExternalId` configuration section; the second named bearer scheme and the issuer-selecting policy scheme, with the existing multi-tenant workforce validator and its issuer-to-`tid` binding left exactly as it is; per-scheme issuer, audience and tenant-binding rules (§ 5.1), with the External ID issuer taken from the tenant's metadata document; a test that an External ID token without `oid` or `tid` (no `profile` scope) is unidentifiable; empty-configuration fail-closed; **the complete § 5.4 regression suite, including two different workforce tenants and every issuer/tenant/audience mismatch**, which covers T1/T2/T3/T10; the composition tests extended so the `E2ETest` host still registers the synthetic scheme and nothing else. **No change to `ActorIdentity` or `EntraActorIdentityAccessor`**, and no schema change |
 | **#711** (Google sign-in) | **Implemented** (see the implementation note below this table) | SPA authority selection, the second MSAL instance with its own cache, the `profile` scope in the External ID token request (§ 4), Google journey end to end, the welcome-screen wording of § 12, invite continuation re-verified |
-| **#712** (email/password) | After #710 | The same for the local journey, including the provider-hosted reset/recovery entry point and the `profile` scope (§ 4). Mailbox verification is enforced by the provider's sign-up flow (§ 13 item 7). **No password, hash, reset token or recovery code in this repository** |
+| **#712** (email/password) | **Implemented** (see the implementation note below this table) | The same for the local journey, including the provider-hosted reset/recovery entry point and the `profile` scope (§ 4). Mailbox verification is enforced by the provider's sign-up flow (§ 13 item 7). **No password, hash, reset token or recovery code in this repository** |
 | **#713** (linking/migration) | **Deferred — not required.** A human records that status; it is removed from the launch prerequisites and must not be given a readiness label unless a human first reopens the linking decision | — |
 | **#714** (security, staging, rollout validation) | Last | The provider/account-state matrix across both issuers; **identity separation in place of linking validation**, as #713 directs; T6, T8, T9; two-business isolation with identities from both issuers; **§ 14.2's staging verification that the associated application exposes and completes each supported journey**; the § 15 rollback rehearsal; human staging sign-off |
 
@@ -902,6 +909,75 @@ that the 15-minute pending-invite window comfortably outlasts a real Google sign
 application actually exposes and completes the journey. Both are listed in
 [README.md § Signing in with Google](../README.md#signing-in-with-google-issue-711) as the staging
 checks a human performs with their own test identity, and #714 owns the consolidated run.
+
+### How #712 implemented journey D, and where it chose differently
+
+The shape is the one § 16's row asks for: the local journey is the *same* hosted user flow as
+journey C, so the credential half of it is entirely the provider's — registration, the mailbox
+verification code, sign-in and the password reset all happen on the tenant's hosted pages, and no
+password, hash, verification code, reset code or recovery token exists anywhere in this repository,
+in a request it makes, in a URL, in storage or in a log. `ActorIdentity`,
+`EntraActorIdentityAccessor` and the API's two schemes are untouched; there is no schema change, no
+API contract change, and **no new configuration value at all** — journey D needs nothing beyond
+#710's `ExternalId` section and #711's `externalIdSettings`, which is also why § 15.1's rollback
+lever removes both journeys at once. Two of the row's requirements were already satisfied by the
+shared code and are asserted rather than re-implemented: the token request names `openid` and
+`profile` explicitly for every External ID sign-in (§ 4, `loginRequestFor`, pinned by
+`auth-config.spec.ts`), and § 12's welcome-screen wording now names an email address beside the
+work account and Google. Five decisions are worth recording because they are not literally what
+§ 9.2 and § 16 say:
+
+- **One action, not a second button, and the label names both journeys.** § 9.2's indicative
+  wording was two buttons, and #711's note left the label to this task. An External ID application
+  has exactly one user flow and the flow is what offers a provider (§ 13 items 5 and 6); nothing in
+  the verified record confirms a supported way for a relying application to preselect one, and #711
+  decided to invent none. A separate "Continue with email" button would therefore send the person
+  to the identical page while promising a choice the application does not make. The single action is
+  labelled **Continue with Google or an email address**, which is § 9.2's own description of the
+  authority, and the line beside it says the hosted page is where the Google account or the email
+  address and password is chosen.
+- **The reset/recovery "entry point" is the hosted page, and the page says so instead of linking
+  to one.** § 13 item 7 confirms the reset journey sends a code to the mailbox from the provider's
+  own page; no documented URL, policy parameter or `prompt` value for reaching it directly is in the
+  verified record, and inventing one is exactly what § 7 and § 11, T11 forbid. `/sign-in` therefore
+  carries a help line naming where registration, verification and password reset happen, stating
+  that this application never sees or stores a password and cannot reset one, and answering the
+  expired-code case — start again from `/sign-in` and the hosted page issues a new code. That is the
+  whole of the application's side of recovery, deliberately.
+- **"Expired link" has no application-side case to handle, and that is the finding.** The provider
+  verifies with a one-time *code* typed on its own page rather than a link the application issues or
+  receives, so an expired or reused verification or reset code is refused inside the hosted journey
+  and never reaches a URL, a route or a store here. What the application owns is the one thing that
+  *can* expire on its side — the 15-minute pending-invite and intended-destination window of § 10.2 —
+  and registration plus mailbox verification is the slowest journey that window has to outlast.
+  Extending it stays its own reviewed decision (§ 17), so it is unchanged here and listed as a
+  staging timing check instead.
+- **Generic failure messaging is enforced by *not* reading the provider's text.** The criterion asks
+  that a failure not disclose account existence. `classifySignInFailure` reduces a failure to
+  *cancelled* or *failed* from the error **code** alone and the page renders one of two
+  application-authored sentences, so the provider's description — which names the mailbox, the
+  directory and often the reason — is never shown, and a test asserts that for a refused
+  credential journey. No new error code was added for a forgotten password or an expired code:
+  recognising one that is not in the verified record would be a guess, and a failure nobody
+  recognises already lands on the generic sentence with the same two choices.
+- **Verification is relied on as the provider's gate, and separately as a thing this API reads for
+  nothing.** § 13 item 7 is what makes "no unverified session" true: the mailbox is verified during
+  sign-up, before the directory object exists, so an unfinished registration has no `oid` and
+  therefore no token. The API is not given a second, weaker rule to enforce — it reads no address
+  and no `email_verified` for any decision (§ 10.1) — and the regression tests assert both halves:
+  an unverified *and* a verified mailbox claim each reach no business endpoint on a direct API
+  request, and a member's changed, unverified or absent address decides nothing about their
+  membership.
+
+Everything that makes the journey usable is still human portal configuration and was not done here:
+enabling email with password inside the user flow with its verification and self-service password
+reset, choosing the MFA methods, accepting or covering the anti-abuse gaps § 13 item 8 records
+(**no built-in bot or sign-up fraud protection, no built-in per-IP throttling, password policy
+configurability unconfirmed**), and § 14.2's staging verification that the associated application
+actually exposes and completes the journey. The recorded control set, the residual limitations and
+the staging checklist are in
+[README.md § Signing in with an email address and password](../README.md#signing-in-with-an-email-address-and-password-issue-712);
+#714 owns the consolidated run across both issuers.
 
 ## 17. Known limitations of this document
 
