@@ -9482,16 +9482,17 @@ machine-stock ledger counts it as unattributed, and the transaction and product-
 show it under the name the provider reported, with the existing "could not be mapped to a Product"
 data-quality note — visible, never silently dropped from a total.
 
-**Open decision: an unresolved sale that carries a provider cost is still costed from it.**
-`CostSale` reads no ledger cost for an unresolved sale, but falls through to the transaction-level
-Nayax `Product Cost Price` when the sale carries one, and returns `Costed`/`NayaxTransactionExport` —
-precedence step 2 of AGENTS.md § Inventory and historical costing invariants, pinned since before
-#758 by `An_unresolved_sale_with_a_Nayax_cost_is_costed_from_the_Nayax_export`. Issue #758's
-acceptance criteria say an unresolved sale "is not costed", which that established precedence
-contradicts, and removing the fallback would change the COGS totals existing reports already show
-for such sales. The difference was raised on PR #766 and is a human decision: either the precedence
-changes here and in AGENTS.md, or the criterion is read as "never costed *from a product's
-inventory*" and this paragraph stays. Nothing in #758 changed that branch either way.
+**Approved decision: product attribution and transaction cost are separate.** On 18 October 2026,
+Cristhyan approved preserving the transaction-level Nayax fallback for unresolved sales (issue #758,
+PR #766). An unresolved sale never takes a local product's inventory-ledger cost and is consumed by
+no inventory replay. When its own persisted Nayax `Product Cost Price` is non-negative, `CostSale`
+may return `Costed`/`NayaxTransactionExport`, retaining explicit provenance without resolving
+`ProductId` or changing any product's quantities or inventory value. Without a valid recorded cost it
+remains uncosted; never substitute zero or today's product cost. Reports keep product attribution
+visibly unresolved even when transaction COGS is known. This preserves AGENTS.md's historical-cost
+precedence and `An_unresolved_sale_with_a_Nayax_cost_is_costed_from_the_Nayax_export`.
+The historical migration failure gates below are unchanged: this decision does not permit losing an
+existing product attribution during migration.
 
 #### Migrating the sales that already exist
 
