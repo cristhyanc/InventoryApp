@@ -37,7 +37,7 @@ async function renderMachineReport(options: {
     imports: [MachineReportComponent],
     providers: [
       { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: new Map() } } },
-      { provide: ReportingService, useValue: { machines: jest.fn(() => of({ machines: [] })) } },
+      { provide: ReportingService, useValue: { machines: jest.fn(() => of({ rows: [] })) } },
       {
         provide: MachineService,
         useValue: { getAll: jest.fn(() => options.machines ?? of([machine(9, 'Lobby')])) }
