@@ -8171,6 +8171,15 @@ selection with no Nayax link, or whose product has no matching row in that tenan
 excluded from the result rather than assigned a fabricated zero storage quantity, so the tenant
 boundary can never be papered over as a data gap.
 
+**A retired product is not picked (issue #736).** `IsActive` is how a product with history is taken
+out of use, so a selection resolving to a product whose `IsActive` is false is left off the pick
+list - the same rule the reorder alerts (`ProductReorderPolicy.IsReorderAlert`), the site stock lists
+(`SiteStockPolicy`) and the machine refill alerts (`MachineRefillAlertPolicy`) already apply. The
+flag travels as a fact on `PickListStorageProduct` and the exclusion is made in `GetPickList`, not as
+a predicate in the adapter, so it is stated where every other pick rule is and so the storage lookup
+stays usable by a later caller that needs a retired product's quantity. Nothing about the product,
+its machine slots or its stock changes.
+
 The projection returns, per product: its physical `QuantityInStock` (untouched), the total quantity
 to pick across the selected machines, and a storage-shortage quantity (`max(0, total to pick -
 QuantityInStock)`) projected when the combined pick quantity would exceed what is physically on the
@@ -9771,7 +9780,8 @@ persisted `ProductId`, issue #758), machine stock counts, and costing records (a
 transition baseline or a costing repair). Two of those foreign keys cascade and four are restricted,
 so without the refusal a delete would either erase inventory history or fail inside the database;
 the refusal names what is in the way and points at `IsActive`, which is how a product is retired —
-it keeps all of its history, stays out of the reorder alerts and can be reactivated. A
+it keeps all of its history, stays out of the reorder alerts and the Pick List, and can be
+reactivated. A
 provider-managed product is refused for its own reason: the next import would create it again. The
 `NayaxSales.ProductId` foreign key stays `Restrict`, never cascade and never set-null.
 `Inventory.Domain.Categories.CategoryCataloguePolicy` refuses a category products still use, with
@@ -9795,13 +9805,46 @@ supplies that could point a tenant-owned row at another business's, so create an
 it through the tenant-filtered read and refuse an unknown one with the same message either way — a
 category of another business is invisible, exactly like one that does not exist.
 
+**Creating a product with opening stock is one transaction.** `POST api/products` is the first
+public path that writes stock through `IProductStore.CreateAsync`, and that create performs three
+writes: the product, the opening `StockAdjustment` that explains its `QuantityInStock`, and the cost
+rebuild that movement implies. `EfProductStore.CreateAsync` commits them as a single relational
+transaction, so a cancellation or a failure part-way through leaves nothing at all rather than a
+persisted quantity whose ledger and costing position were never written — under a request the caller
+saw fail and would retry, which would otherwise create a second product beside the first.
+
+**Retirement and what stops naming a retired product.** `IsActive` is the retirement path the
+deletion refusal points at, and it is the server-side projections that honour it: the reorder alerts
+(`Inventory.Domain.Products.ProductReorderPolicy.IsReorderAlert`, which requires an active product),
+the Pick List projection (`Inventory.Application.PickList.GetPickList`, issue #736 — a retired
+product is dropped from the picking matrix with a stated rule, not by absence), the site stock lists
+(`SiteStockPolicy`) and the machine refill alerts (`MachineRefillAlertPolicy`). All of the product's
+history, its machine slots and its stock are untouched, and it is still readable and editable
+through `GET`/`PUT api/products/{id}`, which is how it is reactivated. **`GET api/products` still
+lists active and inactive products**, as it always has, and so do the product dropdowns the Angular
+screens build from it; hiding them there is a read-contract change whose consumers include the
+catalogue management screen, the Admin costing-repair and AVCO-transition tools and the stock-history
+product filter, all of which need a retired product, so it belongs with the screens (issue #737, B2)
+and is not done here.
+
 **The provider import is refused for a manual catalogue, for now.**
 `Inventory.Domain.Providers.ManualCatalogueImportPolicy`: while the business holds products with no
-external id, `POST api/imports/products` answers `409` with how many they are, before any Nayax call
-and before anything is written, because the import identifies a product only by the provider's own
-id and would create a duplicate of each of them. A business whose products all carry one imports
-exactly as before. The catalogue review (issue #738 for the API, #739 for the screen) is what
-replaces the refusal with a deliberate link-or-create per product.
+external id, `POST api/imports/products` answers `409` with how many they are, before anything is
+written, because the import identifies a product only by the provider's own id and would create a
+duplicate of each of them. A business whose products all carry one imports exactly as before. The
+catalogue review (issue #738 for the API, #739 for the screen) is what replaces the refusal with a
+deliberate link-or-create per product.
+
+**That count is asked twice, and the second answer is the one the import is decided on.** The first
+read runs before the two remote catalogue reads, so a business the import would duplicate spends no
+Nayax call at all — an optimisation, not the guard. The remote reads take as long as Nayax takes,
+and a person can commit a `POST api/products` while they are in flight, so
+`ImportNayaxProductCatalog` opens the import's write transaction
+(`INayaxProductCatalogImportStore.BeginTransactionAsync`) once the snapshot is in hand and re-reads
+`CountProductsWithNoProviderIdAsync` inside it: the authoritative read, the comparison and the write
+are one operation, and a catalogue that became manual in between is refused with nothing committed
+rather than duplicated. The transaction is opened only after the remote reads, so no Nayax request
+is ever made while a database transaction is held open.
 
 ### Nayax product catalogue import (issue #300)
 
@@ -9830,16 +9873,22 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   started concurrently on that shared context are now awaited one at a time (see
   [Concurrency inside one request](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)).
   That keeps the new-versus-existing decision and the write it feeds together *within one request*,
-  and nothing more: this import has no cross-request isolation, and the single scoped `AppDbContext`
-  provides none. Its reads run outside the transaction `SaveChangesAsync` opens, with no lock, no
-  expected-state comparison and no concurrency token, so two overlapping imports can both decide the
+  and nothing more: the adapter has no cross-request isolation of its own, and the single scoped
+  `AppDbContext` provides none. There is no lock, no expected-state comparison and no concurrency
+  token, so two overlapping imports can both decide the
   same product is new (the later `SaveChanges` then fails on the filtered unique index over
   `(BusinessId, ExternalProductId)`, which since #735 is what refuses a duplicated identity in place
   of the primary key) and a local catalogue
-  edit committed between the read and the write is overwritten by whichever writer commits last.
-  This is the legacy behaviour, carried over unchanged; making the import safe under concurrent
-  callers needs an explicit transaction or concurrency token and is a behaviour change for its own
-  issue.
+  edit to a provider-linked row committed between the read and the write is overwritten by whichever
+  writer commits last.
+  This is the legacy behaviour, carried over unchanged; making the import's upsert safe under
+  concurrent callers needs a concurrency token and is a behaviour change for its own issue.
+- The one cross-request window issue #736 did close is the manual-catalogue guard, because there the
+  stale answer is not a lost edit but a duplicated catalogue. `BeginTransactionAsync` on the same
+  port gives the use case a transaction it opens *after* the remote reads and holds across the
+  authoritative `CountProductsWithNoProviderIdAsync` and `ApplyAsync`, so a product created while
+  Nayax was being read refuses the whole import (`409`) with nothing committed — see
+  [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736).
 - Only four fields are Nayax-managed: `Name`, `Description`, `UnitPrice` (from the catalogue
   `ProductDefaultRetailPrice`, never the Nayax `ProductCostPrice` - see
   [Product selling price](#product-selling-price), including the confirmed field name recorded

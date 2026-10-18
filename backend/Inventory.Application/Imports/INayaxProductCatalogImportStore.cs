@@ -1,6 +1,17 @@
 namespace Inventory.Application.Imports;
 
 /// <summary>
+/// The database transaction one catalogue import runs its manual-catalogue re-check and its write
+/// in (issue #736). Disposing it without <see cref="CommitAsync"/> rolls back everything the import
+/// staged, which is what lets the use case read the business's state authoritatively and still
+/// refuse the whole import without having written a row.
+/// </summary>
+public interface INayaxProductCatalogImportTransaction : IAsyncDisposable
+{
+    Task CommitAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// Narrow persistence port for the Nayax product catalogue import (issue #300), owned by the
 /// Application layer.
 ///
@@ -13,6 +24,13 @@ namespace Inventory.Application.Imports;
 /// </summary>
 public interface INayaxProductCatalogImportStore
 {
+    /// <summary>
+    /// Begins the transaction the import's authoritative manual-catalogue check and its write share
+    /// (issue #736). It is opened after the remote catalogue has been read, so no Nayax request is
+    /// ever made while a database transaction is held open.
+    /// </summary>
+    Task<INayaxProductCatalogImportTransaction> BeginTransactionAsync(CancellationToken cancellationToken);
+
     /// <summary>
     /// Applies one remote catalogue snapshot to the caller's business in a single unit of work:
     /// creates a category for every <see cref="NayaxProductCatalogImport.Categories"/> entry the
@@ -37,8 +55,11 @@ public interface INayaxProductCatalogImportStore
     /// (issue #736, parent #329 decision P2).
     ///
     /// <para>It is a count rather than a yes/no because the refusal says how many rows are in the
-    /// way, and it is read before the remote catalogue, so a business the import would duplicate
-    /// never reaches Nayax at all.</para>
+    /// way. It is read twice: once before the remote catalogue, so a business the import would
+    /// duplicate never reaches Nayax at all, and again inside
+    /// <see cref="BeginTransactionAsync"/>'s transaction, where it is the authoritative answer the
+    /// write is decided on - a product created while the two remote reads were in flight is seen by
+    /// the second read and refuses the import.</para>
     /// </summary>
     Task<int> CountProductsWithNoProviderIdAsync(CancellationToken cancellationToken);
 }

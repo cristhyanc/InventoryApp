@@ -16,10 +16,19 @@ namespace InventoryApi.Tests.Application.PickList;
 /// </summary>
 public class GetPickListTests
 {
-    private static Mock<IPickListStorageStockStore> StorageWith(params (long ProductId, string Name, int QuantityInStock)[] products)
+    private static Mock<IPickListStorageStockStore> StorageWith(params (long ProductId, string Name, int QuantityInStock)[] products) =>
+        StorageOf(products.Select(p => (p.ProductId, p.Name, p.QuantityInStock, true)).ToArray());
+
+    /// <summary>
+    /// The same double, with each product's retirement flag stated (issue #736). Every other test
+    /// here uses <see cref="StorageWith"/>, whose products are all active, because that is the state
+    /// those tests are about.
+    /// </summary>
+    private static Mock<IPickListStorageStockStore> StorageOf(
+        params (long ProductId, string Name, int QuantityInStock, bool IsActive)[] products)
     {
         var dictionary = products.ToDictionary(
-            p => p.ProductId, p => new PickListStorageProduct(p.ProductId, p.Name, p.QuantityInStock));
+            p => p.ProductId, p => new PickListStorageProduct(p.ProductId, p.Name, p.QuantityInStock, p.IsActive));
         var store = new Mock<IPickListStorageStockStore>();
         store.Setup(x => x.GetStorageProductsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyDictionary<long, PickListStorageProduct>)dictionary);
@@ -58,6 +67,32 @@ public class GetPickListTests
         Assert.Equal(6, cell.CurrentQuantity);
         Assert.Equal(10, cell.TargetQuantity);
         Assert.Equal(4, cell.QuantityToPick);
+        Assert.Equal(4, product.TotalQuantityToPick);
+    }
+
+    /// <summary>
+    /// A retired product is not picked (issue #736). <c>IsActive</c> is how a product with history
+    /// is taken out of use, so a machine slot that still holds one is left off the pick list -
+    /// the active product on the same machine is unaffected, which is what proves the exclusion is
+    /// this rule rather than the whole machine dropping out.
+    /// </summary>
+    [Fact]
+    public async Task Handle_ExcludesARetiredProduct_AndKeepsTheActiveOneOnTheSameMachine()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 4 },
+                new() { NayaxProductID = 101, MDBCode = 13, PAR = 10, MissingStockByMDB = 6 },
+            });
+        var storage = StorageOf((100, "Coke Zero", 50, true), (101, "Discontinued bar", 50, false));
+
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself())
+            .Handle([1], CancellationToken.None);
+
+        var product = Assert.Single(result.Products);
+        Assert.Equal(100, product.ProductId);
         Assert.Equal(4, product.TotalQuantityToPick);
     }
 

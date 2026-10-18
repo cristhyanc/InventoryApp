@@ -31,7 +31,8 @@ public class GetPickListNayaxLinkTests
                 .Join(products, id => id, product => product.ProductId, (_, product) => product)
                 .ToDictionary(
                     product => product.ProductId,
-                    product => new PickListStorageProduct(product.ProductId, product.Name, product.QuantityInStock)));
+                    product => new PickListStorageProduct(
+                        product.ProductId, product.Name, product.QuantityInStock, IsActive: true)));
         return storage;
     }
 

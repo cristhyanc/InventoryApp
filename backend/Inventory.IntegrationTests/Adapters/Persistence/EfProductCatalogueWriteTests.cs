@@ -1,3 +1,4 @@
+using Inventory.Application.Costing;
 using Inventory.Application.Products;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Products;
@@ -68,8 +69,9 @@ public class EfProductCatalogueWriteTests : IDisposable
         string name = "Coke",
         decimal unitPrice = 3.50m,
         int quantityInStock = 0,
-        long? categoryId = null) =>
-        new(name, "SKU-1", "A can", unitPrice, quantityInStock, 5, 10, "can", categoryId, null, true, null);
+        long? categoryId = null,
+        decimal? initialUnitCost = null) =>
+        new(name, "SKU-1", "A can", unitPrice, quantityInStock, 5, 10, "can", categoryId, null, true, initialUnitCost);
 
     private static ProductUpdateFields UpdateFields(
         string name = "Coke",
@@ -150,6 +152,43 @@ public class EfProductCatalogueWriteTests : IDisposable
         var movement = await db.StockAdjustments.AsNoTracking()
             .SingleAsync(adjustment => adjustment.ProductId == created.ProductId);
         Assert.Equal(6, movement.QuantityChange);
+    }
+
+    /// <summary>
+    /// Creating a product with opening stock is <strong>one</strong> transaction (issue #736): the
+    /// product, the movement that explains its quantity and the costing position that movement
+    /// implies either all exist or none of them do.
+    ///
+    /// <para>The failure is injected into the cost rebuild, which is the last of the three writes
+    /// and the one that runs <em>after</em> the product and its movement have already been saved -
+    /// precisely the window in which the previous three-commit shape left a persisted quantity with
+    /// no complete ledger behind it, under a request the caller saw fail and would retry. A
+    /// cancellation is the same window reached the way a caller actually reaches it. Both are
+    /// verified from a <em>reopened</em> context, because the one that wrote them still tracks what
+    /// the rollback undid.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_failure_in_the_opening_cost_rebuild_leaves_no_product_movement_or_cost(bool cancelled)
+    {
+        Exception failure = cancelled
+            ? new OperationCanceledException()
+            : new InvalidOperationException("costing unavailable");
+
+        await using (var db = TestAppDbContext.For(_options, BusinessA))
+        {
+            var store = new EfProductStore(db, new FailingRebuild(failure));
+
+            await Assert.ThrowsAsync(
+                failure.GetType(),
+                () => store.CreateAsync(
+                    CreateFields(quantityInStock: 12, initialUnitCost: 2m), CancellationToken.None));
+        }
+
+        await using var after = TestAppDbContext.For(_options, BusinessA);
+        Assert.Empty(await after.Products.AsNoTracking().ToListAsync());
+        Assert.Empty(await after.StockAdjustments.AsNoTracking().ToListAsync());
     }
 
     /// <summary>
@@ -566,4 +605,29 @@ public class EfProductCatalogueWriteTests : IDisposable
             db.InventoryCostTransitionBaselines.CountAsync(baseline => baseline.ProductId == productId),
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unhandled history kind."),
     };
+
+    /// <summary>
+    /// A cost rebuild that fails, for the fault injection above. It is deliberately the whole port:
+    /// a create that reached any other method of it would be doing something this test is not
+    /// describing, and would fail here rather than pass quietly.
+    /// </summary>
+    private sealed class FailingRebuild(Exception failure) : IRebuildProductCost
+    {
+        public Task<InventoryCostRebuildResult> RebuildAsync(
+            long productId,
+            DateTime? recostCompletedSalesFrom = null,
+            bool dryRun = false,
+            CancellationToken cancellationToken = default) => throw failure;
+
+        public Task<InventoryCostRebuildResult> RebuildCostingOnlyAsync(
+            long productId,
+            DateTime recostCompletedSalesFrom,
+            CancellationToken cancellationToken = default) => throw failure;
+
+        public Task<decimal?> GetAverageUnitCostAtAsync(
+            long productId,
+            DateTime saleTime,
+            long? saleTransactionId = null,
+            CancellationToken cancellationToken = default) => throw failure;
+    }
 }

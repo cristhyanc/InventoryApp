@@ -29,6 +29,11 @@ namespace Inventory.Application.PickList;
 /// <see cref="IPickListStorageStockStore"/> are scoped by the same tenant ownership every other
 /// <c>AppDbContext</c> read is, so "not found" in either is the tenant boundary or an unmapped
 /// selection, not a data gap to paper over.
+///
+/// A product the business has <em>retired</em> (<c>IsActive</c> false) is excluded too, and for a
+/// stated reason rather than by absence (issue #736): deactivation is how a product with history is
+/// taken out of use, so it stops appearing on the pick list exactly as it already stops raising a
+/// reorder alert. Nothing about the product, its slots or its stock changes.
 /// </summary>
 public sealed class GetPickList
 {
@@ -114,10 +119,17 @@ public sealed class GetPickList
         // way one whose product is not in the caller's catalogue already was. One local product
         // never carries two Nayax links (the link table is unique on business/provider/product), so
         // regrouping on the resolved id cannot merge two different products' selections.
+        //
+        // A **retired** product is dropped for a different and deliberate reason (issue #736):
+        // `IsActive` is how a product is taken out of use, and a product the business has retired is
+        // not one an operator is sent to pick - the same rule the reorder alerts
+        // (`ProductReorderPolicy.IsReorderAlert`), the site stock lists and the machine refill
+        // alerts already apply. Its history, its machine slots and its stock are untouched; only
+        // this projection stops naming it.
         var products = cellsByProductAndMachine
             .Where(cell => localProductIdByNayaxId.ContainsKey(cell.Key.NayaxProductId))
             .GroupBy(cell => localProductIdByNayaxId[cell.Key.NayaxProductId])
-            .Where(group => storageProducts.ContainsKey(group.Key))
+            .Where(group => storageProducts.ContainsKey(group.Key) && storageProducts[group.Key].IsActive)
             .Select(group =>
             {
                 var storageProduct = storageProducts[group.Key];

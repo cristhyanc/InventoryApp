@@ -41,6 +41,20 @@ public sealed class EfProductStore : IProductStore
         _rebuild = rebuild;
     }
 
+    /// <summary>
+    /// Creates the product, its opening stock movement and the costing position that movement
+    /// implies as <strong>one</strong> relational transaction (issue #736).
+    ///
+    /// <para>The three writes used to be three separate commits, which was tolerable while this use
+    /// case was unreachable and is not now that <c>POST /api/products</c> is a public stock-writing
+    /// path: a cancellation or a failure after the first commit left a product carrying
+    /// <c>QuantityInStock</c> with no <c>StockAdjustment</c> behind it, or a movement with no cost
+    /// rebuilt from it, under an HTTP request the caller saw fail and would retry - which would then
+    /// create a second product. Either way the ledger no longer explains the quantity, which is
+    /// exactly what AGENTS.md § Inventory and historical costing invariants forbids. Now nothing at
+    /// all is committed unless all three succeed; disposing the transaction without the commit rolls
+    /// the product back with them.</para>
+    /// </summary>
     public async Task<ProductWriteAttempt> CreateAsync(
         ProductCreateFields fields, CancellationToken cancellationToken)
     {
@@ -48,6 +62,10 @@ public sealed class EfProductStore : IProductStore
 
         if (NameOrRefusal(fields.Name) is not { } name)
             return ProductWriteAttempt.Refused(ProductCataloguePolicy.NameRequiredMessage);
+
+        await using var transaction = _db.Database.IsRelational()
+            ? await _db.Database.BeginTransactionAsync(cancellationToken)
+            : null;
 
         if (!await CategoryIsOwnedAsync(fields.CategoryId, cancellationToken))
             return ProductWriteAttempt.Refused(ProductCataloguePolicy.UnknownCategoryMessage);
@@ -94,6 +112,7 @@ public sealed class EfProductStore : IProductStore
             }
         }
 
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         return ProductWriteAttempt.Succeeded(product.Id);
     }
 

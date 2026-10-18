@@ -153,6 +153,31 @@ public class ImportNayaxProductCatalogTests
         await Import(store, products: [], groups: []);
 
         Assert.Single(store.Applied);
+        Assert.True(store.Transaction!.Committed);
+    }
+
+    /// <summary>
+    /// The guard is re-asked where it counts (issue #736). The check before the remote reads only
+    /// saves a Nayax call: the two reads take as long as Nayax takes, and a person can create a
+    /// manual product while they are in flight. So the count is read again inside the transaction
+    /// the apply commits in, and that answer decides the import - here it refuses one the first
+    /// check had allowed, applies nothing, and never commits.
+    /// </summary>
+    [Fact]
+    public async Task A_manual_product_created_while_Nayax_was_read_refuses_the_import_uncommitted()
+    {
+        var store = new RecordingStore { ProductsWithNoProviderIdByRead = [0, 1] };
+
+        var refusal = await Assert.ThrowsAsync<DomainConflictException>(() =>
+            Import(
+                store,
+                products: [new NayaxProduct { NayaxProductId = 100, ProductName = "Chips" }],
+                groups: []));
+
+        Assert.Equal(ManualCatalogueImportPolicy.Refusal(1), refusal.Message);
+        Assert.Empty(store.Applied);
+        Assert.False(store.Transaction!.Committed);
+        Assert.True(store.Transaction.Disposed);
     }
 
     [Fact]
@@ -186,6 +211,8 @@ public class ImportNayaxProductCatalogTests
 
     private sealed class RecordingStore : INayaxProductCatalogImportStore
     {
+        private int _reads;
+
         public List<NayaxProductCatalogImport> Applied { get; } = [];
 
         /// <summary>
@@ -195,14 +222,58 @@ public class ImportNayaxProductCatalogTests
         /// </summary>
         public int ProductsWithNoProviderId { get; init; }
 
+        /// <summary>
+        /// One answer per read, for the test where the count <em>changes</em> between the check
+        /// before the remote reads and the authoritative one inside the write's own transaction
+        /// (issue #736). Unset, every read answers <see cref="ProductsWithNoProviderId"/>.
+        /// </summary>
+        public IReadOnlyList<int>? ProductsWithNoProviderIdByRead { get; init; }
+
+        /// <summary>The transaction the use case opened, or <c>null</c> if it never got that far.</summary>
+        public RecordingTransaction? Transaction { get; private set; }
+
+        public Task<INayaxProductCatalogImportTransaction> BeginTransactionAsync(CancellationToken cancellationToken)
+        {
+            Transaction = new RecordingTransaction();
+            return Task.FromResult<INayaxProductCatalogImportTransaction>(Transaction);
+        }
+
         public Task ApplyAsync(NayaxProductCatalogImport import, CancellationToken cancellationToken)
         {
             Applied.Add(import);
             return Task.CompletedTask;
         }
 
-        public Task<int> CountProductsWithNoProviderIdAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(ProductsWithNoProviderId);
+        public Task<int> CountProductsWithNoProviderIdAsync(CancellationToken cancellationToken)
+        {
+            var read = _reads++;
+            return Task.FromResult(ProductsWithNoProviderIdByRead is { } answers
+                ? answers[Math.Min(read, answers.Count - 1)]
+                : ProductsWithNoProviderId);
+        }
+    }
+
+    /// <summary>
+    /// Records whether the import's transaction was committed, which is what tells a refusal that
+    /// wrote nothing apart from one that wrote and then reported a conflict.
+    /// </summary>
+    private sealed class RecordingTransaction : INayaxProductCatalogImportTransaction
+    {
+        public bool Committed { get; private set; }
+
+        public bool Disposed { get; private set; }
+
+        public Task CommitAsync(CancellationToken cancellationToken)
+        {
+            Committed = true;
+            return Task.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class FixedClock : IClock

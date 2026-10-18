@@ -1055,16 +1055,24 @@ does not manage.
   movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
   the delete is refused with what is in the way and nothing is written — deleting it would erase
   inventory and financial history. **Deactivate it instead**: a deactivated product keeps all of its
-  history, stays out of the reorder alerts, and can be reactivated at any time. A product the
-  provider manages is not deleted either, because the next import would create it again.
+  history, stays out of the reorder alerts and off the Pick List, and can be reactivated at any
+  time. A product the provider manages is not deleted either, because the next import would create
+  it again.
+- **A deactivated product is still listed on the Products page and in the product pickers.** That is
+  deliberate for now: it is how you find one again to reactivate it, and the Admin costing-repair
+  and AVCO-transition tools and the stock-history product filter all need to reach a retired
+  product. Hiding retired products from the catalogue list and the pickers belongs with the screens
+  (issue #737), which is also where the "show retired" control will live.
 - **A category products use is not deleted.** The refusal says how many products use it; move them
   to another category first, otherwise they would be left with no category at all.
 - **The Nayax catalogue import waits for the catalogue review.** While the business holds products
   that Nayax does not manage, **Admin → Imports → Import Products** is refused with how many they
   are, and nothing is imported: the import recognises a product only by Nayax's own product id, so
   it would create a duplicate of each of yours. A business whose products all came from Nayax
-  imports exactly as before. Linking your own products to Nayax products deliberately is the next
-  step (issues #738 and #739).
+  imports exactly as before, and the check is made again at the moment the import is written, so a
+  product somebody creates while Nayax is being read refuses the import rather than slipping past
+  it — nothing is imported in that case either. Linking your own products to Nayax products
+  deliberately is the next step (issues #738 and #739).
 
 ## Product and supplier GST rules
 
