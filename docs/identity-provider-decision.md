@@ -436,7 +436,7 @@ email address or a provider.
   runtime. Switching the authority on a live instance is the shape that produces a token from
   authority X being served from the cache for authority Y.
 - **The person chooses the authority once, explicitly, before any redirect** — two buttons
-  ("Sign in with Microsoft work account" / "Sign in with Google, Microsoft or email"), not a silent
+  ("Sign in with Microsoft work account" / "Sign in with Google or email"), not a silent
   probe. #711 and #712 design the actual wording.
 - **The chosen authority is remembered per tab/browser**, so a token refresh goes back to the
   authority that issued the session.
@@ -689,8 +689,10 @@ sign-in is removed. Removing it later would be its own decision, with its own mi
   configured identity providers still has no sign-in experience until a user flow exists; this step
   is not optional and is not implied by any step above **[TBC-H]**.
 - **Enable the intended identity providers inside that user flow.** Enabling a provider at tenant
-  level is not the same as offering it in a flow: Microsoft, Google and email + password must each be
-  selected in the flow itself, or the journey simply does not appear on the sign-in page **[TBC-H]**.
+  level is not the same as offering it in a flow: Google and email + password must each be selected
+  in the flow itself, or the journey simply does not appear on the sign-in page (§ 13 item 6).
+  Microsoft federation (journey B) is not enabled in v1; adding it needs a separate future approval
+  (§ 13 item 4).
 - **Associate the SPA application with that user flow.** A registered application that is not
   associated with a user flow has no journey to send users to, and sign-in fails even though every
   registration, provider and configuration value is correct. See Microsoft's
@@ -708,8 +710,9 @@ sign-in is removed. Removing it later would be its own decision, with its own mi
 **Staging verification of the user flow association, before production activation.** Configuring a
 provider is not the same as a user being able to use it, so the setup above is not finished until a
 human has confirmed **in staging** that the associated application actually exposes and completes
-**every** supported journey. For each of Google (journey C) and local email + password
-(journey D), plus Microsoft-federated (journey B) only if it is later approved (§ 13 item 4): the journey is offered on the sign-in page the SPA reaches
+**every** supported journey. The supported journeys are Google (journey C) and local email +
+password (journey D); Microsoft federation (journey B) is excluded from v1 and needs a separate
+future approval (§ 13 item 4). For each supported journey: the journey is offered on the sign-in page the SPA reaches
 through the associated user flow; a new user can complete it end to end, including the email
 verification and the password-reset entry point for D; the SPA returns to `/auth` and acquires an API
 access token for `access_as_user`; and the API accepts that token and resolves the expected
@@ -744,7 +747,7 @@ every External ID token as an untrusted issuer.
 | Who | Outcome |
 | --- | --- |
 | Existing workforce Microsoft users | **No change whatsoever.** They never had an External ID identity, their `(tid, oid)` never changed, and their authority is untouched. This is the guarantee Option C exists for. |
-| Users created through External ID (Google, email/password, Microsoft-federated) | **Lose access — they cannot sign in at all.** There is no fallback identity to offer them, because there is no linking. |
+| Users created through External ID (Google, email/password) | **Lose access — they cannot sign in at all.** There is no fallback identity to offer them, because there is no linking. |
 | Those users' memberships | **Retained in the database, untouched.** Role, business, activation and audit history all remain, and become usable again the moment the configuration is restored. Nothing is deleted or deactivated by rollback, and nothing should be: deleting them would make the rollback the irreversible step. |
 | Outstanding invites | **Retained and unaffected**, including those created by or for External ID identities: an invite is a token and a role, not an identity. Their 7-day lifetime keeps running, so one may expire during a long rollback — an Owner re-issues it. |
 | Provider configuration | **Retained.** The External ID tenant, its registrations, its users and its federations are not torn down; only this application stops trusting the issuer. Restoring is re-entering the three settings. |
