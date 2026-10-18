@@ -31,7 +31,7 @@ export const AUTHORITY_CLIENT_FACTORY = new InjectionToken<AuthorityClientFactor
  * `user_cancelled` for an interaction the browser abandoned, and the hosted customer-identity user
  * flows add their own `AADB2C90091` for the Cancel button on a sign-up or sign-in page.
  */
-const CANCELLED_CODES = ['access_denied', 'user_cancelled', 'aadb2c90091'];
+const CANCELLED_CODES = new Set(['access_denied', 'user_cancelled', 'aadb2c90091']);
 
 /**
  * Starting a sign-in against a chosen authority, and reporting one that did not finish
@@ -91,10 +91,10 @@ export class SignInService {
     return reported;
   }
 
-  private async clientFor(authority: AuthorityId): Promise<IPublicClientApplication> {
+  private clientFor(authority: AuthorityId): Promise<IPublicClientApplication> {
     const bootstrapped = this.msal.instance;
     return bootstrapped.getConfiguration().auth.clientId === clientIdFor(authority)
-      ? bootstrapped
+      ? Promise.resolve(bootstrapped)
       : this.createClient(authority);
   }
 }
@@ -106,6 +106,6 @@ export class SignInService {
  */
 export function classifySignInFailure(error: unknown): SignInFailureKind {
   const code = (error as { errorCode?: unknown } | null)?.errorCode;
-  const cancelled = typeof code === 'string' && CANCELLED_CODES.includes(code.trim().toLowerCase());
+  const cancelled = typeof code === 'string' && CANCELLED_CODES.has(code.trim().toLowerCase());
   return cancelled ? 'cancelled' : 'failed';
 }

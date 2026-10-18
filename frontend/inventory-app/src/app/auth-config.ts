@@ -125,7 +125,10 @@ export function createMsalConfig(
     throw new Error('No customer identity tenant is configured for this deployment.');
   }
 
-  const instance = settings.instance.trim().replace(/\/+$/, '');
+  let instance = settings.instance.trim();
+  while (instance.endsWith('/')) {
+    instance = instance.slice(0, -1);
+  }
 
   return {
     auth: {

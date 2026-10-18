@@ -65,12 +65,16 @@ export function isInternalDestination(url: string): boolean {
     return false;
   }
 
-  const path = url.split(/[?#]/, 1)[0].replace(/\/+$/, '');
+  let path = url.split(/[?#]/, 1)[0];
+  while (path.length > 1 && path.endsWith('/')) {
+    path = path.slice(0, -1);
+  }
+
   return !REFUSED_ROUTES.some((route) => path === `/${route}`);
 }
 
 function isControlCharacter(character: string): boolean {
-  const code = character.charCodeAt(0);
+  const code = character.codePointAt(0) ?? 0;
   return code < 0x20 || code === 0x7f;
 }
 
