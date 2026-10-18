@@ -80,8 +80,11 @@ public class ProductsControllerTests
     }
 
     private static ProductResponse SingleProduct(ActionResult<IEnumerable<ProductResponse>> result) =>
-        Assert.Single(Assert.IsAssignableFrom<IEnumerable<ProductResponse>>(
-            Assert.IsType<OkObjectResult>(result.Result).Value));
+        Assert.Single(Products(result));
+
+    private static IEnumerable<ProductResponse> Products(ActionResult<IEnumerable<ProductResponse>> result) =>
+        Assert.IsAssignableFrom<IEnumerable<ProductResponse>>(
+            Assert.IsType<OkObjectResult>(result.Result).Value);
 
     private static ProductUpdateDto UpdateDto(int lowStockThreshold, int restockTo) =>
         new("Coke", null, null, 1m, lowStockThreshold, restockTo, "unit", null, null, true);
@@ -217,7 +220,7 @@ public class ProductsControllerTests
         });
         await db.SaveChangesAsync();
 
-        var product = SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None));
+        var product = SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None));
 
         Assert.Equal(1, product.Id);
         Assert.Equal("Coke", product.Name);
@@ -395,14 +398,92 @@ public class ProductsControllerTests
         db.Products.Add(new Product { Id = 1, Name = "Local", ExternalProductId = null });
         await db.SaveChangesAsync();
 
-        var local = SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None));
+        var local = SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None));
         Assert.Empty(local.ProviderManagedFields!);
 
         db.Products.Single().ExternalProductId = "100";
         await db.SaveChangesAsync();
 
-        var linked = SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None));
+        var linked = SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None));
         Assert.Equal(new[] { "name", "categoryId" }, linked.ProviderManagedFields!);
+    }
+
+    /// <summary>
+    /// Issue #736's retirement criterion at the API boundary: a deactivated product is hidden from
+    /// the catalogue listing, which is the list every product dropdown is built from, and
+    /// <c>includeRetired=true</c> is the one explicit way to ask for every product the business owns.
+    /// The reorder alerts and the Pick List already refuse a retired product through their own
+    /// Domain rules.
+    /// </summary>
+    [Fact]
+    public async Task GetAll_LeavesARetiredProductOutOfTheListing_UnlessItIsAskedFor()
+    {
+        using var db = CreateDbContext();
+        db.Products.AddRange(
+            new Product { Id = 1, Name = "Coke", IsActive = true },
+            new Product { Id = 2, Name = "Discontinued", IsActive = false });
+        await db.SaveChangesAsync();
+        var controller = CreateController(db);
+
+        var working = Products(await controller.GetAll(null, null, null, null, null, CancellationToken.None));
+        var whole = Products(await controller.GetAll(null, null, null, null, true, CancellationToken.None));
+
+        Assert.Equal(["Coke"], working.Select(product => product.Name));
+        Assert.Equal(["Coke", "Discontinued"], whole.Select(product => product.Name).Order());
+    }
+
+    /// <summary>
+    /// The other half of the same criterion - the history a retired product keeps stays reachable.
+    /// Reading one by id is unchanged by retirement, which is what lets a client show it, read its
+    /// stock history and reactivate it.
+    /// </summary>
+    [Fact]
+    public async Task Get_AnswersARetiredProduct()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Discontinued", IsActive = false });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Get(1);
+
+        var product = Assert.IsType<ProductResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal("Discontinued", product.Name);
+        Assert.False(product.IsActive);
+    }
+
+    /// <summary>
+    /// Reactivation, end to end over the API's own actions: a retired product is out of the listing,
+    /// the explicit listing is how it is found again, and setting <c>isActive</c> back puts it in the
+    /// working catalogue with nothing else changed.
+    /// </summary>
+    [Fact]
+    public async Task Update_ReactivatesARetiredProduct_AndItReturnsToTheListing()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product
+        {
+            Id = 1,
+            Name = "Discontinued",
+            QuantityInStock = 7,
+            LowStockThreshold = 5,
+            RestockTo = 10,
+            IsActive = false,
+        });
+        await db.SaveChangesAsync();
+        var controller = CreateController(db);
+
+        Assert.Empty(Products(await controller.GetAll(null, null, null, null, null, CancellationToken.None)));
+        var retired = SingleProduct(
+            await controller.GetAll(null, null, null, null, true, CancellationToken.None));
+        Assert.False(retired.IsActive);
+
+        Assert.IsType<NoContentResult>(await controller.Update(
+            1, new ProductUpdateDto("Discontinued", null, null, 1m, 5, 10, "unit", null, null, true)));
+
+        var reactivated = SingleProduct(
+            await controller.GetAll(null, null, null, null, null, CancellationToken.None));
+        Assert.True(reactivated.IsActive);
+        Assert.Equal(7, reactivated.QuantityInStock);
     }
 
     /// <summary>
@@ -608,7 +689,7 @@ public class ProductsControllerTests
         await db.SaveChangesAsync();
 
         var json = System.Text.Json.JsonSerializer.Serialize(
-            SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None)),
+            SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None)),
             new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
 
         Assert.DoesNotContain("gstRule", json, StringComparison.OrdinalIgnoreCase);

@@ -4,7 +4,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
 - Nayax product and transaction imports with explicit payment/status handling.
@@ -1055,14 +1055,20 @@ does not manage.
   movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
   the delete is refused with what is in the way and nothing is written — deleting it would erase
   inventory and financial history. **Deactivate it instead**: a deactivated product keeps all of its
-  history, stays out of the reorder alerts and off the Pick List, and can be reactivated at any
-  time. A product the provider manages is not deleted either, because the next import would create
-  it again.
-- **A deactivated product is still listed on the Products page and in the product pickers.** That is
-  deliberate for now: it is how you find one again to reactivate it, and the Admin costing-repair
-  and AVCO-transition tools and the stock-history product filter all need to reach a retired
-  product. Hiding retired products from the catalogue list and the pickers belongs with the screens
-  (issue #737), which is also where the "show retired" control will live.
+  history and can be reactivated at any time. A product the provider manages is not deleted either,
+  because the next import would create it again.
+- **A deactivated product is out of the product lists.** `GET /api/products` answers the catalogue
+  you work from, so a deactivated product is not in it, is not offered in a product picker, and
+  stays out of the reorder alerts and the Pick List — it must not be purchased from, counted,
+  picked or refilled. Nothing about it is lost: it is still answered by
+  `GET /api/products/{id}`, every stock movement, purchase, sale and count that names it is
+  untouched, `GET /api/products?includeRetired=true` lists it with the rest of the catalogue, and
+  putting `isActive: true` back reactivates it.
+- **The screens have not caught up yet** (issue #737). They call `GET /api/products` without
+  `includeRetired=true`, so until that issue ships the Products page, the Admin costing-repair and
+  AVCO-transition tools and the stock-history product filter show active products only, and
+  reactivating a product is done through the API. #737 is where those four call sites and the "show
+  retired" control on the Products page belong.
 - **A category products use is not deleted.** The refusal says how many products use it; move them
   to another category first, otherwise they would be left with no category at all.
 - **The Nayax catalogue import waits for the catalogue review.** While the business holds products

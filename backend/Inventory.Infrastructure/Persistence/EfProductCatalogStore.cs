@@ -48,6 +48,13 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
     {
         var query = WithDetail(products);
 
+        // Retirement, in SQL rather than after the read (issue #736): a retired product is not in
+        // the catalogue a person works from, and a listing that leaves it out should not pay to read
+        // it and its include graph first. Only the filter decides this - the adapter states no rule
+        // of its own, and FindAsync below is deliberately not filtered, so a retired product's
+        // history and its reactivation stay reachable.
+        if (!filter.IncludeRetired) query = query.Where(product => product.IsActive);
+
         if (!string.IsNullOrWhiteSpace(filter.Search))
         {
             var search = filter.Search;

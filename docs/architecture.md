@@ -9780,8 +9780,8 @@ persisted `ProductId`, issue #758), machine stock counts, and costing records (a
 transition baseline or a costing repair). Two of those foreign keys cascade and four are restricted,
 so without the refusal a delete would either erase inventory history or fail inside the database;
 the refusal names what is in the way and points at `IsActive`, which is how a product is retired —
-it keeps all of its history, stays out of the reorder alerts and the Pick List, and can be
-reactivated. A
+it keeps all of its history, stays out of the catalogue listing, the reorder alerts and the Pick
+List, and can be reactivated. A
 provider-managed product is refused for its own reason: the next import would create it again. The
 `NayaxSales.ProductId` foreign key stays `Restrict`, never cascade and never set-null.
 `Inventory.Domain.Categories.CategoryCataloguePolicy` refuses a category products still use, with
@@ -9813,19 +9813,40 @@ transaction, so a cancellation or a failure part-way through leaves nothing at a
 persisted quantity whose ledger and costing position were never written — under a request the caller
 saw fail and would retry, which would otherwise create a second product beside the first.
 
-**Retirement and what stops naming a retired product.** `IsActive` is the retirement path the
-deletion refusal points at, and it is the server-side projections that honour it: the reorder alerts
-(`Inventory.Domain.Products.ProductReorderPolicy.IsReorderAlert`, which requires an active product),
-the Pick List projection (`Inventory.Application.PickList.GetPickList`, issue #736 — a retired
-product is dropped from the picking matrix with a stated rule, not by absence), the site stock lists
-(`SiteStockPolicy`) and the machine refill alerts (`MachineRefillAlertPolicy`). All of the product's
-history, its machine slots and its stock are untouched, and it is still readable and editable
-through `GET`/`PUT api/products/{id}`, which is how it is reactivated. **`GET api/products` still
-lists active and inactive products**, as it always has, and so do the product dropdowns the Angular
-screens build from it; hiding them there is a read-contract change whose consumers include the
-catalogue management screen, the Admin costing-repair and AVCO-transition tools and the stock-history
-product filter, all of which need a retired product, so it belongs with the screens (issue #737, B2)
-and is not done here.
+**Retirement, and the two catalogues it creates.** `IsActive` is the retirement path the deletion
+refusal points at, and a retired product is one the business has taken out of use: it must not be
+offered to purchase from, count, pick or refill, and none of its history may move. So there are two
+reads of the catalogue, and every caller says which one it wants —
+`Inventory.Application.Products.ProductCatalogFilter.IncludeRetired` has no unset value:
+
+- **The working catalogue** leaves retired products out, in the SQL
+  (`EfProductCatalogStore.Filtered`, beside the search/category/supplier narrowing). It is what
+  `GET api/products` answers, and therefore every product dropdown an Angular screen builds from it.
+  The reorder alerts and the Pick List reach the same answer through their own Domain rules, which
+  stay the authority there: `Inventory.Domain.Products.ProductReorderPolicy.IsReorderAlert` requires
+  an active product, and `Inventory.Application.PickList.GetPickList` drops a retired product from
+  the picking matrix with a stated rule rather than by absence (so does `SiteStockPolicy` for the
+  site stock lists and `MachineRefillAlertPolicy` for the machine refill alerts).
+- **The whole catalogue** is every product the business owns, asked for explicitly:
+  `GET api/products?includeRetired=true`, and `ProductCatalogFilter.None` for the two internal
+  consumers that resolve activity themselves — the home Dashboard summary and
+  `ListMachineProducts`, where a machine slot or a refill alert naming a retired product must still
+  be able to describe it. Narrowing `None` would silently stop both describing those rows.
+
+Reading one product is unchanged by retirement: `GET api/products/{id}` answers a retired product
+like any other, because retirement decides what a listing offers to work with, never what the
+business may look at. That read, the explicit listing, and `PUT api/products/{id}` with
+`isActive: true` are the reactivation path; all of the product's history, its machine slots and its
+stock are untouched throughout.
+
+**`GET api/products` hiding retired products is a deliberate read-contract change** (issue #736's
+criterion that a deactivated product is hidden from lists, pick lists and reorder while keeping its
+history and staying reactivatable). The Angular screens are issue #737 (B2) and still call the
+endpoint without the parameter, so until they pass `includeRetired=true` the four places that need a
+retired product show only active ones: the catalogue page (which is how a retired product is found
+again to reactivate), the Admin costing-repair and AVCO-transition tools, and the stock-history
+product filter. Those four call sites plus a "show retired" control on the catalogue page are the
+frontend scope this change hands to #737; nothing on the server depends on them.
 
 **The provider import is refused for a manual catalogue, for now.**
 `Inventory.Domain.Providers.ManualCatalogueImportPolicy`: while the business holds products with no

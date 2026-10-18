@@ -86,23 +86,50 @@ public class ProductsController : ControllerBase
         _getProductPriceComparison = getProductPriceComparison;
     }
 
+    /// <summary>
+    /// The catalogue listing.
+    ///
+    /// <para><strong>A retired product is not in it</strong> (issue #736): a product with history is
+    /// retired through <c>isActive</c> rather than deleted, and a retired product is one the business
+    /// has taken out of use - it must not be offered to purchase from, count, pick or refill. The
+    /// listing therefore answers the working catalogue, and <c>includeRetired=true</c> is the
+    /// explicit way to ask for every product the business owns, which is how a retired one is found
+    /// again to reactivate and how a tool that reaches into history lists its products. A single
+    /// product is answered by <see cref="Get"/> whether it is retired or not.</para>
+    ///
+    /// <para>This is a deliberate read-contract change, required by the issue's criterion that a
+    /// deactivated product is hidden from lists, pick lists and reorder while keeping all of its
+    /// history and staying reactivatable. The Angular screens are issue #737 (B2) and still call
+    /// this endpoint without the parameter, so until they pass it the ones that need a retired
+    /// product - the catalogue page's reactivation path, the Admin costing-repair and
+    /// AVCO-transition tools and the stock-history product filter - see only active products; see
+    /// docs/architecture.md § Manual catalogue: who owns a product's fields.</para>
+    /// </summary>
     [HttpGet]
     public async Task<ActionResult<IEnumerable<ProductResponse>>> GetAll(
         [FromQuery] string? search,
         [FromQuery] long? categoryId,
         [FromQuery] int? supplierId,
         [FromQuery] bool? lowStockOnly,
+        [FromQuery] bool? includeRetired,
         CancellationToken ct)
     {
         var visibility = await _capabilities.ForCurrentRequestAsync(ct);
         var listing = await _listProducts.Handle(
-            new ProductCatalogFilter(search, categoryId, supplierId), lowStockOnly, ct);
+            new ProductCatalogFilter(search, categoryId, supplierId, includeRetired == true),
+            lowStockOnly,
+            ct);
         ReorderListingMetadataHeaders.Publish(Response, listing);
         return Ok(listing.Products
             .Select(product => ProductRecordResponseMapper.ToResponse(product, visibility))
             .ToList());
     }
 
+    /// <summary>
+    /// One product, retired or not (issue #736). It is the read that keeps a retired product's facts
+    /// and its history reachable while <see cref="GetAll"/> leaves it out of the working catalogue,
+    /// and <c>PUT</c> on the same id with <c>isActive: true</c> is how it is reactivated.
+    /// </summary>
     [HttpGet("{id:long}")]
     public async Task<ActionResult<ProductResponse>> Get(long id)
     {
@@ -167,7 +194,10 @@ public class ProductsController : ControllerBase
     {
         var visibility = await _capabilities.ForCurrentRequestAsync(ct);
         var listing = await _listLowStockProducts.Handle(
-            new ProductCatalogFilter(search, categoryId, supplierId), ct);
+            // A retired product never alerts: ProductReorderPolicy.IsReorderAlert requires an
+            // active product, and that stays the authority. Excluding them from the read as well
+            // only narrows the SQL - it cannot change which rows alert.
+            new ProductCatalogFilter(search, categoryId, supplierId, IncludeRetired: false), ct);
         ReorderListingMetadataHeaders.Publish(Response, listing);
         return Ok(listing.Products
             .Select(item => ProductRecordResponseMapper.ToResponse(item, visibility))
