@@ -1,7 +1,39 @@
-import { buildProtectedResourceMap, inventoryApiScope, loginRequest } from './auth-config';
+import { buildProtectedResourceMap, createMsalConfig, inventoryApiScope, loginRequest } from './auth-config';
 import { LOCAL_API_BASE_URL, isLocalDevelopmentHost, resolveApiBaseUrl } from './api-base-url';
 
 describe('auth-config', () => {
+  // Issue #710 adds a second trusted issuer to the API only. The SPA keeps exactly one authority
+  // and one API audience, and the authority selection, the second MSAL instance and its own cache
+  // partition are issues #711/#712 (design § 16). These two assertions are what makes "no stale or
+  // wrong-provider token can be sent or selected" true today: there is one authority to acquire a
+  // token from, one audience to acquire it for, and one destination it is ever attached to.
+  it('signs in against exactly one authority and asks for exactly one API audience', () => {
+    const { auth } = createMsalConfig();
+
+    expect(auth.authority).toBe('https://login.microsoftonline.com/common');
+    expect(loginRequest.scopes).toHaveLength(1);
+    expect(inventoryApiScope).toMatch(/^api:\/\/[0-9a-f-]+\/access_as_user$/);
+  });
+
+  it('attaches a token to the API alone, so an unrelated destination matches no entry', () => {
+    const apiBaseUrl = 'https://example-api.azurewebsites.net/api';
+    const map = buildProtectedResourceMap(apiBaseUrl);
+
+    expect([...map.keys()]).toEqual([`${apiBaseUrl}/*`]);
+
+    // Nothing else is protected, so MSAL has no entry to attach a bearer token to for the
+    // application's own origin, the runtime configuration file it loads before the interceptor
+    // exists, or any Microsoft API.
+    for (const unrelated of [
+      'https://graph.microsoft.com/v1.0/me',
+      'https://example.com/assets/config.json',
+      'assets/config.json',
+      'https://example-api.azurewebsites.net/health'
+    ]) {
+      expect([...map.keys()].some((key) => unrelated.startsWith(key.replace(/\*$/, '')))).toBe(false);
+    }
+  });
+
   it('loginRequest requests the delegated access_as_user API scope', () => {
     expect(loginRequest.scopes).toEqual([inventoryApiScope]);
     expect(inventoryApiScope.endsWith('/access_as_user')).toBe(true);

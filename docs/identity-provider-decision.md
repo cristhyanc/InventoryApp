@@ -1,12 +1,21 @@
 # Customer identity: the Microsoft Entra External ID design (issue #709)
 
-**Status: approved design (merged with #709), not implemented.** Nothing in this document describes how InventoryApp
-authenticates today. Today's behaviour is, and until an implementation task ships remains, exactly
-what [docs/architecture.md § Authentication and authorization](architecture.md#authentication-and-authorization)
-and [README.md § Authentication configuration](../README.md#authentication-configuration) describe:
-workforce Microsoft Entra ID on the `common` authority, MSAL in the SPA, `Microsoft.Identity.Web`
-validating bearer tokens on the API, and memberships bound to the validated Entra `(tid, oid)` claim
-pair.
+**Status: approved design (merged with #709). § 5 is implemented by #710; everything else is still
+design.** What ships today is the API's side of the trust decision: a second named bearer scheme
+pinned to one configured External ID tenant, behind an issuer-selecting policy scheme, with the
+multi-tenant workforce validator unchanged — see
+[docs/architecture.md § Trusted issuers and the two bearer schemes](architecture.md#trusted-issuers-and-the-two-bearer-schemes-issue-710)
+and [README.md § Customer identity: a second trusted issuer](../README.md#customer-identity-a-second-trusted-issuer-issue-710)
+for the behaviour of record, and § 16 below for what #710 did and did not do.
+
+**Deferred, and not current behaviour:** the SPA's authority selection and the Google (#711) and
+local email/password (#712) journeys — the Angular application still signs in against the workforce
+`common` authority alone and offers no second option — identity linking (#713, deferred and not
+required under this recommendation), and the consolidated security, staging and rollback validation
+(#714). The `ExternalId` configuration section is **empty in source control**, so a deployment no
+human has configured behaves exactly as it did before #710: workforce Microsoft Entra ID on the
+`common` authority, MSAL in the SPA, `Microsoft.Identity.Web` validating bearer tokens on the API,
+and memberships bound to the validated Entra `(tid, oid)` claim pair.
 
 **Merging the pull request that adds this file is the human approval of the design** (issue #709's
 decision gate, under parent #708). Until it is merged, no downstream implementation subtask —
@@ -42,7 +51,7 @@ their status.
 
 | Fact | Where it is |
 | --- | --- |
-| The API registers exactly one real bearer scheme, `AddMicrosoftIdentityWebApi(configuration.GetSection("AzureAd"))`, for every environment except the `E2ETest` host | `backend/InventoryApi/Auth/E2ETesting/InventoryApiAuthenticationExtensions.cs` |
+| The API registered exactly one real bearer scheme, `AddMicrosoftIdentityWebApi(configuration.GetSection("AzureAd"))`, for every environment except the `E2ETest` host. **Since #710** it registers that same scheme plus, only when the `ExternalId` section names one complete tenant, the pinned `ExternalIdBearer` scheme behind the `IssuerSelectingBearer` policy scheme; with the section empty - the shipped state - the registration is unchanged | `backend/InventoryApi/Auth/E2ETesting/InventoryApiAuthenticationExtensions.cs`, `backend/InventoryApi/Auth/ExternalIdentity/` |
 | The bound configuration is `Instance: https://login.microsoftonline.com/`, `TenantId: common`, `ClientId` (the API app registration's public application id), `Scopes: access_as_user` | `backend/InventoryApi/appsettings.json`, `AzureAd` section |
 | Every controller carries `[Authorize]` and `[RequiredScope("access_as_user")]`; every endpoint additionally declares one of exactly four authorization classes | `docs/architecture.md` § Capability authorization; `EndpointAuthorizationClassificationTests` |
 | The actor is the validated `(tid, oid)` pair, **both halves required, both parsed as GUIDs**, normalised to canonical upper-case dashed form; every recognised spelling of a claim that is present must agree, or the caller is unidentifiable | `Inventory.Domain.Tenancy.ActorIdentity`, `InventoryApi.Auth.EntraActorIdentityAccessor` |
@@ -250,8 +259,8 @@ than replacing them.
 ### 5.3 Configuration shape, and what is secret
 
 ```jsonc
-// Proposed addition to backend/InventoryApi/appsettings.json. Shape only: no real identifier is
-// committed here, exactly as PlatformAdmin and BusinessBootstrap commit none.
+// In place in backend/InventoryApi/appsettings.json since #710, in this shape and empty. No real
+// identifier is committed there, exactly as PlatformAdmin and BusinessBootstrap commit none.
 "ExternalId": {
   "Instance": "",      // the External ID authority host                        [TBC-H]
   "TenantId": "",      // the External ID tenant id (a GUID) — one fixed value  [TBC-H]
@@ -651,7 +660,8 @@ in all of them.
 3. **Phase 2 — provider setup (human, outside this repository).** § 14.2, which includes creating the
    sign-up/sign-in user flow, enabling the intended providers inside it, and associating the SPA
    application with it. No code.
-4. **Phase 3 — API accepts the second issuer (#710).** The second scheme is registered **only when
+4. **Phase 3 — API accepts the second issuer (#710), code complete; its environment check is still
+   a human step.** The second scheme is registered **only when
    the `ExternalId` section is filled**, so merging and deploying it with the section empty changes
    nothing observable. Then a non-production environment is configured and a human signs in with a
    test External ID identity, which resolves no membership and is correctly `403` on every business
@@ -779,11 +789,51 @@ for people are identical to § 15.1.
 | --- | --- | --- |
 | **#708** (parent) | Proceed; **remove #713 from the launch prerequisites** | Record Option C as the approved rollout and this file as the design of record |
 | **#709** (this) | Complete on merge; § 13's checklist is a separate human step before #710 | Design, decision table, threat model, rollout, rollback. No code |
-| **#710** (identity foundation and API token validation) | Ready **after** § 13 is recorded, and only if the GUID assumption is confirmed | The `ExternalId` configuration section; the second named bearer scheme and the issuer-selecting policy scheme, with the existing multi-tenant workforce validator and its issuer-to-`tid` binding left exactly as it is; per-scheme issuer, audience and tenant-binding rules (§ 5.1), with the External ID issuer taken from the tenant's metadata document; a test that an External ID token without `oid` or `tid` (no `profile` scope) is unidentifiable; empty-configuration fail-closed; **the complete § 5.4 regression suite, including two different workforce tenants and every issuer/tenant/audience mismatch**, which covers T1/T2/T3/T10; the composition tests extended so the `E2ETest` host still registers the synthetic scheme and nothing else. **No change to `ActorIdentity` or `EntraActorIdentityAccessor`**, and no schema change |
+| **#710** (identity foundation and API token validation) | **Implemented** (see the implementation note below this table) | The `ExternalId` configuration section; the second named bearer scheme and the issuer-selecting policy scheme, with the existing multi-tenant workforce validator and its issuer-to-`tid` binding left exactly as it is; per-scheme issuer, audience and tenant-binding rules (§ 5.1), with the External ID issuer taken from the tenant's metadata document; a test that an External ID token without `oid` or `tid` (no `profile` scope) is unidentifiable; empty-configuration fail-closed; **the complete § 5.4 regression suite, including two different workforce tenants and every issuer/tenant/audience mismatch**, which covers T1/T2/T3/T10; the composition tests extended so the `E2ETest` host still registers the synthetic scheme and nothing else. **No change to `ActorIdentity` or `EntraActorIdentityAccessor`**, and no schema change |
 | **#711** (Google sign-in) | After #710 | SPA authority selection, the second MSAL instance with its own cache, the `profile` scope in the External ID token request (§ 4), Google journey end to end, the welcome-screen wording of § 12, invite continuation re-verified |
 | **#712** (email/password) | After #710 | The same for the local journey, including the provider-hosted reset/recovery entry point and the `profile` scope (§ 4). Mailbox verification is enforced by the provider's sign-up flow (§ 13 item 7). **No password, hash, reset token or recovery code in this repository** |
 | **#713** (linking/migration) | **Deferred — not required.** A human records that status; it is removed from the launch prerequisites and must not be given a readiness label unless a human first reopens the linking decision | — |
 | **#714** (security, staging, rollout validation) | Last | The provider/account-state matrix across both issuers; **identity separation in place of linking validation**, as #713 directs; T6, T8, T9; two-business isolation with identities from both issuers; **§ 14.2's staging verification that the associated application exposes and completes each supported journey**; the § 15 rollback rehearsal; human staging sign-off |
+
+### How #710 implemented § 5, and where it chose differently
+
+The shape is § 5.2's recommendation: two named schemes behind a policy scheme that reads the
+unvalidated `iss` only to choose a validator, with the workforce scheme left on `TenantId: common`
+and its Entra issuer-to-`tid` binding untouched. `ActorIdentity` and `EntraActorIdentityAccessor`
+are unchanged, there is no schema change, and the complete § 5.4 table is covered by
+`backend/Inventory.IntegrationTests/Auth/TrustedIssuerTokenValidationTests` (real tokens, test
+signing keys, stubbed metadata documents) and `ExternalIdBearerSchemeCompositionTests`. Four
+decisions are worth recording because they are not literally what § 5.2 and § 5.4 say:
+
+- **The pinned scheme is a plain `AddJwtBearer`, not a second `AddMicrosoftIdentityWebApi`.** The
+  identity library's Entra issuer validation derives the expected issuer from the *token's own*
+  `tid`, which is exactly right for a multi-tenant workforce scheme and the opposite of rule 2's
+  "one literal value, taken from the tenant's metadata document". The pinned scheme therefore
+  leaves `ValidIssuer`/`ValidIssuers` unset so the bearer handler accepts exactly the issuer the
+  configured tenant's metadata publishes, and asserts `tid` against the configured tenant
+  explicitly (rule 3). It is still a supported validation library and the same `JwtBearerOptions`;
+  what changed is which component decides the issuer.
+- **Rule 6 is enforced for both schemes, as § 5.4's "for each authority" requires.** A token that
+  carries no delegated scope at all, or that carries the `nonce`/`at_hash`/`c_hash` claims of an ID
+  token, is refused at authentication with `401` - so an ID token and an app-only token are `401`
+  on the workforce authority too, where they would previously have been authenticated and then
+  refused `403` by `[RequiredScope]`. That is the one behaviour change to the workforce path, it
+  can only refuse more, and the `401`/`403` separation is unchanged for a delegated access token
+  that merely lacks `access_as_user`, which is still `403`.
+- **An unreadable metadata document is `401`, not a failed request.** The bearer handler lets a
+  metadata or key-refresh failure escape, which surfaces as a server error rather than as § 9.3's
+  "a token that cannot be validated is `401`". `FailClosedIdentityMetadata` wraps the pinned
+  scheme's metadata source and answers with a document naming no issuer and publishing no key, so
+  validation fails the ordinary way and the real cause is logged as an error.
+- **Rule 4's access-token version stays a human portal decision.** Both audience spellings
+  (`<client-id>` and `api://<client-id>`) are pinned per scheme, so whichever version a
+  registration is set to issue validates, and the workforce scheme's accepted set is the same two
+  values the library derived by default - now stated rather than inferred.
+
+Everything this task was not allowed to do is still undone: no provider resource was created, no
+configuration value was filled in, no SPA journey was added, nothing was linked or migrated, and
+the staging verification of § 14.2 and the phase-3 sign-in check of § 14.1 remain human steps
+against a human-provisioned tenant.
 
 ## 17. Known limitations of this document
 

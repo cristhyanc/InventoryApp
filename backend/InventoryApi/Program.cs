@@ -23,6 +23,7 @@ using Inventory.Application.SupportSessions;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using InventoryApi.Auth.E2ETesting;
+using InventoryApi.Auth.ExternalIdentity;
 using InventoryApi.Auth.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
 using Inventory.Infrastructure.PlatformDiagnostics;
@@ -379,6 +380,16 @@ builder.Services.AddScoped<IBusinessTimeZoneProvider>(sp => sp.GetRequiredServic
 // connection string a host that calls AddInfrastructureServices() must still make.
 
 var app = builder.Build();
+
+// One line of startup evidence about which issuers this deployment trusts (issue #710). It is
+// logged rather than enforced here because the decision itself was made in the composition root,
+// from configuration, before any request existed: a complete ExternalId section registers the
+// pinned customer identity scheme beside the workforce one, and an empty or unusable section
+// registers only the workforce scheme - which is why an unusable one is an error in the log rather
+// than a silently missing sign-in path. It carries identifiers only; this configuration holds no
+// secret, and no token or claim reaches it.
+app.Services.GetRequiredService<ExternalIdAuthenticationDecision>()
+    .LogTo(app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("InventoryApi.Auth.ExternalIdentity"));
 
 // Schema handling at startup (issue #64, revised by issue #201). Development, Testing, and
 // Production apply pending migrations automatically; any other environment applies nothing and
