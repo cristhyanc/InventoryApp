@@ -154,9 +154,13 @@ public sealed class ResolveNayaxSaleProducts
     /// <para>A conflicting sale is never attributable this way: its stored number names a product
     /// directly, so the name fallback never ran for it, and nothing but an audited decision may
     /// settle a disagreement two recorded identifiers already raised.</para>
+    ///
+    /// <para>The id argument is <see langword="null"/> because this question is about the name alone;
+    /// the matcher's id parameter is a <em>local</em> product id (issue #735), never the stored
+    /// provider number.</para>
     /// </summary>
     private static bool IsAttributableByName(
         IReadOnlyList<ProductMatchCandidate> catalogue, UnresolvedNayaxSale sale) =>
         !sale.ConflictDirectCandidateProductId.HasValue
-        && ProductMatcher.Match(catalogue, null, sale.ProductName) is not null;
+        && ProductMatcher.MatchLinked(catalogue, null, sale.ProductName) is not null;
 }

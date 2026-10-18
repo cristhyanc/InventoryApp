@@ -12,10 +12,13 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
 /// Relational coverage for <see cref="EfNayaxProductCatalogImportStore"/> (issue #300): the
-/// upsert the Nayax catalogue import performs is a real insert/update against SQLite, where the
-/// remote identifier is the local primary key, so the new/existing split, the repeated-import case
-/// and the locally owned fields the import must not touch are proven against the database rather
-/// than an in-memory provider.
+/// upsert the Nayax catalogue import performs is a real insert/update against SQLite, so the
+/// new/existing split, the repeated-import case and the locally owned fields the import must not
+/// touch are proven against the database rather than an in-memory provider.
+///
+/// Since issue #735 (A4) the database is also what assigns a created row's key, which is itself
+/// relational behaviour: the import writes no <c>Id</c>, and what SQLite then puts there - and what
+/// the created category's foreign key resolves to - is only observable against a real database.
 /// </summary>
 public class EfNayaxProductCatalogImportStoreTests : IDisposable
 {
@@ -51,8 +54,15 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>
+    /// The created rows carry the catalogue fields, their Nayax ids in the external id columns, and
+    /// keys the <strong>database</strong> assigned (issue #735, parent #329 decision A4) - which this
+    /// fixture can state exactly, because an empty table makes the generated keys 1 while the Nayax
+    /// ids are 100 and 10. The product's category is the created category, named by its generated
+    /// key rather than by the group id.
+    /// </summary>
     [Fact]
-    public async Task A_new_product_and_its_category_are_created_from_the_snapshot()
+    public async Task A_new_product_and_its_category_are_created_with_database_generated_ids()
     {
         await Apply(new NayaxProductCatalogImport(
             [new ImportedProductCategory(10, "Snacks", "Snacks")],
@@ -61,17 +71,20 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
 
         using var verify = TestAppDbContext.For(_options, 1);
         var product = await verify.Products.SingleAsync();
-        Assert.Equal(100, product.Id);
+        var category = await verify.Categories.SingleAsync();
+
+        Assert.Equal(1, product.Id);
+        Assert.Equal("100", product.ExternalProductId);
         Assert.Equal("Chips", product.Name);
         Assert.Equal("Salted", product.Description);
         Assert.Equal(3.50m, product.UnitPrice);
-        Assert.Equal(10, product.CategoryId);
+        Assert.Equal(category.Id, product.CategoryId);
         Assert.Equal(0, product.RestockTo);
         Assert.Equal(ImportedAt, product.CreatedAt);
         Assert.Equal(ImportedAt, product.UpdatedAt);
 
-        var category = await verify.Categories.SingleAsync();
-        Assert.Equal(10, category.Id);
+        Assert.Equal(1, category.Id);
+        Assert.Equal("10", category.ExternalCategoryId);
         Assert.Equal("Snacks", category.Name);
         Assert.Equal("Snacks", category.Description);
     }
@@ -193,6 +206,35 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
     }
 
     /// <summary>
+    /// One snapshot naming the same product and the same group twice converges inside a single
+    /// import: the row created for the first occurrence is what the second one updates.
+    ///
+    /// <para>Since issue #735 that is also the one thing standing between a repeated id and two
+    /// rows carrying it, where the primary key used to refuse the second insert outright - and the
+    /// filtered unique index over the external id column, which would then fail the whole import,
+    /// is a worse answer than converging.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_snapshot_that_repeats_an_id_creates_one_row_for_it()
+    {
+        await Apply(new NayaxProductCatalogImport(
+            [new ImportedProductCategory(10, "Snacks", "Snacks"), new ImportedProductCategory(10, "Snacks again", null)],
+            [
+                new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10),
+                new ImportedProductCatalogEntry(100, "Chips (large)", "Salted, 100g", 4m, 10),
+            ],
+            ImportedAt));
+
+        using var verify = TestAppDbContext.For(_options, 1);
+        var product = await verify.Products.SingleAsync();
+        var category = await verify.Categories.SingleAsync();
+        Assert.Equal(("Chips (large)", 4m, "100"), (product.Name, product.UnitPrice, product.ExternalProductId));
+        Assert.Equal(category.Id, product.CategoryId);
+        // The first occurrence is the one that created the category; the second named the same group.
+        Assert.Equal(("Snacks", "10"), (category.Name, category.ExternalCategoryId));
+    }
+
+    /// <summary>
     /// A local product Nayax stopped returning is a data-quality signal for the catalog
     /// reconciliation report, not a deletion: the import never removes local history.
     /// </summary>
@@ -274,39 +316,45 @@ public class EfNayaxProductCatalogImportStoreTests : IDisposable
 
     /// <summary>
     /// A local row that carries no external id is not claimed by a snapshot id that merely equals its
-    /// key (issue #745): identity comes from the recorded provider id, and a row this import creates
-    /// is still keyed by the Nayax id until #735 (A4), so the two collide on the primary key.
+    /// key (issue #745): identity comes from the recorded provider id, and since issue #735 (A4) the
+    /// new row the entry creates needs no key of the provider's, so the import simply creates it and
+    /// leaves the local row completely alone.
     ///
-    /// <para>That is deliberate, and it is what the issue asks for: the alternative is merging a
-    /// remote product into whichever local row happens to hold its number, which is a silent
-    /// financial-data error rather than a visible failure. The refusal is named and actionable, and
-    /// nothing is written - the import runs in one <c>SaveChanges</c> - so a human can record the id
-    /// on the row or re-key it and import again. Issue #732's backfill, and the #759 copy that
-    /// followed it, recorded an id for every row that existed, so reaching this state needs a row
-    /// restored from an older backup or created locally with a colliding key.</para>
+    /// <para>That is the outcome this slice exists for. Merging the remote product into whichever
+    /// local row happened to hold its number would be a silent error in financial data - the
+    /// operator's own product would start taking a Nayax product's name, price and category - and
+    /// refusing the whole import, which is what #745 had to do while the key was the provider's
+    /// number, stopped an operator's catalogue over a number collision it did not cause.</para>
     /// </summary>
     [Fact]
-    public async Task A_local_row_with_no_external_id_is_not_claimed_by_an_equal_nayax_id()
+    public async Task A_local_row_with_an_equal_key_is_untouched_and_the_entry_creates_its_own_row()
     {
         using (var seed = TestAppDbContext.For(_options, 1))
         {
             seed.Categories.Add(new Category { Id = 10, Name = "Snacks" });
-            seed.Products.Add(new Product { Id = 100, Name = "Old name" });
+            seed.Products.Add(new Product { Id = 100, Name = "Old name", UnitPrice = 9m, QuantityInStock = 4 });
             await seed.SaveChangesAsync();
         }
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => Apply(new NayaxProductCatalogImport(
+        await Apply(new NayaxProductCatalogImport(
             [new ImportedProductCategory(10, "Snacks", "Snacks")],
             [new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10)],
-            ImportedAt)));
-
-        Assert.Contains("is recorded on no", exception.Message);
+            ImportedAt));
 
         using var verify = TestAppDbContext.For(_options, 1);
-        var product = await verify.Products.AsNoTracking().SingleAsync();
-        Assert.Equal(("Old name", null), (product.Name, product.ExternalProductId));
-        var category = await verify.Categories.AsNoTracking().SingleAsync();
-        Assert.Equal(("Snacks", null), (category.Name, category.ExternalCategoryId));
+
+        var local = await verify.Products.AsNoTracking().SingleAsync(product => product.Id == 100);
+        Assert.Equal(("Old name", null, 9m, 4), (local.Name, local.ExternalProductId, local.UnitPrice, local.QuantityInStock));
+        var localCategory = await verify.Categories.AsNoTracking().SingleAsync(category => category.Id == 10);
+        Assert.Equal(("Snacks", null), (localCategory.Name, localCategory.ExternalCategoryId));
+
+        // The imported rows: their own generated keys, their Nayax ids recorded, and the product in
+        // the category this import created rather than in the local one that shares its number.
+        var imported = await verify.Products.AsNoTracking().SingleAsync(product => product.Id != 100);
+        var importedCategory = await verify.Categories.AsNoTracking().SingleAsync(category => category.Id != 10);
+        Assert.Equal(("Chips", "100"), (imported.Name, imported.ExternalProductId));
+        Assert.Equal(importedCategory.Id, imported.CategoryId);
+        Assert.Equal(("Snacks", "10"), (importedCategory.Name, importedCategory.ExternalCategoryId));
     }
 
     /// <summary>

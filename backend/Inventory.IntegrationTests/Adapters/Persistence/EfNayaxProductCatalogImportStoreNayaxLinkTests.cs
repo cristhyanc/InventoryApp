@@ -18,10 +18,11 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// same way.
 ///
 /// Every fixture here records a Nayax id on a local row with a <strong>different</strong> key, which
-/// is the only shape that can tell the recorded id apart from the coincidence it replaces -
-/// <c>Product.Id</c>/<c>Category.Id</c> still being the Nayax id until #735 (A4). These are
-/// deliberately written before that divergence exists, so the resolution is pinned while the
-/// migrated ids are all id-to-id, exactly as the issue asks.
+/// is the only shape that can tell the recorded id apart from the coincidence it replaced -
+/// <c>Product.Id</c>/<c>Category.Id</c> having been the Nayax id until #735 (A4) made a created
+/// row's key the database's own. The resolution these tests pin is unchanged by that: what changed
+/// is that a row the import creates now has a key of its own, which the two creating cases below
+/// assert explicitly.
 ///
 /// SQLite, not an in-memory provider: the insert/update split, the primary keys, the filtered unique
 /// indexes over the external id columns and the <c>Products.CategoryId</c> foreign key are all part
@@ -157,21 +158,149 @@ public class EfNayaxProductCatalogImportStoreNayaxLinkTests : IDisposable
 
     /// <summary>
     /// A category this snapshot creates is immediately the answer for the products in that group: the
-    /// created row's external id joins the lookup in the same unit of work, so a first import still
-    /// categorises its products.
+    /// created row joins the lookup in the same unit of work, so a first import still categorises its
+    /// products.
+    ///
+    /// <para>And since issue #735 (A4) it does so without the import knowing the key: the created
+    /// category's <c>Category.Id</c> is the database's own and differs from the
+    /// <c>ProductGroupID</c>, the product's <c>CategoryId</c> is that generated key, and a re-import
+    /// finds the same row again through <c>ExternalCategoryId</c> rather than creating a second one.
+    /// This is the acceptance criterion for category identity, so it asserts the generated key
+    /// explicitly rather than comparing two numbers that used to be equal.</para>
     /// </summary>
     [Fact]
-    public async Task A_category_created_by_the_same_snapshot_is_resolved_for_its_products()
+    public async Task A_category_created_by_the_same_snapshot_gets_a_generated_id_and_is_resolved_for_its_products()
     {
+        var import = new NayaxProductCatalogImport(
+            [new ImportedProductCategory(10, "Snacks", "Snacks")],
+            [new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10)],
+            ImportedAt);
+
+        await Apply(import);
+
+        long createdCategoryId;
+        using (var verify = TestAppDbContext.For(_options, 1))
+        {
+            var category = await verify.Categories.SingleAsync();
+            createdCategoryId = category.Id;
+            Assert.NotEqual(10, createdCategoryId);
+            Assert.Equal("10", category.ExternalCategoryId);
+            Assert.Equal(createdCategoryId, (await verify.Products.SingleAsync()).CategoryId);
+        }
+
+        // The same snapshot again: the group resolves to the category it created, so no second
+        // category appears and the product keeps the generated key it was given.
+        await Apply(import);
+
+        using var reverify = TestAppDbContext.For(_options, 1);
+        Assert.Equal(createdCategoryId, (await reverify.Categories.SingleAsync()).Id);
+        Assert.Equal(createdCategoryId, (await reverify.Products.SingleAsync()).CategoryId);
+    }
+
+    /// <summary>
+    /// An <strong>existing</strong> product moved into a category the same snapshot creates. This is
+    /// the one case where the category's key does not exist when the product is updated (issue
+    /// #735), so the product is pointed at the category row and EF writes the assigned key into its
+    /// foreign key - and the product here is a tracked, already-stored row rather than one this
+    /// import is inserting.
+    /// </summary>
+    [Fact]
+    public async Task An_existing_product_is_moved_into_a_category_the_same_snapshot_creates()
+    {
+        using (var seed = TestAppDbContext.For(_options, 1))
+        {
+            seed.Products.Add(new Product
+            {
+                Id = 5001,
+                ExternalProductId = NayaxExternalId.From(100),
+                Name = "Old name",
+                QuantityInStock = 7,
+            });
+            await seed.SaveChangesAsync();
+        }
+
         await Apply(new NayaxProductCatalogImport(
             [new ImportedProductCategory(10, "Snacks", "Snacks")],
             [new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10)],
             ImportedAt));
 
         using var verify = TestAppDbContext.For(_options, 1);
+        var category = await verify.Categories.SingleAsync();
         var product = await verify.Products.SingleAsync();
-        Assert.Equal(10, product.CategoryId);
+        Assert.NotEqual(10, category.Id);
+        Assert.Equal(category.Id, product.CategoryId);
+        // Still the same row: updated in place, with its local stock untouched.
+        Assert.Equal((5001L, "Chips", 7), (product.Id, product.Name, product.QuantityInStock));
+    }
+
+    /// <summary>
+    /// A snapshot that names the same product twice, where the first occurrence puts it in a group
+    /// this import is creating and the last leaves it with no resolvable group at all - no group id,
+    /// or one that is neither recorded nor in this snapshot. The last occurrence is the one the
+    /// import applies, exactly as it is for the name and the price, so the product ends
+    /// uncategorised: the category row the earlier occurrence pointed it at must not survive as a
+    /// navigation that <c>SaveChanges</c> would then write instead of the cleared foreign key.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData(99L)]
+    public async Task A_repeated_product_that_ends_with_no_resolvable_group_is_uncategorised(long? lastGroupId)
+    {
+        await Apply(new NayaxProductCatalogImport(
+            [new ImportedProductCategory(10, "Snacks", "Snacks")],
+            [
+                new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10),
+                new ImportedProductCatalogEntry(100, "Chips (large)", "Salted, 100g", 4m, lastGroupId),
+            ],
+            ImportedAt));
+
+        using var verify = TestAppDbContext.For(_options, 1);
+        var product = await verify.Products.SingleAsync();
+        Assert.Null(product.CategoryId);
+        Assert.Equal(("Chips (large)", 4m), (product.Name, product.UnitPrice));
+        // The group list still created its category; it simply has no product in it.
         Assert.Equal("10", (await verify.Categories.SingleAsync()).ExternalCategoryId);
+    }
+
+    /// <summary>
+    /// The same repetition, moving the other way round between the two kinds of category this import
+    /// resolves: from a group it is creating to one this business already records, and from a
+    /// recorded one to a created one. Each direction mixes a category with no key yet and one named
+    /// by its key, which is exactly where a navigation left over from the earlier occurrence would
+    /// outvote the foreign key the last one set.
+    /// </summary>
+    [Theory]
+    [InlineData(10L, 20L, "20")]
+    [InlineData(20L, 10L, "10")]
+    public async Task A_repeated_product_lands_in_the_category_its_last_occurrence_names(
+        long firstGroupId, long lastGroupId, string expectedExternalCategoryId)
+    {
+        using (var seed = TestAppDbContext.For(_options, 1))
+        {
+            seed.Categories.Add(new Category
+            {
+                Id = 55,
+                ExternalCategoryId = NayaxExternalId.From(20),
+                Name = "Drinks",
+                Description = "Recorded before this import",
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await Apply(new NayaxProductCatalogImport(
+            [new ImportedProductCategory(10, "Snacks", "Snacks")],
+            [
+                new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, firstGroupId),
+                new ImportedProductCatalogEntry(100, "Chips (large)", "Salted, 100g", 4m, lastGroupId),
+            ],
+            ImportedAt));
+
+        using var verify = TestAppDbContext.For(_options, 1);
+        var product = await verify.Products.SingleAsync();
+        var expected = await verify.Categories.SingleAsync(
+            category => category.ExternalCategoryId == expectedExternalCategoryId);
+        Assert.Equal(expected.Id, product.CategoryId);
+        Assert.Equal("Chips (large)", product.Name);
     }
 
     /// <summary>
@@ -232,7 +361,11 @@ public class EfNayaxProductCatalogImportStoreNayaxLinkTests : IDisposable
 
         using var verify = TestAppDbContext.For(_options, 1);
         var created = await verify.Products.SingleAsync();
-        Assert.Equal((100L, "Chips", "100"), (created.Id, created.Name, created.ExternalProductId));
+        Assert.Equal(("Chips", "100"), (created.Name, created.ExternalProductId));
+        // Its own generated key, which is not the Nayax id and not business B's product's either
+        // (issue #735).
+        Assert.NotEqual(100L, created.Id);
+        Assert.NotEqual(5001L, created.Id);
 
         using var verifyOther = TestAppDbContext.For(_options, 2);
         var untouched = await verifyOther.Products.SingleAsync();

@@ -32,8 +32,8 @@ public class Product : IBusinessOwned
     /// and this text.
     ///
     /// <strong>Not a local id, in either direction.</strong> <see cref="Id"/> is this application's
-    /// own key - today still assigned from the Nayax id by the catalogue import, until #735 makes it
-    /// database-generated - and nothing reads this column as a local id or a local id as this
+    /// own key, assigned by the database on insert since issue #735 (A4) - including for a row the
+    /// catalogue import creates - and nothing reads this column as a local id or a local id as this
     /// column. It is unique per business among the rows that have one (a filtered unique index), for
     /// the reason every constraint over an externally supplied value is scoped by business: two
     /// operators' catalogues may legitimately both contain product 100.
