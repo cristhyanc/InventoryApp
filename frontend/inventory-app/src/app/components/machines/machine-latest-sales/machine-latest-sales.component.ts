@@ -144,8 +144,14 @@ export class MachineLatestSalesComponent implements OnDestroy {
 
   /**
    * The amount cell's text. Three distinct answers, and none of them is `0`: the role may not see
-   * the figure, the provider reported no figure, or this is the figure it reported - with the
-   * currency code it reported alongside it, when it reported one.
+   * the figure, the provider reported no figure, or this is the figure it reported.
+   *
+   * <p><strong>No currency denomination is invented.</strong> The documented `lastSales` contract
+   * declares `CurrencyCode` as `string | null` and carries no currency symbol, so the figure is a
+   * neutral number labelled with the code the provider reported - `9.50 EUR` for a euro sale - and
+   * an unreported currency says so instead of being rendered as dollars. A `$` here would be this
+   * application's guess at the denomination of somebody else's money, and the API deliberately
+   * preserves a null `CurrencyCode` rather than assuming one.</p>
    */
   amountLabel(sale: MachineLatestSale): string {
     if (!this.canViewFinancials) {
@@ -156,8 +162,8 @@ export class MachineLatestSalesComponent implements OnDestroy {
       return 'Unavailable';
     }
 
-    const amount = `$${sale.saleAmount.toFixed(2)}`;
-    return sale.currencyCode ? `${amount} ${sale.currencyCode}` : amount;
+    const amount = sale.saleAmount.toFixed(2);
+    return sale.currencyCode ? `${amount} ${sale.currencyCode}` : `${amount} (currency not reported)`;
   }
 
   private request(machineId: number | null): Observable<MachineLatestSales | null> {

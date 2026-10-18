@@ -1,8 +1,11 @@
-import { TestBed } from '@angular/core/testing';
-import { convertToParamMap, ActivatedRoute, provideRouter } from '@angular/router';
-import { Observable, of } from 'rxjs';
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { convertToParamMap, ActivatedRoute, ParamMap, provideRouter } from '@angular/router';
+import { BehaviorSubject, Observable, of } from 'rxjs';
 import { MachineDetailComponent } from './machine-detail.component';
 import { Machine, MachineLatestSales, Product } from '../../models/models';
+import { ConfigService } from '../../services/config.service';
 import { MachineService } from '../../services/machine.service';
 import { StockService } from '../../services/stock.service';
 import { ToastService } from '../../services/toast.service';
@@ -57,16 +60,14 @@ describe('MachineDetailComponent product refresh', () => {
     component.ngOnInit();
     // Products are read when that tab is first opened, not on arrival (issue #768).
     component.openTab('products');
-    let products: Product[] = [];
-    component.products$.subscribe((p) => (products = p));
-    expect(products[0].quantityInStock).toBe(10);
+    expect(component.products[0].quantityInStock).toBe(10);
 
     component.refreshProducts();
-    component.products$.subscribe((p) => (products = p));
 
     expect(getProducts).toHaveBeenCalledTimes(2);
     expect(getProducts).toHaveBeenLastCalledWith(7);
-    expect(products[0].quantityInStock).toBe(8);
+    expect(component.products[0].quantityInStock).toBe(8);
+    expect(component.productsState).toBe('loaded');
   });
 });
 
@@ -120,10 +121,8 @@ describe('MachineDetailComponent Sales and Products tabs (issue #768)', () => {
     const { instance, getProducts } = component();
 
     instance.openTab('products');
-    instance.products$.subscribe();
     instance.openTab('sales');
     instance.openTab('products');
-    instance.products$.subscribe();
 
     expect(getProducts).toHaveBeenCalledTimes(1);
   });
@@ -175,6 +174,175 @@ describe('MachineDetailComponent Sales and Products tabs (issue #768)', () => {
 
     expect(instance.activeTab).toBe('sales');
     expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The Products panel's one read, counted as real HTTP requests through the rendered page (issue
+ * #768).
+ *
+ * <p>Counting the service double's invocations is not enough here: the panel's row count and its
+ * table are two bindings over the same read, and an unshared cold `HttpClient` observable bound
+ * twice issues the request twice however often the component asked for it once. These cases use the
+ * real `MachineService` over `HttpTestingController`, click the real tab buttons, and count the
+ * requests that actually left the page.</p>
+ */
+describe('MachineDetailComponent Products panel read (issue #768)', () => {
+  const productsUrl = (machineId: number) => `/api/machines/${machineId}/products`;
+
+  interface Rendered {
+    readonly fixture: ComponentFixture<MachineDetailComponent>;
+    readonly host: HTMLElement;
+    readonly httpMock: HttpTestingController;
+    readonly paramMap$: BehaviorSubject<ParamMap>;
+  }
+
+  async function renderPage(machineId = 7): Promise<Rendered> {
+    const paramMap$ = new BehaviorSubject(convertToParamMap({ id: String(machineId) }));
+    await TestBed.configureTestingModule({
+      imports: [MachineDetailComponent],
+      providers: [
+        provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
+        { provide: ConfigService, useValue: { apiBaseUrl: '/api' } },
+        { provide: ActivatedRoute, useValue: { paramMap: paramMap$ } },
+        { provide: StockService, useValue: {} },
+        { provide: ToastService, useValue: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } },
+        { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
+        { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
+        { provide: AccessService, useValue: { allows: () => of(true) } },
+        { provide: SupportSessionService, useValue: supportSessionStub() }
+      ]
+    }).compileComponents();
+
+    const httpMock = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(MachineDetailComponent);
+    const rendered = { fixture, host: fixture.nativeElement as HTMLElement, httpMock, paramMap$ };
+    answerPageReads(rendered, machineId);
+    return rendered;
+  }
+
+  /**
+   * The page's own machine read and the Sales panel's latest-sales read - everything this spec is
+   * not counting - answered so that the tabs render at all.
+   */
+  function answerPageReads({ fixture, httpMock }: Rendered, machineId: number): void {
+    fixture.detectChanges(false);
+    httpMock.match(`/api/machines/${machineId}`).forEach((request) => request.flush({ machineID: machineId } as Machine));
+    fixture.detectChanges(false);
+    httpMock
+      .match(`/api/machines/${machineId}/latest-sales`)
+      .forEach((request) => request.flush(emptyLatestSales(machineId)));
+    fixture.detectChanges(false);
+  }
+
+  function clickTab({ fixture, host }: Rendered, tab: 'sales' | 'products'): void {
+    (host.querySelector(`[data-testid="machine-tab-${tab}"]`) as HTMLButtonElement).click();
+    fixture.detectChanges(false);
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('issues no products request while the page opens on Sales', async () => {
+    const rendered = await renderPage();
+
+    expect(rendered.httpMock.match(productsUrl(7))).toHaveLength(0);
+  });
+
+  /** The repaired defect: two template bindings over one read, and one request on the wire. */
+  it('issues exactly one products request when the Products tab is opened', async () => {
+    const rendered = await renderPage();
+
+    clickTab(rendered, 'products');
+    const requests = rendered.httpMock.match(productsUrl(7));
+
+    expect(requests).toHaveLength(1);
+
+    requests[0].flush([product(10)]);
+    rendered.fixture.detectChanges(false);
+
+    expect(rendered.host.querySelector('[data-testid="machine-products-count"]')!.textContent)
+      .toContain('1 products found');
+    expect(rendered.host.textContent).toContain('Beef Jerky');
+  });
+
+  it('issues no further products request when the tabs are switched again', async () => {
+    const rendered = await renderPage();
+
+    clickTab(rendered, 'products');
+    rendered.httpMock.match(productsUrl(7)).forEach((request) => request.flush([product(10)]));
+    rendered.fixture.detectChanges(false);
+
+    clickTab(rendered, 'sales');
+    clickTab(rendered, 'products');
+
+    expect(rendered.httpMock.match(productsUrl(7))).toHaveLength(0);
+    expect(rendered.host.textContent).toContain('Beef Jerky');
+  });
+
+  /**
+   * An outstanding read is not an answered one: "No products" while the request is still in flight
+   * is the page claiming something it has not been told.
+   */
+  it('shows a loading state while the products read is in flight, and no count or empty state', async () => {
+    const rendered = await renderPage();
+
+    clickTab(rendered, 'products');
+    const request = rendered.httpMock.expectOne(productsUrl(7));
+
+    expect(rendered.host.querySelector('[data-testid="machine-products-loading"]')).not.toBeNull();
+    expect(rendered.host.querySelector('[data-testid="machine-products-empty"]')).toBeNull();
+    expect(rendered.host.querySelector('[data-testid="machine-products-count"]')).toBeNull();
+
+    request.flush([]);
+    rendered.fixture.detectChanges(false);
+
+    expect(rendered.host.querySelector('[data-testid="machine-products-loading"]')).toBeNull();
+    expect(rendered.host.querySelector('[data-testid="machine-products-empty"]')).not.toBeNull();
+    expect(rendered.host.querySelector('[data-testid="machine-products-count"]')!.textContent)
+      .toContain('0 products found');
+  });
+
+  it('shows a failed products read as a failure rather than as a machine with no products', async () => {
+    const rendered = await renderPage();
+
+    clickTab(rendered, 'products');
+    rendered.httpMock
+      .expectOne(productsUrl(7))
+      .flush('unavailable', { status: 500, statusText: 'Server Error' });
+    rendered.fixture.detectChanges(false);
+
+    const failure = rendered.host.querySelector('[data-testid="machine-products-error"]')!;
+    expect(failure).not.toBeNull();
+    expect(failure.textContent).toContain('does not mean the machine has no products');
+    expect(rendered.host.querySelector('[data-testid="machine-products-empty"]')).toBeNull();
+    expect(rendered.host.querySelector('[data-testid="machine-products-count"]')).toBeNull();
+  });
+
+  /**
+   * Navigating to a different machine cancels the outstanding read - so the previous machine's rows
+   * cannot arrive into this table at all - and leaves the panel unrequested again.
+   */
+  it('cancels an in-flight products read and resets the panel when the machine changes', async () => {
+    const rendered = await renderPage();
+
+    clickTab(rendered, 'products');
+    const machineSevenProducts = rendered.httpMock.expectOne(productsUrl(7));
+
+    rendered.paramMap$.next(convertToParamMap({ id: '8' }));
+    answerPageReads(rendered, 8);
+
+    expect(machineSevenProducts.cancelled).toBe(true);
+    expect(rendered.host.querySelector('[data-testid="machine-products-loading"]')).toBeNull();
+    expect(rendered.host.querySelector('[data-testid="machine-products-empty"]')).toBeNull();
+    expect(rendered.host.querySelector('[data-testid="machine-products-count"]')).toBeNull();
+    expect(rendered.httpMock.match(productsUrl(8))).toHaveLength(0);
+
+    // The new machine's products are read when its Products tab is opened, and only then.
+    clickTab(rendered, 'products');
+
+    expect(rendered.httpMock.match(productsUrl(8))).toHaveLength(1);
   });
 });
 

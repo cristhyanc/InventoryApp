@@ -1296,11 +1296,13 @@ machine's product table in a second tab (issue #768).
   those. For a complete period use the reports, which are built from the sales this application has
   imported.
 - **Each sale shows its date and time, the product name Nayax reported, the payment method and the
-  amount**, with the currency code Nayax reported when it reported one. Times are shown in your
-  business's own time zone. A value Nayax did not report reads **Not reported** rather than being
-  filled in with a zero or a guessed date, and **no transaction status is shown**: the documented
-  Nayax endpoint for this read declares none, so the page does not invent one. No cost or profit is
-  derived here.
+  amount**, labelled with the currency code Nayax reported — `9.50 AUD`, or `9.50 EUR` for a euro
+  sale. **No currency symbol is invented**: the documented Nayax read declares the currency as
+  optional and carries no symbol, so a sale Nayax reported without one reads `9.50 (currency not
+  reported)` rather than being shown as dollars. Times are shown in your business's own time zone. A
+  value Nayax did not report reads **Not reported** rather than being filled in with a zero or a
+  guessed date, and **no transaction status is shown**: the documented Nayax endpoint for this read
+  declares none, so the page does not invent one. No cost or profit is derived here.
 - **Refresh re-reads Nayax, and changes nothing.** It is disabled while a request is in flight. A
   refresh imports no sale, moves no stock, recosts no inventory and applies no stock event — reading
   this tab a hundred times leaves every report, cost and quantity exactly as it was. Importing sales
@@ -1319,8 +1321,11 @@ machine's product table in a second tab (issue #768).
   Nayax data at all here, because a session resolves no Nayax credentials.
 - **Products is the same product table as before**, with the same fields, the same financial
   redaction and the same per-product Restock control. It is read the first time you open that tab for
-  a machine, so opening a machine does not fetch it, and **Sync Restock stays its own section above
-  the tabs**.
+  a machine — once, not once per thing on screen that reads it — so opening a machine does not fetch
+  it and switching back to Products does not fetch it again, and **Sync Restock stays its own section
+  above the tabs**. While that read is outstanding the tab says it is loading, and a read that
+  **failed** says so and offers a page reload: only a tab that has actually been answered reports a
+  product count or tells you the machine has no products.
 
 See [docs/architecture.md § Machine latest sales](docs/architecture.md#machine-latest-sales-issue-768)
 for the read boundary, the verified Nayax contract and the authorization rule.

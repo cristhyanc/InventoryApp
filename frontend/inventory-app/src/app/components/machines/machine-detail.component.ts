@@ -24,6 +24,14 @@ import {
  */
 export type MachineDetailTab = 'sales' | 'products';
 
+/**
+ * The four distinct states of the Products panel's one read (issue #768), which the template keeps
+ * apart because three of them would otherwise be presented as "this machine has no products":
+ * nobody has opened the tab yet, the read is in flight, it succeeded (with however many rows it
+ * returned, including none), or it failed.
+ */
+export type MachineProductsState = 'not-requested' | 'loading' | 'loaded' | 'failed';
+
 @Component({
   selector: 'app-machine-detail',
   standalone: true,
@@ -40,10 +48,17 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
   readonly machine$: Observable<Machine | null>;
 
   /**
-   * The machine's product table. It starts empty and is only requested once somebody opens the
-   * Products tab (issue #768), so opening a machine on Sales makes no machine-products call at all.
+   * The machine's product table, held as the rows this page has actually read rather than as an
+   * observable the template subscribes to (issue #768). The table and its row count are two
+   * bindings over one read: an unshared cold `HttpClient` observable bound twice would make the
+   * same machine-products call twice, and the row count would be read from a different subscription
+   * from the rows. One subscription, owned here, is what makes "opening Products reads once" true
+   * of the rendered page and not only of this component's intent.
    */
-  products$: Observable<Product[]> = of([] as Product[]);
+  products: Product[] = [];
+
+  /** Which of the panel's four states the product table is in; never inferred from `products`. */
+  productsState: MachineProductsState = 'not-requested';
 
   loading$ = new BehaviorSubject(true);
   error$ = new BehaviorSubject('');
@@ -76,16 +91,12 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
 
   private machineId: number | null = null;
 
-  /**
-   * Whether the Products tab has been opened for the machine currently on screen. It is what makes
-   * the product read happen once: switching back to Products shows the rows already loaded rather
-   * than calling Nayax again (issue #768).
-   */
-  private productsRequested = false;
-
   private readonly sessionActiveSubscription: Subscription;
   private readonly financialsAccessSubscription: Subscription;
   private routeSubscription?: Subscription;
+
+  /** The one in-flight product read, so a superseded one can be cancelled rather than raced. */
+  private productsSubscription?: Subscription;
 
   constructor(
     private readonly route: ActivatedRoute,
@@ -133,6 +144,7 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
     this.sessionActiveSubscription.unsubscribe();
     this.financialsAccessSubscription.unsubscribe();
     this.routeSubscription?.unsubscribe();
+    this.cancelProductsRead();
   }
 
   ngOnInit(): void {
@@ -144,11 +156,13 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
       this.machineId = !machineId || isNaN(machineId) ? null : machineId;
 
       // Every machine opens on Sales, and its products are not fetched until somebody opens the
-      // Products tab. Clearing the products stream as well as the flag is what keeps the previous
-      // machine's rows from appearing under this machine's heading.
+      // Products tab. An in-flight read for the machine being navigated away from is cancelled and
+      // the rows are cleared here, at the moment the machine changes, so the previous machine's
+      // products can never appear under this machine's heading or arrive late into this table.
       this.activeTab = 'sales';
-      this.productsRequested = false;
-      this.products$ = of([] as Product[]);
+      this.cancelProductsRead();
+      this.products = [];
+      this.productsState = 'not-requested';
     });
   }
 
@@ -161,12 +175,11 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
   openTab(tab: MachineDetailTab): void {
     this.activeTab = tab;
 
-    if (tab !== 'products' || this.productsRequested || !this.machineId) {
+    if (tab !== 'products' || this.productsState !== 'not-requested' || !this.machineId) {
       return;
     }
 
-    this.productsRequested = true;
-    this.products$ = this.loadProducts(this.machineId);
+    this.loadProducts(this.machineId);
   }
 
   /**
@@ -211,11 +224,11 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
    * on screen to refresh, and opening the tab later reads the current quantities anyway.
    */
   refreshProducts(): void {
-    if (!this.machineId || !this.productsRequested) {
+    if (!this.machineId || this.productsState === 'not-requested') {
       return;
     }
 
-    this.products$ = this.loadProducts(this.machineId);
+    this.loadProducts(this.machineId);
   }
 
   stockClass(product: Product): string {
@@ -265,12 +278,30 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
     });
   }
 
-  private loadProducts(machineId: number): Observable<Product[]> {
-    return this.machineService.getProducts(machineId).pipe(
-      catchError(() => {
-        this.error$.next('Failed to load products for this machine.');
-        return of([] as Product[]);
-      })
-    );
+  /**
+   * Reads one machine's products exactly once per call, into this component's own state. A
+   * superseded read - a refresh, or a different machine - is cancelled rather than left to answer
+   * into a table that has moved on, and a failure is its own state in the panel rather than the
+   * page-level error line, so a failed read is never presented as a machine with no products.
+   */
+  private loadProducts(machineId: number): void {
+    this.cancelProductsRead();
+    this.productsState = 'loading';
+
+    this.productsSubscription = this.machineService.getProducts(machineId).subscribe({
+      next: (products) => {
+        this.products = products;
+        this.productsState = 'loaded';
+      },
+      error: () => {
+        this.products = [];
+        this.productsState = 'failed';
+      }
+    });
+  }
+
+  private cancelProductsRead(): void {
+    this.productsSubscription?.unsubscribe();
+    this.productsSubscription = undefined;
   }
 }

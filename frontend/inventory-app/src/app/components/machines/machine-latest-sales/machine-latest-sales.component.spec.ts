@@ -98,18 +98,35 @@ describe('MachineLatestSalesComponent (issue #768)', () => {
     expect(host.textContent).not.toContain('all sales');
   });
 
-  /** The amount carries the currency the provider reported, and nothing is invented when it did not. */
-  it('shows the amount with the reported currency code', async () => {
+  /**
+   * The amount carries the currency the provider reported, and no denomination is invented when it
+   * reported none. The documented contract declares `CurrencyCode` nullable and carries no symbol,
+   * so a `$` on these figures would be this application guessing at somebody else's money.
+   */
+  it('labels the amount with the reported currency code instead of a dollar sign', async () => {
     const { host } = await render(() => of(available([sale()])));
 
-    expect(host.querySelector('tbody tr')!.textContent).toContain('$9.50 AUD');
+    const row = host.querySelector('tbody tr')!.textContent!;
+    expect(row).toContain('9.50 AUD');
+    expect(row).not.toContain('$');
   });
 
-  it('shows the amount without a currency when the provider reported none', async () => {
+  it('labels a non-dollar currency with the code the provider reported', async () => {
+    const { host } = await render(() => of(available([sale({ currencyCode: 'EUR' })])));
+
+    const row = host.querySelector('tbody tr')!.textContent!;
+    expect(row).toContain('9.50 EUR');
+    expect(row).not.toContain('$');
+    expect(row).not.toContain('AUD');
+  });
+
+  it('says the currency was not reported rather than showing the amount as dollars', async () => {
     const { host } = await render(() => of(available([sale({ currencyCode: null })])));
 
     const row = host.querySelector('tbody tr')!.textContent!;
-    expect(row).toContain('$9.50');
+    expect(row).toContain('9.50');
+    expect(row).toContain('currency not reported');
+    expect(row).not.toContain('$');
     expect(row).not.toContain('AUD');
   });
 

@@ -10224,6 +10224,16 @@ never read as an instant and is not on the response at all. The API publishes th
 Angular panel renders it through `BusinessDateTimePipe`, in the current business's own configured
 IANA zone (issue #499) — never the browser's.
 
+**The amount is rendered in the currency Nayax reported, and in no currency at all otherwise.** The
+documented response declares `CurrencyCode` as `string | null` and carries no currency symbol, so
+the panel renders a neutral number labelled with the reported code (`9.50 AUD`, `9.50 EUR`) and says
+`9.50 (currency not reported)` when the provider reported none. A `$` on these figures would be this
+application asserting a denomination the provider never stated, which is the same mistake as
+rendering an absent figure as `0`: the API deliberately preserves a null `CurrencyCode` rather than
+assuming one, and the UI must not undo that. This is a provider-reported figure, not one of this
+business's own records, so it is deliberately not formatted like the dollar amounts elsewhere on the
+page.
+
 **An unusable provider is an availability answer, not an error.** The use case turns three refusals
 into `MachineLatestSales.Unavailable(reason)`, published as `200` with `isAvailable: false` and a
 stable code, because each is a state of this business rather than a failure of the call:
@@ -10262,7 +10272,24 @@ are **hidden rather than destroyed**, so switching back to Sales shows the windo
 instead of calling Nayax again. The product table is read when Products is first opened for that
 machine and not on arrival, so opening a machine makes the latest-sales call and no machine-products
 call; it happens once per machine, and an applied Sync Restock reloads it only while that tab has
-been opened. **Sync Restock stays a section of its own, outside both panels**: it is a write workflow
+been opened.
+
+**One read per machine means one request on the wire, which is a property of the bindings and not
+only of the intent.** The page holds the product rows and the read's state as its own fields, from a
+single subscription it owns, because the panel renders them twice — a row count beside the heading
+and the table itself — and two `| async` bindings over one cold `HttpClient` observable would issue
+the machine-products request twice, with the count read from a different subscription from the rows.
+The state is explicit and has four values (`not-requested`, `loading`, `loaded`, `failed`), so three
+different things can no longer be presented as "this machine has no products": a tab nobody has
+opened, a read still in flight, and a read that failed. Only `loaded` shows a count or the empty
+sentence, a failure is its own message in the panel rather than the page-level error line, and
+navigating to another machine **cancels** the outstanding read and returns the panel to
+`not-requested` — so the previous machine's rows cannot arrive late into the new machine's table. The
+regression tests count the requests that actually leave the rendered page, through
+`HttpTestingController` and the real `MachineService`, rather than counting calls into a service
+double.
+
+**Sync Restock stays a section of its own, outside both panels**: it is a write workflow
 rather than one of the page's two views of this machine, and [issue
 #744](#nayax-machine-stock-event-import-and-sync-restock-reconciliation-issue-183) owns the future
 consolidation of the per-product manual Restock controls, which this change leaves exactly where

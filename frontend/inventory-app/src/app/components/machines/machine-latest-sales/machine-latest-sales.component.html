@@ -5,10 +5,14 @@
       <!-- The window is Nayax's own "most recent sales" for this machine. It is deliberately not
            described with a date range or a row count: the documented endpoint guarantees neither,
            and this is not the machine's complete sales history. -->
+      <!-- Kept to what an operator needs to know (the owner's review of PR #771): the window is a
+           rolling one, and refreshing only re-reads it. That it imports no sale and touches no stock
+           or cost is a structural guarantee of the read, recorded in `docs/architecture.md`
+           § Machine latest sales rather than explained on screen. -->
       <p class="text-md-body value-muted">
         The most recent sales Nayax reports for this machine, newest first. This is Nayax's rolling
-        latest-sales window, not this machine's complete sales history. Refreshing reads Nayax and
-        changes nothing: no sale is imported and no stock or cost is touched.
+        latest-sales window, not this machine's complete sales history. Refreshing only re-reads it;
+        nothing is saved.
       </p>
     </div>
     <button
