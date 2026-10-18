@@ -50,8 +50,8 @@ public class EfSaleCostingStoreTests
         Assert.Equal(SaleCostingStatus.Costed, saleA.CostingStatus);
         Assert.Equal(SaleCostSource.InventoryLedger, saleA.CostSource);
 
-        // Business B's sale shares business A's transaction ID and names business A's product; it is
-        // neither read nor costed by business A's backfills.
+        // Business B's sale shares business A's transaction ID and carries a raw provider id equal
+        // to business A's product key; it is neither read nor costed by business A's backfills.
         var saleB = await verify.NayaxSales.SingleAsync(s => s.BusinessId == BusinessB);
         Assert.Null(saleB.UnitCostAtSale);
         Assert.Null(saleB.CostOfGoodsSold);
@@ -73,8 +73,9 @@ public class EfSaleCostingStoreTests
         var sale = Assert.Single(await store.LoadCompletedSalesAsync(new CompletedSaleSelection(), forUpdate: false, CancellationToken.None));
         Assert.Equal(9m, sale.NayaxProductCostPrice);
 
-        // Business B's sale names business A's product, which business B cannot see: unmatched, so
-        // its Nayax export cost applies rather than business A's ledger.
+        // Business B's sale is unresolved and its raw provider id is business A's product key,
+        // which business B cannot see: no product, so its Nayax export cost applies rather than
+        // business A's ledger.
         Assert.Equal(
             new SaleCostAssignment(9m, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport),
             await TestCostingUseCases.CostSale(db).Handle(sale));
@@ -197,19 +198,22 @@ public class EfSaleCostingStoreTests
         await using (var b = TestAppDbContext.For(options, BusinessB))
         {
             b.Products.Add(new Product { Id = ProductB, Name = "Business B Product", QuantityInStock = 5 });
-            b.NayaxSales.Add(CompletedSale(ProductA, 9m));
+            // Unresolved, carrying a raw provider id that happens to equal business A's product
+            // key: the number is not an answer, and the foreign key could not store it as one.
+            b.NayaxSales.Add(CompletedSale(null, 9m, nayaxProductId: ProductA));
             await b.SaveChangesAsync();
         }
 
         return options;
     }
 
-    private static NayaxSales CompletedSale(long productId, decimal nayaxCost) => new()
+    private static NayaxSales CompletedSale(long? productId, decimal nayaxCost, long? nayaxProductId = null) => new()
     {
         TransactionID = 5001,
         TransactionStatusId = NayaxTransactionStatusIds.Completed,
         MachineID = 1,
-        NayaxProductId = productId,
+        ProductId = productId,
+        NayaxProductId = nayaxProductId ?? productId,
         ProductName = "Coke Zero",
         SettlementValue = 3m,
         NayaxProductCostPrice = nayaxCost,

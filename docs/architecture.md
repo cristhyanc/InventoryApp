@@ -1054,7 +1054,7 @@ Contains:
 - Dependency injection and application startup.
 - HTTP error/result mapping.
 - The persistence *provider* decision: the `Microsoft.EntityFrameworkCore.Sqlite` reference, the single `options.UseSqlite(ConnectionStrings:DefaultConnection)` call in `Program.cs`, and the `Microsoft.EntityFrameworkCore.Design` reference the `dotnet ef` tooling needs. The model itself is not here (issue #307).
-- The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents`, `migrate-nayax-connection` and the database backup commands.
+- The startup schema decision and the human-invoked commands in `InventoryApi/Bootstrap`: `DatabaseSchemaStartup`, `migrate-database`, `bootstrap-business`, `migrate-documents`, `migrate-nayax-connection`, `resolve-nayax-sale-products` (issue #758) and the database backup commands.
 - The one hosted background drain, `Auth/MemberProfileRefreshWorker` (issue #524): it opens a new service scope per queued member display-name and email refresh and invokes the `Inventory.Application` use case in it. Hosting glue, not a use case — it holds no rule, resolves no `DbContext`, and logs only the outcome. See [Member display name and email](#member-display-name-and-email-issue-524).
 
 Controllers do not implement accounting, inventory, persistence, or filesystem rules.
@@ -1497,7 +1497,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. No endpoint accepts a file name or path as input, and `FileSystemDocumentStorage` reduces any stored name with `Path.GetFileName` and then proves the result is inside the category folder, so a crafted value cannot escape it. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
 
-**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). Being a human-invoked command is not what grants it: `migrate-nayax-connection` (issue #519) is a fourth such command and constructs no unrestricted context at all, because it needs none — the tenancy tables it reads to resolve the target business carry no tenant filter, and the credential itself is read and written through a context scoped to that one business (see [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context, and issue #544 extended that test to the platform-admin store below — it is registered scoped and its only constructor dependency is the request's own `AppDbContext`, so nothing can hand it anything else. Issue #550's support-session store is held to the same three things, for the same reason: it is the second adapter a platform administrator's denied-scope request reaches. **A support session is not unrestricted either, and is narrower than a membership rather than wider** (issue #551): `BusinessScopeState.SupportReadOnly` names exactly one business and is compared by the same filter expression as `Resolved`, so such a request reads that one business and — because `BusinessOwnershipEnforcer` refuses every `SaveChanges` in that state — writes nothing at all. See [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551). The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
+**The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). Being a human-invoked command is not what grants it: `migrate-nayax-connection` (issue #519) is a fourth such command and constructs no unrestricted context at all, because it needs none — the tenancy tables it reads to resolve the target business carry no tenant filter, and the credential itself is read and written through a context scoped to that one business (see [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)). `resolve-nayax-sale-products` (issue #758) is a fifth, on the same pattern: it enumerates businesses through a denied-scope context and reads and writes every sale, product and audit row through a context scoped to the one business that sale belongs to (see [The sale's own product](#the-sales-own-product-issue-758)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context, and issue #544 extended that test to the platform-admin store below — it is registered scoped and its only constructor dependency is the request's own `AppDbContext`, so nothing can hand it anything else. Issue #550's support-session store is held to the same three things, for the same reason: it is the second adapter a platform administrator's denied-scope request reaches. **A support session is not unrestricted either, and is narrower than a membership rather than wider** (issue #551): `BusinessScopeState.SupportReadOnly` names exactly one business and is compared by the same filter expression as `Resolved`, so such a request reads that one business and — because `BusinessOwnershipEnforcer` refuses every `SaveChanges` in that state — writes nothing at all. See [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551). The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
 
 **The one reviewed `IgnoreQueryFilters` in a request path (issue #544).** The Super Admin's business directory reports whether each business has stored Nayax credentials, `BusinessNayaxConnection` is tenant-owned, and the request carries a denied scope — so the central filter matches none of its rows and the fact is otherwise unreadable. `EfPlatformBusinessDirectoryStore` makes exactly one `IgnoreQueryFilters` statement, projecting `BusinessId` alone, and the rest of the adapter is ordinary reads and writes of the structurally non-tenant-owned tables. It is a *narrowed* exception rather than a loosened rule: the column it reads is the ownership key, not business data, and the alternatives — an unscoped request context, a second read-only cross-business connection, or resolving each business into the request scope in turn — were each strictly worse. See [Super Admin businesses API](#super-admin-businesses-api-issue-544).
 
@@ -7314,7 +7314,11 @@ business scoping are unchanged, and since issue #745 a payload item's `NayaxProd
 through the id recorded on this business's product (`Product.ExternalProductId` since issue #759)
 instead of being compared with `Product.Id` - see
 [Resolving Nayax ids in the sale paths, the catalogue import and
-reconciliation](#resolving-nayax-ids-in-the-sale-paths-the-catalogue-import-and-reconciliation-issue-745)),
+reconciliation](#resolving-nayax-ids-in-the-sale-paths-the-catalogue-import-and-reconciliation-issue-745),
+and since issue #758 the matched local product is *persisted* on the sale as
+`NayaxSales.ProductId` - with the payload's own product id kept separately in
+`NayaxProductId` - rather than re-derived by every later reader, see
+[The sale's own product](#the-sales-own-product-issue-758)),
 the settlement-value completed/cancelled default,
 historical costing through the Application `ICostSale` use case (issue #297), and the `IRebuildProductCost` rebuild for products whose
 transition-baseline cutoff a newly imported completed sale follows - and enriches an already stored
@@ -7786,6 +7790,12 @@ loses and gains (completed sales only — a pending, refunded, cancelled or unkn
 re-dated and still listed, but moves no revenue); the products whose costing would be replayed, from
 when, and whether the replay is actually planned; the transactions the source carries that this
 business holds **no** sale for; and the fixed-cutoff reconciliation.
+
+A product whose costing would be replayed is read from the sale's own persisted association
+(`NayaxSales.ProductId`, issue #758), never re-matched from the provider's product id or the
+reported name, so the repair replays exactly the product the sale is costed against; a sale with no
+association has no inventory to replay and stays visible through its own row and its costing
+provenance. See [The sale's own product](#the-sales-own-product-issue-758).
 
 **The fixed-cutoff reconciliation is what makes a comparison with a Nayax export valid.** It takes an
 explicit cutoff instant and an inclusive Sydney business-date window — all three together or none,
@@ -8655,10 +8665,11 @@ unknown.
 `ObservationSourceUnavailable` when the machine's own report could not be read at all,
 `PendingNayaxStockEvents` when Sync Restock still holds unprocessed events for that machine (so a
 shortage may be an unapplied refill rather than shrinkage), and `UnattributedCompletedSales` when
-completed sales on the machine match no catalogue product (so their units are missing from every
-product's expected stock). A sale is attributed with the same
-`Inventory.Domain.Reporting.ProductMatching.ProductMatcher` the costing ledger uses, so the two
-always agree about which product a transaction dispensed.
+completed sales on the machine are unresolved (so their units are missing from every
+product's expected stock). A sale is attributed by the local product persisted on its own row
+(`NayaxSales.ProductId`, issue #758) - the same association the costing ledger reads - so the two
+always agree about which product a transaction dispensed, and a product renamed after the sale does
+not move it. See [The sale's own product](#the-sales-own-product-issue-758).
 
 **The layers.** `Inventory.Application.MachineStock.GetMachineStockReconciliation` orchestrates and
 decides nothing: it reads the machine's report through the narrow `IMachineStockObservationSource`
@@ -8845,7 +8856,12 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   (`Product.ExternalProductId` since issue #759, read once per import through
   `INayaxProductLinkStore`) before that matcher's name fallback, rather than compared with
   `Product.Id`; an id recorded on no product is an unknown product, handled exactly as an unmatched
-  id already was. An export carrying no data row at
+  id already was. Since issue #758 that answer is *persisted* as the sale's `NayaxSales.ProductId`
+  and is what every later reader uses, the export's own raw product id stays in `NayaxProductId`,
+  and the product a stored sale is moved *off* by a re-import is read from the same column - so one
+  pass replays both the product it left and the product it joined. A sale the migration marked
+  conflicting keeps its (absent) product until a human decides it; see
+  [The sale's own product](#the-sales-own-product-issue-758). An export carrying no data row at
   all reads nothing and writes nothing, not even the catalogue.
 - **Workbook/CSV parsing** sits behind the `INayaxSalesWorkbookReader` port, implemented by
   `Inventory.Infrastructure.Imports.ClosedXmlNayaxSalesWorkbookReader` - a real Infrastructure
@@ -8867,6 +8883,7 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
   reported to the operator as an import of zero rows. A CSV, by contrast, is always readable, so
   unusable CSV content surfaces as skipped rows.
 - **Persistence** sits behind the narrow `INayaxSalesImportStore` port (the product candidates, the
+  conflicting transactions issue #758's migration recorded, the
   existing-transaction lookup, staging an added or updated sale, staging a decided cost, the
   affected products' transition cutoffs, and save), implemented by
   `Inventory.Infrastructure.Persistence.EfNayaxSalesImportStore`, which moved there with the rest of
@@ -8878,7 +8895,9 @@ child 3 of 3 of #151), moved unchanged in behaviour out of
 - **Costing and the replay** use the Application contracts: `ICostSale` (issue #297) decides each
   sale's historical cost and provenance, and `IRebuildProductCost.RebuildAsync` (issue #296) replays
   an affected product's cost from the earliest completed sale that touched it, but only for a product
-  whose transition-baseline cutoff that instant actually follows.
+  whose transition-baseline cutoff that instant actually follows. Which sales are a product's is the
+  persisted `NayaxSales.ProductId` association (issue #758), part of the replay's own SQL rather
+  than a catalogue match made afterwards.
 - **The save order and its failure behaviour are unchanged, and deliberately differ from the
   latest-sales sync's.** The imported and updated sales are saved first, the affected products are
   replayed next, and the replayed costs are saved last, so a fatal `InventoryCostDataQualityException`
@@ -8906,15 +8925,17 @@ child 3 of #149), moved unchanged in behaviour from the removed
 - `CostSale` (`ICostSale`) decides one sale's cost and provenance. A sale that is not completed is
   left uncosted and pending. A completed sale already costed or legacy-estimated with both costs
   present is kept unless forced. Otherwise the precedence is the inventory-ledger (AVCO) cost from
-  `IRebuildProductCost.GetAverageUnitCostAtAsync` (skipped for an unmatched product or a sale at or
+  `IRebuildProductCost.GetAverageUnitCostAtAsync` (skipped for an unresolved sale or a sale at or
   before the product's transition-baseline cutoff), then the persisted transaction-level Nayax
-  `Product Cost Price`, then uncosted: `Error` for an unmatched product or a negative Nayax cost,
-  `Pending` otherwise. It matches the product with the Domain
-  `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` directly. Its Application-owned
+  `Product Cost Price`, then uncosted: `Error` for an unresolved sale or a negative Nayax cost,
+  `Pending` otherwise. The product is the one persisted on the sale (`NayaxSales.ProductId`, issue
+  #758), read rather than matched: nothing here falls back to the provider's product id or the
+  reported name, which is what stops a rename or a duplicate name moving historical COGS. Its
+  Application-owned
   `SaleCostStatus`/`SaleCostOrigin` mirror the persisted `SaleCostingStatus`/`SaleCostSource`
   ordinal-for-ordinal (a parity test enforces this).
-- `CostPendingSales` costs every pending completed sale, optionally for one matched product, and
-  saves once.
+- `CostPendingSales` costs every pending completed sale, optionally for one product it is
+  persisted against, and saves once.
 - `BackfillSaleCosts` (`POST api/sale-costing/backfill`) re-costs completed sales through
   `CostSale`. Without `force` it counts already costed or legacy-estimated sales as finalized and
   leaves them untouched. `BackfillNayaxHistoricalSaleCosts` (`POST
@@ -9237,8 +9258,9 @@ revised on 18 October 2026: a business has zero or one sales provider, so a colu
 saying which provider issued it was answering a question that has one answer per business.
 
 Nothing else about identity changed with it: `Product.Id`/`Category.Id` are still the Nayax ids until
-#735 (A4), the one lookup and its callers behave exactly as before, and costing and timestamp repair
-(#747, A2c) and the reporting queries (#734, A3) still read `Product.Id` as a Nayax id.
+#735 (A4), the one lookup and its callers behave exactly as before, and the reporting queries (#734,
+A3) still read `Product.Id` as a Nayax id. Which product a *sale* belongs to stopped being derived
+from either id in issue #758, below.
 
 **One provider per business, and it is fixed once set.** `Business.SalesProvider` is a nullable
 `Inventory.Domain.Providers.ExternalProvider`: null means no provider at all, and inventory —
@@ -9408,17 +9430,137 @@ silent error in financial data, which is the thing this slice exists to end. Iss
 the #759 copy that followed it, recorded an id for every row that existed, so reaching that state needs
 a row restored from an older backup or created locally under a colliding key.
 
-**The stored `NayaxSales.NayaxProductId` column is deliberately still read as it was.** Its
-provenance is mixed: the latest-sales sync writes the *local* product id it matched, while the
-uploaded export writes the row's raw remote id. Re-resolving that column as a Nayax id would turn the
-local product a synchronized sale already names into an unknown one and silently stop replaying its
-inventory cost, so the two reads of it that remain — the sync's enrichment of an already stored sale,
-and the import's tracking of the product a stored sale is about to be moved off — keep comparing it
-with `Product.Id`. Settling that column's meaning belongs to the paths that own it: costing and
-timestamp repair (#747, A2c) and the reporting queries (#734, A3).
+**The stored `NayaxSales.NayaxProductId` column had mixed provenance, and #758 ended that.** Until
+then the latest-sales sync wrote the *local* product id it matched into it while the uploaded export
+wrote the row's raw remote id, so the column could not be read as either kind of identifier without
+being wrong about half the rows. Issue #758 (A2c), below, gave the sale its own `ProductId` column
+and left `NayaxProductId` holding only the provider's own id.
 
 The settlement (pending reimbursement XML) import carries no product or group identifier at all, so
 there is nothing in it to resolve.
+
+### The sale's own product (issue #758)
+
+Issue #758 (child A2c of #329) is where a stored sale stopped being matched to a product and started
+**recording** one. `NayaxSales.ProductId` is the local product the sale belongs to, decided once by
+the writer that stored it, and it is what costing, the inventory cost replay, the timestamp repair,
+the reports and the machine-stock ledger all read. A sale is therefore attributed to the same product
+everywhere, and a product rename, a duplicate name or a database-generated product id cannot move it.
+
+**Why a column rather than a match.** Every one of those readers used to call
+`Inventory.Domain.Reporting.ProductMatching.ProductMatcher` over the stored `NayaxProductId` and the
+reported `ProductName`: id first, then the unambiguous name. That re-derived an answer on every read,
+from data that changes. Renaming a product moved historical sales between report rows; two products
+sharing a name made sales ambiguous retroactively; and after #735 (A4) a local key and a Nayax id
+that coincide are a coincidence, so the id half would quietly start matching the wrong row. An
+earlier attempt (#747, PR #755) read the column as a *raw* provider id everywhere instead, which was
+wrong for the rows the sync had written with a local id in it — reproduced on that pull request as
+sales left `Error`/uncosted with their product's inventory never consumed.
+
+**The three columns.**
+
+| Column | What it holds |
+| --- | --- |
+| `ProductId` | The **local** product, nullable. Foreign key on `(BusinessId, ProductId)` to the products' `(BusinessId, Id)` business key, so a sale can never name another business's product — and `DeleteBehavior.Restrict`, never cascade and never set-null, because deleting the product a sale sold must fail loudly rather than delete the sale or detach its COGS from any product. |
+| `Provider` | The originating `ExternalProvider`, `Nayax` on every row. The table's name only implies it; a provider switch (#761) needs it stated. |
+| `ProviderProductIdIsRaw` | Whether `NayaxProductId` is known to be the raw provider id. `true` on every row written since this change, `false` — provenance-unknown — on every row that predates it. |
+
+`NayaxProductId` keeps the provider's own product id and nothing else: a remote identity, never a
+local key, `null` when the payload or the export carried none.
+
+**The writers decide once.** The latest-sales sync, its enrichment branch and the uploaded-export
+import resolve the provider id through `INayaxProductLinkStore` (`Product.ExternalProductId` since
+#759) and then the unambiguous-name rule — exactly as #745 made them match — and persist that answer
+in `ProductId` instead of leaving it to be redone. The import's `TrackStoredProduct` is keyed on the
+stored `ProductId`, so re-importing a transaction whose product changed replays both the product it
+left and the product it joined, in the same pass. Neither writer touches the product of a sale the
+migration marked **conflicting**: only an audited decision settles one.
+
+**A null `ProductId` is unresolved, and unresolved is a reported state.** No reader matches such a
+sale by name or by number. It is not costed (the same `Error`/`Pending` outcome an unmatched sale
+already had), it is consumed by no replay, the machine-stock ledger counts it as unattributed, and
+the transaction and product-profitability reports show it under the name the provider reported, with
+the existing "could not be mapped to a Product" data-quality note — visible, never silently dropped
+from a total.
+
+#### Migrating the sales that already exist
+
+Two migrations, in one release, neither of which guesses.
+
+**Step 1, `AddNayaxSaleProductAssociation`.** Adds the three columns, the index, the foreign key and
+the two append-only tables below; records `Provider = Nayax` on every existing row and leaves them
+all provenance-unknown; then fills `ProductId` from what the recorded ids already say. A sale is
+resolved when its stored number names a product of the same business **directly** — which is what
+`ProductMatcher` does today — *and*, when some product of that business carries that same number as
+its `ExternalProductId`, it is that same product. Those two agree for every row in the current data,
+because #732's backfill recorded each product's Nayax id as the one it was keyed by and #759 copied
+it onto the row. `NayaxProductId` is left exactly as it was.
+
+**Conflicting sales.** When the direct candidate and the external candidate are *different*
+products there is no honest answer — the stored number is of mixed provenance — so the sale stays
+unresolved and a `NayaxSaleProductConflicts` row records both candidates as the reason. **A
+conflicting sale is never resolved automatically, by name or otherwise**, including by step 2, whose
+name rule would otherwise silently pick one of two products a recorded identifier already disagrees
+about.
+
+**Step 2, `ResolveNayaxSaleProductsByName`.** In the same release, a sale that is still unresolved
+because its stored id matched *no* product — never a conflicting one — and whose `ProductName`
+matches exactly one product under the current `ProductMatcher` rule gets that product, through the
+audited `NayaxSaleProductResolutions` operation: one row per sale carrying the old value, the new
+value and the rule. Ambiguous and absent names stay null. The step only ever fills a null, which is
+what makes it idempotent. Together, steps 1 and 2 reproduce the readers' existing precedence exactly
+— id, then unambiguous name — which is why a sale costed before the migration comes out with the
+same product, the same cost and the same COGS after it.
+
+**Where SQL cannot promise the Domain's answer, it does not answer.** SQLite's `NOCASE` folds ASCII
+only and its `TRIM` removes the characters it is given, while .NET's `OrdinalIgnoreCase` and `Trim()`
+cover the whole of Unicode. Over an all-ASCII catalogue the two rules are identical character for
+character; over a catalogue holding any non-ASCII product name they are not provably identical, and
+a backfill must never assign a product the current code would not. The name step is therefore skipped
+entirely for a business whose catalogue holds a non-ASCII product name, and for a sale whose own
+product name is not ASCII. Those sales stay unresolved, and the gate below forces a human decision
+for any of them that is costed.
+
+**The failure gate.** Step 2 ends by counting the sales that carry a historical cost today
+(`CostingStatus` `Costed`/`LegacyEstimated`, or a stored `UnitCostAtSale`/`CostOfGoodsSold`) and
+would come out with no product. If there are any, the migration **aborts** and the release does not
+activate: such a sale would otherwise be dropped from every future cost replay while still carrying
+COGS. Uncosted unresolved sales stop nothing — they are reported as unresolved, exactly as an
+unmatched sale already was.
+
+**Why two migrations.** The gate can stop the release, and a migration that aborts rolls its own work
+back. Step 1 always succeeds, so the conflicts and the audit table survive a refused step 2; the
+operator then records the decision through the command below — a human-invoked command that applies
+no migration and therefore runs while the API is refusing to start — and the next start gets past the
+gate. `AddNayaxSaleProductAssociationMigrationTests` covers both steps, both writers' row shapes, the
+conflicting-and-uncosted case, the conflicting-and-costed refusal and its recovery, the name step's
+audit row, the ambiguous and absent names, the cross-business refusal and the restricted delete.
+
+**Both migrations work with the code already in production**, which applies migrations at startup
+(AGENTS.md § Database and migrations): every column and table they add is new, and the running code
+neither reads nor writes any of them.
+
+#### Deciding a conflicting sale: `resolve-nayax-sale-products`
+
+The one way a conflicting — or otherwise unresolved — sale gets a product after the migration, and a
+human-invoked command rather than a screen, which parent #329 left out of scope here.
+
+```bash
+dotnet InventoryApi.dll resolve-nayax-sale-products --dry-run
+dotnet InventoryApi.dll resolve-nayax-sale-products --decide 4821=5001 --decided-by "A. Operator" --apply
+```
+
+A dry run writes nothing and lists, per business, every unresolved sale with its own key, its
+transaction and machine, its reported name, its provider id (only when the provenance is known), both
+recorded candidates where there are any, and whether it is costed today — that last count being
+exactly what the failure gate refuses to start over. `--apply` must be typed; `--decided-by` is
+required with it, because who decided is part of the audit row. A decision names the **sale**, by the
+local key the dry run prints: there is no `--business-id` flag, and the business is the one the
+stored sale belongs to. Every write goes through `Inventory.Application.SaleProductResolution
+.ResolveNayaxSaleProducts` over a context scoped to that business, fills only a null `ProductId`, and
+appends a `NayaxSaleProductResolutions` row with the candidates, the chosen product, who decided and
+when — so re-running an applied decision writes nothing and cannot move a sale off the product it
+already carries. A product the business does not hold is refused before anything is staged.
 
 ### Nayax product catalogue import (issue #300)
 

@@ -725,6 +725,7 @@ public sealed class InventoryCostRepairApiTests : IClassFixture<InventoryCostRep
                 TransactionID = transactionId,
                 TransactionStatusId = NayaxTransactionStatusIds.Completed,
                 MachineID = 1,
+                ProductId = productId,
                 NayaxProductId = productId,
                 MachineAuthorizationTime = authorizationTime,
             };

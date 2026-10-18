@@ -414,6 +414,7 @@ public class ImportNayaxSalesTests
         await using var db = CreateDb();
         var store = new Mock<INayaxSalesImportStore>();
         store.Setup(x => x.GetProductCandidatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        store.Setup(x => x.GetConflictingTransactionIdsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         var reader = new Mock<INayaxSalesWorkbookReader>();
         reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>()))
             .Returns([new NayaxSalesImportRow(0, 0, null, null, null, null, 0m, null, null, null)]);

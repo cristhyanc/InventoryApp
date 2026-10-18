@@ -73,8 +73,8 @@ public class EfInventoryCostingAdaptersTenancyTests
         Assert.Equal(6, productA.CostingQuantity);
         Assert.Equal(12m, productA.InventoryValue);
 
-        // Business B's completed sale names business A's product ID; it must be neither consumed by
-        // business A's replay nor recosted by it.
+        // Business B's completed sale carries a raw provider id equal to business A's product key;
+        // it must be neither consumed by business A's replay nor recosted by it.
         var saleB = await verify.NayaxSales.SingleAsync();
         Assert.Equal(BusinessB, saleB.BusinessId);
         Assert.Null(saleB.UnitCostAtSale);
@@ -145,6 +145,9 @@ public class EfInventoryCostingAdaptersTenancyTests
                 TransactionID = 5001,
                 TransactionStatusId = NayaxTransactionStatusIds.Completed,
                 MachineID = 1,
+                // Business B's own product, with a raw provider id that happens to equal business
+                // A's local product key - the collision the stored association exists to survive.
+                ProductId = ProductB,
                 NayaxProductId = ProductA,
                 ProductName = "Coke Zero",
                 SettlementValue = 3m,

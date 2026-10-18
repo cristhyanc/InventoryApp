@@ -576,6 +576,7 @@ public class RebuildProductCostTests
             TransactionID = id,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = 1,
             NayaxProductId = 1,
             MachineAuthorizationTime = at
         };

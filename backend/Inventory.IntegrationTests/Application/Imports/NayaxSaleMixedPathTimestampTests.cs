@@ -225,6 +225,7 @@ public class NayaxSaleMixedPathTimestampTests
     {
         TransactionID = TransactionId,
         MachineID = MachineId,
+        ProductId = 10,
         NayaxProductId = 10,
         ProductName = "Water",
         SettlementValue = 3.5m,

@@ -10,9 +10,9 @@ public class GetTransactionSalesReportTests
     private static TransactionSalesReportFactsRow Row(long id, TransactionSaleStatus status = TransactionSaleStatus.Completed,
         TransactionPaymentType paymentType = TransactionPaymentType.Card, decimal sale = 10m,
         bool hasPersistedCost = true, decimal? costOfGoodsSold = 4m, long? siteId = null, string? siteName = null,
-        long? nayaxProductId = 1, string rawProductName = "Water", string machineName = "Machine A",
+        long? productId = 1, long? nayaxProductId = 1, string rawProductName = "Water", string machineName = "Machine A",
         long machineId = 10, DateTime? date = null) =>
-        new(id, date ?? new DateTime(2025, 8, 1), machineId, machineName, siteId, siteName, nayaxProductId,
+        new(id, date ?? new DateTime(2025, 8, 1), machineId, machineName, siteId, siteName, productId, nayaxProductId,
             rawProductName, paymentType, paymentType.ToString(), sale, null, costOfGoodsSold, costOfGoodsSold,
             hasPersistedCost ? "Costed" : "Pending", hasPersistedCost ? "Inventory Ledger" : "Unknown", hasPersistedCost,
             status, status == TransactionSaleStatus.Completed ? 12 : 55, status.ToString());
@@ -50,6 +50,7 @@ public class GetTransactionSalesReportTests
             costOfGoodsSold: i * 13 % 53,
             siteId: 90,
             siteName: "Depot",
+            productId: null,
             nayaxProductId: null,
             rawProductName: $"Item {i * 5 % 11:D2}",
             machineName: $"Machine {i * 3 % 9:D2}",
@@ -111,8 +112,8 @@ public class GetTransactionSalesReportTests
     public async Task Site_and_product_filters_narrow_to_the_selected_identity()
     {
         var facts = Facts(
-            Row(1, siteId: 91, nayaxProductId: 1),
-            Row(2, siteId: 92, nayaxProductId: 2));
+            Row(1, siteId: 91, productId: 1),
+            Row(2, siteId: 92, productId: 2));
         var useCase = UseCase(facts);
 
         var report = await useCase.Handle(new TransactionSalesFilterDto(Status: "all", SiteId: 91), CancellationToken.None);
@@ -210,8 +211,8 @@ public class GetTransactionSalesReportTests
     public async Task Filter_options_are_built_from_every_transaction_not_only_the_filtered_set()
     {
         var facts = Facts(
-            Row(1, status: TransactionSaleStatus.Completed, siteId: 91, siteName: "Depot", nayaxProductId: 1, rawProductName: "Water"),
-            Row(2, status: TransactionSaleStatus.Pending, siteId: 92, siteName: "Office", nayaxProductId: 2, rawProductName: "Cola")) with
+            Row(1, status: TransactionSaleStatus.Completed, siteId: 91, siteName: "Depot", productId: 1, rawProductName: "Water"),
+            Row(2, status: TransactionSaleStatus.Pending, siteId: 92, siteName: "Office", productId: 2, rawProductName: "Cola")) with
         {
             ProductCatalogue = [new TransactionSalesCatalogueEntry(1, "Water"), new TransactionSalesCatalogueEntry(2, "Cola")]
         };
@@ -224,9 +225,9 @@ public class GetTransactionSalesReportTests
     }
 
     [Fact]
-    public async Task Unmapped_product_falls_back_to_the_normalized_raw_name_and_adds_a_quality_note()
+    public async Task Unresolved_product_falls_back_to_the_normalized_raw_name_and_adds_a_quality_note()
     {
-        var facts = Facts(Row(1, nayaxProductId: 999, rawProductName: "Mystery Snack (999)"));
+        var facts = Facts(Row(1, productId: null, nayaxProductId: 999, rawProductName: "Mystery Snack (999)"));
         var useCase = UseCase(facts);
 
         var report = await useCase.Handle(new TransactionSalesFilterDto(), CancellationToken.None);
@@ -238,9 +239,9 @@ public class GetTransactionSalesReportTests
     }
 
     [Fact]
-    public async Task Product_matches_the_catalogue_by_nayax_product_id()
+    public async Task Product_name_comes_from_the_catalogue_row_the_sale_is_attributed_to()
     {
-        var facts = Facts(Row(1, nayaxProductId: 1, rawProductName: "Water")) with
+        var facts = Facts(Row(1, productId: 1, rawProductName: "Water")) with
         {
             ProductCatalogue = [new TransactionSalesCatalogueEntry(1, "Spring Water")]
         };
@@ -269,7 +270,7 @@ public class GetTransactionSalesReportTests
     {
         var rows = Enumerable.Range(1, 500).Select(i => Row(i,
             sale: i, siteId: 90 + i % 5, siteName: $"Site {90 + i % 5}",
-            nayaxProductId: 1 + i % 3, rawProductName: $"Product {1 + i % 3}")).ToArray();
+            productId: 1 + i % 3, rawProductName: $"Product {1 + i % 3}")).ToArray();
         var catalogue = new[]
         {
             new TransactionSalesCatalogueEntry(1, "Product 1"),

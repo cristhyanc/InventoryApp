@@ -196,6 +196,41 @@ whose credential was already in global configuration before that wizard did.
 is the canonical procedure, including the cutover window around issue #520, how to verify Nayax
 afterwards and when the global settings may be removed.
 
+#### Deciding which product an unresolved sale belongs to
+
+Since issue #758 every stored sale records the local product it belongs to in its own column, and
+the release's migration fills that column from the identifiers each sale already carries. It
+deliberately refuses to guess in two cases: a sale whose stored number names one product directly
+and a *different* one through a recorded provider id, and a sale no unambiguous product name covers.
+A human names the product instead:
+
+```bash
+dotnet run --project backend/InventoryApi -- resolve-nayax-sale-products --dry-run
+dotnet run --project backend/InventoryApi -- resolve-nayax-sale-products \
+    --decide 4821=5001 --decided-by "A. Operator" --apply
+```
+
+On a deployed application use `dotnet InventoryApi.dll resolve-nayax-sale-products --dry-run` /
+`--apply` instead. `--apply` must be typed explicitly; neither flag is a dry run, both together are
+refused, and `--decided-by` is required with a decision because who decided is part of the audit
+row.
+
+The dry run writes nothing and lists, per business, every unresolved sale with its own key, its
+transaction, its machine, its reported product name, both recorded candidate products where there
+are any, and whether it carries a historical cost today. That last count matters: **the application
+refuses to start while any sale that is costed today has no product**, because such a sale would
+otherwise be dropped from every future cost replay while still carrying COGS. The command applies no
+migration, so it is runnable exactly when startup is refusing for that reason.
+
+A decision names the sale by the key the dry run prints — there is no business flag, and the
+business is the one the stored sale belongs to. Each applied decision fills only a product that is
+still absent and appends an audit row with the candidates, the chosen product, who decided and when,
+so re-running one writes nothing and can never move a sale off a product it already carries.
+
+**Do not run this against production from this description.** See
+[docs/architecture.md § The sale's own product](docs/architecture.md#the-sales-own-product-issue-758)
+for the model, the migration steps and what the failure gate guarantees.
+
 ### 2. How the frontend finds the API
 
 Nothing to configure locally. `ConfigService` resolves the API base URL to `/api` whenever the application is served from `localhost` or `127.0.0.1`, and the development proxy forwards `/api` to <http://localhost:5000>. Any other origin is a deployed one and uses `apiBaseUrl` from `frontend/inventory-app/src/assets/config.json`, which holds the deployed Azure API URL. Do not edit that tracked file to switch between local development and deployment, and do not commit a personal endpoint.

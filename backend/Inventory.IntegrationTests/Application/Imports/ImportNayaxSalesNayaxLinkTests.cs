@@ -74,9 +74,13 @@ public class ImportNayaxSalesNayaxLinkTests : IDisposable
         rebuild.Verify(
             x => x.RebuildAsync(5001, It.IsAny<DateTime?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Once);
-        // The raw remote id is still what the row persists, exactly as before: the import stores
-        // imported facts, and nothing about that column changed here.
-        Assert.Equal(777, (await db.NayaxSales.AsNoTracking().SingleAsync()).NayaxProductId);
+        // The raw remote id is still what that column persists, and since issue #758 the matched
+        // local product is persisted beside it as the sale's one association.
+        var stored = await db.NayaxSales.AsNoTracking().SingleAsync();
+        Assert.Equal(777, stored.NayaxProductId);
+        Assert.True(stored.ProviderProductIdIsRaw);
+        Assert.Equal(ExternalProvider.Nayax, stored.Provider);
+        Assert.Equal(5001, stored.ProductId);
     }
 
     /// <summary>
@@ -102,6 +106,7 @@ public class ImportNayaxSalesNayaxLinkTests : IDisposable
             Times.Never);
         var sale = await db.NayaxSales.AsNoTracking().SingleAsync();
         Assert.Equal(777, sale.NayaxProductId);
+        Assert.Null(sale.ProductId);
         Assert.Equal(1001, sale.TransactionID);
     }
 

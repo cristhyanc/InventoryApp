@@ -64,8 +64,13 @@ public class SyncLatestNayaxSalesNayaxLinkTests : IDisposable
 
         await UseCase(db, rebuild.Object).Handle();
 
+        // Issue #758: the matched local product goes to ProductId, and NayaxProductId keeps the
+        // payload's own raw provider id, marked as such. It used to hold the local id instead.
         var sale = await db.NayaxSales.AsNoTracking().SingleAsync();
-        Assert.Equal(5001, sale.NayaxProductId);
+        Assert.Equal(5001, sale.ProductId);
+        Assert.Equal(777, sale.NayaxProductId);
+        Assert.True(sale.ProviderProductIdIsRaw);
+        Assert.Equal(ExternalProvider.Nayax, sale.Provider);
         Assert.Equal(NayaxTransactionStatusIds.Completed, sale.TransactionStatusId);
         rebuild.Verify(
             x => x.RebuildAsync(5001, It.IsAny<DateTime?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
@@ -90,6 +95,7 @@ public class SyncLatestNayaxSalesNayaxLinkTests : IDisposable
         await UseCase(db, rebuild.Object).Handle();
 
         var sale = await db.NayaxSales.AsNoTracking().SingleAsync();
+        Assert.Null(sale.ProductId);
         Assert.Equal(777, sale.NayaxProductId);
         rebuild.Verify(
             x => x.RebuildAsync(It.IsAny<long>(), It.IsAny<DateTime?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
@@ -125,6 +131,7 @@ public class SyncLatestNayaxSalesNayaxLinkTests : IDisposable
         await UseCase(db, rebuild.Object).Handle();
 
         var sale = await db.NayaxSales.AsNoTracking().SingleAsync();
+        Assert.Null(sale.ProductId);
         Assert.Equal(777, sale.NayaxProductId);
         rebuild.Verify(
             x => x.RebuildAsync(It.IsAny<long>(), It.IsAny<DateTime?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
@@ -147,7 +154,8 @@ public class SyncLatestNayaxSalesNayaxLinkTests : IDisposable
         await UseCase(db, rebuild.Object, nayaxProductId: null, productName: "Snack").Handle();
 
         var sale = await db.NayaxSales.AsNoTracking().SingleAsync();
-        Assert.Equal(5001, sale.NayaxProductId);
+        Assert.Equal(5001, sale.ProductId);
+        Assert.Null(sale.NayaxProductId);
         rebuild.Verify(
             x => x.RebuildAsync(5001, It.IsAny<DateTime?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()),
             Times.Once);

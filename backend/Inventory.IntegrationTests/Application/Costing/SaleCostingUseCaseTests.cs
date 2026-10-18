@@ -56,11 +56,11 @@ public class SaleCostingUseCaseTests
     }
 
     [Fact]
-    public async Task An_unmatched_product_without_a_Nayax_cost_is_an_error_and_never_reads_the_ledger()
+    public async Task An_unresolved_sale_without_a_Nayax_cost_is_an_error_and_never_reads_the_ledger()
     {
         var store = new FakeStore(Product(10, "Snack"));
         var rebuild = LedgerCost(10, 1.50m);
-        var sale = Sale(1, productId: 99, nayaxCost: null, productName: "Unknown drink");
+        var sale = Sale(1, productId: null, nayaxCost: null, productName: "Unknown drink");
 
         var cost = await new CostSale(store, rebuild.Object).Handle(sale);
 
@@ -70,25 +70,33 @@ public class SaleCostingUseCaseTests
     }
 
     [Fact]
-    public async Task An_unmatched_product_with_a_Nayax_cost_is_costed_from_the_Nayax_export()
+    public async Task An_unresolved_sale_with_a_Nayax_cost_is_costed_from_the_Nayax_export()
     {
         var store = new FakeStore(Product(10, "Snack"));
-        var sale = Sale(1, productId: 99, nayaxCost: 1.10m, productName: "Unknown drink");
+        var sale = Sale(1, productId: null, nayaxCost: 1.10m, productName: "Unknown drink");
 
         var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale);
 
         Assert.Equal(new SaleCostAssignment(1.10m, SaleCostStatus.Costed, SaleCostOrigin.NayaxTransactionExport), cost);
     }
 
+    /// <summary>
+    /// Issue #758: the association is decided once by the writer that stored the sale. A sale that
+    /// writer left unresolved is not rescued at costing time by a name that would match exactly one
+    /// product today - that is what stops a rename or a duplicate name moving historical COGS.
+    /// </summary>
     [Fact]
-    public async Task A_sale_matched_by_name_uses_the_Domain_product_matcher()
+    public async Task An_unresolved_sale_is_never_costed_from_a_product_its_name_would_match()
     {
         var store = new FakeStore(Product(10, "Snack"));
+        var rebuild = LedgerCost(10, 1.50m);
         var sale = Sale(1, productId: null, nayaxCost: null, productName: "Snack (3.00)");
 
-        var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale);
+        var cost = await new CostSale(store, rebuild.Object).Handle(sale);
 
-        Assert.Equal(new SaleCostAssignment(1.50m, SaleCostStatus.Costed, SaleCostOrigin.InventoryLedger), cost);
+        Assert.Equal(new SaleCostAssignment(null, SaleCostStatus.Error, SaleCostOrigin.Unknown), cost);
+        rebuild.Verify(x => x.GetAverageUnitCostAtAsync(
+            It.IsAny<long>(), It.IsAny<DateTime>(), It.IsAny<long?>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -122,7 +130,7 @@ public class SaleCostingUseCaseTests
             Sales =
             {
                 Sale(1, productId: 10, nayaxCost: null),
-                Sale(2, productId: 99, nayaxCost: null, productName: "Unknown drink"),
+                Sale(2, productId: null, nayaxCost: null, productName: "Unknown drink"),
                 Sale(3, productId: 10, nayaxCost: 1m, unitCost: 1m, status: SaleCostStatus.Costed),
             },
         };
@@ -179,7 +187,7 @@ public class SaleCostingUseCaseTests
     }
 
     [Fact]
-    public async Task Pending_sales_costing_filters_by_matched_product_and_saves_once()
+    public async Task Pending_sales_costing_filters_by_the_persisted_association_and_saves_once()
     {
         var store = new FakeStore(Product(10, "Snack"), Product(20, "Drink"))
         {
@@ -187,6 +195,8 @@ public class SaleCostingUseCaseTests
             {
                 Sale(1, productId: 10, nayaxCost: null),
                 Sale(2, productId: 20, nayaxCost: 1m),
+                // Unresolved, and its name is the filtered product's: it is still not that
+                // product's sale (issue #758).
                 Sale(3, productId: null, nayaxCost: null, productName: "Snack"),
             },
         };
@@ -194,9 +204,9 @@ public class SaleCostingUseCaseTests
 
         var costed = await useCase.Handle(productId: 10);
 
-        Assert.Equal(2, costed);
+        Assert.Equal(1, costed);
         Assert.True(store.LastSelection!.PendingOnly);
-        Assert.Equal([1L, 3L], store.Staged.Keys.Order());
+        Assert.Equal([1L], store.Staged.Keys.Order());
         Assert.Equal(1, store.SaveCount);
     }
 
@@ -256,7 +266,7 @@ public class SaleCostingUseCaseTests
     }
 
     [Fact]
-    public async Task Historical_backfill_passes_the_range_and_excludes_unmatched_products_from_a_product_filter()
+    public async Task Historical_backfill_passes_the_range_and_excludes_unresolved_sales_from_a_product_filter()
     {
         var from = SaleAt.AddDays(-1);
         var to = SaleAt.AddDays(1);
@@ -265,7 +275,7 @@ public class SaleCostingUseCaseTests
             Sales =
             {
                 Sale(1, productId: 10, nayaxCost: 1.10m),
-                Sale(2, productId: 99, nayaxCost: 1.20m, productName: "Unknown drink"),
+                Sale(2, productId: null, nayaxCost: 1.20m, productName: "Unknown drink"),
             },
         };
 
@@ -327,6 +337,9 @@ public class SaleCostingUseCaseTests
         {
             TransactionId = transactionId,
             TransactionStatusId = transactionStatusId,
+            // The persisted association (issue #758) and, beside it, the raw provider id the sale
+            // arrived with. Costing reads only the former.
+            ProductId = productId,
             NayaxProductId = productId,
             ProductName = productName,
             AuthorizationTime = SaleAt,

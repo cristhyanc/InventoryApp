@@ -281,6 +281,7 @@ public class MachineStockLedgerCostingIntegrityTests
         TransactionID = 5001,
         TransactionStatusId = NayaxTransactionStatusIds.Completed,
         MachineID = MachineId,
+        ProductId = ProductId,
         NayaxProductId = ProductId,
         ProductName = "Coke Zero",
         SettlementValue = 3m,
