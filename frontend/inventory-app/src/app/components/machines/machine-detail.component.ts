@@ -37,7 +37,7 @@ export type MachineDetailTab = 'sales' | 'products';
   templateUrl: './machine-detail.component.html'
 })
 export class MachineDetailComponent implements OnInit, OnDestroy {
-  machine$!: Observable<Machine | null>;
+  readonly machine$: Observable<Machine | null>;
 
   /**
    * The machine's product table. It starts empty and is only requested once somebody opens the
@@ -100,29 +100,6 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
     this.financialsAccessSubscription = access
       .allows('Dashboard.ViewFinancials')
       .subscribe((allowed) => (this.canViewFinancials = allowed));
-  }
-
-  ngOnDestroy(): void {
-    this.sessionActiveSubscription.unsubscribe();
-    this.financialsAccessSubscription.unsubscribe();
-    this.routeSubscription?.unsubscribe();
-  }
-
-  ngOnInit(): void {
-    // The route's own machine id, resolved eagerly rather than as a side effect of somebody
-    // subscribing to `machine$`: the tabs' state and the lazy product read both depend on it, and
-    // neither may wait for a template binding to have run (issue #768).
-    this.routeSubscription = this.route.paramMap.subscribe((params) => {
-      const machineId = Number(params.get('id'));
-      this.machineId = !machineId || isNaN(machineId) ? null : machineId;
-
-      // Every machine opens on Sales, and its products are not fetched until somebody opens the
-      // Products tab. Clearing the products stream as well as the flag is what keeps the previous
-      // machine's rows from appearing under this machine's heading.
-      this.activeTab = 'sales';
-      this.productsRequested = false;
-      this.products$ = of([] as Product[]);
-    });
 
     this.machine$ = this.route.paramMap.pipe(
       map((params) => Number(params.get('id'))),
@@ -150,6 +127,29 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
       // already requested for itself - never a second request made just for the breadcrumb.
       tap((machine) => this.breadcrumbService.setCurrentPageLabel(machine?.machineName ?? null))
     );
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+    this.financialsAccessSubscription.unsubscribe();
+    this.routeSubscription?.unsubscribe();
+  }
+
+  ngOnInit(): void {
+    // The route's own machine id, resolved eagerly rather than as a side effect of somebody
+    // subscribing to `machine$`: the tabs' state and the lazy product read both depend on it, and
+    // neither may wait for a template binding to have run (issue #768).
+    this.routeSubscription = this.route.paramMap.subscribe((params) => {
+      const machineId = Number(params.get('id'));
+      this.machineId = !machineId || isNaN(machineId) ? null : machineId;
+
+      // Every machine opens on Sales, and its products are not fetched until somebody opens the
+      // Products tab. Clearing the products stream as well as the flag is what keeps the previous
+      // machine's rows from appearing under this machine's heading.
+      this.activeTab = 'sales';
+      this.productsRequested = false;
+      this.products$ = of([] as Product[]);
+    });
   }
 
   /**

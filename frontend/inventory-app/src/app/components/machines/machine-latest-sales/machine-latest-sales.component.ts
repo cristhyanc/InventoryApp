@@ -45,7 +45,7 @@ export class MachineLatestSalesComponent implements OnDestroy {
    */
   @Input()
   set machineId(value: number | null | undefined) {
-    const machineId = typeof value === 'number' && !isNaN(value) && value > 0 ? value : null;
+    const machineId = typeof value === 'number' && !Number.isNaN(value) && value > 0 ? value : null;
     if (machineId === this.requestedMachineId) {
       return;
     }

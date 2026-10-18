@@ -85,7 +85,7 @@ describe('MachineLatestSalesComponent (issue #768)', () => {
 
     expect(calls).toEqual([7]);
     const rows = host.querySelectorAll('tbody tr');
-    expect(rows.length).toBe(2);
+    expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain('Bottled Water');
     expect(rows[1].textContent).toContain('Chips');
   });
@@ -141,7 +141,7 @@ describe('MachineLatestSalesComponent (issue #768)', () => {
       of(available([sale({ saleDateTimeUtc: null, productName: null, paymentMethod: null })])));
 
     const row = host.querySelector('tbody tr')!.textContent!;
-    expect((row.match(/Not reported/g) ?? []).length).toBe(3);
+    expect(row.match(/Not reported/g) ?? []).toHaveLength(3);
   });
 
   it('shows an honest empty state when the provider reported no sales', async () => {
