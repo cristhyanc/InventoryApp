@@ -19,8 +19,12 @@ and [README.md § Customer identity: a second trusted issuer](../README.md#custo
 for the behaviour of record, and § 16 below for what each task did and did not do.
 
 **Deferred, and not current behaviour:** journey B — Microsoft *through* External ID — which is not
-in v1 at all (§ 13 item 4), identity linking (#713, deferred and not required under this
-recommendation), and the consolidated security, staging and rollback validation (#714). Both
+in v1 at all (§ 13 item 4), and identity linking (#713, deferred and not required under this
+recommendation). The consolidated security, staging and rollback validation (#714) has done its
+automated half — the provider × account-state × role matrix across both issuers, identity separation
+in place of linking validation, threats T6, T8 and T9, and the § 15 rollback rehearsal — and recorded
+every hosted-provider check as **not verified**; see
+[docs/identity-rollout-verification.md](identity-rollout-verification.md) and § 16 below. Both
 configuration sections are **empty in source control** — the API's `ExternalId` and the SPA's
 `externalIdSettings` — so a deployment no human has configured behaves exactly as it did before
 #710: workforce Microsoft Entra ID on the `common` authority, one MSAL authority in the SPA with no
@@ -28,7 +32,9 @@ sign-in chooser and no customer identity action, `Microsoft.Identity.Web` valida
 on the API, and memberships bound to the validated Entra `(tid, oid)` claim pair. Nothing about
 journeys C and D is verified against a provisioned tenant: § 14.2's staging verification of every
 supported journey, and the human configuration of the provider's recovery, MFA and anti-abuse
-controls, remain human steps that #714 consolidates.
+controls, remain human steps, and #714 has consolidated them into the checklist and go/no-go gate in
+[docs/identity-rollout-verification.md](identity-rollout-verification.md) § 3 and § 7 rather than
+performing them.
 
 **Merging the pull request that adds this file is the human approval of the design** (issue #709's
 decision gate, under parent #708). Until it is merged, no downstream implementation subtask —
@@ -326,7 +332,7 @@ choice, provided no test key or metadata stub is reachable from a non-test code 
 | Account linking (#713) | Mandatory, up front | Mandatory | **Not required** |
 | Schema change | Likely (identity re-key, or a link table) | Likely | **None** |
 | Existing-account continuity | At risk: a failed re-key strands a user from their business | At risk during the transition window | **Guaranteed — nothing about existing accounts is touched** |
-| Rollback | Hard: reverting code does not un-re-key rows | Medium: partially linked users are in a mixed state | **Easy: remove one configuration section** (§ 15) |
+| Rollback | Hard: reverting code does not un-re-key rows | Medium: partially linked users are in a mixed state | **Easy: empty one configuration section on the deployed build** (§ 15.1; a code change is a forward fix, § 15.2) |
 | Operational complexity | One authority, one issuer — simplest *end state* | Two authorities plus a linking flow and its own threat surface — the most complex | Two authorities, no linking — one extra issuer and nothing else |
 | Cost | One External ID tenant **[TBC-H]** | Same **[TBC-H]** | Same **[TBC-H]** |
 | New Google / email-password users | Supported | Supported | **Supported** |
@@ -335,7 +341,8 @@ choice, provided no test key or metadata stub is reachable from a non-test code 
 **Recommendation: Option C.** It is the only option that cannot strand an existing user, because it
 changes nothing about them; it delivers the parent issue's actual business outcome (a customer can
 sign in with Google or an email address without holding a Microsoft work account); it needs no
-schema change and no migration; and its rollback is a configuration edit. Its one real cost is that
+schema change and no migration; and its rollback is a configuration edit on the deployed build
+(§ 15.1), never a redeployment of an earlier one. Its one real cost is that
 the application has two authorities to keep configured and tested for as long as both exist, and the
 one real product limitation is the two-identities consequence in § 12 — which is a limitation to
 state plainly to users, not a security problem.
@@ -665,8 +672,9 @@ are only partly confirmed and one statement was corrected; none blocks #710.
 
 ### 14.1 Incremental coexistence, in phases
 
-Each phase is independently deployable and independently revertible. The workforce path is untouched
-in all of them.
+Each phase is independently deployable, and each can be undone independently in § 15's sense — the
+configuration lever on the deployed build, or a forward fix for a code change, never a redeployment
+of an earlier build. The workforce path is untouched in all of them.
 
 1. **Phase 0 — approval.** Merge this document. No code, no configuration, no tenant.
 2. **Phase 1 — human verification.** § 13's checklist. No code.
@@ -759,11 +767,16 @@ shipped state is fail-closed.
 
 Rollback has two distinct levers, and conflating them is the mistake to avoid.
 
-### 15.1 Lever 1 — disable the new login (configuration, minutes, no deployment)
+### 15.1 Lever 1 — disable the new login on the deployed build
 
-Clear the production `ExternalId__*` application settings (and the SPA's equivalent). The second
-bearer scheme is not registered, the second authority button is not rendered, and the API rejects
-every External ID token as an untrusted issuer.
+Clear the production `ExternalId__*` application settings: they are read once at startup, so this is
+a settings edit and a restart — **no deployment, minutes** — and it is what stops access, because the
+second bearer scheme is then not registered and the API rejects every External ID token as an
+untrusted issuer. The SPA's equivalent four identifiers are **build-time** values, so removing the
+second authority button is a build and a deployment of the **current** commit rather than a settings
+edit; until it ships, an already-served bundle may still offer a journey that can no longer grant
+anything. The operational split is [docs/identity-rollout-verification.md](identity-rollout-verification.md)
+§ 6.1.
 
 **Observable outcomes:**
 
@@ -778,12 +791,24 @@ every External ID token as an untrusted issuer.
 | Support sessions, role previews | No change; they are gated on that same pair. |
 | Business data | **No change.** No schema change and no data migration is part of this design, so there is nothing to revert. |
 
-### 15.2 Lever 2 — revert the code
+### 15.2 Lever 2 — a forward fix, not an earlier build
 
-Reverting #710/#711/#712 removes the second scheme and the SPA's second authority from the build.
-Because **this design changes no schema and migrates no data**, a code revert is an ordinary
-deployment of an earlier commit with no data step, no backfill and no down-migration. The outcomes
-for people are identical to § 15.1.
+If the code itself must change, the supported shape is a **focused forward fix or revert pull request
+against the current `develop`**, released by a human through the ordinary route: it removes the second
+scheme or the SPA's second authority while preserving every applied migration and every current data
+contract, and the outcomes for people are then identical to § 15.1.
+
+That **this design changes no schema and migrates no data** is true, and it means this design
+contributes no data step, no backfill and no down-migration. It does **not** make an earlier
+whole-application build a safe deployment: such a build carries every unrelated change made since it
+and meets today's database. `AGENTS.md` § Database and migrations has normal Production startup
+applying pending migrations automatically and **failing closed rather than serving requests against a
+schema its code does not match**, and several of the repository's data contracts are forward-only
+regardless of identity — a release that reads the link tables retired by #759 is explicitly
+unsupported, and #758 changed which column a stored sale's local product is read from. An earlier
+binary is therefore an option only after a human has performed and documented a schema and data
+compatibility check for that exact commit against the database in use; this document promises no such
+compatibility. See [docs/identity-rollout-verification.md](identity-rollout-verification.md) § 6.2.
 
 ### 15.3 What rollback is *not*
 
@@ -794,7 +819,13 @@ for people are identical to § 15.1.
   not part of any rollback described here.
 - It must be **rehearsed in #714** before production activation, including restoring the
   configuration and confirming an External ID member's retained membership and role come back
-  unchanged.
+  unchanged. That rehearsal exists as an automated one:
+  `backend/Inventory.IntegrationTests/Auth/CustomerIdentityRollbackRehearsalTests` runs this lever
+  over one database read by three hosts in turn — configured, rolled back, configured again — and
+  asserts the retained membership, the retained live invite, the restored access and role, the
+  untouched workforce journey and the still-working Super Admin recovery route. The **drill against
+  a provisioned staging tenant** is the part that remains a human step
+  ([docs/identity-rollout-verification.md](identity-rollout-verification.md) § 3.7).
 
 ## 16. Phased issue impacts
 
@@ -806,7 +837,7 @@ for people are identical to § 15.1.
 | **#711** (Google sign-in) | **Implemented** (see the implementation note below this table) | SPA authority selection, the second MSAL instance with its own cache, the `profile` scope in the External ID token request (§ 4), Google journey end to end, the welcome-screen wording of § 12, invite continuation re-verified |
 | **#712** (email/password) | **Implemented** (see the implementation note below this table) | The same for the local journey, including the provider-hosted reset/recovery entry point and the `profile` scope (§ 4). Mailbox verification is enforced by the provider's sign-up flow (§ 13 item 7). **No password, hash, reset token or recovery code in this repository** |
 | **#713** (linking/migration) | **Deferred — not required.** A human records that status; it is removed from the launch prerequisites and must not be given a readiness label unless a human first reopens the linking decision | — |
-| **#714** (security, staging, rollout validation) | Last | The provider/account-state matrix across both issuers; **identity separation in place of linking validation**, as #713 directs; T6, T8, T9; two-business isolation with identities from both issuers; **§ 14.2's staging verification that the associated application exposes and completes each supported journey**; the § 15 rollback rehearsal; human staging sign-off |
+| **#714** (security, staging, rollout validation) | **Automated half implemented; every hosted-provider check recorded as `not verified`, which blocks production activation** (see the implementation note below this table) | The provider/account-state matrix across both issuers; **identity separation in place of linking validation**, as #713 directs; T6, T8, T9; two-business isolation with identities from both issuers; **§ 14.2's staging verification that the associated application exposes and completes each supported journey**; the § 15 rollback rehearsal; human staging sign-off |
 
 ### How #710 implemented § 5, and where it chose differently
 
@@ -978,6 +1009,71 @@ actually exposes and completes the journey. The recorded control set, the residu
 the staging checklist are in
 [README.md § Signing in with an email address and password](../README.md#signing-in-with-an-email-address-and-password-issue-712);
 #714 owns the consolidated run across both issuers.
+
+### How #714 verified the rollout, and what it deliberately could not
+
+The shape is § 16's row for it, with one thing stated more sharply than the row does: **the evidence
+is of three kinds and they are never pooled.** A synthetic API/JWT test says what the API accepts,
+refuses and resolves; a synthetic browser journey says what the SPA decides, stores and asks MSAL
+for; and only a human running a hosted journey against a provisioned tenant can say that the tenant
+exists, that a provider is enabled inside its user flow, that the application is associated with that
+flow, or that a real token carries the claims § 7 rests on. Every row of the matrix in
+[docs/identity-rollout-verification.md](identity-rollout-verification.md) therefore declares its kind
+and is `passed`, `failed` or `not verified`, and that document is the record of this task.
+
+What the automated half added, beyond what #710, #711 and #712 already proved:
+
+- **The provider × account-state × role matrix, through both issuers.**
+  `backend/Inventory.IntegrationTests/Auth/CustomerIdentityRolloutMatrixTests` reuses #710's signing
+  keys and stubbed metadata, so the tokens are validated by the production schemes, and then asserts
+  the decisions *after* authentication: invitation redemption in both directions, the already-a-member
+  `409` that is this design's version of a linking conflict, all five non-member account states
+  reported identically per issuer with `403` from every business endpoint, revocation taking effect
+  on the next request, deactivation ending access and cancelling live invites with reactivation
+  restoring the member's own role, identical capability sets for one role across the issuers, the
+  whole platform-admin surface refusing a customer identity (T9, including the administrator's own
+  object id presented from the customer tenant), and two-business isolation across the issuers (T8).
+  T6 is #710's no-membership regression, re-read as a #714 row rather than duplicated.
+- **The § 15 rollback rehearsal as a test, not a procedure.**
+  `CustomerIdentityRollbackRehearsalTests` reads **one** database with three hosts in turn —
+  configured, rolled back, configured again — because § 15.1's central claim is about data surviving
+  a configuration change, not about either state alone. It asserts the `401` for every customer
+  identity token, the untouched workforce journey, the retained active membership and its role, the
+  retained live invite (pending, not cancelled, not used), the restored access and the still-redeemable
+  invite, and the legacy Super Admin recovery route still working while the new sign-in is off.
+  Lever 2 is deliberately not simulated: what removing this design's code takes out of the build is
+  exactly what an empty configuration section already does not register, and the part of § 15.2 a
+  test cannot stand in for — whether some earlier build is compatible with the database in use — is a
+  human's documented check, not a behaviour of this design.
+- **Observability without a credential in it.** The same class asserts that a refused issuer, an
+  expired token and a successful redemption leave no invitation token, no mailbox and none of the
+  three bearer tokens those requests presented in the logs — the one thing an operator reading logs
+  during a rollout could otherwise create.
+- **The browser journeys, composed.**
+  `frontend/inventory-app/src/app/auth/customer-identity-journey.spec.ts` runs the real units as whole
+  journeys rather than one at a time: an interrupted invite acceptance through a cancellation and a
+  retry, with the invite token reaching no MSAL request, cache location or stored destination and
+  still readable afterwards; the two authorities sharing no client id, authority or audience while
+  both keep one cache location, so the partition *is* the client id; a provider switch asking only
+  the newly chosen authority for a token; this § 15.1 lever landing on a tab part-way through; and a
+  destination outside the application never becoming a redirect start page.
+
+What it did not do, and what that means:
+
+- **No provider resource was created, no configuration value was filled in, and no hosted journey was
+  run.** Rows 39 to 47 of that document's matrix — the tenant and its user flow, journeys C and D end
+  to end, the § 13 item 3 token decode, cross-issuer separation with a real shared mailbox, the invite
+  window timed against a real registration, the provider's own MFA/lockout/password-policy settings,
+  and the rollback drill against staging — are **not verified**, and § 7 states plainly that an
+  unticked human row blocks production activation. No smoke-test or rollback result was recorded that
+  nobody performed.
+- **Nothing in the application changed.** This task added tests and documentation only: no production
+  code, no default, no contract, no schema. A failure in either suite is a finding about #710, #711
+  or #712.
+- **The findings this task leaves open rather than fixing** are the ones § 17 already reserves for
+  their own decisions: per-IP or non-identity-keyed rate limiting (T6, still unmitigated, which is why
+  `SelfServiceOnboarding:Enabled` stays off), and extending the 15-minute pending-invite window if
+  § 3.6's timing shows it is too short for a real registration.
 
 ## 17. Known limitations of this document
 
