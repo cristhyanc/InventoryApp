@@ -24,6 +24,13 @@ import { extractInviteToken } from './invite-link-token';
  * gated on the same `onboardingEnabled` flag `GET /api/me/account-state` reports, so what is shown
  * here matches the deployment's own eligibility rule rather than a frontend guess - the same rule
  * `AccessUnavailableComponent` already follows for a `MembershipRevoked` caller.
+ *
+ * **It also says that signing in a different way is a different account** (issue #711, design
+ * `docs/identity-provider-decision.md` § 12). Identity linking is deferred, so a member who
+ * normally signs in with their Microsoft work account and then signs in with Google arrives here,
+ * on this page, with no membership and no inherited access - and this is the only place that can
+ * tell them why, because nothing else in the application knows they have another account. The
+ * supported advice is to pick one way to sign in and keep using it.
  */
 @Component({
   selector: 'app-welcome',
@@ -66,6 +73,15 @@ import { extractInviteToken } from './invite-link-token';
               <a routerLink="/apply" class="btn btn-primary mt-2 inline-flex">Start a new business</a>
             </div>
           }
+
+          <div class="mt-6">
+            <h2 class="text-md-subtitle font-medium">Already use Inventory Manager?</h2>
+            <p class="text-md-body" data-testid="welcome-separate-accounts">
+              Each way of signing in is a separate account here. If you normally sign in another way - with your work
+              account instead of Google, for example - sign out and sign in that way again: signing in a new way never
+              joins you to a business you already belong to, and the access you have there is not carried across.
+            </p>
+          </div>
         </div>
       </section>
     </div>

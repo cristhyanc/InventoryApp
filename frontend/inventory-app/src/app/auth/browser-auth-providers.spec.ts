@@ -2,9 +2,22 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { HTTP_INTERCEPTORS } from '@angular/common/http';
 import { ClassProvider, FactoryProvider, Provider } from '@angular/core';
+import { TestBed } from '@angular/core/testing';
+import { ActivatedRouteSnapshot, RouterStateSnapshot, UrlTree, provideRouter } from '@angular/router';
 import { MsalBroadcastService, MsalGuard, MsalInterceptor, MsalService, MSAL_INSTANCE } from '@azure/msal-angular';
 import { InteractionStatus } from '@azure/msal-browser';
-import { browserAuthProviders } from './browser-auth-providers';
+import { apiScopeFor } from '../auth-config';
+import { ConfigService } from '../services/config.service';
+import {
+  MSALGuardConfigFactory,
+  MSALInterceptorConfigFactory,
+  MSAL_REDIRECT_GUARD,
+  SignInAuthorityGuard,
+  browserAuthProviders
+} from './browser-auth-providers';
+import { configureExternalId, unconfigureExternalId } from './external-id.spec-helpers';
+import { INTENDED_DESTINATION_KEY, takeIntendedDestination } from './intended-destination';
+import { SELECTED_AUTHORITY_KEY } from './selected-authority';
 import {
   E2ETestAuthGuard,
   browserAuthProviders as e2eBrowserAuthProviders,
@@ -49,20 +62,35 @@ describe('browser auth providers', () => {
     );
   }
 
+  function classProvider(token: unknown): ClassProvider | undefined {
+    return browserAuthProviders.find(
+      (provider): provider is ClassProvider =>
+        typeof provider === 'object' && 'provide' in provider && provider.provide === token
+    );
+  }
+
   it('wires the real MSAL guard, interceptor and instance in the module every build compiles', () => {
     const tokens = provideTokens(browserAuthProviders);
 
     expect(tokens).toContain(MsalGuard);
+    expect(tokens).toContain(MSAL_REDIRECT_GUARD);
     expect(tokens).toContain(MsalService);
     expect(tokens).toContain(MsalBroadcastService);
     expect(tokens).toContain(MSAL_INSTANCE);
 
-    const interceptor = browserAuthProviders.find(
-      (provider): provider is ClassProvider =>
-        typeof provider === 'object' && 'provide' in provider && provider.provide === HTTP_INTERCEPTORS
-    );
+    const interceptor = classProvider(HTTP_INTERCEPTORS);
     expect(interceptor?.useClass).toBe(MsalInterceptor);
     expect(interceptor?.multi).toBe(true);
+  });
+
+  /**
+   * The authority choice of issue #711 reaches every protected route by taking the `MsalGuard`
+   * token's place, because that is the token `app.routes.ts` names. The real guard is still wired,
+   * under its own token, and is what the gate delegates to.
+   */
+  it('puts the authority choice in front of the real guard, keeping both', () => {
+    expect(classProvider(MsalGuard)?.useClass).toBe(SignInAuthorityGuard);
+    expect(classProvider(MSAL_REDIRECT_GUARD)?.useClass).toBe(MsalGuard);
   });
 
   it('declares the end-to-end replacement in exactly one build configuration', () => {
@@ -89,6 +117,138 @@ describe('browser auth providers', () => {
     expect(serveConfigurations['e2e'].buildTarget).toBe('inventory-app:build:e2e');
     expect(serveConfigurations['production'].buildTarget).toBe('inventory-app:build:production');
     expect(serveConfigurations['development'].buildTarget).toBe('inventory-app:build:development');
+  });
+
+  /**
+   * The authority choice in front of the real guard (issue #711).
+   *
+   * `app.routes.ts` names `MsalGuard`, so the gate reaches every protected route by taking that
+   * token's place - the same way the end-to-end build already replaces it. The real guard is still
+   * there, under `MSAL_REDIRECT_GUARD`, and still makes every decision the moment there is an
+   * authority to use.
+   */
+  describe('the authority choice in front of the guard', () => {
+    const route = {} as ActivatedRouteSnapshot;
+
+    function decide(accounts: number, url: string): unknown {
+      TestBed.configureTestingModule({
+        providers: [
+          SignInAuthorityGuard,
+          { provide: MSAL_REDIRECT_GUARD, useValue: { canActivate: () => 'delegated' } },
+          {
+            provide: MsalService,
+            useValue: { instance: { getAllAccounts: () => new Array(accounts).fill({}) } }
+          },
+          provideRouter([])
+        ]
+      });
+
+      return TestBed.inject(SignInAuthorityGuard).canActivate(route, { url } as RouterStateSnapshot);
+    }
+
+    beforeEach(() => {
+      localStorage.clear();
+      sessionStorage.clear();
+      unconfigureExternalId();
+    });
+
+    afterEach(() => {
+      unconfigureExternalId();
+      TestBed.resetTestingModule();
+    });
+
+    it('does not intervene at all with no customer identity tenant configured', () => {
+      expect(decide(0, '/reports/daily')).toBe('delegated');
+      expect(sessionStorage.getItem(INTENDED_DESTINATION_KEY)).toBeNull();
+    });
+
+    it('sends a signed-out visitor who has not chosen yet to the sign-in page', () => {
+      configureExternalId();
+
+      const decision = decide(0, '/reports/daily');
+
+      expect(decision).toBeInstanceOf(UrlTree);
+      expect(String(decision)).toBe('/sign-in');
+    });
+
+    it('records the page that visitor asked for, from the route it refused', () => {
+      configureExternalId();
+
+      decide(0, '/reports/daily?machineId=7');
+
+      expect(takeIntendedDestination()).toBe('/reports/daily?machineId=7');
+    });
+
+    /**
+     * An invite link has already been turned into the tokenless `/invite` by the time any
+     * `canActivate` guard runs, so that - and never the token - is what the sign-in returns to.
+     */
+    it('records an invite acceptance page as the tokenless /invite', () => {
+      configureExternalId();
+
+      decide(0, '/invite');
+
+      expect(takeIntendedDestination()).toBe('/invite');
+    });
+
+    it('delegates to the real guard once somebody is signed in', () => {
+      configureExternalId();
+
+      expect(decide(1, '/reports/daily')).toBe('delegated');
+    });
+
+    it('delegates to the real guard once an authority has been chosen', () => {
+      configureExternalId();
+      localStorage.setItem(SELECTED_AUTHORITY_KEY, 'externalId');
+
+      expect(decide(0, '/reports/daily')).toBe('delegated');
+      expect(sessionStorage.getItem(INTENDED_DESTINATION_KEY)).toBeNull();
+    });
+  });
+
+  /**
+   * What the guard and the interceptor ask for follows the remembered authority (issue #711): the
+   * two authorities expose `access_as_user` from two different API app registrations, and each
+   * bearer scheme on the API validates only its own audience.
+   */
+  describe('the authority each MSAL configuration is built for', () => {
+    beforeEach(() => {
+      localStorage.clear();
+      unconfigureExternalId();
+    });
+
+    afterEach(() => {
+      unconfigureExternalId();
+      TestBed.resetTestingModule();
+    });
+
+    function interceptorScopes(): string[] | undefined {
+      const configuration = MSALInterceptorConfigFactory({ apiBaseUrl: '/api' } as ConfigService);
+      return configuration.protectedResourceMap.get('/api/*') as string[] | undefined;
+    }
+
+    function guardScopes(): string[] | undefined {
+      return (MSALGuardConfigFactory().authRequest as { scopes?: string[] } | undefined)?.scopes;
+    }
+
+    it('asks for the workforce audience with nothing configured and nothing chosen', () => {
+      expect(guardScopes()).toEqual([apiScopeFor('workforce')]);
+      expect(interceptorScopes()).toEqual([apiScopeFor('workforce')]);
+    });
+
+    it('asks for the customer identity audience once that authority is the chosen one', () => {
+      configureExternalId();
+      localStorage.setItem(SELECTED_AUTHORITY_KEY, 'externalId');
+
+      expect(guardScopes()).toContain(apiScopeFor('externalId'));
+      expect(interceptorScopes()).toEqual([apiScopeFor('externalId')]);
+    });
+
+    it('falls back to the workforce audience when the configuration is cleared under a choice', () => {
+      localStorage.setItem(SELECTED_AUTHORITY_KEY, 'externalId');
+
+      expect(interceptorScopes()).toEqual([apiScopeFor('workforce')]);
+    });
   });
 
   describe('the end-to-end replacement', () => {

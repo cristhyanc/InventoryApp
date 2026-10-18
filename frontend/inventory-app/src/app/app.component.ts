@@ -1,5 +1,5 @@
 import { ChangeDetectorRef, Component, ElementRef, HostListener, OnDestroy, OnInit, ViewChild } from '@angular/core';
-import { RouterOutlet } from '@angular/router';
+import { Router, RouterOutlet } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
 import { AuthenticationResult } from '@azure/msal-browser';
 import { Subject, Subscription, catchError, defer, filter, map, of, retry, switchMap, take, takeUntil, timer } from 'rxjs';
@@ -20,7 +20,10 @@ import { activeAccountKey, signedInAccountMayHaveChanged } from './access/signed
 import { RolePreviewService } from './role-preview/role-preview.service';
 import { BusinessService } from './services/business.service';
 import { SupportSessionService } from './support-session/support-session.service';
-import { loginRequest } from './auth-config';
+import { isExternalIdConfigured, loginRequest } from './auth-config';
+import { SIGN_IN_ROUTE } from './auth/intended-destination';
+import { forgetSelectedAuthority } from './auth/selected-authority';
+import { SignInService } from './auth/sign-in.service';
 
 /**
  * The application shell (issue #391): a collapsible left sidebar for the primary navigation, a
@@ -231,7 +234,9 @@ export class AppComponent implements OnInit, OnDestroy {
     private readonly businessService: BusinessService,
     private readonly supportSession: SupportSessionService,
     private readonly rolePreview: RolePreviewService,
-    private readonly changeDetector: ChangeDetectorRef
+    private readonly changeDetector: ChangeDetectorRef,
+    private readonly signInService: SignInService,
+    private readonly router: Router
   ) {}
 
   /** The sidebar is only off the page when a narrow layout has dismissed its drawer. */
@@ -301,6 +306,13 @@ export class AppComponent implements OnInit, OnDestroy {
         },
         error: (error) => {
           console.error('Authentication redirect failed', error);
+
+          // A cancelled or failed hosted sign-in lands back on `/auth`, whose only message is
+          // "Signing you in...". Report it on the sign-in page and let the person choose again
+          // (issue #711); nothing here starts another redirect, because retrying a failing
+          // authority automatically is how a callback page becomes a loop.
+          this.signInService.report(error);
+          this.router.navigateByUrl(`/${SIGN_IN_ROUTE}`);
         }
       });
 
@@ -397,11 +409,27 @@ export class AppComponent implements OnInit, OnDestroy {
     }
   }
 
+  /**
+   * The header's **Sign in**. With a second authority configured it opens the sign-in page, where
+   * the person chooses one before any redirect starts (issue #711, design § 9.2); with none
+   * configured - the shipped state - it is the single workforce redirect it has always been, with
+   * no extra page and no extra click.
+   */
   login(): void {
+    if (isExternalIdConfigured()) {
+      this.router.navigateByUrl(`/${SIGN_IN_ROUTE}`);
+      return;
+    }
+
     this.authService.loginRedirect({ ...loginRequest });
   }
 
   logout(): void {
+    // Signing out ends one authority's session, so the choice made for it is forgotten too
+    // (issue #711, design § 9.3): the next person at this browser is asked again rather than sent
+    // silently back to the previous one.
+    forgetSelectedAuthority();
+
     const account = this.authService.instance.getActiveAccount();
     // A support session is the signed-in administrator's, so signing out ends it first (issue #681)
     // rather than leaving it running on the server, and presented by other open tabs, for the rest
