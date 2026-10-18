@@ -4,7 +4,7 @@ import { Observable, of, throwError } from 'rxjs';
 import { StockAdjustmentFormComponent } from './stock-adjustment-form.component';
 import { StockService } from '../../../services/stock.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
-import { RestockCostSuggestion, StockAdjustment, StockAdjustmentReason } from '../../../models/models';
+import { Machine, RestockCostSuggestion, StockAdjustment, StockAdjustmentReason } from '../../../models/models';
 
 interface Harness {
   component: StockAdjustmentFormComponent;
@@ -252,6 +252,65 @@ describe('StockAdjustmentFormComponent write control during a support session (i
     const host = await render(of(false));
 
     expect(host.querySelector<HTMLButtonElement>('[data-testid="apply-adjustment"]')?.disabled).toBe(false);
+  });
+});
+
+/**
+ * The machine field depends on the page having a machine list at all (issue #728): without a
+ * provider, or after a machine read the page could not complete, there is nothing to attribute an
+ * adjustment to and "— None —" alone is not a choice.
+ */
+describe('StockAdjustmentFormComponent machine field (issue #728)', () => {
+  async function render(machines: Machine[]): Promise<HTMLElement> {
+    await TestBed.configureTestingModule({
+      imports: [StockAdjustmentFormComponent],
+      providers: [
+        { provide: StockService, useValue: { adjust: jest.fn(() => of({})), restockCostSuggestion: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(StockAdjustmentFormComponent);
+    fixture.componentRef.setInput('productId', 7);
+    fixture.componentRef.setInput('machines', machines);
+    fixture.detectChanges();
+
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('offers the machine field while the page has machines to offer', async () => {
+    const host = await render([{ machineID: 9, machineName: 'Lobby' } as Machine]);
+
+    expect(host.querySelector('#adjustment-machine')).not.toBeNull();
+  });
+
+  it('hides the machine field when no machine list is available', async () => {
+    const host = await render([]);
+
+    expect(host.querySelector('#adjustment-machine')).toBeNull();
+  });
+
+  it('drops a staged machine when the list it came from goes away', () => {
+    const { component } = createHarness();
+    component.machines = [{ machineID: 9, machineName: 'Lobby' } as Machine];
+    component.form.machineId = 9;
+
+    component.machines = [];
+    component.ngOnChanges({ machines: new SimpleChange([{ machineID: 9 }], [], false) });
+
+    expect(component.form.machineId).toBeNull();
+  });
+
+  it('keeps a staged machine while the list still holds it', () => {
+    const { component } = createHarness();
+    component.machines = [{ machineID: 9, machineName: 'Lobby' } as Machine];
+    component.form.machineId = 9;
+
+    component.ngOnChanges({ machines: new SimpleChange([], [{ machineID: 9 }], false) });
+
+    expect(component.form.machineId).toBe(9);
   });
 });
 

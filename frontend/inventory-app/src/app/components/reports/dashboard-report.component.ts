@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { ActivatedRoute } from '@angular/router';
 import { Observable } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { ReportingFilter, ReportingService, DashboardReport } from '../../services/reporting.service';
 import { ReportPageBase } from './report-page.base';
 import { ReportFiltersComponent } from './report-filters.component';
@@ -11,7 +12,7 @@ import { IconComponent } from '../shared/icon.component';
 @Component({ selector: 'app-dashboard-report', standalone: true, imports: [CommonModule, ReportFiltersComponent, IconComponent], template: `
 <div class="page">
   <header class="page-header"><h1 class="page-title">Reporting Dashboard</h1></header>
-  <app-report-filters [from]="from" [to]="to" [machineId]="machineId" [machines]="machines" [period]="period" (fromChange)="from=$event" (toChange)="to=$event" (machineChange)="machineId=$event" (periodChange)="selectPeriod($event)" (apply)="load()" />
+  <app-report-filters [from]="from" [to]="to" [machineId]="machineId" [machines]="machines" [machinesError]="machinesError" [period]="period" (fromChange)="from=$event" (toChange)="to=$event" (machineChange)="machineId=$event" (periodChange)="selectPeriod($event)" (apply)="load()" />
   @if (loading) { <div class="card"><div class="card-body text-center"><span class="value-muted">Loading report...</span></div></div> }
   @else if (error) { <div class="alert alert-danger">{{ error }}</div> }
   @else if (report) {
@@ -75,7 +76,7 @@ import { IconComponent } from '../shared/icon.component';
 </div>
 ` })
 export class DashboardReportComponent extends ReportPageBase<DashboardReport> {
-  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService) { super(route, reports, machines); }
+  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, provider: ProviderAvailabilityService) { super(route, reports, machines, provider); }
   request(filter: ReportingFilter): Observable<DashboardReport> { return this.reports.dashboard(filter); }
   statusClass(status?: string): string {
     return status === 'Reconciled' ? 'badge-success' : 'badge-warning';

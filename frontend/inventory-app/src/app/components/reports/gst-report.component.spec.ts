@@ -4,6 +4,7 @@ import { of } from 'rxjs';
 import { GstReportComponent } from './gst-report.component';
 import { GstReport, ReportingService } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
+import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 
 function report(overrides: Partial<GstReport> = {}): GstReport {
   return {
@@ -26,7 +27,8 @@ async function render(value: GstReport) {
     providers: [
       { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: new Map() } } },
       { provide: ReportingService, useValue: { gst: jest.fn(() => of(value)) } },
-      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } }
+      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
+      provideNayaxConnectionStatus()
     ]
   }).compileComponents();
 

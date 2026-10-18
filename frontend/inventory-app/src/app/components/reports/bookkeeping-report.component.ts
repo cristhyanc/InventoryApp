@@ -4,6 +4,7 @@ import { ActivatedRoute } from '@angular/router';
 import { Observable } from 'rxjs';
 import { ReportAvailability } from '../../features/reports/shared/models/reporting.models';
 import { MachineService } from '../../services/machine.service';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { ReportingFilter, ReportingService, BookkeepingReport } from '../../services/reporting.service';
 import { ReportPageBase } from './report-page.base';
 import { ReportFiltersComponent } from './report-filters.component';
@@ -22,7 +23,7 @@ import { IconComponent } from '../shared/icon.component';
         <button type="button" class="btn btn-sm btn-secondary" (click)="export('xlsx','bookkeeping')"><app-icon name="download" [size]="18" />Export XLSX</button>
       </div>
     </header>
-    <app-report-filters [from]="from" [to]="to" [machineId]="machineId" [machines]="machines" [period]="period" (fromChange)="from=$event" (toChange)="to=$event" (machineChange)="machineId=$event" (periodChange)="selectPeriod($event)" (apply)="load()" />
+    <app-report-filters [from]="from" [to]="to" [machineId]="machineId" [machines]="machines" [machinesError]="machinesError" [period]="period" (fromChange)="from=$event" (toChange)="to=$event" (machineChange)="machineId=$event" (periodChange)="selectPeriod($event)" (apply)="load()" />
     @if (loading) { <div class="card"><div class="card-body text-center"><span class="value-muted">Loading report...</span></div></div> }
     @else if (error) { <div class="alert alert-danger">{{ error }}</div> }
     @else if (report) {
@@ -85,7 +86,7 @@ import { IconComponent } from '../shared/icon.component';
   `
 })
 export class BookkeepingReportComponent extends ReportPageBase<BookkeepingReport> {
-  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService) { super(route, reports, machines); }
+  constructor(route: ActivatedRoute, reports: ReportingService, machines: MachineService, provider: ProviderAvailabilityService) { super(route, reports, machines, provider); }
   request(filter: ReportingFilter): Observable<BookkeepingReport> { return this.reports.bookkeeping(filter); }
   margin(sales: number, profit: number | null | undefined): number { return sales && profit != null ? profit / sales * 100 : 0; }
   categoryEntries(report: BookkeepingReport): [string, number][] { return Object.entries(report.operatingExpensesByCategory ?? {}); }

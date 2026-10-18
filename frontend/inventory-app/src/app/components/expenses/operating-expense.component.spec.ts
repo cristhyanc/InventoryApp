@@ -4,6 +4,7 @@ import { OperatingExpenseComponent } from './operating-expense.component';
 import { OperatingExpense, OperatingExpenseCategory, OperatingExpenseService } from '../../services/operating-expense.service';
 import { SupplierService } from '../../services/supplier.service';
 import { MachineService } from '../../services/machine.service';
+import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
 function expense(overrides: Partial<OperatingExpense> = {}): OperatingExpense {
@@ -44,7 +45,8 @@ async function render(overrides: {
       },
       { provide: SupplierService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
-      { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } }
+      { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
+      provideNayaxConnectionStatus()
     ]
   }).compileComponents();
 

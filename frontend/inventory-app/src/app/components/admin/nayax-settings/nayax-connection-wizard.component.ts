@@ -3,6 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
+import { ProviderAvailabilityService } from '../../../provider/provider-availability.service';
 import {
   NayaxConnectionCheckLine,
   NayaxConnectionRetestResult,
@@ -479,6 +480,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
 
   constructor(
     private readonly connections: NayaxConnectionService,
+    private readonly provider: ProviderAvailabilityService,
     private readonly toast: ToastService,
     access: AccessService,
     supportSession: SupportSessionService
@@ -698,8 +700,9 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
     this.saveSubscription = this.connections.save(result.draftId).subscribe({
       next: (connection) => {
         this.saving = false;
-        this.connection = connection;
-        this.statusUnavailable = false;
+        // The stored pair is exactly the pair this test ran against, so its check lines are
+        // evidence about the connection that now exists (issue #728).
+        this.acceptConnection(connection, result.checks);
         this.saved = true;
         // The draft is consumed: withdrawing it is what makes a second save impossible here as
         // well as refused by the server.
@@ -734,8 +737,7 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
       next: (result) => {
         this.retesting = false;
         this.retestResult = result;
-        this.connection = result.connection;
-        this.statusUnavailable = false;
+        this.acceptConnection(result.connection, result.checks);
         if (!result.statusUpdated) {
           this.notice = {
             tone: 'warning',
@@ -907,12 +909,30 @@ export class NayaxConnectionWizardComponent implements OnInit, OnDestroy {
   private loadStatus(): void {
     this.statusSubscription?.unsubscribe();
     this.statusSubscription = this.connections.status().subscribe({
-      next: (connection) => {
-        this.connection = connection;
-        this.statusUnavailable = false;
-      },
+      next: (connection) => this.acceptConnection(connection),
       error: () => (this.statusUnavailable = true)
     });
+  }
+
+  /**
+   * Records a connection state the server just reported - a fresh status read, a completed save, a
+   * re-test - on this screen and on the application-wide signal every other screen shares (issue
+   * #728). This is the one place the connection changes, so it is the one place that signal needs
+   * refreshing: without it a banner, a machine filter or an expense category read earlier in the
+   * session would keep describing the connection the Owner has just replaced.
+   *
+   * `checks` is the completed run's own check lines, which a save and a re-test have and a plain
+   * status read does not. They are the only per-read evidence this application ever obtains about
+   * which Nayax permissions the stored credentials have, so they refresh the shared signal's
+   * per-feature answers; without them those answers are cleared rather than carried over.
+   */
+  private acceptConnection(
+    connection: NayaxConnectionState,
+    checks?: readonly NayaxConnectionCheckLine[]
+  ): void {
+    this.connection = connection;
+    this.statusUnavailable = false;
+    this.provider.accept(connection, checks);
   }
 
   private discardToken(): void {

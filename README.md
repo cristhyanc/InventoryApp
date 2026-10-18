@@ -1119,6 +1119,43 @@ read-only support session the dashboard keeps its existing behaviour (issues #55
 four cards and all three sections, with "Nayax is not available in support view" on the two withheld
 cards and in place of the sync notice.
 
+#### Machine and site filters without a usable provider
+
+Issue #728 does the same for every other screen that lists machines or sites, from **one** answer the
+whole application shares: the Nayax connection status is read once per sign-in, refreshed when an
+Owner saves or re-tests the connection, and used by the "Nayax isn't fully connected" banners and by
+the filters and fields below.
+
+- **A filter over a list that cannot exist is not shown.** Without a usable connection, the machine
+  filter disappears from Stock History and the report pages, the Site filter disappears from Site
+  Commissions, the machine selection and matrix disappear from the Pick List (which says "The pick
+  list is unavailable because Nayax is not connected"), and the optional machine field disappears from
+  the stock adjustment form and the Expenses form. No request is sent that could only be refused.
+- **A request that *failed* says so where its filter was.** "The machine list could not be loaded, so
+  this report cannot be narrowed to one machine", for example. It is never shown as "All machines"
+  narrowing nothing, and a business that genuinely has no machines is never reported as an error.
+- **Expenses stops mentioning Nayax it does not have.** Without a connection, "Nayax monthly fee" is
+  not offered for a **new** expense and the page subtitle drops its Nayax sentence. An expense already
+  recorded under that category keeps it — in the table, in the Category filter and on its own edit
+  form — because a recorded expense is a fact about the past.
+- **Stock History keeps the two questions apart.** The "Nayax Sync Restock" source filter is about
+  movements that are already recorded locally, so it is offered whenever Nayax is part of the business
+  at all — including while a stored connection needs attention — and the table keeps labelling such a
+  movement either way. The machine filter needs a machine list, so it stays hidden until there are
+  machines to filter by.
+- **A connection that needs attention is still a connection.** A business whose stored token stopped
+  working keeps its Nayax expense category and its Nayax source filter; what it loses is the live
+  fleet reads, with the banner asking an Owner to reconnect.
+- **One permission Nayax has not granted does not take the rest of the application with it.** When
+  Nayax refuses one read for lack of permission, that one feature says so where its control was and
+  is not asked for again until the connection is saved or re-tested; everything else the Nayax account
+  does allow keeps working. A business whose connection is usable is never assumed to have been
+  granted every permission, so nothing is hidden on a guess either: a feature nobody has been refused
+  is offered, and its own request reports its own outcome.
+
+**A connected business sees no change here either.** Every filter, field and category is exactly as
+before.
+
 ## Business settings (Admin page)
 
 **Admin → Business Settings** is where an Owner reads and changes their own business's name,

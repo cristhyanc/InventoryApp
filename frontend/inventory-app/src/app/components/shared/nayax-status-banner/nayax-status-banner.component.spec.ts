@@ -79,6 +79,25 @@ describe('NayaxStatusBannerComponent (issue #539)', () => {
     expect(banner(host)).toBeNull();
   });
 
+  it('reads the status once for several banners on one screen (issue #728)', async () => {
+    const connections: ConnectionStub = { status: jest.fn(() => of(state('NeedsAttention'))) };
+
+    await TestBed.configureTestingModule({
+      imports: [NayaxStatusBannerComponent],
+      providers: [
+        provideRouter([]),
+        { provide: NayaxConnectionService, useValue: connections },
+        { provide: AccessService, useValue: { allows: () => of(true) } }
+      ]
+    }).compileComponents();
+
+    for (const _ of [0, 1, 2]) {
+      TestBed.createComponent(NayaxStatusBannerComponent).detectChanges();
+    }
+
+    expect(connections.status).toHaveBeenCalledTimes(1);
+  });
+
   it('hides the banner when the status read fails, rather than guessing it is not Ready', async () => {
     const { host, connections } = await render(throwError(() => new Error('boom')), true);
 

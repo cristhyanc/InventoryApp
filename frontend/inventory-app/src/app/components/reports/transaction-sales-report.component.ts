@@ -5,9 +5,12 @@ import { Machine } from '../../models/models';
 import { MachineService } from '../../services/machine.service';
 import { ReportingService, TransactionSalesFilter, TransactionSalesReport, TransactionSalesRow } from '../../services/reporting.service';
 import { ReportFiltersComponent } from './report-filters.component';
+import { REPORT_MACHINE_FILTER_ERROR } from './report-page.base';
 import { availabilityBadge, moneyOrState } from './report-formatting';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 import { IconComponent } from '../shared/icon.component';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
+import { loadProviderList } from '../../provider/provider-list-load';
 
 @Component({
   selector: 'app-transaction-sales-report',
@@ -22,7 +25,7 @@ import { IconComponent } from '../shared/icon.component';
       <button type="button" class="btn btn-sm btn-secondary" (click)="export('xlsx')"><app-icon name="download" [size]="18" />Export XLSX</button>
     </div>
   </header>
-  <app-report-filters [from]="filter.from!" [to]="filter.to!" [machineId]="filter.machineId ?? null" [machines]="machines" [period]="period"
+  <app-report-filters [from]="filter.from!" [to]="filter.to!" [machineId]="filter.machineId ?? null" [machines]="machines" [machinesError]="machinesError" [period]="period"
     (fromChange)="filter.from=$event" (toChange)="filter.to=$event" (machineChange)="filter.machineId=$event" (periodChange)="selectPeriod($event)" (apply)="apply()" />
   <div class="card card-body grid gap-3 md:grid-cols-3 xl:grid-cols-6">
     <label class="field-label">Site<select class="mt-1" [(ngModel)]="filter.siteId"><option [ngValue]="null">All sites</option>@for (site of report?.filterOptions?.sites ?? []; track site.id) {<option [ngValue]="site.id">{{ site.name }}</option>}</select></label>
@@ -74,6 +77,8 @@ import { IconComponent } from '../shared/icon.component';
 `})
 export class TransactionSalesReportComponent implements OnInit {
   machines: Machine[] = [];
+  /** See `ReportPageBase.machinesError`; this page does not extend it but behaves the same (issue #728). */
+  machinesError = '';
   report: TransactionSalesReport | null = null;
   loading = false;
   error = '';
@@ -81,8 +86,14 @@ export class TransactionSalesReportComponent implements OnInit {
   filter: TransactionSalesFilter = { from: this.isoDate(new Date(new Date().getFullYear(), new Date().getMonth(), 1)), to: this.isoDate(new Date()), status: 'completed', page: 1, pageSize: 50, sortBy: 'date', sortDescending: true };
   columns = [{ key: 'date', label: 'Date / time', sortable: true }, { key: 'machine', label: 'Machine / site', sortable: true }, { key: 'product', label: 'Product', sortable: true }, { key: 'payment', label: 'Payment', sortable: false }, { key: 'sale', label: 'Sale', sortable: true }, { key: 'cogs', label: 'COGS', sortable: true }, { key: 'gross', label: 'Gross Profit', sortable: true }, { key: 'direct', label: 'Direct Profit', sortable: true }, { key: 'status', label: 'Status', sortable: true }];
 
-  constructor(private reports: ReportingService, private machineService: MachineService) {}
-  ngOnInit(): void { this.machineService.getAll().subscribe({ next: machines => this.machines = machines ?? [] }); this.load(); }
+  constructor(private reports: ReportingService, private machineService: MachineService, private provider: ProviderAvailabilityService) {}
+  ngOnInit(): void {
+    loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe(outcome => {
+      this.machines = outcome.kind === 'listed' ? outcome.items : [];
+      this.machinesError = outcome.kind === 'failed' ? REPORT_MACHINE_FILTER_ERROR : '';
+    });
+    this.load();
+  }
   get pages(): number { return this.report ? Math.max(1, Math.ceil(this.report.totalCount / this.report.pageSize)) : 1; }
   apply(): void { this.filter.page = 1; this.load(); }
   load(): void { this.loading = true; this.error = ''; this.reports.transactions(this.filter).subscribe({ next: value => { this.report = value; this.loading = false; }, error: () => { this.error = 'Unable to load transaction sales.'; this.loading = false; } }); }

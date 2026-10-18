@@ -22,6 +22,7 @@ import { BusinessService } from '../services/business.service';
 import { AccessService } from '../access/access.service';
 import { activeAccountKey, signedInAccountMayHaveChanged } from '../access/signed-in-account';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
+import { ProviderAvailabilityService } from '../provider/provider-availability.service';
 import { ToastService } from '../services/toast.service';
 import { SUPPORT_SESSION_ENDED_MESSAGE } from './support-session-messages';
 
@@ -239,6 +240,7 @@ export class SupportSessionService implements OnDestroy {
     private readonly http: HttpClient,
     private readonly config: ConfigService,
     private readonly business: BusinessService,
+    private readonly providerAvailability: ProviderAvailabilityService,
     private readonly access: AccessService,
     private readonly platformDiagnosticsAccess: PlatformDiagnosticsAccessService,
     private readonly router: Router,
@@ -487,6 +489,11 @@ export class SupportSessionService implements OnDestroy {
    */
   private applyBusinessContextChange(): void {
     this.business.reset();
+    // The shared provider-availability answer belongs to one business's Nayax connection too
+    // (issue #728), so it is dropped for the same reason and at the same moment: a support view
+    // must not keep reporting the administrator's own business's connection, and a session is
+    // refused Nayax credentials entirely, which is not a statement about the business being read.
+    this.providerAvailability.reset();
     // Dropping the cached business is not reading the new one (issue #671): the business this tab
     // resolves after this transition - the session's inside a support view, the administrator's own
     // outside one - has its own time zone, and every instant the next page renders is rendered in

@@ -13,6 +13,7 @@ import {
   DailyReport, DashboardReport, MachineReport, ProductReport, ReconciliationReport, ReportAvailability,
   ReportProviderAvailability, ReportingService, SiteCommissionReport, TransactionSalesReport,
 } from '../../services/reporting.service';
+import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -54,7 +55,10 @@ function machines() {
 async function render<T>(component: new (...args: never[]) => T, reporting: unknown, extra: unknown[] = []) {
   await TestBed.configureTestingModule({
     imports: [component as never],
-    providers: [route(), { provide: ReportingService, useValue: reporting }, machines(), ...(extra as never[])],
+    providers: [
+      route(), { provide: ReportingService, useValue: reporting }, machines(), provideNayaxConnectionStatus('Ready'),
+      ...(extra as never[]),
+    ],
   }).compileComponents();
 
   const fixture = TestBed.createComponent(component as never);
@@ -362,6 +366,7 @@ async function renderSiteCommissions(report: SiteCommissionReport) {
       { provide: ReportingService, useValue: { siteCommissions: jest.fn(() => of(report)) } },
       { provide: SiteService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
+      provideNayaxConnectionStatus('Ready'),
     ],
   }).compileComponents();
 
