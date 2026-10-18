@@ -124,6 +124,9 @@ public class ReportingContractJsonSerializationTests
                 "actualReimbursement", "reimbursementDifference", "isReconciled", "reconciliationStatus",
                 "reconciliationTolerance", "adjustmentsSupported", "directProfit", "directMarginPercent",
                 "nayaxProcessingFees",
+                // Issue #731: the states the bookkeeping report decided, republished beside the
+                // figures they govern.
+                "providerAvailability",
             },
             PropertyNames(json));
 
@@ -190,6 +193,9 @@ public class ReportingContractJsonSerializationTests
             new[]
             {
                 "from", "to", "rows", "totals", "dataQuality", "page", "pageSize", "totalCount", "filterOptions",
+                // Issue #731: one state, because every figure here comes from the stored sales
+                // themselves and nothing in this report comes from a settlement import.
+                "salesAvailability",
             },
             PropertyNames(json));
 

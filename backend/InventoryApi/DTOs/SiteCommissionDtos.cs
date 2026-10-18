@@ -18,4 +18,23 @@ public record SiteCommissionRowDto(long SiteId, string SiteName, DateTime Period
     public bool HasOverlap { get; init; }
     public bool UsesMultipleRates { get; init; }
 }
-public record SiteCommissionReportDto(DateTime From, DateTime To, IReadOnlyList<SiteCommissionRowDto> Rows);
+public record SiteCommissionReportDto(DateTime From, DateTime To, IReadOnlyList<SiteCommissionRowDto> Rows)
+{
+    /// <summary>
+    /// Whether this is an answer about commission at all (issue #731). <c>false</c> only when the
+    /// provider is not usable, where the empty row list means "nothing could be calculated" and must
+    /// never be read as "no site is owed anything"; the request still succeeds with <c>200</c>,
+    /// because an unconnected provider is a state of this business and not a failure of the call.
+    /// </summary>
+    public bool IsAvailable { get; init; } = true;
+
+    /// <summary>
+    /// The stable reason code for an unavailable report - <c>NayaxNotConnected</c> or
+    /// <c>PermissionNotGranted</c>, the same two codes the reorder and dashboard surfaces publish -
+    /// and null for an available one. A code a client branches on, never a sentence to display.
+    /// </summary>
+    public string? UnavailableReason { get; init; }
+
+    /// <summary>The one sentence that explains an unavailable report; null for an available one.</summary>
+    public string? UnavailableDetail { get; init; }
+}

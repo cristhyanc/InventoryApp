@@ -55,6 +55,15 @@ public sealed class GetReportExportRows
     private const string BookkeepingGstOnSalesBasis =
         "Estimated GST on sales - assumes all included sales are taxable at 10% (GST-inclusive).";
 
+    // The availability column headers and date format repeat across every report's row shape
+    // below, so they are named once here rather than retyped per report (issue #731).
+    private const string DateFormat = "yyyy-MM-dd";
+    private const string SalesDataAvailabilityHeader = "SalesDataAvailability";
+    private const string SalesDataAsOfUtcHeader = "SalesDataAsOfUtc";
+    private const string FeeDataAvailabilityHeader = "FeeDataAvailability";
+    private const string FeeDataAsOfUtcHeader = "FeeDataAsOfUtc";
+    private const string CombinedDataAvailabilityHeader = "CombinedDataAvailability";
+
     private static string Number(decimal? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
     private static string Number(long? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
     private static string Number(int? value) => value?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
@@ -75,9 +84,15 @@ public sealed class GetReportExportRows
                 "GrossProfit", "GrossMarginPercent", "DirectProfit",
                 "DirectMarginPercent", "FeeExGst", "FeeGST", "FeeIncGST", "FeeSource",
                 "CommissionRate", "CommissionBasis", "CommissionAmount", "TransactionStatusId",
-                "TransactionStatus", "IsCompleted"
+                "TransactionStatus", "IsCompleted", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader
             }
         };
+        // Every row here is one stored transaction, so no amount on it is a zero nothing measured -
+        // the row's existence is the measurement. What the file cannot otherwise say is whether
+        // these are *all* the transactions of the period, which is exactly what the two state
+        // columns report (issue #731). They are repeated per row because a downloaded row is read
+        // on its own, and they carry only the sales state: this report has no settlement figure.
+        var availability = value.SalesAvailability;
         rows.AddRange(value.Rows.Select(x => new List<string>
         {
             x.TransactionDate.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
@@ -88,8 +103,15 @@ public sealed class GetReportExportRows
             Number(x.GrossProfit), Number(x.GrossMarginPercent),
             Number(x.DirectProfit), Number(x.DirectMarginPercent), Number(x.FeeExGst), Number(x.FeeGst),
             Number(x.FeeIncGst), x.FeeSource, Number(x.CommissionRate), x.CommissionBasis ?? string.Empty,
-            Number(x.CommissionAmount), Number(x.TransactionStatusId), x.TransactionStatus, x.IsCompleted.ToString()
+            Number(x.CommissionAmount), Number(x.TransactionStatusId), x.TransactionStatus, x.IsCompleted.ToString(),
+            AvailabilityExportCells.State(availability), AvailabilityExportCells.AsOfUtc(availability)
         }));
+        // With no transaction at all there is no data row to carry those columns, and a download of
+        // headings alone cannot say whether the period was unaccounted for or genuinely sold
+        // nothing. One marked metadata row states it instead, fabricating no transaction.
+        if (value.Rows.Count == 0)
+            rows.Add(AvailabilityExportCells.NoRowsRow(rows[0],
+                AvailabilityExportCells.State(availability), AvailabilityExportCells.AsOfUtc(availability)));
         return new ReportExportTable(rows, "Transactions");
     }
 
@@ -99,44 +121,63 @@ public sealed class GetReportExportRows
         if (report is "daily")
         {
             var value = await _getDailyReport.Handle(filter, cancellationToken);
+            // Every provider-sourced figure is spelled with the availability of the data that feeds
+            // it, and the state columns report every family in full (issue #731, the same rule
+            // issue #730 wrote for bookkeeping - see AvailabilityExportCells). The state is the
+            // period's, so it is repeated on every row: a downloaded row is read on its own, where
+            // nothing else can say whether its zero was measured.
+            var sales = value.ProviderAvailability.Sales;
+            var fees = value.ProviderAvailability.Fees;
+            var combined = value.ProviderAvailability.Combined;
+            List<string> AvailabilityCells() =>
+            [
+                AvailabilityExportCells.State(sales), AvailabilityExportCells.AsOfUtc(sales),
+                AvailabilityExportCells.State(fees), AvailabilityExportCells.AsOfUtc(fees),
+                AvailabilityExportCells.State(combined)
+            ];
             var rows = new[] { new List<string>
                 {
                     "Date", "GrossSales", "CardSales", "CashSales", "AverageSale", "Quantity",
                     "CostOfGoods", "GrossProfit", "GrossMarginPercent", "Transactions",
                     "IsCogsComplete", "UncostedTransactionCount", "UncostedSalesAmount",
                     "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "FeeSource", "ImportedReimbursement",
-                    "NetReimbursement", "ReconciliationStatus"
+                    "NetReimbursement", "ReconciliationStatus",
+                    SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader, FeeDataAvailabilityHeader, FeeDataAsOfUtcHeader,
+                    CombinedDataAvailabilityHeader
                 } }
                 .Concat(value.Rows.Select(x => new List<string>
                 {
-                    x.Date.ToString("yyyy-MM-dd"), x.GrossSales.ToString(CultureInfo.InvariantCulture),
-                    x.CardSales.ToString(CultureInfo.InvariantCulture), x.CashSales.ToString(CultureInfo.InvariantCulture),
-                    x.AverageSale.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture),
-                    Number(x.CostOfGoods), Number(x.GrossProfit),
-                    Number(x.GrossMarginPercent), x.TransactionCount.ToString(),
+                    x.Date.ToString(DateFormat), AvailabilityExportCells.Amount(x.GrossSales, sales),
+                    AvailabilityExportCells.Amount(x.CardSales, sales), AvailabilityExportCells.Amount(x.CashSales, sales),
+                    AvailabilityExportCells.Amount(x.AverageSale, sales), AvailabilityExportCells.Amount(x.Quantity, sales),
+                    AvailabilityExportCells.Amount(x.CostOfGoods, sales), AvailabilityExportCells.Amount(x.GrossProfit, sales),
+                    AvailabilityExportCells.Amount(x.GrossMarginPercent, sales), AvailabilityExportCells.Amount(x.TransactionCount, sales),
                     x.IsCogsComplete.ToString(), x.UncostedTransactionCount.ToString(),
                     x.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture),
-                    x.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture), x.NayaxFeesGst.ToString(CultureInfo.InvariantCulture), x.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture), x.NayaxFeeSource,
-                    x.ImportedReimbursement.ToString(CultureInfo.InvariantCulture), x.NetReimbursement.ToString(CultureInfo.InvariantCulture),
+                    AvailabilityExportCells.Amount(x.NayaxFeesExGst, fees), AvailabilityExportCells.Amount(x.NayaxFeesGst, fees),
+                    AvailabilityExportCells.Amount(x.NayaxFeesIncludingGst, fees), x.NayaxFeeSource,
+                    AvailabilityExportCells.Amount(x.ImportedReimbursement, fees),
+                    AvailabilityExportCells.Amount(x.NetReimbursement, fees),
                     x.ReconciliationStatus
-                })).ToList();
+                }.Concat(AvailabilityCells()).ToList())).ToList();
             if (value.Totals is not null)
                 rows.Add(new List<string>
                 {
-                    "TOTAL", value.Totals.GrossSales.ToString(CultureInfo.InvariantCulture),
-                    value.Totals.CardSales.ToString(CultureInfo.InvariantCulture), value.Totals.CashSales.ToString(CultureInfo.InvariantCulture),
-                    value.Totals.AverageSale.ToString(CultureInfo.InvariantCulture), value.Totals.Quantity.ToString(CultureInfo.InvariantCulture),
-                    Number(value.Totals.CostOfGoods), Number(value.Totals.GrossProfit),
-                    Number(value.Totals.GrossMarginPercent), value.Totals.TransactionCount.ToString(),
+                    "TOTAL", AvailabilityExportCells.Amount(value.Totals.GrossSales, sales),
+                    AvailabilityExportCells.Amount(value.Totals.CardSales, sales), AvailabilityExportCells.Amount(value.Totals.CashSales, sales),
+                    AvailabilityExportCells.Amount(value.Totals.AverageSale, sales), AvailabilityExportCells.Amount(value.Totals.Quantity, sales),
+                    AvailabilityExportCells.Amount(value.Totals.CostOfGoods, sales), AvailabilityExportCells.Amount(value.Totals.GrossProfit, sales),
+                    AvailabilityExportCells.Amount(value.Totals.GrossMarginPercent, sales), AvailabilityExportCells.Amount(value.Totals.TransactionCount, sales),
                     value.Totals.IsCogsComplete.ToString(), value.Totals.UncostedTransactionCount.ToString(),
                     value.Totals.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture),
-                    value.Totals.NayaxFeesExGst.ToString(CultureInfo.InvariantCulture),
-                    value.Totals.NayaxProcessingFees.TotalFeeGst.ToString(CultureInfo.InvariantCulture),
-                    value.Totals.NayaxFeesIncludingGst.ToString(CultureInfo.InvariantCulture),
+                    AvailabilityExportCells.Amount(value.Totals.NayaxFeesExGst, fees),
+                    AvailabilityExportCells.Amount(value.Totals.NayaxProcessingFees.TotalFeeGst, fees),
+                    AvailabilityExportCells.Amount(value.Totals.NayaxFeesIncludingGst, fees),
                     string.Empty,
-                    value.Totals.ImportedReimbursement.ToString(CultureInfo.InvariantCulture), value.Totals.NetReimbursement.ToString(CultureInfo.InvariantCulture),
+                    AvailabilityExportCells.Amount(value.Totals.ImportedReimbursement, fees),
+                    AvailabilityExportCells.Amount(value.Totals.NetReimbursement, fees),
                     string.Empty
-                });
+                }.Concat(AvailabilityCells()).ToList());
             return new ReportExportTable(rows, "Report");
         }
         if (report is "bookkeeping")
@@ -153,71 +194,98 @@ public sealed class GetReportExportRows
             var combined = value.ProviderAvailability.Combined;
             var rows = new List<List<string>>
             {
-                new() { "From", "To", "FinancialYear", "GrossSales", "CardSales", "CashSales", "CardTransactions", "CashTransactions", "COGS", "GrossProfit",                 "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "DeliveryCosts", "PackageCosts", "OtherOperatingExpenses", "NetSettlement", "SiteCommission", isMachineFiltered ? "DirectProfit" : "NetProfit", isMachineFiltered ? "DirectMarginPercent" : "NetMargin", "GstOnSales", "GstOnFees", "GstOnSalesBasis", "IsCogsComplete", "UncostedTransactionCount", "UncostedSalesAmount", "PendingTransactionCount", "RefundedTransactionCount", "DeclinedOrCancelledTransactionCount", "UnknownStatusTransactionCount", "MissingStatusTransactionCount", "SalesDataAvailability", "SalesDataAsOfUtc", "FeeDataAvailability", "FeeDataAsOfUtc", "CombinedDataAvailability", "DataQualityNotes" },
-                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.FinancialYear, AvailabilityExportCells.Amount(value.Sales, sales), AvailabilityExportCells.Amount(value.CardSales, sales), AvailabilityExportCells.Amount(value.CashSales, sales), AvailabilityExportCells.Amount(value.CardTransactionCount, sales), AvailabilityExportCells.Amount(value.CashTransactionCount, sales), AvailabilityExportCells.Amount(value.CostOfGoods, sales), AvailabilityExportCells.Amount(value.GrossProfit, sales), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeExGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeIncGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.ActualFeeIncGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.EstimatedFeeIncGst, combined), AvailabilityExportCells.Amount(value.NayaxProcessingFees.EstimatedCardTransactionCount, combined), value.NayaxProcessingFees.HasEstimatedFees.ToString(), value.DeliveryCosts.ToString(CultureInfo.InvariantCulture), value.PackageCosts.ToString(CultureInfo.InvariantCulture), value.OtherOperatingExpenses.ToString(CultureInfo.InvariantCulture), AvailabilityExportCells.Amount(value.NetSettlement, combined), AvailabilityExportCells.Amount(value.SiteCommission, sales), AvailabilityExportCells.Amount(isMachineFiltered ? value.DirectProfit : value.NetProfit, combined), AvailabilityExportCells.Amount(isMachineFiltered ? value.DirectMarginPercent : value.NetMarginPercent, combined), AvailabilityExportCells.Amount(value.GstOnSales, sales), AvailabilityExportCells.Amount(value.GstOnFees, fees), BookkeepingGstOnSalesBasis, value.IsCogsComplete.ToString(), value.UncostedTransactionCount.ToString(CultureInfo.InvariantCulture), value.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture), value.PendingTransactionCount.ToString(CultureInfo.InvariantCulture), value.RefundedTransactionCount.ToString(CultureInfo.InvariantCulture), value.DeclinedOrCancelledTransactionCount.ToString(CultureInfo.InvariantCulture), value.UnknownStatusTransactionCount.ToString(CultureInfo.InvariantCulture), value.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture), AvailabilityExportCells.State(sales), AvailabilityExportCells.AsOfUtc(sales), AvailabilityExportCells.State(fees), AvailabilityExportCells.AsOfUtc(fees), AvailabilityExportCells.State(combined), string.Join(" ", value.DataQuality.Notes ?? []) }
+                new() { "From", "To", "FinancialYear", "GrossSales", "CardSales", "CashSales", "CardTransactions", "CashTransactions", "COGS", "GrossProfit",                 "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "DeliveryCosts", "PackageCosts", "OtherOperatingExpenses", "NetSettlement", "SiteCommission", isMachineFiltered ? "DirectProfit" : "NetProfit", isMachineFiltered ? "DirectMarginPercent" : "NetMargin", "GstOnSales", "GstOnFees", "GstOnSalesBasis", "IsCogsComplete", "UncostedTransactionCount", "UncostedSalesAmount", "PendingTransactionCount", "RefundedTransactionCount", "DeclinedOrCancelledTransactionCount", "UnknownStatusTransactionCount", "MissingStatusTransactionCount", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader, FeeDataAvailabilityHeader, FeeDataAsOfUtcHeader, CombinedDataAvailabilityHeader, "DataQualityNotes" },
+                new() { value.From.ToString(DateFormat), value.To.ToString(DateFormat), value.FinancialYear, AvailabilityExportCells.Amount(value.Sales, sales), AvailabilityExportCells.Amount(value.CardSales, sales), AvailabilityExportCells.Amount(value.CashSales, sales), AvailabilityExportCells.Amount(value.CardTransactionCount, sales), AvailabilityExportCells.Amount(value.CashTransactionCount, sales), AvailabilityExportCells.Amount(value.CostOfGoods, sales), AvailabilityExportCells.Amount(value.GrossProfit, sales), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeExGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.TotalFeeIncGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.ActualFeeIncGst, fees), AvailabilityExportCells.Amount(value.NayaxProcessingFees.EstimatedFeeIncGst, combined), AvailabilityExportCells.Amount(value.NayaxProcessingFees.EstimatedCardTransactionCount, combined), value.NayaxProcessingFees.HasEstimatedFees.ToString(), value.DeliveryCosts.ToString(CultureInfo.InvariantCulture), value.PackageCosts.ToString(CultureInfo.InvariantCulture), value.OtherOperatingExpenses.ToString(CultureInfo.InvariantCulture), AvailabilityExportCells.Amount(value.NetSettlement, combined), AvailabilityExportCells.Amount(value.SiteCommission, sales), AvailabilityExportCells.Amount(isMachineFiltered ? value.DirectProfit : value.NetProfit, combined), AvailabilityExportCells.Amount(isMachineFiltered ? value.DirectMarginPercent : value.NetMarginPercent, combined), AvailabilityExportCells.Amount(value.GstOnSales, sales), AvailabilityExportCells.Amount(value.GstOnFees, fees), BookkeepingGstOnSalesBasis, value.IsCogsComplete.ToString(), value.UncostedTransactionCount.ToString(CultureInfo.InvariantCulture), value.UncostedSalesAmount.ToString(CultureInfo.InvariantCulture), value.PendingTransactionCount.ToString(CultureInfo.InvariantCulture), value.RefundedTransactionCount.ToString(CultureInfo.InvariantCulture), value.DeclinedOrCancelledTransactionCount.ToString(CultureInfo.InvariantCulture), value.UnknownStatusTransactionCount.ToString(CultureInfo.InvariantCulture), value.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture), AvailabilityExportCells.State(sales), AvailabilityExportCells.AsOfUtc(sales), AvailabilityExportCells.State(fees), AvailabilityExportCells.AsOfUtc(fees), AvailabilityExportCells.State(combined), string.Join(" ", value.DataQuality.Notes ?? []) }
             };
             return new ReportExportTable(rows, "Report");
         }
         if (report is "reconciliation")
         {
             var value = await _getReconciliationReport.Handle(filter, 0.01m, cancellationToken);
+            // The recorded side carries the sales state, the imported side the settlement state,
+            // and every difference between them the combined one (issue #731): a difference of
+            // 0.00 between two sides that were never both measured is the most misleading zero in
+            // this report. The assumed-zero Adjustments is not provider data and stays exact, with
+            // its own AdjustmentsBasis column explaining it.
+            var sales = value.ProviderAvailability.Sales;
+            var settlement = value.ProviderAvailability.Fees;
+            var combined = value.ProviderAvailability.Combined;
+            List<string> AvailabilityCells() =>
+            [
+                AvailabilityExportCells.State(sales), AvailabilityExportCells.AsOfUtc(sales),
+                AvailabilityExportCells.State(settlement), AvailabilityExportCells.AsOfUtc(settlement),
+                AvailabilityExportCells.State(combined)
+            ];
             var rows = new List<List<string>>
             {
-                new() { "From", "To", "TotalVendingSales", "CardSales", "CashSales", "CardTransactionSales", "NayaxReportedGrossCardSales", "CardTransactionCount", "NayaxReportedCardTransactionCount", "CountDifference", "GrossDifference", "GrossStatus", "ProcessingFeesExGst", "FeeGst", "OtherFees", "Adjustments", "AdjustmentsSupported", "AdjustmentsBasis", "ExpectedNetReimbursement", "ActualNetReimbursement", "SettlementDifference", "SettlementStatus", "Status", "PayoutDate", "PendingTransactionCount", "RefundedTransactionCount", "DeclinedOrCancelledTransactionCount", "UnknownStatusTransactionCount", "MissingStatusTransactionCount", "DataQualityNotes" }
+                new() { "From", "To", "TotalVendingSales", "CardSales", "CashSales", "CardTransactionSales", "NayaxReportedGrossCardSales", "CardTransactionCount", "NayaxReportedCardTransactionCount", "CountDifference", "GrossDifference", "GrossStatus", "ProcessingFeesExGst", "FeeGst", "OtherFees", "Adjustments", "AdjustmentsSupported", "AdjustmentsBasis", "ExpectedNetReimbursement", "ActualNetReimbursement", "SettlementDifference", "SettlementStatus", "Status", "PayoutDate", "PendingTransactionCount", "RefundedTransactionCount", "DeclinedOrCancelledTransactionCount", "UnknownStatusTransactionCount", "MissingStatusTransactionCount", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader, "SettlementDataAvailability", "SettlementDataAsOfUtc", CombinedDataAvailabilityHeader, "DataQualityNotes" }
             };
             rows.AddRange(value.PeriodRows.Select(x => new List<string>
             {
-                x.From.ToString("yyyy-MM-dd"), x.To.ToString("yyyy-MM-dd"),
-                x.TotalVendingSales.ToString(CultureInfo.InvariantCulture), x.CardSales.ToString(CultureInfo.InvariantCulture),
-                x.CashSales.ToString(CultureInfo.InvariantCulture), x.CardTransactionSales.ToString(CultureInfo.InvariantCulture),
-                x.NayaxReportedGrossCardSales.ToString(CultureInfo.InvariantCulture), x.CardTransactionCount.ToString(),
-                x.NayaxReportedCardTransactionCount.ToString(), x.CountDifference.ToString(),
-                x.GrossDifference.ToString(CultureInfo.InvariantCulture), x.GrossStatus,
-                x.ProcessingFeesExGst.ToString(CultureInfo.InvariantCulture), x.FeeGst.ToString(CultureInfo.InvariantCulture),
-                x.OtherFees.ToString(CultureInfo.InvariantCulture), x.Adjustments.ToString(CultureInfo.InvariantCulture),
+                x.From.ToString(DateFormat), x.To.ToString(DateFormat),
+                AvailabilityExportCells.Amount(x.TotalVendingSales, sales), AvailabilityExportCells.Amount(x.CardSales, sales),
+                AvailabilityExportCells.Amount(x.CashSales, sales), AvailabilityExportCells.Amount(x.CardTransactionSales, sales),
+                AvailabilityExportCells.Amount(x.NayaxReportedGrossCardSales, settlement), AvailabilityExportCells.Amount(x.CardTransactionCount, sales),
+                AvailabilityExportCells.Amount(x.NayaxReportedCardTransactionCount, settlement), AvailabilityExportCells.Amount(x.CountDifference, combined),
+                AvailabilityExportCells.Amount(x.GrossDifference, combined), x.GrossStatus,
+                AvailabilityExportCells.Amount(x.ProcessingFeesExGst, settlement), AvailabilityExportCells.Amount(x.FeeGst, settlement),
+                AvailabilityExportCells.Amount(x.OtherFees, settlement), x.Adjustments.ToString(CultureInfo.InvariantCulture),
                 x.AdjustmentsSupported.ToString(), GetReconciliationReport.AdjustmentsAssumption,
-                x.ExpectedNetReimbursement.ToString(CultureInfo.InvariantCulture), x.ActualNetReimbursement.ToString(CultureInfo.InvariantCulture),
-                x.SettlementDifference.ToString(CultureInfo.InvariantCulture), x.SettlementStatus, x.Status,
-                x.PayoutDate?.ToString("yyyy-MM-dd") ?? string.Empty,
+                AvailabilityExportCells.Amount(x.ExpectedNetReimbursement, combined), AvailabilityExportCells.Amount(x.ActualNetReimbursement, settlement),
+                AvailabilityExportCells.Amount(x.SettlementDifference, combined), x.SettlementStatus, x.Status,
+                x.PayoutDate?.ToString(DateFormat) ?? string.Empty,
                 x.PendingTransactionCount.ToString(CultureInfo.InvariantCulture),
                 x.RefundedTransactionCount.ToString(CultureInfo.InvariantCulture),
                 x.DeclinedOrCancelledTransactionCount.ToString(CultureInfo.InvariantCulture),
                 x.UnknownStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
-                x.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
-                string.Join(" ", x.DataQuality.Notes ?? [])
-            }));
+                x.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture)
+            }.Concat(AvailabilityCells()).Append(string.Join(" ", x.DataQuality.Notes ?? [])).ToList()));
             if (value.Totals is not null)
             {
                 var x = value.Totals;
                 rows.Add(new List<string>
                 {
-                    "TOTAL", string.Empty, x.TotalVendingSales.ToString(CultureInfo.InvariantCulture),
-                    x.CardSales.ToString(CultureInfo.InvariantCulture), x.CashSales.ToString(CultureInfo.InvariantCulture),
-                    x.CardTransactionSales.ToString(CultureInfo.InvariantCulture), x.NayaxReportedGrossCardSales.ToString(CultureInfo.InvariantCulture),
-                    x.CardTransactionCount.ToString(), x.NayaxReportedCardTransactionCount.ToString(), x.CountDifference.ToString(),
-                    x.GrossDifference.ToString(CultureInfo.InvariantCulture), x.GrossStatus,
-                    x.ProcessingFeesExGst.ToString(CultureInfo.InvariantCulture), x.FeeGst.ToString(CultureInfo.InvariantCulture),
-                    x.OtherFees.ToString(CultureInfo.InvariantCulture), x.Adjustments.ToString(CultureInfo.InvariantCulture),
+                    "TOTAL", string.Empty, AvailabilityExportCells.Amount(x.TotalVendingSales, sales),
+                    AvailabilityExportCells.Amount(x.CardSales, sales), AvailabilityExportCells.Amount(x.CashSales, sales),
+                    AvailabilityExportCells.Amount(x.CardTransactionSales, sales), AvailabilityExportCells.Amount(x.NayaxReportedGrossCardSales, settlement),
+                    AvailabilityExportCells.Amount(x.CardTransactionCount, sales), AvailabilityExportCells.Amount(x.NayaxReportedCardTransactionCount, settlement),
+                    AvailabilityExportCells.Amount(x.CountDifference, combined),
+                    AvailabilityExportCells.Amount(x.GrossDifference, combined), x.GrossStatus,
+                    AvailabilityExportCells.Amount(x.ProcessingFeesExGst, settlement), AvailabilityExportCells.Amount(x.FeeGst, settlement),
+                    AvailabilityExportCells.Amount(x.OtherFees, settlement), x.Adjustments.ToString(CultureInfo.InvariantCulture),
                     x.AdjustmentsSupported.ToString(), GetReconciliationReport.AdjustmentsAssumption,
-                    x.ExpectedNetReimbursement.ToString(CultureInfo.InvariantCulture), x.ActualNetReimbursement.ToString(CultureInfo.InvariantCulture),
-                    x.SettlementDifference.ToString(CultureInfo.InvariantCulture), x.SettlementStatus, x.Status, string.Empty,
+                    AvailabilityExportCells.Amount(x.ExpectedNetReimbursement, combined), AvailabilityExportCells.Amount(x.ActualNetReimbursement, settlement),
+                    AvailabilityExportCells.Amount(x.SettlementDifference, combined), x.SettlementStatus, x.Status, string.Empty,
                     // The totals row carries the report's own range-wide counts and notes, never a
                     // sum of the period rows' scoped ones.
                     value.PendingTransactionCount.ToString(CultureInfo.InvariantCulture),
                     value.RefundedTransactionCount.ToString(CultureInfo.InvariantCulture),
                     value.DeclinedOrCancelledTransactionCount.ToString(CultureInfo.InvariantCulture),
                     value.UnknownStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
-                    value.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture),
-                    string.Join(" ", value.DataQuality.Notes ?? [])
-                });
+                    value.MissingStatusTransactionCount.ToString(CultureInfo.InvariantCulture)
+                }.Concat(AvailabilityCells()).Append(string.Join(" ", value.DataQuality.Notes ?? [])).ToList());
             }
             return new ReportExportTable(rows, "Report");
         }
         if (report is "machine-profitability" or "machines")
         {
             var value = await _getMachineProfitabilityReport.Handle(filter, cancellationToken);
-            var rows = new[] { new List<string> { "MachineId", "MachineName", "Sales", "CardSales", "CashSales", "Quantity", "CostOfGoods", "GrossProfit", "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "CommissionPercent", "SiteCommission", "DirectProfit", "DirectMarginPercent", "Transactions" } }
-                .Concat(value.Rows.Select(x => new List<string> { x.MachineId.ToString(), x.MachineName, x.Sales.ToString(CultureInfo.InvariantCulture), x.CardSales.ToString(CultureInfo.InvariantCulture), x.CashSales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), Number(x.CostOfGoods), Number(x.GrossProfit), x.NayaxProcessingFees.TotalFeeExGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.TotalFeeGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.TotalFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.ActualFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.EstimatedFeeIncGst.ToString(CultureInfo.InvariantCulture), x.NayaxProcessingFees.EstimatedCardTransactionCount.ToString(), x.NayaxProcessingFees.HasEstimatedFees.ToString(), x.CommissionPercent.ToString(CultureInfo.InvariantCulture), x.SiteCommission.ToString(CultureInfo.InvariantCulture), Number(x.DirectProfit), Number(x.DirectMarginPercent), x.TransactionCount.ToString(CultureInfo.InvariantCulture) })).ToList();
+            // Each machine's sales figures carry the sales state, the actual fees the settlement
+            // state, and direct profit the combined one (issue #731). The per-machine direct
+            // operating expenses are not exported here; where they are, they carry no state, being
+            // this business's own records.
+            var machineSales = value.ProviderAvailability.Sales;
+            var machineFees = value.ProviderAvailability.Fees;
+            var machineCombined = value.ProviderAvailability.Combined;
+            var rows = new[] { new List<string> { "MachineId", "MachineName", "Sales", "CardSales", "CashSales", "Quantity", "CostOfGoods", "GrossProfit", "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "ActualNayaxFee", "EstimatedNayaxFee", "EstimatedCardTransactionCount", "HasEstimates", "CommissionPercent", "SiteCommission", "DirectProfit", "DirectMarginPercent", "Transactions", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader, FeeDataAvailabilityHeader, FeeDataAsOfUtcHeader, CombinedDataAvailabilityHeader } }
+                .Concat(value.Rows.Select(x => new List<string> { x.MachineId.ToString(), x.MachineName, AvailabilityExportCells.Amount(x.Sales, machineSales), AvailabilityExportCells.Amount(x.CardSales, machineSales), AvailabilityExportCells.Amount(x.CashSales, machineSales), AvailabilityExportCells.Amount(x.Quantity, machineSales), AvailabilityExportCells.Amount(x.CostOfGoods, machineSales), AvailabilityExportCells.Amount(x.GrossProfit, machineSales), AvailabilityExportCells.Amount(x.NayaxProcessingFees.TotalFeeExGst, machineFees), AvailabilityExportCells.Amount(x.NayaxProcessingFees.TotalFeeGst, machineFees), AvailabilityExportCells.Amount(x.NayaxProcessingFees.TotalFeeIncGst, machineFees), AvailabilityExportCells.Amount(x.NayaxProcessingFees.ActualFeeIncGst, machineFees), AvailabilityExportCells.Amount(x.NayaxProcessingFees.EstimatedFeeIncGst, machineCombined), AvailabilityExportCells.Amount(x.NayaxProcessingFees.EstimatedCardTransactionCount, machineCombined), x.NayaxProcessingFees.HasEstimatedFees.ToString(), AvailabilityExportCells.Amount(x.CommissionPercent, machineSales), AvailabilityExportCells.Amount(x.SiteCommission, machineSales), AvailabilityExportCells.Amount(x.DirectProfit, machineCombined), AvailabilityExportCells.Amount(x.DirectMarginPercent, machineCombined), AvailabilityExportCells.Amount(x.TransactionCount, machineSales), AvailabilityExportCells.State(machineSales), AvailabilityExportCells.AsOfUtc(machineSales), AvailabilityExportCells.State(machineFees), AvailabilityExportCells.AsOfUtc(machineFees), AvailabilityExportCells.State(machineCombined) })).ToList();
+            // An absent machine is the figure a reader is most likely to misread as "nothing
+            // happened", so a result with no machine row still states its three families.
+            if (value.Rows.Count == 0)
+                rows.Add(AvailabilityExportCells.NoRowsRow(rows[0],
+                    AvailabilityExportCells.State(machineSales), AvailabilityExportCells.AsOfUtc(machineSales),
+                    AvailabilityExportCells.State(machineFees), AvailabilityExportCells.AsOfUtc(machineFees),
+                    AvailabilityExportCells.State(machineCombined)));
             return new ReportExportTable(rows, "Report");
         }
         if (report is "gst" or "gst-accounting")
@@ -230,24 +298,39 @@ public sealed class GetReportExportRows
             var gstFees = value.ProviderAvailability.Fees;
             var rows = new List<List<string>>
             {
-                new() { "From", "To", "TaxableSales", "GstOnSales", "TaxableFees", "GstOnFees", "PurchaseLineGst", "PurchaseChargeGst", "PurchaseInputGst", "PurchaseUnresolvedComponents", "PurchaseUnresolvedAmount", "PurchaseGstIncomplete", "NetGst", "SalesDataAvailability", "SalesDataAsOfUtc", "FeeDataAvailability", "FeeDataAsOfUtc", "NetGstAvailability", "DataQualityNotes" },
-                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), AvailabilityExportCells.Amount(value.TaxableSales, sales), AvailabilityExportCells.Amount(value.GstOnSales, sales), AvailabilityExportCells.Amount(value.TaxableFees, gstFees), AvailabilityExportCells.Amount(value.GstOnFees, gstFees), value.PurchaseLineGst.ToString(CultureInfo.InvariantCulture), value.PurchaseChargeGst.ToString(CultureInfo.InvariantCulture), value.InventoryPurchaseGst.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedComponentCount.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedAmount.ToString(CultureInfo.InvariantCulture), value.PurchaseGstIncomplete.ToString(), AvailabilityExportCells.Amount(value.NetGst, value.NetGstAvailability), AvailabilityExportCells.State(sales), AvailabilityExportCells.AsOfUtc(sales), AvailabilityExportCells.State(gstFees), AvailabilityExportCells.AsOfUtc(gstFees), AvailabilityExportCells.State(value.NetGstAvailability), string.Join(" ", value.DataQuality.Notes ?? []) }
+                new() { "From", "To", "TaxableSales", "GstOnSales", "TaxableFees", "GstOnFees", "PurchaseLineGst", "PurchaseChargeGst", "PurchaseInputGst", "PurchaseUnresolvedComponents", "PurchaseUnresolvedAmount", "PurchaseGstIncomplete", "NetGst", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader, FeeDataAvailabilityHeader, FeeDataAsOfUtcHeader, "NetGstAvailability", "DataQualityNotes" },
+                new() { value.From.ToString(DateFormat), value.To.ToString(DateFormat), AvailabilityExportCells.Amount(value.TaxableSales, sales), AvailabilityExportCells.Amount(value.GstOnSales, sales), AvailabilityExportCells.Amount(value.TaxableFees, gstFees), AvailabilityExportCells.Amount(value.GstOnFees, gstFees), value.PurchaseLineGst.ToString(CultureInfo.InvariantCulture), value.PurchaseChargeGst.ToString(CultureInfo.InvariantCulture), value.InventoryPurchaseGst.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedComponentCount.ToString(CultureInfo.InvariantCulture), value.PurchaseUnresolvedAmount.ToString(CultureInfo.InvariantCulture), value.PurchaseGstIncomplete.ToString(), AvailabilityExportCells.Amount(value.NetGst, value.NetGstAvailability), AvailabilityExportCells.State(sales), AvailabilityExportCells.AsOfUtc(sales), AvailabilityExportCells.State(gstFees), AvailabilityExportCells.AsOfUtc(gstFees), AvailabilityExportCells.State(value.NetGstAvailability), string.Join(" ", value.DataQuality.Notes ?? []) }
             };
             return new ReportExportTable(rows, "Report");
         }
         if (report is "dashboard")
         {
             var value = await _getDashboardReport.Handle(filter, cancellationToken);
+            // Every figure in this summary is counted from the completed sales the provider
+            // supplied - including the machine, product and unmapped-product counts, which are
+            // distinct counts over those sales and not a catalogue size - so all of them carry the
+            // sales state (issue #731). The fee state is reported beside them because the summary's
+            // own API response shows the Nayax fees and the actual reimbursement.
+            var dashboardSales = value.ProviderAvailability.Sales;
+            var dashboardFees = value.ProviderAvailability.Fees;
+            var dashboardCombined = value.ProviderAvailability.Combined;
             var rows = new List<List<string>>
             {
-                new() { "From", "To", "Sales", "GrossProfit", "Transactions", "Quantity", "MachineCount", "ProductCount", "UnmappedProductCount" },
-                new() { value.From.ToString("yyyy-MM-dd"), value.To.ToString("yyyy-MM-dd"), value.Sales.ToString(CultureInfo.InvariantCulture), Number(value.GrossProfit), value.Transactions.ToString(CultureInfo.InvariantCulture), value.Quantity.ToString(CultureInfo.InvariantCulture), value.MachineCount.ToString(), value.ProductCount.ToString(), value.UnmappedProductCount.ToString() }
+                new() { "From", "To", "Sales", "GrossProfit", "Transactions", "Quantity", "MachineCount", "ProductCount", "UnmappedProductCount", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader, FeeDataAvailabilityHeader, FeeDataAsOfUtcHeader, CombinedDataAvailabilityHeader },
+                new() { value.From.ToString(DateFormat), value.To.ToString(DateFormat), AvailabilityExportCells.Amount(value.Sales, dashboardSales), AvailabilityExportCells.Amount(value.GrossProfit, dashboardSales), AvailabilityExportCells.Amount(value.Transactions, dashboardSales), AvailabilityExportCells.Amount(value.Quantity, dashboardSales), AvailabilityExportCells.Amount(value.MachineCount, dashboardSales), AvailabilityExportCells.Amount(value.ProductCount, dashboardSales), AvailabilityExportCells.Amount(value.UnmappedProductCount, dashboardSales), AvailabilityExportCells.State(dashboardSales), AvailabilityExportCells.AsOfUtc(dashboardSales), AvailabilityExportCells.State(dashboardFees), AvailabilityExportCells.AsOfUtc(dashboardFees), AvailabilityExportCells.State(dashboardCombined) }
             };
             return new ReportExportTable(rows, "Report");
         }
         var products = await _getProductProfitabilityReport.Handle(filter, cancellationToken);
-        var productRows = new[] { new List<string> { "Product", "Sales", "Quantity", "CostOfGoods", "GrossProfit", "MarginPercent", "Transactions", "Unmapped" } }
-            .Concat(products.Rows.Select(x => new List<string> { x.ProductName, x.Sales.ToString(CultureInfo.InvariantCulture), x.Quantity.ToString(CultureInfo.InvariantCulture), Number(x.CostOfGoods), Number(x.GrossProfit), Number(x.MarginPercent), x.TransactionCount.ToString(CultureInfo.InvariantCulture), x.IsUnmapped.ToString() })).ToList();
+        // One state, because nothing in this report comes from a settlement import (issue #731).
+        var productSales = products.SalesAvailability;
+        var productRows = new[] { new List<string> { "Product", "Sales", "Quantity", "CostOfGoods", "GrossProfit", "MarginPercent", "Transactions", "Unmapped", SalesDataAvailabilityHeader, SalesDataAsOfUtcHeader } }
+            .Concat(products.Rows.Select(x => new List<string> { x.ProductName, AvailabilityExportCells.Amount(x.Sales, productSales), AvailabilityExportCells.Amount(x.Quantity, productSales), AvailabilityExportCells.Amount(x.CostOfGoods, productSales), AvailabilityExportCells.Amount(x.GrossProfit, productSales), AvailabilityExportCells.Amount(x.MarginPercent, productSales), AvailabilityExportCells.Amount(x.TransactionCount, productSales), x.IsUnmapped.ToString(), AvailabilityExportCells.State(productSales), AvailabilityExportCells.AsOfUtc(productSales) })).ToList();
+        // The same for an absent product: an empty product list is reported with the state behind
+        // it, never left to read as "nothing sold".
+        if (products.Rows.Count == 0)
+            productRows.Add(AvailabilityExportCells.NoRowsRow(productRows[0],
+                AvailabilityExportCells.State(productSales), AvailabilityExportCells.AsOfUtc(productSales)));
         return new ReportExportTable(productRows, "Report");
     }
 

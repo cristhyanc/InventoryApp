@@ -59,6 +59,17 @@ public sealed class EfProductProfitabilityReportFactsProvider : IProductProfitab
                 g.Where(x => PaymentMethodClassifier.Classify(x.PaymentMethod) == NayaxPaymentType.Cash).Sum(x => x.SettlementValue)))
             .ToList();
 
-        return new ProductProfitabilityReportFacts(saleGroups, catalogue);
+        // Every stored sale in scope, over every status and before the completed-sale filter
+        // (issue #731): a period holding only cancelled rows has sales data and no product rows at
+        // all, which is unverified rather than a measured "nothing sold".
+        var containsSalesRows = await EfReportingSharedQueries
+            .AllSalesQuery(_db, from, endExclusive, machineId).AnyAsync(cancellationToken);
+        var coverage = await EfReportingSharedQueries.CoverageFactsAsync(
+            _db, from, endExclusive, containsSalesRows, containsSettlementRows: false, cancellationToken);
+
+        return new ProductProfitabilityReportFacts(saleGroups, catalogue)
+        {
+            Coverage = coverage
+        };
     }
 }

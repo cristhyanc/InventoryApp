@@ -385,7 +385,8 @@ public class GetReportExportRowsTests
         var table = await Sut().Handle("daily", new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1)), CancellationToken.None);
 
         var headerLength = table.Rows[0].Count;
-        Assert.Equal(20, headerLength);
+        // 20 report columns plus issue #731's five availability-state columns.
+        Assert.Equal(25, headerLength);
         Assert.All(table.Rows, row => Assert.Equal(headerLength, row.Count));
     }
 

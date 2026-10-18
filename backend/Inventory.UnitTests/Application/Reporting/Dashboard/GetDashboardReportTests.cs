@@ -2,6 +2,7 @@ using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Shared;
+using Inventory.Domain.Reporting.Availability;
 using InventoryApi.Tests.Application.Reporting.Gst;
 using InventoryApi.Tests.Application.Reporting.ProductProfitability;
 using Xunit;
@@ -30,8 +31,16 @@ public class GetDashboardReportTests
             DirectMarginPercent = directMarginPercent,
             NayaxProcessingFees = hasMissingFeeRates
             ? new NayaxProcessingFeeResult(0m, 0m, 0m, 0m, 0m, 0m, 0, null, null, MissingRateTransactionCount: 3)
-            : new NayaxProcessingFeeResult(nayaxFeesExGst, 0.4m, nayaxFeesIncludingGst, 0m, 0m, 0m, 0, DateTime.UtcNow, null)
+            : new NayaxProcessingFeeResult(nayaxFeesExGst, 0.4m, nayaxFeesIncludingGst, 0m, 0m, 0m, 0, DateTime.UtcNow, null),
+            // The dashboard republishes the bookkeeping report's decided states (issue #731), so a
+            // test about something else says the provider data was fully accounted for and no
+            // availability note is added. DashboardReportAvailabilityTests replaces this.
+            ProviderAvailability = CompleteAvailability
         };
+
+    private static readonly ReportProviderAvailabilityDto CompleteAvailability = ReportProviderAvailabilityDto.From(
+        new ReportAvailabilityDto(nameof(ReportAvailabilityState.Complete), null),
+        new ReportAvailabilityDto(nameof(ReportAvailabilityState.Complete), null));
 
     private static ProductProfitabilityReportDto EmptyProductReport(bool containsUnmapped = false, string? note = null) => new(
         new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), [],

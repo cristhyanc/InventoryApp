@@ -59,4 +59,13 @@ public sealed record DailyReportFacts(
     bool ImportedContainsRows,
     bool ImportedContainsGstClassification,
     bool ImportedFeesMachineFilterLimited,
-    bool HasAnyPeriodOnlyImportedData);
+    bool HasAnyPeriodOnlyImportedData)
+{
+    /// <summary>
+    /// How well recorded provider coverage accounts for this period (issue #731, extending issue
+    /// #730's model to this report). It carries the business-day instants this report actually
+    /// selected its sales by, so a coverage range is compared with the window the figures were
+    /// measured over rather than with a plain calendar range.
+    /// </summary>
+    public ReportCoverageFacts Coverage { get; init; } = new();
+}

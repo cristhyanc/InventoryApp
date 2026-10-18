@@ -6,6 +6,25 @@ using Inventory.Domain.Reporting.ProductMatching;
 
 namespace Inventory.Application.Commissions;
 
+/// <summary>
+/// The site commission report use case: matches the business's live Nayax machine fleet to its sites,
+/// resolves the effective-dated agreement covering each completed sale, and totals what each site is
+/// owed and has been paid.
+///
+/// <para><b>An unusable provider is an availability answer, not an error</b> (issue #731, parent #329
+/// decision P9). A site is known only from the fleet read's <c>CustomerID</c>, so when the fleet is
+/// unavailable to this business there is nothing to calculate: this use case answers
+/// <see cref="SiteCommissionReport.Unavailable"/> with the reason instead of failing the request and
+/// taking the bookkeeping, GST, dashboard and machine profitability reports - all of which compose
+/// this one - down with it.</para>
+///
+/// <para><b>Exactly two answers degrade</b>, the same two <c>CalculateReorderNeeds</c> degrades on:
+/// <see cref="NayaxNotConnectedException"/> (no credentials an ordinary operation may use) and
+/// <see cref="NayaxPermissionNotGrantedException"/> (usable credentials, and Nayax refused this read
+/// for lack of permission). A transport failure, a cancellation, a <c>401</c> that closes the gate
+/// and the support-session refusal all propagate: an outage is not a business with no sites, and
+/// nothing here writes a connection status.</para>
+/// </summary>
 public sealed class GetSiteCommissionReport : IGetSiteCommissionReport
 {
     private readonly INayaxLynxClient _nayax;
@@ -33,7 +52,24 @@ public sealed class GetSiteCommissionReport : IGetSiteCommissionReport
     {
         from = from.Date;
         to = to.Date;
-        var machines = (await _nayax.GetMachinesAsync(cancellationToken))
+
+        List<NayaxMachine> fleet;
+        try
+        {
+            fleet = await _nayax.GetMachinesAsync(cancellationToken);
+        }
+        catch (NayaxNotConnectedException)
+        {
+            // No usable connection for this business, and no request reached Nayax: the credential
+            // provider refuses before the stored connection is read.
+            return SiteCommissionReport.Unavailable(from, to, SiteCommissionUnavailableReason.NayaxNotConnected);
+        }
+        catch (NayaxPermissionNotGrantedException)
+        {
+            return SiteCommissionReport.Unavailable(from, to, SiteCommissionUnavailableReason.PermissionNotGranted);
+        }
+
+        var machines = fleet
             .Where(machine => machine.CustomerID.HasValue && (!siteId.HasValue || machine.CustomerID == siteId))
             .ToList();
         var siteMachines = machines.GroupBy(machine => machine.CustomerID!.Value).ToList();

@@ -1,4 +1,4 @@
-import { NayaxProcessingFeeResult, ReportQuality } from '../../shared/models/reporting.models';
+import { NayaxProcessingFeeResult, ReportProviderAvailability, ReportQuality } from '../../shared/models/reporting.models';
 
 export interface DashboardReport {
   from: string; to: string; sales: number; grossProfit?: number | null; transactions: number;
@@ -17,4 +17,13 @@ export interface DashboardReport {
   isReconciled?: boolean; reconciliationStatus?: string; reconciliationTolerance?: number;
   adjustmentsSupported?: boolean;
   nayaxProcessingFees?: NayaxProcessingFeeResult;
+  /**
+   * The states the bookkeeping report decided, republished here (issue #731): this summary composes
+   * that report for every provider figure it shows. `sales` governs sales, the card/cash split and
+   * their counts, quantity, cost of goods, gross profit and margin, average sale and site
+   * commission; `fees` governs the Nayax fees and the actual reimbursement; `combined` governs net
+   * and direct profit and their margins and the reimbursement reconciliation. Delivery, packaging
+   * and operating expenses are this business's own records and carry no state.
+   */
+  providerAvailability?: ReportProviderAvailability;
 }

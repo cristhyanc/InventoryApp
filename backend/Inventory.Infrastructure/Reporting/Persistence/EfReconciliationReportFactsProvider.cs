@@ -65,6 +65,16 @@ public sealed class EfReconciliationReportFactsProvider : IReconciliationReportF
         if (periods.Count == 0)
             periods.Add(BuildPeriodFacts(null, sales, statusSales, machineId, from, to));
 
+        var coverage = await EfReportingSharedQueries.CoverageFactsAsync(
+            _db, from, endExclusive, statusSales.Count > 0,
+            // Any imported reimbursement *overlapping* the range, not only one this report could
+            // match entirely inside it (issue #731). A settlement that straddles the boundary is
+            // still settlement data for these dates, so the fee figures are unverified rather than
+            // missing - the two answers mean different things.
+            reimbursements.Any(x => x.ReimbursementStartDate!.Value.Date < endExclusive &&
+                x.ReimbursementEndDate!.Value.Date >= from.Date),
+            cancellationToken);
+
         return new ReconciliationReportFacts(
             periods,
             HasMatchedReimbursement: matching.Count != 0,
@@ -80,7 +90,10 @@ public sealed class EfReconciliationReportFactsProvider : IReconciliationReportF
             DeclinedOrCancelledTransactionCount: CountStatus(statusSales, NayaxTransactionStatus.CancelledOrDeclined),
             UnknownStatusTransactionCount: CountUnrecognisedStatus(statusSales),
             NullStatusTransactionCount: CountMissingStatus(statusSales),
-            IsMachineFiltered: isMachineFiltered);
+            IsMachineFiltered: isMachineFiltered)
+        {
+            Coverage = coverage
+        };
     }
 
     // The status counts are read before the completed-sale predicate removes those rows, which is

@@ -64,6 +64,11 @@ public sealed class GetMachineProfitabilityReport
             qualityNotes.Add("Commission configuration is incomplete; profit is unavailable.");
         qualityNotes.AddRange(facts.CommissionWarnings);
 
+        // How well recorded provider coverage accounts for this period (issue #731, under issue
+        // #730's model), decided by the one Domain policy from the sources that feed each family.
+        var availability = facts.Coverage.Availability();
+        ReportAvailabilityNotes.AddBoth(qualityNotes, availability, SalesFigures, FeeFigures);
+
         var quality = ReportingQuality.Quality(
             missingStatus: true,
             historicalCostUnavailable: rows.Any(x => !x.IsCogsComplete),
@@ -72,6 +77,20 @@ public sealed class GetMachineProfitabilityReport
             containsUnmappedProducts: false,
             notes: qualityNotes);
 
-        return new MachineProfitabilityReportDto(range.From, range.ToDate, rows, quality);
+        return new MachineProfitabilityReportDto(range.From, range.ToDate, rows, quality)
+        {
+            ProviderAvailability = availability
+        };
     }
+
+    /// <summary>
+    /// The sales-sourced figures this report shows, named for its own columns. The machine list is
+    /// named too: a machine with no sales at all simply does not appear, so an absent machine is the
+    /// figure a reader is most likely to misread.
+    /// </summary>
+    public const string SalesFigures =
+        "Each machine's sales, quantity, cost of goods, gross profit and commission, and the list of machines itself";
+
+    /// <summary>The settlement-sourced part of each machine's fees.</summary>
+    public const string FeeFigures = "The actual Nayax processing fees charged to each machine";
 }

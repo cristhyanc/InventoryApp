@@ -1,4 +1,4 @@
-import { ReportQuality } from '../../shared/models/reporting.models';
+import { ReportAvailability, ReportQuality } from '../../shared/models/reporting.models';
 
 export interface TransactionSalesFilter {
   from?: string; to?: string; machineId?: number | null; siteId?: number | null; productId?: number | null;
@@ -29,4 +29,12 @@ export interface TransactionSalesReport {
   from: string; to: string; rows: TransactionSalesRow[]; totals: TransactionSalesTotals; dataQuality: ReportQuality;
   page: number; pageSize: number; totalCount: number;
   filterOptions: { sites: TransactionSalesFilterOption[]; products: TransactionSalesFilterOption[]; };
+  /**
+   * How well recorded provider coverage accounts for this period's stored sales (issue #731). One
+   * state, not the two-family split: every total here comes from the stored transactions, including
+   * the per-transaction fee, which is an effective-dated estimate and never an imported settlement
+   * amount. Each listed row is a stored fact and is shown exactly as recorded; what this state adds
+   * is whether those rows are all of them.
+   */
+  salesAvailability?: ReportAvailability;
 }

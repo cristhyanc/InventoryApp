@@ -1,6 +1,9 @@
 using Inventory.Infrastructure.Data;
 using Inventory.Application.Commissions;
+using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
+using Inventory.Domain.Reporting.Availability;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
@@ -24,6 +27,62 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 /// </summary>
 internal static class EfReportingSharedQueries
 {
+    /// <summary>
+    /// The provider coverage overlapping one report period (issue #730 for bookkeeping, issue #731
+    /// for every other sales-based report), grouped by what each range accounts for: sale instants,
+    /// from a fully successful synchronization or a committed sales file import, and settlement
+    /// periods, from a committed settlement import.
+    ///
+    /// <para>One query shared by every reporting adapter, so the six reports cannot read coverage
+    /// differently. No machine predicate, because coverage is about whether provider data was
+    /// retrieved for the business at all - a machine filter narrows which stored rows a figure
+    /// counts, not which runs happened. No provider predicate either: every connected provider's
+    /// data feeds the same combined figures today, and a provider filter is explicitly a later
+    /// change (parent #329, P5). Reads go through the tenant query filters on
+    /// <see cref="AppDbContext"/>; there is no business predicate here, by design (AGENTS.md
+    /// § Tenant ownership and data isolation).</para>
+    /// </summary>
+    /// <param name="db">The request's tenant-filtered context.</param>
+    /// <param name="periodStartUtc">
+    /// The inclusive start of the window the caller filtered its own rows by, which is the only
+    /// window its coverage may be compared with.
+    /// </param>
+    /// <param name="periodEndExclusiveUtc">That window's exclusive end.</param>
+    /// <param name="containsSalesRows">
+    /// Whether the period and scope holds any stored provider sale at all, counted before the
+    /// completed-sale filter - never derived from an amount.
+    /// </param>
+    /// <param name="containsSettlementRows">Whether it holds any imported settlement row.</param>
+    /// <param name="cancellationToken">The request's cancellation token.</param>
+    public static async Task<ReportCoverageFacts> CoverageFactsAsync(
+        AppDbContext db,
+        DateTime periodStartUtc,
+        DateTime periodEndExclusiveUtc,
+        bool containsSalesRows,
+        bool containsSettlementRows,
+        CancellationToken cancellationToken)
+    {
+        var rows = await db.ProviderDataCoverages.AsNoTracking()
+            .Where(x => x.FromUtc < periodEndExclusiveUtc && x.ToUtc > periodStartUtc)
+            .Select(x => new { x.Source, x.FromUtc, x.ToUtc })
+            .ToListAsync(cancellationToken);
+
+        List<ReportCoverageRange> Ranges(params ProviderDataSource[] sources) =>
+            rows.Where(x => sources.Contains(x.Source))
+                .Select(x => new ReportCoverageRange(x.FromUtc, x.ToUtc))
+                .ToList();
+
+        return new ReportCoverageFacts
+        {
+            PeriodStartUtc = periodStartUtc,
+            PeriodEndExclusiveUtc = periodEndExclusiveUtc,
+            SalesCoverage = Ranges(ProviderDataSource.SalesSync, ProviderDataSource.SalesFileImport),
+            SettlementCoverage = Ranges(ProviderDataSource.SettlementImport),
+            ContainsSalesRows = containsSalesRows,
+            ContainsSettlementRows = containsSettlementRows,
+        };
+    }
+
     public static IQueryable<NayaxSales> AllSalesQuery(AppDbContext db, DateTime from, DateTime endExclusive, long? machineId) =>
         db.NayaxSales.AsNoTracking().Where(x => x.MachineAuthorizationTime >= from && x.MachineAuthorizationTime < endExclusive &&
             (!machineId.HasValue || x.MachineID == machineId.Value));
@@ -51,6 +110,24 @@ internal static class EfReportingSharedQueries
         long? machineId, CancellationToken cancellationToken)
     {
         var report = await siteCommissions.Handle(from, to, null, cancellationToken);
+
+        // An unusable provider makes the commission report an availability answer rather than a set
+        // of zero-commission sites (issue #731). Commission therefore stays *incomplete* here: a
+        // site that cannot be identified is not a site that is owed nothing, so the direct and net
+        // profit figures this result gates must come out unavailable rather than overstated. This is
+        // the established rule, not a new one - AGENTS.md § Site commissions: "No agreement is a
+        // valid zero-commission case. Incomplete coverage ... must make affected reports
+        // provisional rather than selecting one silently."
+        if (!report.IsAvailable)
+        {
+            var reason = report.UnavailableReason
+                ?? SiteCommissionUnavailableReason.NayaxNotConnected;
+            return new(
+                new Dictionary<long, MachineCommission>(), IsComplete: false,
+                HasConfigurationGap: false, HasOverlap: false, HasMissingSiteMapping: true,
+                UsesMultipleRates: false,
+                Warnings: [SiteCommissionUnavailableReasons.Describe(reason)]);
+        }
 
         var relevantRows = report.Rows.Where(site => !machineId.HasValue || site.Machines.Any(machine => machine.MachineId == machineId.Value)).ToList();
         var machines = relevantRows.SelectMany(site => site.Machines.Select(machine =>

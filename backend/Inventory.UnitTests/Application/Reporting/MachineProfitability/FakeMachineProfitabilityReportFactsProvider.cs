@@ -1,5 +1,6 @@
 using Inventory.Application.Reporting.MachineProfitability;
 using Inventory.Application.Reporting.Shared;
+using InventoryApi.Tests.Application.Reporting.Shared;
 
 namespace InventoryApi.Tests.Application.Reporting.MachineProfitability;
 
@@ -21,14 +22,17 @@ public sealed class FakeMachineProfitabilityReportFactsProvider : IMachineProfit
         return Task.FromResult(_facts);
     }
 
-    public static MachineProfitabilityReportFacts Empty() =>
-        new(Array.Empty<MachineProfitabilityMachineFacts>(), 0, true, Array.Empty<string>());
+    public static MachineProfitabilityReportFacts Empty(ReportCoverageFacts? coverage = null) =>
+        new(Array.Empty<MachineProfitabilityMachineFacts>(), 0, true, Array.Empty<string>())
+        {
+            Coverage = coverage ?? TestReportCoverage.Complete()
+        };
 
     public static MachineProfitabilityReportFacts SingleMachine(
         long machineId = 10, string machineName = "Machine A", decimal sales = 100m, decimal cost = 40m,
         decimal cardSales = 80m, decimal cashSales = 20m, bool isCogsComplete = true,
         decimal commissionDue = 5m, bool commissionComplete = true, decimal operatingExpenses = 2m,
-        bool hasMissingFeeRates = false) => new(
+        bool hasMissingFeeRates = false, ReportCoverageFacts? coverage = null) => new(
         [
             new MachineProfitabilityMachineFacts(machineId, machineName, sales, cardSales, cashSales, 10m,
                 cost, isCogsComplete, isCogsComplete ? 0 : 1, isCogsComplete ? 0m : sales, 10,
@@ -36,5 +40,10 @@ public sealed class FakeMachineProfitabilityReportFactsProvider : IMachineProfit
                 new NayaxProcessingFeeResult(4m, 0.4m, 4.4m, 0m, 0m, 0m, 0, DateTime.UtcNow, null,
                     hasMissingFeeRates ? 1 : 0))
         ],
-        hasMissingFeeRates ? 1 : 0, commissionComplete, Array.Empty<string>());
+        hasMissingFeeRates ? 1 : 0, commissionComplete, Array.Empty<string>())
+        {
+            // Fully accounted for unless a test replaces it, so a test about something else is
+            // never incidentally about provider coverage (issue #731).
+            Coverage = coverage ?? TestReportCoverage.Complete()
+        };
 }

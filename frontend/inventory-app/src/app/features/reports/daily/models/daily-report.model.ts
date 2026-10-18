@@ -1,4 +1,4 @@
-import { NayaxProcessingFeeResult, ReportQuality } from '../../shared/models/reporting.models';
+import { NayaxProcessingFeeResult, ReportProviderAvailability, ReportQuality } from '../../shared/models/reporting.models';
 
 export interface DailyRow {
   date: string; sales: number; grossSales?: number; cardSales?: number; cashSales?: number;
@@ -21,4 +21,14 @@ export interface DailyTotals {
   importedReimbursement: number; netReimbursement: number;
   nayaxProcessingFees?: NayaxProcessingFeeResult;
 }
-export interface DailyReport { from: string; to: string; rows: DailyRow[]; dataQuality: ReportQuality; totals?: DailyTotals; }
+export interface DailyReport {
+  from: string; to: string; rows: DailyRow[]; dataQuality: ReportQuality; totals?: DailyTotals;
+  /**
+   * How well recorded provider coverage accounts for this period (issue #731). `sales` governs gross
+   * sales, the card/cash split, the counts, cost of goods, gross profit and the margin; `fees`
+   * governs the imported reimbursement and the net reimbursement; `combined` governs the
+   * reconciliation status, which compares the two. Optional because an older API response does not
+   * carry it.
+   */
+  providerAvailability?: ReportProviderAvailability;
+}

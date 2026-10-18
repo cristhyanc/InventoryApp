@@ -1,5 +1,6 @@
 using Inventory.Application.Reporting.Daily;
 using Inventory.Application.Reporting.Shared;
+using InventoryApi.Tests.Application.Reporting.Shared;
 
 namespace InventoryApi.Tests.Application.Reporting.Daily;
 
@@ -45,7 +46,8 @@ public sealed class FakeDailyReportFactsProvider : IDailyReportFactsProvider
         int unknownStatusTransactionCount = 0,
         int nullStatusTransactionCount = 0,
         bool importedFeesMachineFilterLimited = false,
-        bool hasAnyPeriodOnlyImportedData = false)
+        bool hasAnyPeriodOnlyImportedData = false,
+        ReportCoverageFacts? coverage = null)
     {
         var fees = processingFees ?? new NayaxProcessingFeeResult(4m, 0.4m, 4.4m, 0m, 0m, 0m, 0, DateTime.UtcNow, null);
         var day = new DailyReportDayFacts(
@@ -59,6 +61,11 @@ public sealed class FakeDailyReportFactsProvider : IDailyReportFactsProvider
             completedTransactionCount, pendingTransactionCount, declinedOrCancelledTransactionCount,
             refundedTransactionCount, unknownStatusTransactionCount, nullStatusTransactionCount);
         return new DailyReportFacts(new List<DailyReportDayFacts> { day }, totals, importedContainsRows, true,
-            importedFeesMachineFilterLimited, hasAnyPeriodOnlyImportedData);
+            importedFeesMachineFilterLimited, hasAnyPeriodOnlyImportedData)
+        {
+            // Fully accounted for unless a test replaces it, so a test about something else is
+            // never incidentally about provider coverage (issue #731).
+            Coverage = coverage ?? TestReportCoverage.Complete()
+        };
     }
 }

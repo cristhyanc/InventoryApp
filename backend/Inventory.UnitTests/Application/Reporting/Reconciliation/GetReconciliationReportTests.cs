@@ -1,5 +1,6 @@
 using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
+using InventoryApi.Tests.Application.Reporting.Shared;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Reporting.Reconciliation;
@@ -21,7 +22,8 @@ public class GetReconciliationReportTests
         int declinedOrCancelledTransactionCount = 0,
         int unknownStatusTransactionCount = 0,
         int nullStatusTransactionCount = 0,
-        bool isMachineFiltered = false) =>
+        bool isMachineFiltered = false,
+        ReportCoverageFacts? coverage = null) =>
         new(periods, hasMatchedReimbursement,
             TotalVendingSales: periods.Sum(x => x.TotalVendingSales),
             CardSales: periods.Sum(x => x.CardSales),
@@ -31,7 +33,12 @@ public class GetReconciliationReportTests
             CashTransactionCount: periods.Sum(x => x.CashTransactionCount),
             unknownPaymentTransactionCount, pendingTransactionCount, refundedTransactionCount,
             declinedOrCancelledTransactionCount, unknownStatusTransactionCount, nullStatusTransactionCount,
-            isMachineFiltered);
+            isMachineFiltered)
+        {
+            // Fully accounted for unless a test replaces it, so a test about something else is
+            // never incidentally about provider coverage (issue #731).
+            Coverage = coverage ?? TestReportCoverage.Complete()
+        };
 
     [Fact]
     public async Task Matched_period_within_tolerance_is_reconciled_and_totals_mirror_the_single_period()
