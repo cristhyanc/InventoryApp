@@ -56,9 +56,11 @@ public static class NayaxSaleProductResolutionArguments
         var sawApply = false;
         var sawDryRun = false;
 
-        for (var index = 1; index < args.Length; index++)
+        var index = 1;
+        while (index < args.Length)
         {
             var argument = args[index];
+            index++;
 
             if (string.Equals(argument, ApplyFlag, StringComparison.OrdinalIgnoreCase))
             {
@@ -70,30 +72,15 @@ public static class NayaxSaleProductResolutionArguments
             }
             else if (string.Equals(argument, DecideFlag, StringComparison.OrdinalIgnoreCase))
             {
-                if (index + 1 >= args.Length)
-                {
-                    error = $"{DecideFlag} needs a <saleId>=<productId> pair. {Usage}";
+                if (!TryTakeDecision(args, ref index, out var decision, out error))
                     return false;
-                }
-
-                if (!TryParsePair(args[++index], out var decision))
-                {
-                    error = $"'{args[index]}' is not a <saleId>=<productId> pair of positive whole "
-                        + $"numbers. {Usage}";
-                    return false;
-                }
 
                 parsed.Add(decision);
             }
             else if (string.Equals(argument, DecidedByFlag, StringComparison.OrdinalIgnoreCase))
             {
-                if (index + 1 >= args.Length || string.IsNullOrWhiteSpace(args[index + 1]))
-                {
-                    error = $"{DecidedByFlag} needs the identity to record on the audit rows. {Usage}";
+                if (!TryTakeDecidedBy(args, ref index, out decidedBy, out error))
                     return false;
-                }
-
-                decidedBy = args[++index].Trim();
             }
             else
             {
@@ -105,6 +92,59 @@ public static class NayaxSaleProductResolutionArguments
             }
         }
 
+        if (!AreFlagsConsistent(sawApply, sawDryRun, parsed, decidedBy, out error))
+            return false;
+
+        apply = sawApply;
+        return true;
+    }
+
+    private static bool TryTakeDecision(
+        string[] args, ref int index, out NayaxSaleProductDecision decision, out string error)
+    {
+        decision = new NayaxSaleProductDecision(0, 0);
+
+        if (index >= args.Length)
+        {
+            error = $"{DecideFlag} needs a <saleId>=<productId> pair. {Usage}";
+            return false;
+        }
+
+        var pair = args[index];
+        index++;
+
+        if (!TryParsePair(pair, out decision))
+        {
+            error = $"'{pair}' is not a <saleId>=<productId> pair of positive whole numbers. {Usage}";
+            return false;
+        }
+
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool TryTakeDecidedBy(string[] args, ref int index, out string decidedBy, out string error)
+    {
+        if (index >= args.Length || string.IsNullOrWhiteSpace(args[index]))
+        {
+            decidedBy = string.Empty;
+            error = $"{DecidedByFlag} needs the identity to record on the audit rows. {Usage}";
+            return false;
+        }
+
+        decidedBy = args[index].Trim();
+        index++;
+        error = string.Empty;
+        return true;
+    }
+
+    private static bool AreFlagsConsistent(
+        bool sawApply,
+        bool sawDryRun,
+        IReadOnlyCollection<NayaxSaleProductDecision> parsed,
+        string decidedBy,
+        out string error)
+    {
         if (sawApply && sawDryRun)
         {
             error = $"{ApplyFlag} and {DryRunFlag} are mutually exclusive. "
@@ -118,15 +158,15 @@ public static class NayaxSaleProductResolutionArguments
             return false;
         }
 
+        // Who decided is part of the audit row, so an apply cannot write one without it.
         if (sawApply && parsed.Count > 0 && decidedBy.Length == 0)
         {
-            // Who decided is part of the audit row, so an apply cannot write one without it.
             error = $"{DecidedByFlag} is required when applying a decision: the audit row records "
                 + "who chose the product.";
             return false;
         }
 
-        apply = sawApply;
+        error = string.Empty;
         return true;
     }
 

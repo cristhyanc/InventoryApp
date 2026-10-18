@@ -2,7 +2,6 @@ using Inventory.Application;
 using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
-using Inventory.Domain.Reporting.ProductMatching;
 using Microsoft.Extensions.DependencyInjection;
 using Moq;
 using Xunit;
@@ -22,7 +21,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task Unforced_costing_keeps_an_already_costed_sale_unchanged()
     {
-        var store = new FakeStore(Product(10, "Snack"));
+        var store = new FakeStore();
         var rebuild = LedgerCost(10, 1.50m);
         var sale = Sale(1, productId: 10, nayaxCost: 1.20m, unitCost: 0.90m, status: SaleCostStatus.Costed);
 
@@ -36,7 +35,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task Forced_costing_recosts_an_already_costed_sale_from_the_inventory_ledger()
     {
-        var store = new FakeStore(Product(10, "Snack"));
+        var store = new FakeStore();
         var sale = Sale(1, productId: 10, nayaxCost: 1.20m, unitCost: 0.90m, status: SaleCostStatus.Costed);
 
         var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale, force: true);
@@ -47,7 +46,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task A_costed_sale_missing_its_cost_values_is_recosted_without_force()
     {
-        var store = new FakeStore(Product(10, "Snack"));
+        var store = new FakeStore();
         var sale = Sale(1, productId: 10, nayaxCost: 1.20m, unitCost: null, status: SaleCostStatus.Costed);
 
         var cost = await new CostSale(store, LedgerCost(10, null).Object).Handle(sale);
@@ -58,7 +57,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task An_unresolved_sale_without_a_Nayax_cost_is_an_error_and_never_reads_the_ledger()
     {
-        var store = new FakeStore(Product(10, "Snack"));
+        var store = new FakeStore();
         var rebuild = LedgerCost(10, 1.50m);
         var sale = Sale(1, productId: null, nayaxCost: null, productName: "Unknown drink");
 
@@ -72,7 +71,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task An_unresolved_sale_with_a_Nayax_cost_is_costed_from_the_Nayax_export()
     {
-        var store = new FakeStore(Product(10, "Snack"));
+        var store = new FakeStore();
         var sale = Sale(1, productId: null, nayaxCost: 1.10m, productName: "Unknown drink");
 
         var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale);
@@ -88,7 +87,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task An_unresolved_sale_is_never_costed_from_a_product_its_name_would_match()
     {
-        var store = new FakeStore(Product(10, "Snack"));
+        var store = new FakeStore();
         var rebuild = LedgerCost(10, 1.50m);
         var sale = Sale(1, productId: null, nayaxCost: null, productName: "Snack (3.00)");
 
@@ -102,7 +101,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task A_sale_at_or_before_the_transition_cutoff_is_not_costed_from_the_ledger()
     {
-        var store = new FakeStore(Product(10, "Snack")) { Cutoffs = { [10] = SaleAt } };
+        var store = new FakeStore { Cutoffs = { [10] = SaleAt } };
         var sale = Sale(1, productId: 10, nayaxCost: null);
 
         var cost = await new CostSale(store, LedgerCost(10, 1.50m).Object).Handle(sale);
@@ -113,7 +112,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task A_sale_that_is_not_completed_is_left_uncosted_and_pending_even_when_forced()
     {
-        var store = new FakeStore(Product(10, "Snack"));
+        var store = new FakeStore();
         var sale = Sale(1, productId: 10, nayaxCost: 1.10m, unitCost: 1m, status: SaleCostStatus.Costed,
             transactionStatusId: NayaxTransactionStatusIds.Refunded);
 
@@ -125,7 +124,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task Backfill_dry_run_reports_without_staging_or_saving_and_apply_persists()
     {
-        var store = new FakeStore(Product(10, "Snack"))
+        var store = new FakeStore
         {
             Sales =
             {
@@ -156,7 +155,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task Unforced_backfill_counts_finalized_sales_and_does_not_recost_them()
     {
-        var store = new FakeStore(Product(10, "Snack"))
+        var store = new FakeStore
         {
             Sales =
             {
@@ -175,7 +174,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task Repeating_an_applied_backfill_yields_the_same_costs()
     {
-        var store = new FakeStore(Product(10, "Snack")) { Sales = { Sale(1, productId: 10, nayaxCost: 1m) } };
+        var store = new FakeStore { Sales = { Sale(1, productId: 10, nayaxCost: 1m) } };
         var backfill = new BackfillSaleCosts(store, new CostSale(store, LedgerCost(10, 1.50m).Object));
 
         await backfill.Handle(dryRun: false, force: true);
@@ -189,7 +188,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task Pending_sales_costing_filters_by_the_persisted_association_and_saves_once()
     {
-        var store = new FakeStore(Product(10, "Snack"), Product(20, "Drink"))
+        var store = new FakeStore()
         {
             Sales =
             {
@@ -213,7 +212,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task Pending_sales_costing_with_nothing_pending_saves_nothing()
     {
-        var store = new FakeStore(Product(10, "Snack"));
+        var store = new FakeStore();
 
         Assert.Equal(0, await new CostPendingSales(store, new CostSale(store, LedgerCost(10, 1m).Object)).Handle());
         Assert.Equal(0, store.SaveCount);
@@ -222,7 +221,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task Historical_backfill_dry_run_stages_nothing_and_apply_costs_only_eligible_sales()
     {
-        var store = new FakeStore(Product(10, "Snack"))
+        var store = new FakeStore
         {
             Sales =
             {
@@ -254,7 +253,7 @@ public class SaleCostingUseCaseTests
     [Fact]
     public async Task Forced_historical_backfill_replaces_a_final_cost_with_the_Nayax_export_cost()
     {
-        var store = new FakeStore(Product(10, "Snack"))
+        var store = new FakeStore
         {
             Sales = { Sale(5, productId: 10, nayaxCost: 1.30m, unitCost: 0.90m, status: SaleCostStatus.Costed) },
         };
@@ -270,7 +269,7 @@ public class SaleCostingUseCaseTests
     {
         var from = SaleAt.AddDays(-1);
         var to = SaleAt.AddDays(1);
-        var store = new FakeStore(Product(10, "Snack"))
+        var store = new FakeStore
         {
             Sales =
             {
@@ -294,7 +293,7 @@ public class SaleCostingUseCaseTests
         // sale; it never calls the Nayax API. Every Nayax read fails here, and the backfills resolved
         // through the real Application registrations still complete and never touch the client.
         var nayax = new Mock<INayaxLynxClient>(MockBehavior.Strict);
-        var store = new FakeStore(Product(10, "Snack")) { Sales = { Sale(1, productId: 10, nayaxCost: 1.10m) } };
+        var store = new FakeStore { Sales = { Sale(1, productId: 10, nayaxCost: 1.10m) } };
         var services = new ServiceCollection()
             .AddApplicationServices()
             .AddSingleton(nayax.Object)
@@ -313,8 +312,6 @@ public class SaleCostingUseCaseTests
         Assert.Equal(1, backfill.CostedCount);
         nayax.VerifyNoOtherCalls();
     }
-
-    private static ProductMatchCandidate Product(long id, string name) => new(id, name);
 
     private static Mock<IRebuildProductCost> LedgerCost(long productId, decimal? cost)
     {
@@ -349,7 +346,7 @@ public class SaleCostingUseCaseTests
             CostingStatus = status,
         };
 
-    private sealed class FakeStore(params ProductMatchCandidate[] products) : ISaleCostingStore
+    private sealed class FakeStore : ISaleCostingStore
     {
         public List<CostableSale> Sales { get; } = [];
         public Dictionary<long, DateTime> Cutoffs { get; } = [];
@@ -357,9 +354,6 @@ public class SaleCostingUseCaseTests
         public CompletedSaleSelection? LastSelection { get; private set; }
         public bool LastLoadForUpdate { get; private set; }
         public int SaveCount { get; private set; }
-
-        public Task<IReadOnlyList<ProductMatchCandidate>> GetProductCandidatesAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<IReadOnlyList<ProductMatchCandidate>>(products);
 
         public Task<DateTime?> GetTransitionCutoffAsync(long productId, CancellationToken cancellationToken) =>
             Task.FromResult(Cutoffs.TryGetValue(productId, out var cutoff) ? cutoff : (DateTime?)null);

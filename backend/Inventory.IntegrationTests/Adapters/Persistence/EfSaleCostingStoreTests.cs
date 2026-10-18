@@ -68,7 +68,6 @@ public class EfSaleCostingStoreTests
         await using var db = TestAppDbContext.For(options, BusinessB);
         var store = new EfSaleCostingStore(db);
 
-        Assert.Equal([ProductB], (await store.GetProductCandidatesAsync(CancellationToken.None)).Select(p => p.Id));
         Assert.Null(await store.GetTransitionCutoffAsync(ProductA, CancellationToken.None));
         var sale = Assert.Single(await store.LoadCompletedSalesAsync(new CompletedSaleSelection(), forUpdate: false, CancellationToken.None));
         Assert.Equal(9m, sale.NayaxProductCostPrice);
@@ -90,7 +89,6 @@ public class EfSaleCostingStoreTests
         await using (var db = TestAppDbContext.Denied(options))
         {
             var store = new EfSaleCostingStore(db);
-            Assert.Empty(await store.GetProductCandidatesAsync(CancellationToken.None));
             Assert.Empty(await store.LoadCompletedSalesAsync(new CompletedSaleSelection(), forUpdate: true, CancellationToken.None));
             Assert.Equal(0, (await TestCostingUseCases.BackfillNayaxHistoricalSaleCosts(db).Handle(dryRun: false)).SalesReviewed);
         }

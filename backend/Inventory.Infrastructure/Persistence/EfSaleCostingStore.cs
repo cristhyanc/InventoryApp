@@ -1,5 +1,4 @@
 using Inventory.Application.Costing;
-using Inventory.Domain.Reporting.ProductMatching;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -23,11 +22,6 @@ public sealed class EfSaleCostingStore : ISaleCostingStore
     private readonly AppDbContext _db;
 
     public EfSaleCostingStore(AppDbContext db) => _db = db;
-
-    public async Task<IReadOnlyList<ProductMatchCandidate>> GetProductCandidatesAsync(CancellationToken cancellationToken) =>
-        (await _db.Products.ToListAsync(cancellationToken))
-            .Select(product => new ProductMatchCandidate(product.Id, product.Name))
-            .ToList();
 
     public Task<DateTime?> GetTransitionCutoffAsync(long productId, CancellationToken cancellationToken) =>
         _db.InventoryCostTransitionBaselines.AsNoTracking()

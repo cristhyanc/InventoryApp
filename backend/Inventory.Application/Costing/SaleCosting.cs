@@ -1,5 +1,3 @@
-using Inventory.Domain.Reporting.ProductMatching;
-
 namespace Inventory.Application.Costing;
 
 /// <summary>
@@ -80,9 +78,6 @@ public sealed record CompletedSaleSelection(bool PendingOnly = false, DateTime? 
 /// </summary>
 public interface ISaleCostingStore
 {
-    /// <summary>The caller's product catalogue, as the Domain <see cref="ProductMatcher"/> consumes it.</summary>
-    Task<IReadOnlyList<ProductMatchCandidate>> GetProductCandidatesAsync(CancellationToken cancellationToken);
-
     /// <summary>The product's inventory-cost transition baseline cutoff, or <c>null</c> when it has none.</summary>
     Task<DateTime?> GetTransitionCutoffAsync(long productId, CancellationToken cancellationToken);
 
