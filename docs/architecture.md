@@ -9340,10 +9340,15 @@ column is single-valued, which is the simplification this model exists for.
 **Nothing can cross a business any more, by construction.** The id is on the row it belongs to, so it
 cannot name another business's row and cannot outlive a deleted one — the composite foreign key and
 cascade the link tables needed have nothing left to guard. The `(BusinessId, Id)` alternate keys that
-#732 added to `Products` and `Categories` stay until #760 drops the tables that use them, and with
-them the two consequences worth knowing: the migration that added them rebuilt both tables (SQLite
-cannot add a constraint in place), and `BusinessId` being part of a key means EF refuses outright to
-modify it on a tracked entity, before `BusinessOwnershipEnforcer`'s immutability rule is reached.
+#732 added to `Products` and `Categories` stay, and two consequences of them are worth knowing: the
+migration that added them rebuilt both tables (SQLite cannot add a constraint in place), and
+`BusinessId` being part of a key means EF refuses outright to modify it on a tracked entity, before
+`BusinessOwnershipEnforcer`'s immutability rule is reached. The one on `Products` is **not** only the
+link tables' principal and does not go away with them: since #758 it is what
+`NayaxSales.ProductId`'s `(BusinessId, ProductId)` foreign key points at (see
+[The sale's own product](#the-sales-own-product-issue-758)), so #760 drops the link tables alone and
+that constraint stays — it is the database-level guarantee that a sale names a product of its own
+business. The one on `Categories` has only the link table behind it today.
 
 **The migration copies, verifies, and refuses rather than guessing.** `AddProviderIdentityColumns`
 adds the three columns and two indexes, sets `SalesProvider = Nayax` for every business with a
@@ -9415,6 +9420,18 @@ no key yet, so the product is pointed at the category **row** (the `Product.Cate
 EF writes the key the insert assigns into `Product.CategoryId`. A recorded category is still named by
 its foreign key, and an unresolvable group still leaves the product uncategorised rather than
 pointing it at a local category that merely shares the number.
+
+`AssignCategory` writes **both** the navigation and the foreign key on every entry, including to
+clear them. A snapshot may name the same product twice, and its last occurrence decides the category
+as it decides the name and the price; writing one of the pair alone would leave the other holding
+what an earlier occurrence put there — a navigation to a category this import is creating beside a
+foreign key since cleared or pointed elsewhere — and `SaveChanges` would then write whichever of the
+two disagreeing values EF's change detection happens to prefer. So a recorded category is assigned to
+both, no resolvable group clears both, and a created one is assigned to the navigation with the
+foreign key left empty, which is the ordinary way to name a principal whose key does not exist yet.
+`EfNayaxProductCatalogImportStoreNayaxLinkTests` repeats one product across each pair of cases —
+created group then none, created group then an unknown one, created then recorded and recorded then
+created — and reads the category back from a reopened context.
 
 **No migration, and no re-keying.** Every id already stored stays exactly as it is — including the
 Nayax ids the #732 backfill and the #759 copy recorded on the rows that existed — and every foreign

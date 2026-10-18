@@ -234,6 +234,76 @@ public class EfNayaxProductCatalogImportStoreNayaxLinkTests : IDisposable
     }
 
     /// <summary>
+    /// A snapshot that names the same product twice, where the first occurrence puts it in a group
+    /// this import is creating and the last leaves it with no resolvable group at all - no group id,
+    /// or one that is neither recorded nor in this snapshot. The last occurrence is the one the
+    /// import applies, exactly as it is for the name and the price, so the product ends
+    /// uncategorised: the category row the earlier occurrence pointed it at must not survive as a
+    /// navigation that <c>SaveChanges</c> would then write instead of the cleared foreign key.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData(99L)]
+    public async Task A_repeated_product_that_ends_with_no_resolvable_group_is_uncategorised(long? lastGroupId)
+    {
+        await Apply(new NayaxProductCatalogImport(
+            [new ImportedProductCategory(10, "Snacks", "Snacks")],
+            [
+                new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, 10),
+                new ImportedProductCatalogEntry(100, "Chips (large)", "Salted, 100g", 4m, lastGroupId),
+            ],
+            ImportedAt));
+
+        using var verify = TestAppDbContext.For(_options, 1);
+        var product = await verify.Products.SingleAsync();
+        Assert.Null(product.CategoryId);
+        Assert.Equal(("Chips (large)", 4m), (product.Name, product.UnitPrice));
+        // The group list still created its category; it simply has no product in it.
+        Assert.Equal("10", (await verify.Categories.SingleAsync()).ExternalCategoryId);
+    }
+
+    /// <summary>
+    /// The same repetition, moving the other way round between the two kinds of category this import
+    /// resolves: from a group it is creating to one this business already records, and from a
+    /// recorded one to a created one. Each direction mixes a category with no key yet and one named
+    /// by its key, which is exactly where a navigation left over from the earlier occurrence would
+    /// outvote the foreign key the last one set.
+    /// </summary>
+    [Theory]
+    [InlineData(10L, 20L, "20")]
+    [InlineData(20L, 10L, "10")]
+    public async Task A_repeated_product_lands_in_the_category_its_last_occurrence_names(
+        long firstGroupId, long lastGroupId, string expectedExternalCategoryId)
+    {
+        using (var seed = TestAppDbContext.For(_options, 1))
+        {
+            seed.Categories.Add(new Category
+            {
+                Id = 55,
+                ExternalCategoryId = NayaxExternalId.From(20),
+                Name = "Drinks",
+                Description = "Recorded before this import",
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await Apply(new NayaxProductCatalogImport(
+            [new ImportedProductCategory(10, "Snacks", "Snacks")],
+            [
+                new ImportedProductCatalogEntry(100, "Chips", "Salted", 3.50m, firstGroupId),
+                new ImportedProductCatalogEntry(100, "Chips (large)", "Salted, 100g", 4m, lastGroupId),
+            ],
+            ImportedAt));
+
+        using var verify = TestAppDbContext.For(_options, 1);
+        var product = await verify.Products.SingleAsync();
+        var expected = await verify.Categories.SingleAsync(
+            category => category.ExternalCategoryId == expectedExternalCategoryId);
+        Assert.Equal(expected.Id, product.CategoryId);
+        Assert.Equal("Chips (large)", product.Name);
+    }
+
+    /// <summary>
     /// A group id no local category carries - and that the snapshot's own group list does not carry
     /// either - is an unknown category, so the product is imported uncategorised rather than pointed
     /// at whichever local category happens to hold that number.

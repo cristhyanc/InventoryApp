@@ -189,11 +189,21 @@ public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImpor
     /// is unknown, and <c>Category.Id</c> is not where a Nayax id is read from. A product with no
     /// group at all is unchanged: it has nothing to resolve.</para>
     ///
-    /// <para>A recorded category is named by its foreign key, and EF's fixup keeps the navigation in
-    /// step with it. A category <em>this import</em> created has no key yet (issue #735), so the
-    /// navigation is what names it and EF writes the key the insert assigns into
-    /// <c>Product.CategoryId</c> - which is how a first import still categorises its products
-    /// without the import ever choosing a key.</para>
+    /// <para>A recorded category is named by its foreign key. A category <em>this import</em>
+    /// created has no key yet (issue #735), so the navigation is what names it and EF writes the key
+    /// the insert assigns into <c>Product.CategoryId</c> - which is how a first import still
+    /// categorises its products without the import ever choosing a key.</para>
+    ///
+    /// <para><strong>Both properties are written every time, including to clear them.</strong> A
+    /// snapshot may name the same product twice, and the last occurrence decides its category as it
+    /// decides its name and price. Writing only one of the pair would leave the other holding what
+    /// an earlier occurrence put there - a navigation to a category this import is creating beside a
+    /// foreign key that was since cleared or pointed elsewhere - and which of the two
+    /// <c>SaveChanges</c> believes when they disagree is not something a financial write should
+    /// depend on. So a recorded category is assigned to both, no resolvable group clears both, and a
+    /// created one is assigned to the navigation with the foreign key left empty: that pair is the
+    /// ordinary way to name a principal whose key does not exist yet, and it is the same state a
+    /// product this import is inserting is in.</para>
     /// </summary>
     private static void AssignCategory(
         Product product,
@@ -206,13 +216,16 @@ public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImpor
         if (externalId is not null && createdCategoryByNayaxId.TryGetValue(externalId, out var created))
         {
             product.Category = created;
+            product.CategoryId = null;
             return;
         }
 
-        product.CategoryId =
-            externalId is not null
-            && recordedCategoryByNayaxId.TryGetValue(externalId, out var recorded)
-                ? recorded.Id
+        var recorded = externalId is not null
+            && recordedCategoryByNayaxId.TryGetValue(externalId, out var recordedCategory)
+                ? recordedCategory
                 : null;
+
+        product.Category = recorded;
+        product.CategoryId = recorded?.Id;
     }
 }
