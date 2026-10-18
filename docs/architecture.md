@@ -960,7 +960,7 @@ Contains stable business language and deterministic rules:
 - Financial-year/date-range value types where appropriate.
 - Pure reporting calculations such as GST extraction, gross profit, and margins.
 - Purchase GST classification vocabulary, the purchase input-GST rule, its reporting-period aggregation and the purchase line identity rule (`Inventory.Domain.Gst`, `Purchases.PurchaseGstPolicy`, `Reporting.Gst.PurchaseInputGstPolicy`, `Purchases.PurchaseLineIdentityPolicy`; see [Purchase GST classification](#purchase-gst-classification-issue-429) and [Purchase input GST in the GST accounting aid](#purchase-input-gst-in-the-gst-accounting-aid-issue-432)).
-- The provider vocabulary and the report availability rule (`Inventory.Domain.Providers.ExternalProvider`/`ProviderDataSource`, `Inventory.Domain.Reporting.Availability.ReportAvailabilityPolicy`; see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-and-759) and [Report availability model](#report-availability-model-issue-730)).
+- The provider vocabulary and the report availability rule (`Inventory.Domain.Providers.ExternalProvider`/`ProviderDataSource`, `Inventory.Domain.Reporting.Availability.ReportAvailabilityPolicy`; see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735) and [Report availability model](#report-availability-model-issue-730)).
 
 It must not reference ASP.NET Core, EF Core, HTTP, filesystem APIs, ClosedXML, configuration, or concrete Nayax clients.
 
@@ -1543,7 +1543,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Nayax Settings, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax **catalogue** is no longer part of that limit either: its products and categories used to be keyed by the Nayax `NayaxProductID`/`ProductGroupID`, which is one global identifier space, so two businesses could not both import the same Nayax product — issue #735 made a created row's key the database's own and left the provider's id as a per-business column, and `EfNayaxProductCatalogImportStoreTenancyTests` proves two businesses importing the same ids, see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735). The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Nayax Settings, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
 
 #### Membership roles and capabilities (issue #521)
 
@@ -2642,7 +2642,7 @@ transaction as the credential, and refuses the save when the business already se
 different provider — a business has one sales provider, and switching it is a separate design (#761).
 That belongs to this one port rather than to each of its callers, so no path can store credentials
 without recording the provider they belong to. See
-[Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-and-759).
+[Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735).
 
 **Encryption lives in Infrastructure, behind `INayaxTokenProtector`.** `AesGcmNayaxTokenProtector`
 encrypts with AES-256-GCM, a fresh random nonce per encryption, and stores
@@ -9285,10 +9285,10 @@ count — a count of `0` with no coverage behind it reads as "nothing happened h
 does, and must not be formatted as currency. Every page keeps one banner saying the provider side is
 incomplete and the business's own records are not.
 
-### Provider identity on the local row (issues #732 and #759)
+### Provider identity on the local row (issues #732, #759 and #735)
 
-`Product.Id` and `Category.Id` *are* the Nayax `NayaxProductID` and `ProductGroupID`: the catalogue
-import below writes the remote identifier as the local primary key. A local key that another system
+`Product.Id` and `Category.Id` *were* the Nayax `NayaxProductID` and `ProductGroupID`: the catalogue
+import wrote the remote identifier as the local primary key. A local key that another system
 issues is global rather than per business, cannot be chosen at all by a business with no provider
 connected, and has room for exactly one provider's answer. Issue #732 (child A1 of #329, decision
 P1) added the place a provider id belongs instead — two link tables, `ProductExternalIds` and
@@ -9297,10 +9297,9 @@ local row's id — and issue #759 (A1b) **moved that id onto the local row**, be
 revised on 18 October 2026: a business has zero or one sales provider, so a column of every mapping
 saying which provider issued it was answering a question that has one answer per business.
 
-Nothing else about identity changed with it: `Product.Id`/`Category.Id` are still the Nayax ids until
-#735 (A4), the one lookup and its callers behave exactly as before, and the reporting queries (#734,
-A3) still read `Product.Id` as a Nayax id. Which product a *sale* belongs to stopped being derived
-from either id in issue #758, below.
+Neither of those changed the keys: that is issue #735 (A4), below, which is where a row the import
+creates stopped being keyed by the provider's number. Which product a *sale* belongs to stopped
+being derived from either id in issue #758, also below.
 
 **One provider per business, and it is fixed once set.** `Business.SalesProvider` is a nullable
 `Inventory.Domain.Providers.ExternalProvider`: null means no provider at all, and inventory —
@@ -9377,10 +9376,61 @@ The migration's `Down` exists to undo the schema, not to make that rollback safe
 **The import keeps the column true.** `EfNayaxProductCatalogImportStore` writes
 `ExternalProductId`/`ExternalCategoryId` on every product and category in the snapshot that carries
 none, and leaves an existing one exactly as it is — it is the same id, and rewriting it would be the
-one way the import could move an identifier between rows. It still sets `Id` from the Nayax id, which
-#735 (A4) changes, and it refuses to run at all for a business whose `SalesProvider` is not Nayax,
-rather than recording Nayax ids in a column another system's ids would be read from. Since #745 the
-same adapter also *reads* those ids as the identity of a snapshot entry (below).
+one way the import could move an identifier between rows. It refuses to run at all for a business
+whose `SalesProvider` is not Nayax, rather than recording Nayax ids in a column another system's ids
+would be read from. Since #745 the same adapter also *reads* those ids as the identity of a snapshot
+entry (below), and since #735 it writes no `Id` at all.
+
+#### The local key is the database's own (issue #735)
+
+Issue #735 (A4) is where a provider's number stopped being a local primary key. The catalogue import
+sets no `Id` on the product or category it creates: SQLite assigns it, and the remote id it came from
+goes in the external id column beside it. `Product.Id` and `Category.Id` are this application's own
+keys everywhere now, and a local key equal to a Nayax id is a coincidence — the thing every lookup
+migrated in #733, #745 and #758 was made to stop depending on.
+
+**What it unlocks, and what it protects.** Three things, each of which was impossible or unsafe while
+the key was the operator's number:
+
+- **Two businesses can hold the same provider id.** The key is per row and the external id is unique
+  only per business, so two operators who stock the same Nayax product each get their own product.
+  Before, the second import collided on the shared primary key — the known single-operator limit
+  recorded in [Tenant ownership](#tenant-ownership-issue-64), which this removes.
+- **A local row that merely holds that number is another row.** An entry whose Nayax id this business
+  has recorded nowhere creates its own product or category and leaves the local row untouched, with
+  its name, price, stock and costing exactly as they were. Issue #745 had to *refuse* that import by
+  name, because the key the new row needed was taken; stopping an operator's whole catalogue over a
+  number collision they did not cause is gone with the collision.
+- **Nothing can quietly overwrite the wrong row.** Merging a remote product into whichever local row
+  happened to hold its number is a silent error in financial data. It is now structurally impossible
+  in the import, and `ProviderIdIsNeverALocalKeyTests` fails the build if any production code
+  assigns a `Product`/`Category` `Id`, compares a `NayaxProductID` or `ProductGroupID` with one, or
+  reads the stored `NayaxSales.NayaxProductId` as a local product key. The same test asserts the EF
+  model still generates both keys, because a model that stopped would make the import write `0`
+  rather than fail.
+
+**A category the same snapshot creates, without predicting a key.** A product's `ProductGroupID` is
+resolved through `Category.ExternalCategoryId` as before, but a category this import is creating has
+no key yet, so the product is pointed at the category **row** (the `Product.Category` navigation) and
+EF writes the key the insert assigns into `Product.CategoryId`. A recorded category is still named by
+its foreign key, and an unresolvable group still leaves the product uncategorised rather than
+pointing it at a local category that merely shares the number.
+
+**No migration, and no re-keying.** Every id already stored stays exactly as it is — including the
+Nayax ids the #732 backfill and the #759 copy recorded on the rows that existed — and every foreign
+key pointing at them stays valid. Nothing had to change on the target database: both tables have
+declared their key `INTEGER PRIMARY KEY AUTOINCREMENT` since the schema was created and the EF model
+has always had it `ValueGeneratedOnAdd` (manual product creation relied on that all along), so SQLite
+simply assigns above the highest key the table has held. `ProductAndCategoryGeneratedKeyTests` reads
+that generation back out of the *migrated* schema rather than trusting it, because issue #732's and
+#759's table rebuilds are exactly the kind of change that could have altered the declaration.
+
+**Rolling forward is safe; the sale is what carries attribution.** A sale stores the local product it
+belongs to (#758), so a generated product id travels through synchronize → cost → inventory cost
+replay → report with no reader ever comparing two numbers;
+`ImportedProductGeneratedIdAttributionTests` proves that end to end over a fixture where an unrelated
+local product carries both the provider's number and the name the sale reports, at a different unit
+cost.
 
 ### Resolving a Nayax product id to a local product (issue #733)
 
@@ -9421,8 +9471,8 @@ changed from taking Nayax ids to taking local ones for exactly that reason. The 
 | Machine stock (`NayaxMachineStockObservationSource`) | in the adapter that translates the slots | the slot is dropped, as one whose product was not in the caller's catalogue already was |
 
 In every case an unresolved id is treated as an unknown product, never matched to the local product
-whose id happens to be the same number. That is the point of the change: in a business created after
-#735, a local key and a Nayax id that coincide are a coincidence.
+whose id happens to be the same number. That is the point of the change: since #735 a local key and
+a Nayax id that coincide are a coincidence.
 
 **Each lookup is awaited on its own.** All of these use cases run a concurrent Nayax fan-out and
 then one or more reads on the request's scoped `AppDbContext`, which supports a single operation at
@@ -9449,7 +9499,7 @@ Nayax id as the one it was keyed by and #759's migration copied that onto the ro
 | --- | --- | --- |
 | Latest-sales sync (`EfLatestNayaxSalesStore`) | each payload item's `NayaxProductID`, once per batch through `INayaxProductLinkStore`, before the per-sale work | an unknown product: the name fallback still runs, and a sale that matches nothing is still imported, stays visible, is left uncosted and replays no product's inventory cost — exactly as an unmatched id already was |
 | Uploaded sales export (`ImportNayaxSales`) | each row's `NayaxProductID`, once per import through the same port | the same: the row is imported and counted, stays visibly uncosted, and no inventory cost is replayed for it |
-| Catalogue import (`EfNayaxProductCatalogImportStore`) | each entry's `NayaxProductID` through `Product.ExternalProductId`, each group's and each product's `ProductGroupID` through `Category.ExternalCategoryId`, both read from the rows the import already has in hand | a new row (still keyed by the Nayax id until #735) carrying that id; for a product's group, no local category at all, so the product is imported uncategorised |
+| Catalogue import (`EfNayaxProductCatalogImportStore`) | each entry's `NayaxProductID` through `Product.ExternalProductId`, each group's and each product's `ProductGroupID` through `Category.ExternalCategoryId`, both read from the rows the import already has in hand | a new row, keyed by the database since #735, carrying that id; for a product's group, no local category at all, so the product is imported uncategorised |
 | Catalogue reconciliation (`EfLocalCatalogSnapshotProvider`) | the local product snapshot is built *from* the recorded ids, so each product is reported under the Nayax id it carries | a local product with no recorded id has no provider identity and takes no part in the comparison: it is a product Nayax never named, not one Nayax stopped returning |
 
 Three things are worth stating explicitly.
@@ -9461,14 +9511,14 @@ group endpoint issues ids from that same space (`GET /v1/operators/{ActorID}/pro
 is what makes one column — `Category.ExternalCategoryId` — the answer for both. A category the same
 snapshot creates joins the lookup immediately, so a first import still categorises its products.
 
-**A local row with no recorded id is not claimed by a Nayax id that merely equals its key.** In the
-catalogue import that is a conflict with nowhere to go while a created row is still keyed by the Nayax
-id: the adapter refuses the entry by name, nothing is written (the import is one `SaveChanges`), and a
-human records the id on the local row or re-keys it and imports again. Merging the two instead would
-write a remote product's catalogue fields onto whichever local row happened to hold its number — a
-silent error in financial data, which is the thing this slice exists to end. Issue #732's backfill, and
-the #759 copy that followed it, recorded an id for every row that existed, so reaching that state needs
-a row restored from an older backup or created locally under a colliding key.
+**A local row with no recorded id is not claimed by a Nayax id that merely equals its key.** Merging
+the two would write a remote product's catalogue fields onto whichever local row happened to hold its
+number — a silent error in financial data, which is the thing this slice exists to end. While a
+created row was still keyed by the Nayax id this was a conflict with nowhere to go, so the import
+refused the entry by name and wrote nothing (it is one `SaveChanges`), and a human recorded the id on
+the local row or re-keyed it and imported again. Since #735 (A4) the entry simply creates its own row
+under a key the database assigns and the local row is left untouched — see
+[The local key is the database's own](#the-local-key-is-the-databases-own-issue-735).
 
 **The stored `NayaxSales.NayaxProductId` column had mixed provenance, and #758 ended that.** Until
 then the latest-sales sync wrote the *local* product id it matched into it while the uploaded export
@@ -9491,8 +9541,8 @@ everywhere, and a product rename, a duplicate name or a database-generated produ
 `Inventory.Domain.Reporting.ProductMatching.ProductMatcher` over the stored `NayaxProductId` and the
 reported `ProductName`: id first, then the unambiguous name. That re-derived an answer on every read,
 from data that changes. Renaming a product moved historical sales between report rows; two products
-sharing a name made sales ambiguous retroactively; and after #735 (A4) a local key and a Nayax id
-that coincide are a coincidence, so the id half would quietly start matching the wrong row. An
+sharing a name made sales ambiguous retroactively; and since #735 (A4) a local key and a Nayax id
+that coincide are a coincidence, so the id half would quietly have started matching the wrong row. An
 earlier attempt (#747, PR #755) read the column as a *raw* provider id everywhere instead, which was
 wrong for the rows the sync had written with a local id in it — reproduced on that pull request as
 sales left `Error`/uncosted with their product's inventory never consumed.
@@ -9674,7 +9724,7 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   issue #240 are deliberately not reused or widened here: `IProductStore.CreateAsync` creates a
   locally keyed product (with its initial stock adjustment and cost rebuild) from operator input,
   and `IProductCatalogStore` reads the enriched catalogue graph an API response needs, while this
-  import upserts a product whose primary key *is* the remote Nayax product identifier and touches
+  import upserts a product identified by the remote Nayax product id recorded on it and touches
   only the Nayax-managed catalogue fields.
 - The read-decide-write sequence stays inside that adapter, step for step as the legacy method ran
   it, rather than being decomposed into Application-level orchestration - the same ownership
@@ -9685,7 +9735,9 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   and nothing more: this import has no cross-request isolation, and the single scoped `AppDbContext`
   provides none. Its reads run outside the transaction `SaveChangesAsync` opens, with no lock, no
   expected-state comparison and no concurrency token, so two overlapping imports can both decide the
-  same product is new (the later `SaveChanges` then fails on its primary key) and a local catalogue
+  same product is new (the later `SaveChanges` then fails on the filtered unique index over
+  `(BusinessId, ExternalProductId)`, which since #735 is what refuses a duplicated identity in place
+  of the primary key) and a local catalogue
   edit committed between the read and the write is overwritten by whichever writer commits last.
   This is the legacy behaviour, carried over unchanged; making the import safe under concurrent
   callers needs an explicit transaction or concurrency token and is a behaviour change for its own
@@ -9703,26 +9755,29 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
 - Since issue #732 the import also records the provider identity of every product and category in the
   snapshot that does not already carry one — on the row itself since issue #759 — and leaves an
   existing one untouched (see
-  [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-and-759)). It is
-  the only writer of a Nayax id besides those issues' migrations, it refuses to run at all for a
-  business whose `SalesProvider` is not Nayax, and it still sets `Id` from the Nayax id — #735 (A4) is
-  where a new row stops being keyed that way.
+  [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735)). It is
+  the only writer of a Nayax id besides those issues' migrations, and it refuses to run at all for a
+  business whose `SalesProvider` is not Nayax. Since issue #735 (A4) it sets no `Id` at all: the row
+  it creates is keyed by the database and records the remote id beside that key — see
+  [The local key is the database's own](#the-local-key-is-the-databases-own-issue-735).
 - Since issue #745 those recorded ids are also what *identifies* a snapshot entry: the product an
   entry updates is the one carrying its `NayaxProductID`, a group becomes a new category only when no
   category of this business carries that group id, and a product's `CategoryId` is the local
   category its Nayax `ProductGroupID` resolves to (null when the group is unknown) rather than the
   group id written straight through. A local row with no recorded id whose key equals an incoming Nayax
-  id is refused by name instead of being merged into, and an unresolvable group no longer leaves a
+  id is never merged into — since #735 the entry creates its own row and leaves that one alone — and
+  an unresolvable group no longer leaves a
   product pointing at a category that merely shares its number. See [Resolving Nayax ids in the sale paths,
   the catalogue import and
   reconciliation](#resolving-nayax-ids-in-the-sale-paths-the-catalogue-import-and-reconciliation-issue-745).
 - Reads and writes are scoped to the caller's business by the central `AppDbContext` query filters
-  and `BusinessOwnershipEnforcer` alone, with no business predicate of its own. Because
-  `Product.Id`/`Category.Id` *are* the Nayax identifiers and are the single-column primary keys,
-  the catalogue itself is not partitioned per business; that is the known single-operator Nayax
-  limit recorded in [Tenant ownership](#tenant-ownership-issue-64), not something this slice
-  changed. What is pinned by test is that one business's import never reads, rewrites or deletes
-  another business's catalogue row.
+  and `BusinessOwnershipEnforcer` alone, with no business predicate of its own. Since issue #735 the
+  catalogue is also partitioned per business in fact: a created row's key is the database's own and
+  the provider's id is unique only within one business, so two operators importing the same Nayax
+  catalogue each get their own rows. That removes the known single-operator Nayax limit recorded in
+  [Tenant ownership](#tenant-ownership-issue-64) — `EfNayaxProductCatalogImportStoreTenancyTests`
+  pins both halves: two businesses importing the same product and group ids, and one business's
+  import never reading, rewriting or deleting another business's catalogue row.
 - `ImportsController.ImportProducts` calls the use case directly; the route, the constant `true`
   `200 OK` body and the status codes are unchanged. The action now also binds the request's
   `CancellationToken` and passes it through the Nayax and persistence calls, which the legacy

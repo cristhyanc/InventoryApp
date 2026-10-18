@@ -23,9 +23,11 @@ namespace Inventory.Infrastructure.Persistence;
 /// That shape gives no isolation against a *concurrent* request, and must not be read as if it did.
 /// The catalogue reads run outside the transaction <c>SaveChangesAsync</c> opens, and there is no
 /// lock, no expected-state comparison and no concurrency token, so two overlapping imports can both
-/// decide the same product is new (the later <c>SaveChanges</c> then fails on its primary key), and
-/// a local catalogue edit committed between this import's read and its write is simply overwritten
-/// by whichever writer commits last. Keeping the sequence in one adapter only keeps the
+/// decide the same product is new (the later <c>SaveChanges</c> then fails on the filtered unique
+/// index over <c>(BusinessId, ExternalProductId)</c>, which since issue #735 is what refuses a
+/// duplicated identity in place of the primary key), and a local catalogue edit committed between
+/// this import's read and its write is simply overwritten by whichever writer commits last. Keeping
+/// the sequence in one adapter only keeps the
 /// new/existing decision and the write it feeds together within this one request; closing the
 /// cross-request window would need an explicit transaction or a concurrency token, which is a
 /// behaviour change outside issue #300.
@@ -36,10 +38,18 @@ namespace Inventory.Infrastructure.Persistence;
 /// <c>ExternalProductId</c>/<c>ExternalCategoryId</c>, and a product's Nayax <c>ProductGroupID</c> is
 /// resolved to a local <c>CategoryId</c> the same way - including for a category this same snapshot
 /// creates. A local row with no external id is <em>not</em> claimed by a Nayax id that merely equals
-/// its key. A row this import creates is still keyed by the Nayax id until #735 (A4), so a local row
-/// of this business with no external id whose key collides with an incoming Nayax id is refused by
-/// name (see <c>RefuseCollidingLocalKey</c>) rather than silently merged into; another business's
-/// colliding row is still refused by the shared primary key, as it always was.</para>
+/// its key.</para>
+///
+/// <para><strong>A row it creates is keyed by the database, not by the provider</strong> (issue
+/// #735, parent #329 decision A4). The import sets no <c>Id</c> at all: SQLite assigns it, and the
+/// remote id it came from is recorded in the external id column beside it. Three consequences are
+/// the point of the change. Two businesses can import the same catalogue, because neither row's key
+/// is the operator's number and the external id is unique only per business. A local row of this
+/// business that happens to hold that number is simply another product - the entry creates a new row
+/// and leaves it untouched, where the previous shape had to refuse the import by name because the
+/// key it would have created was taken. And a product's category is reached through the category
+/// row, so a group this snapshot creates is resolved by tracking that row rather than by predicting
+/// the key it is about to be given (see <c>AssignCategory</c>).</para>
 ///
 /// <para><strong>It writes the business's own provider's ids, and refuses to do anything else</strong>
 /// (issue #759). The external id columns hold the id issued by <c>Business.SalesProvider</c>, so this
@@ -70,82 +80,64 @@ public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImpor
 
         // The Nayax ids this business has already recorded, taken from the two reads above rather
         // than from a third query: since issue #759 the id is a column on the local row, so the rows
-        // this import already has in hand are the identity lookup (issue #745). The local id beside
-        // each external id is what makes it one. The text itself stays opaque: the one thing this
-        // adapter assumes about it is that NayaxExternalId is what writes it.
-        var localProductIdByNayaxId = localProducts
+        // this import already has in hand are the identity lookup (issue #745). The row beside each
+        // external id is what makes it one - the row itself, not its key, because since issue #735 a
+        // row this import creates has no key until SQLite assigns one. The text stays opaque: the one
+        // thing this adapter assumes about it is that NayaxExternalId is what writes it.
+        var recordedProductByNayaxId = localProducts
             .Where(product => product.ExternalProductId is not null)
-            .ToDictionary(product => product.ExternalProductId!, product => product.Id, StringComparer.Ordinal);
-        var localCategoryIdByNayaxId = localCategories
+            .ToDictionary(product => product.ExternalProductId!, product => product, StringComparer.Ordinal);
+        var recordedCategoryByNayaxId = localCategories
             .Where(category => category.ExternalCategoryId is not null)
-            .ToDictionary(category => category.ExternalCategoryId!, category => category.Id, StringComparer.Ordinal);
+            .ToDictionary(category => category.ExternalCategoryId!, category => category, StringComparer.Ordinal);
 
-        var productsByLocalId = localProducts.ToDictionary(product => product.Id);
+        // The categories this snapshot creates, kept apart from the recorded ones for exactly one
+        // reason: their keys do not exist yet, so a product in such a group is pointed at the row
+        // itself (see AssignCategory) instead of at a number this import would have to predict.
+        var createdCategoryByNayaxId = new Dictionary<string, Category>(StringComparer.Ordinal);
 
         // Every row the snapshot named - created or merely updated - ends the import carrying its
         // Nayax id (issue #732, as a column since #759). A row that already carries one is left
         // exactly as it is: it is the same id, and rewriting it would be the one way this import
-        // could move an identifier between rows. A created row's id joins the lookup immediately, so
-        // a product whose group this snapshot just created resolves to it, and a snapshot that
-        // repeated an id neither creates a second row nor assigns the id twice.
-        //
-        // The local id of a created row is still the remote one, which is what makes its external id
-        // derivable without matching anything. #735 (A4) is where a new row stops being keyed that
-        // way, and this is the write that has to be in place before it can be.
-        var newCategories = new List<Category>();
+        // could move an identifier between rows. A created row joins the lookup immediately, so a
+        // product whose group this snapshot just created resolves to it, and a snapshot that repeated
+        // an id neither creates a second row nor records the id twice.
         foreach (var category in import.Categories)
         {
-            var externalId = NayaxExternalId.From(category.Id);
+            var externalId = NayaxExternalId.From(category.NayaxProductGroupId);
 
             // Only a group this business has recorded no category for becomes a new category; a
-            // recorded one keeps its local name. A local category whose Id merely equals the group id
-            // is neither used nor updated - it is some other category, as it will plainly be after
-            // #735 (A4).
-            if (localCategoryIdByNayaxId.ContainsKey(externalId))
+            // recorded one keeps its local name. A local category whose own key merely equals the
+            // group id is some other category, and since issue #735 that is plainly a coincidence.
+            if (recordedCategoryByNayaxId.ContainsKey(externalId)
+                || createdCategoryByNayaxId.ContainsKey(externalId))
                 continue;
 
-            RefuseCollidingLocalKey(
-                localCategories.Any(local => local.Id == category.Id), "category", category.Id);
-
-            var created = new Category
+            createdCategoryByNayaxId[externalId] = new Category
             {
-                Id = category.Id,
                 ExternalCategoryId = externalId,
                 Name = category.Name,
                 Description = category.Description,
             };
-            newCategories.Add(created);
-            localCategoryIdByNayaxId[externalId] = created.Id;
         }
 
-        var newProducts = new List<Product>();
+        // Added before the products, so every category this import creates is tracked by the time a
+        // product is pointed at one and EF orders the inserts accordingly.
+        _db.Categories.AddRange(createdCategoryByNayaxId.Values);
+
         foreach (var entry in import.Products)
         {
-            var externalId = NayaxExternalId.From(entry.Id);
-            Product product;
-            if (localProductIdByNayaxId.TryGetValue(externalId, out var localProductId))
+            var externalId = NayaxExternalId.From(entry.NayaxProductId);
+            if (!recordedProductByNayaxId.TryGetValue(externalId, out var product))
             {
-                // The lookup was built from the product rows this import already read, so a local id
-                // it does not hold would be a broken dictionary rather than an unknown id.
-                product = productsByLocalId.TryGetValue(localProductId, out var recorded)
-                    ? recorded
-                    : throw new InvalidOperationException(
-                        $"A Nayax product id names local product {localProductId}, which this business does not hold.");
-            }
-            else
-            {
-                RefuseCollidingLocalKey(productsByLocalId.ContainsKey(entry.Id), "product", entry.Id);
-
                 product = new Product
                 {
-                    Id = entry.Id,
                     ExternalProductId = externalId,
                     RestockTo = 0,
                     CreatedAt = import.ImportedAtUtc,
                 };
-                newProducts.Add(product);
-                productsByLocalId[product.Id] = product;
-                localProductIdByNayaxId[externalId] = product.Id;
+                _db.Products.Add(product);
+                recordedProductByNayaxId[externalId] = product;
             }
 
             // Only the Nayax-managed catalogue fields are written. Stock, costing and the
@@ -153,12 +145,11 @@ public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImpor
             product.Name = entry.Name;
             product.Description = entry.Description;
             product.UnitPrice = entry.UnitPrice;
-            product.CategoryId = LocalCategoryId(entry.CategoryId, localCategoryIdByNayaxId);
+            AssignCategory(
+                product, entry.NayaxProductGroupId, recordedCategoryByNayaxId, createdCategoryByNayaxId);
             product.UpdatedAt = import.ImportedAtUtc;
         }
 
-        if (newCategories.Count > 0) _db.Categories.AddRange(newCategories);
-        if (newProducts.Count > 0) _db.Products.AddRange(newProducts);
         await _db.SaveChangesAsync(cancellationToken);
     }
 
@@ -186,49 +177,42 @@ public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImpor
     }
 
     /// <summary>
-    /// Refuses a snapshot entry whose Nayax id this business has recorded nowhere while a local row
-    /// of its own already holds that key (issue #745).
-    ///
-    /// <para>Identity comes from the external id column, so that local row is some other product or
-    /// category and must not be merged into - but a row this import creates is still keyed by the
-    /// Nayax id until #735 (A4), so there is no key left to create it under either. The deliberate,
-    /// named failure is the honest answer: nothing is written (the import is one
-    /// <c>SaveChanges</c>), and a human records the id on the local row or re-keys it and imports
-    /// again. Issue #732's backfill, and the #759 copy that followed it, recorded an id for every row
-    /// that existed, so this needs a row restored from an older backup or created locally under a
-    /// colliding key.</para>
-    ///
-    /// <para>It carries only the ids - no names, prices or operator data - because it reaches logs
-    /// and the generic error response.</para>
-    /// </summary>
-    private static void RefuseCollidingLocalKey(bool collides, string rowKind, long nayaxId)
-    {
-        if (!collides)
-            return;
-
-        throw new InvalidOperationException(
-            $"Nayax {rowKind} {nayaxId} is recorded on no {rowKind} in this business, and a local " +
-            $"{rowKind} already holds the id {nayaxId}. The catalogue import will not merge them: " +
-            $"record the Nayax id on the local {rowKind}, or give it a different id, and import again.");
-    }
-
-    /// <summary>
-    /// The local category a product's Nayax <c>ProductGroupID</c> names (issue #745). The Lynx
-    /// contract declares that field as <c>integer&lt;int32&gt;</c>, nullable, "the unique identifier
-    /// of the product group to which the product belongs" (<c>GET
+    /// Points a product at the local category its Nayax <c>ProductGroupID</c> names (issue #745).
+    /// The Lynx contract declares that field as <c>integer&lt;int32&gt;</c>, nullable, "the unique
+    /// identifier of the product group to which the product belongs" (<c>GET
     /// /v1/operators/{OperatorID}/products</c>), and the group endpoint issues ids from that same
     /// space (<c>GET /v1/operators/{ActorID}/productGroups</c>), which is what makes one column -
     /// <c>Category.ExternalCategoryId</c> - the answer for both.
     ///
     /// <para>A group this business has recorded on no category leaves the product uncategorised
     /// rather than pointing it at whichever local category happens to carry that number - the group
-    /// is unknown, and <c>Category.Id</c> stopped being the place a Nayax id is read from. A product
-    /// with no group at all is unchanged: it has nothing to resolve.</para>
+    /// is unknown, and <c>Category.Id</c> is not where a Nayax id is read from. A product with no
+    /// group at all is unchanged: it has nothing to resolve.</para>
+    ///
+    /// <para>A recorded category is named by its foreign key, and EF's fixup keeps the navigation in
+    /// step with it. A category <em>this import</em> created has no key yet (issue #735), so the
+    /// navigation is what names it and EF writes the key the insert assigns into
+    /// <c>Product.CategoryId</c> - which is how a first import still categorises its products
+    /// without the import ever choosing a key.</para>
     /// </summary>
-    private static long? LocalCategoryId(
-        long? nayaxProductGroupId, IReadOnlyDictionary<string, long> localCategoryIdByNayaxId) =>
-        nayaxProductGroupId is long groupId
-        && localCategoryIdByNayaxId.TryGetValue(NayaxExternalId.From(groupId), out var localCategoryId)
-            ? localCategoryId
-            : null;
+    private static void AssignCategory(
+        Product product,
+        long? nayaxProductGroupId,
+        IReadOnlyDictionary<string, Category> recordedCategoryByNayaxId,
+        IReadOnlyDictionary<string, Category> createdCategoryByNayaxId)
+    {
+        var externalId = nayaxProductGroupId is long groupId ? NayaxExternalId.From(groupId) : null;
+
+        if (externalId is not null && createdCategoryByNayaxId.TryGetValue(externalId, out var created))
+        {
+            product.Category = created;
+            return;
+        }
+
+        product.CategoryId =
+            externalId is not null
+            && recordedCategoryByNayaxId.TryGetValue(externalId, out var recorded)
+                ? recorded.Id
+                : null;
+    }
 }

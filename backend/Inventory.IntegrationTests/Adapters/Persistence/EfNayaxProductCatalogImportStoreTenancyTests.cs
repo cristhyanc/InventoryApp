@@ -17,11 +17,12 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// <c>AppDbContext</c> global query filters and <c>BusinessOwnershipEnforcer</c> every other
 /// tenant-owned store uses, never an ad hoc business predicate (AGENTS.md § Tenant ownership).
 ///
-/// <c>Product.Id</c> and <c>Category.Id</c> *are* the Nayax identifiers and are the single-column
-/// primary keys, so the Nayax catalogue is not partitioned per business today - the known limit
-/// docs/architecture.md § Tenant ownership records for the single-operator Nayax client. These
-/// tests pin the behaviour that matters while that limit stands: one business's import never
-/// reads, rewrites or deletes another business's catalogue row.
+/// Since issue #735 (A4) the catalogue <em>is</em> partitioned per business: a created row's key is
+/// the database's own and the provider's id is a column that is unique only within one business, so
+/// two operators who sell the same Nayax product each get their own row. That is the limit
+/// docs/architecture.md § Tenant ownership recorded for the single-operator Nayax client, and these
+/// tests are where it is proven gone - alongside the behaviour that always had to hold: one
+/// business's import never reads, rewrites or deletes another business's catalogue row.
 /// </summary>
 public class EfNayaxProductCatalogImportStoreTenancyTests : IDisposable
 {
@@ -78,9 +79,11 @@ public class EfNayaxProductCatalogImportStoreTenancyTests : IDisposable
             ImportedAt));
 
         using var verify = TestAppDbContext.Unrestricted(_options);
-        var imported = await verify.Products.SingleAsync(product => product.Id == 100);
+        var imported = await verify.Products.SingleAsync(product => product.Name == "A chips");
+        var importedCategory = await verify.Categories.SingleAsync(category => category.Name == "A snacks");
         Assert.Equal(BusinessA, imported.BusinessId);
-        Assert.Equal(BusinessA, (await verify.Categories.SingleAsync(category => category.Id == 10)).BusinessId);
+        Assert.Equal(BusinessA, importedCategory.BusinessId);
+        Assert.Equal(importedCategory.Id, imported.CategoryId);
 
         var other = await verify.Products.SingleAsync(product => product.Id == 200);
         Assert.Equal(BusinessB, other.BusinessId);
@@ -91,30 +94,78 @@ public class EfNayaxProductCatalogImportStoreTenancyTests : IDisposable
         // exactly the same stamp (issues #732 and #759): business B's catalogue gains none, so
         // another business's import can neither claim B's rows nor record a Nayax id inside B.
         Assert.Equal("100", imported.ExternalProductId);
-        Assert.Equal("10", (await verify.Categories.SingleAsync(category => category.Id == 10)).ExternalCategoryId);
+        Assert.Equal("10", importedCategory.ExternalCategoryId);
         Assert.Null(other.ExternalProductId);
         Assert.Null((await verify.Categories.SingleAsync(category => category.Id == 20)).ExternalCategoryId);
     }
 
     /// <summary>
-    /// The import's read is tenant-scoped, so another business's product is not a row this import
-    /// may update. Because the Nayax product identifier is the shared primary key, the write is
-    /// refused by the database rather than silently rewriting the other business's catalogue -
-    /// which is the outcome that matters: B's product is exactly as it was.
+    /// Two businesses importing the <strong>same</strong> Nayax product and group ids - the
+    /// acceptance criterion of issue #735 (A4), and the shape that used to be impossible. A key the
+    /// database assigns is each row's own, and the external id is unique only per business, so each
+    /// operator's catalogue holds its own product 100 and its own group 10 with its own name, price
+    /// and category.
+    ///
+    /// <para>Before this change the second import collided on the shared primary key: A's import
+    /// either failed with a <c>DbUpdateException</c> or, had the read not been tenant-scoped, would
+    /// have rewritten B's catalogue. The ordering here is deliberate - B imports first, so A is the
+    /// business that would have been refused.</para>
     /// </summary>
     [Fact]
-    public async Task A_product_id_another_business_owns_is_never_rewritten_by_this_business()
+    public async Task Two_businesses_import_the_same_nayax_product_and_group_ids_without_conflict()
+    {
+        await ImportAs(BusinessB, SameIdsNamedFor("B"));
+        await ImportAs(BusinessA, SameIdsNamedFor("A"));
+
+        using var verify = TestAppDbContext.Unrestricted(_options);
+        var products = await verify.Products.OrderBy(product => product.BusinessId).ToListAsync();
+        var categories = await verify.Categories.OrderBy(category => category.BusinessId).ToListAsync();
+
+        // One product and one category per business, each carrying the same Nayax id on its own row
+        // under its own generated key.
+        Assert.Equal([BusinessA, BusinessB], products.Select(product => product.BusinessId));
+        Assert.Equal(["A chips", "B chips"], products.Select(product => product.Name));
+        Assert.Equal(["100", "100"], products.Select(product => product.ExternalProductId));
+        Assert.Equal(2, products.Select(product => product.Id).Distinct().Count());
+
+        Assert.Equal([BusinessA, BusinessB], categories.Select(category => category.BusinessId));
+        Assert.Equal(["10", "10"], categories.Select(category => category.ExternalCategoryId));
+        Assert.Equal(2, categories.Select(category => category.Id).Distinct().Count());
+
+        // And each product is in its own business's category, not in the other's.
+        Assert.All(
+            products,
+            product => Assert.Equal(
+                categories.Single(category => category.BusinessId == product.BusinessId).Id,
+                product.CategoryId));
+    }
+
+    /// <summary>
+    /// The import's read is tenant-scoped, so another business's product is not a row this import
+    /// may update - and since issue #735 nothing about the keys makes that accidental either: A's
+    /// entry creates A's own row, and B's product, which carries the same recorded Nayax id, is
+    /// exactly as it was.
+    /// </summary>
+    [Fact]
+    public async Task A_recorded_id_another_business_owns_is_never_rewritten_by_this_business()
     {
         using (var seed = TestAppDbContext.For(_options, BusinessB))
         {
-            seed.Products.Add(new Product { Id = 100, Name = "B cola", Description = "B description", UnitPrice = 2m });
+            seed.Products.Add(new Product
+            {
+                Id = 100,
+                ExternalProductId = NayaxExternalId.From(100),
+                Name = "B cola",
+                Description = "B description",
+                UnitPrice = 2m,
+            });
             await seed.SaveChangesAsync();
         }
 
-        await Assert.ThrowsAnyAsync<DbUpdateException>(() => ImportAs(BusinessA, new NayaxProductCatalogImport(
+        await ImportAs(BusinessA, new NayaxProductCatalogImport(
             [],
             [new ImportedProductCatalogEntry(100, "A chips", "Salted", 3.50m, null)],
-            ImportedAt)));
+            ImportedAt));
 
         using var verify = TestAppDbContext.Unrestricted(_options);
         var other = await verify.Products.SingleAsync(product => product.Id == 100);
@@ -122,7 +173,21 @@ public class EfNayaxProductCatalogImportStoreTenancyTests : IDisposable
         Assert.Equal("B cola", other.Name);
         Assert.Equal("B description", other.Description);
         Assert.Equal(2m, other.UnitPrice);
+
+        var imported = await verify.Products.SingleAsync(product => product.BusinessId == BusinessA);
+        Assert.Equal(("A chips", "100"), (imported.Name, imported.ExternalProductId));
+        Assert.NotEqual(100L, imported.Id);
     }
+
+    /// <summary>
+    /// One snapshot of the same Nayax product id and group id, named for the business importing it
+    /// so each row's own catalogue fields are visible afterwards.
+    /// </summary>
+    private static NayaxProductCatalogImport SameIdsNamedFor(string prefix) =>
+        new(
+            [new ImportedProductCategory(10, $"{prefix} snacks", $"{prefix} snacks")],
+            [new ImportedProductCatalogEntry(100, $"{prefix} chips", "Salted", 3.50m, 10)],
+            ImportedAt);
 
     private async Task ImportAs(int businessId, NayaxProductCatalogImport import)
     {

@@ -13,8 +13,8 @@ namespace Inventory.Infrastructure.Models;
 /// by a business that has no provider at all, and two providers can never name the same product.
 /// This table is where a provider id lives instead. It changes nothing on its own - every existing
 /// id and foreign key stays exactly as it is, and the backfill simply records the mapping that is
-/// already true - so the later slices can stop reading <c>Product.Id</c> as a Nayax id (#733, #745,
-/// #747, #734) before #735 makes a new product's id the database's own.</para>
+/// already true - so the later slices could stop reading <c>Product.Id</c> as a Nayax id (#733,
+/// #745, #747, #734) before #735 made a new product's id the database's own.</para>
 ///
 /// <para><see cref="ExternalId"/> is opaque text, compared exactly and never parsed by anything
 /// that is not provider-specific. <c>Inventory.Domain.Providers.NayaxExternalId</c> is the one
