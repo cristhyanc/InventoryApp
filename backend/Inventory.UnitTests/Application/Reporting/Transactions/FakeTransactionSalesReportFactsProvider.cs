@@ -61,6 +61,7 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         string machineName = "Machine A",
         long? siteId = null,
         string? siteName = null,
+        long? productId = 1,
         long? nayaxProductId = 1,
         string rawProductName = "Water",
         decimal sale = 10m,
@@ -68,7 +69,7 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         bool hasPersistedCost = true,
         DateTime? transactionDate = null) => new(
         transactionId, transactionDate ?? new DateTime(2025, 8, 1), machineId, machineName,
-        siteId, siteName, nayaxProductId, rawProductName,
+        siteId, siteName, productId, nayaxProductId, rawProductName,
         Inventory.Domain.FinancialConfiguration.NayaxPaymentType.Card, "Credit Card", sale,
         null, costOfGoodsSold, costOfGoodsSold,
         "Costed", "Inventory Ledger", hasPersistedCost,

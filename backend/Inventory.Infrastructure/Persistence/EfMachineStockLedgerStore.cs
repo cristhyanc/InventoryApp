@@ -1,7 +1,6 @@
 using Inventory.Application.MachineStock;
 using Inventory.Domain.MachineStock;
 using Inventory.Domain.Nayax;
-using Inventory.Domain.Reporting.ProductMatching;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -18,11 +17,12 @@ namespace Inventory.Infrastructure.Persistence;
 /// row. It writes no second copy of either, so the machine ledger cannot disagree with Stock
 /// History, and a completed sale cannot be consumed twice.
 ///
-/// A sale is attributed to a product with <see cref="ProductMatcher"/> - the same deterministic
-/// matcher <see cref="EfInventoryCostLedgerStore"/> uses to decide which product's costing a sale
-/// belongs to - so the machine ledger and the costing ledger always agree about which product a
-/// transaction dispensed. Sales that match no catalogue product are counted and reported rather than
-/// spread across the products that happen to be in the machine.
+/// A sale is attributed to the local product persisted on its own row (issue #758) - the same
+/// association <see cref="EfInventoryCostLedgerStore"/> reads to decide which product's costing a
+/// sale belongs to - so the machine ledger and the costing ledger always agree about which product
+/// a transaction dispensed, and a product renamed after the sale does not move it. Sales with no
+/// association are counted and reported as unattributed rather than spread across the products that
+/// happen to be in the machine.
 ///
 /// Tenant isolation is the central query filter's, as everywhere else: there is no per-call
 /// <c>BusinessId</c> predicate here, which is also what makes the observed product ids safe to pass
@@ -48,26 +48,16 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
                 adjustment.Id, adjustment.ProductId, adjustment.QuantityChange, adjustment.EffectiveAt))
             .ToListAsync(cancellationToken);
 
-        var candidates = await _db.Products
-            .AsNoTracking()
-            .Select(product => new ProductMatchCandidate(product.Id, product.Name))
-            .ToListAsync(cancellationToken);
-
-        var saleRows = await _db.NayaxSales
+        // Attribution is the sale's own persisted association (issue #758): the ledger reads the
+        // product the writer recorded, so it cannot disagree with the costing ledger, and a sale
+        // with none is counted as unattributed rather than spread across the machine's products.
+        var attributedSales = await _db.NayaxSales
             .AsNoTracking()
             .Where(EfNayaxSalesQueries.CompletedSalePredicate)
             .Where(sale => sale.MachineID == machineId)
-            .Select(sale => new { sale.TransactionID, sale.NayaxProductId, sale.ProductName, sale.MachineAuthorizationTime })
+            .Select(sale => new { sale.TransactionID, sale.ProductId, sale.MachineAuthorizationTime })
             .ToListAsync(cancellationToken);
 
-        var attributedSales = saleRows
-            .Select(sale => new
-            {
-                sale.TransactionID,
-                sale.MachineAuthorizationTime,
-                ProductId = ProductMatcher.Match(candidates, sale.NayaxProductId, sale.ProductName),
-            })
-            .ToList();
         var sales = attributedSales
             .Where(sale => sale.ProductId.HasValue)
             .Select(sale => new MachineSaleFact(

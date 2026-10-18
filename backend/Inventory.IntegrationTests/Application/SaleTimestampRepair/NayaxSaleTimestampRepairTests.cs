@@ -781,6 +781,7 @@ public class NayaxSaleTimestampRepairTests : IDisposable
             SettlementValue = settlementValue,
             PaymentMethod = "Credit Card",
             ProductName = productId is null ? "Unknown" : "Coke Zero",
+            ProductId = productId,
             NayaxProductId = productId,
             MachineAuthorizationTime = storedUtc,
         };

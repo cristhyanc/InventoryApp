@@ -68,6 +68,15 @@ if (NayaxConnectionMigrationCommand.Matches(args))
     return await NayaxConnectionMigrationCommand.RunAsync(args, CancellationToken.None);
 }
 
+// Deciding which local product a stored sale belongs to is the fifth human-invoked command (issue
+// #758). It is how an operator settles a sale the release's migration refused to guess at - a
+// conflicting one, or one no unambiguous name covered - and it applies no migration, so it can be
+// run while startup is refusing to come up over exactly those sales.
+if (NayaxSaleProductResolutionCommand.Matches(args))
+{
+    return await NayaxSaleProductResolutionCommand.RunAsync(args, CancellationToken.None);
+}
+
 // Taking a verified snapshot is likewise a deliberate, human- or scheduler-invoked command, not
 // something normal startup performs (issue #331). It is callable manually for one-off
 // verification and by the scheduled backup job (issue #333) against the same configured database.

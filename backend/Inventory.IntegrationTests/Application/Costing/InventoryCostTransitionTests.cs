@@ -96,6 +96,7 @@ public class InventoryCostTransitionTests
             TransactionID = 1,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = 10,
             NayaxProductId = 10,
             MachineAuthorizationTime = DateTime.UtcNow.AddDays(-5),
             NayaxProductCostPrice = 1.10m,
@@ -143,6 +144,7 @@ public class InventoryCostTransitionTests
             TransactionID = 2,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = 10,
             NayaxProductId = 10,
             MachineAuthorizationTime = preview.CutoffAt.AddMinutes(2)
         };
@@ -192,6 +194,7 @@ public class InventoryCostTransitionTests
             TransactionID = 3,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = 10,
             NayaxProductId = 10,
             MachineAuthorizationTime = cutoff.AddDays(-1),
             NayaxProductCostPrice = 1.10m
@@ -258,7 +261,8 @@ public class InventoryCostTransitionTests
         var sale = await db.NayaxSales.SingleAsync();
         Assert.Equal(9, product.CostingQuantity);
         Assert.Equal(18m, product.InventoryValue);
-        Assert.Equal(10, sale.NayaxProductId);
+        Assert.Equal(10, sale.ProductId);
+        Assert.Null(sale.NayaxProductId);
         Assert.Equal(NayaxTransactionStatusIds.Completed, sale.TransactionStatusId);
         Assert.Equal(2m, sale.CostOfGoodsSold);
         Assert.Equal(SaleCostSource.InventoryLedger, sale.CostSource);

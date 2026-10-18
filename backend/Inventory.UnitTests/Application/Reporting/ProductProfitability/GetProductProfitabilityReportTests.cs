@@ -38,12 +38,12 @@ public class GetProductProfitabilityReportTests
     }
 
     [Fact]
-    public async Task Two_raw_sale_groups_that_match_the_same_product_are_merged_into_one_row()
+    public async Task Two_sale_groups_attributed_to_the_same_product_are_merged_into_one_row()
     {
         var facts = new ProductProfitabilityReportFacts(
             [
-                new ProductProfitabilitySaleGroupFacts(1, "Water", 3m, 1m, 1m, true, 0, 0m, 1, 3m, 0m),
-                new ProductProfitabilitySaleGroupFacts(999, "Water (999)", 3m, 1m, 1m, true, 0, 0m, 1, 3m, 0m)
+                new ProductProfitabilitySaleGroupFacts(1, null, null, 3m, 1m, 1m, true, 0, 0m, 1, 3m, 0m),
+                new ProductProfitabilitySaleGroupFacts(1, null, null, 3m, 1m, 1m, true, 0, 0m, 1, 3m, 0m)
             ],
             [new ProductProfitabilityCatalogueEntry(1, "Water", null)]);
         var useCase = new GetProductProfitabilityReport(new FakeProductProfitabilityReportFactsProvider(facts), FakeProductPurchaseCostFactsProvider.Empty());
@@ -61,7 +61,7 @@ public class GetProductProfitabilityReportTests
     public async Task Unmapped_sale_group_is_reported_as_unmapped_with_a_quality_note()
     {
         var facts = new ProductProfitabilityReportFacts(
-            [new ProductProfitabilitySaleGroupFacts(999, "Unknown Item", 5m, 1m, 0m, false, 1, 5m, 1, 0m, 0m)],
+            [new ProductProfitabilitySaleGroupFacts(null, 999, "Unknown Item", 5m, 1m, 0m, false, 1, 5m, 1, 0m, 0m)],
             []);
         var useCase = new GetProductProfitabilityReport(new FakeProductProfitabilityReportFactsProvider(facts), FakeProductPurchaseCostFactsProvider.Empty());
 
@@ -80,7 +80,7 @@ public class GetProductProfitabilityReportTests
     public async Task Blank_raw_name_with_no_id_match_is_unmapped_product_not_a_normalized_empty_name()
     {
         var facts = new ProductProfitabilityReportFacts(
-            [new ProductProfitabilitySaleGroupFacts(null, "   ", 5m, 1m, 2m, true, 0, 0m, 1, 5m, 0m)],
+            [new ProductProfitabilitySaleGroupFacts(null, null, "   ", 5m, 1m, 2m, true, 0, 0m, 1, 5m, 0m)],
             []);
         var useCase = new GetProductProfitabilityReport(new FakeProductProfitabilityReportFactsProvider(facts), FakeProductPurchaseCostFactsProvider.Empty());
 
@@ -110,8 +110,8 @@ public class GetProductProfitabilityReportTests
     {
         var facts = new ProductProfitabilityReportFacts(
             [
-                new ProductProfitabilitySaleGroupFacts(1, "Low", 10m, 1m, 1m, true, 0, 0m, 1, 10m, 0m),
-                new ProductProfitabilitySaleGroupFacts(2, "High", 50m, 1m, 1m, true, 0, 0m, 1, 50m, 0m)
+                new ProductProfitabilitySaleGroupFacts(1, null, null, 10m, 1m, 1m, true, 0, 0m, 1, 10m, 0m),
+                new ProductProfitabilitySaleGroupFacts(2, null, null, 50m, 1m, 1m, true, 0, 0m, 1, 50m, 0m)
             ],
             [new ProductProfitabilityCatalogueEntry(1, "Low", null), new ProductProfitabilityCatalogueEntry(2, "High", null)]);
         var useCase = new GetProductProfitabilityReport(new FakeProductProfitabilityReportFactsProvider(facts), FakeProductPurchaseCostFactsProvider.Empty());
@@ -222,10 +222,10 @@ public class GetProductProfitabilityReportTests
     }
 
     [Fact]
-    public async Task An_unmapped_sale_group_never_gets_a_purchase_cost_insight_from_its_raw_nayax_identifier()
+    public async Task An_unresolved_sale_group_never_gets_a_purchase_cost_insight_from_its_raw_nayax_identifier()
     {
         var facts = new ProductProfitabilityReportFacts(
-            [new ProductProfitabilitySaleGroupFacts(1, "Unknown Item", 5m, 1m, 0m, false, 1, 5m, 1, 0m, 0m)],
+            [new ProductProfitabilitySaleGroupFacts(null, 1, "Unknown Item", 5m, 1m, 0m, false, 1, 5m, 1, 0m, 0m)],
             []);
         var purchaseCostFacts = new FakeProductPurchaseCostFactsProvider(new Dictionary<long, IReadOnlyList<SupplierPriceHistoryEntry>>
         {
@@ -246,8 +246,8 @@ public class GetProductProfitabilityReportTests
     {
         var facts = new ProductProfitabilityReportFacts(
             [
-                new ProductProfitabilitySaleGroupFacts(1, "Low", 10m, 1m, 1m, true, 0, 0m, 1, 10m, 0m),
-                new ProductProfitabilitySaleGroupFacts(2, "High", 50m, 1m, 1m, true, 0, 0m, 1, 50m, 0m)
+                new ProductProfitabilitySaleGroupFacts(1, null, null, 10m, 1m, 1m, true, 0, 0m, 1, 10m, 0m),
+                new ProductProfitabilitySaleGroupFacts(2, null, null, 50m, 1m, 1m, true, 0, 0m, 1, 50m, 0m)
             ],
             [new ProductProfitabilityCatalogueEntry(1, "Low", null), new ProductProfitabilityCatalogueEntry(2, "High", null)]);
         var purchaseCostFacts = FakeProductPurchaseCostFactsProvider.Empty();

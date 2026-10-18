@@ -40,6 +40,7 @@ public class ImportsControllerNayaxSalesTests
             .Returns([Row(1001), Row(1002)]);
         var store = new Mock<INayaxSalesImportStore>();
         store.Setup(x => x.GetProductCandidatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        store.Setup(x => x.GetConflictingTransactionIdsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         store.Setup(x => x.FindByTransactionIdAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((CostableSale?)null);
         store.Setup(x => x.Add(It.IsAny<ImportedNayaxSale>()))

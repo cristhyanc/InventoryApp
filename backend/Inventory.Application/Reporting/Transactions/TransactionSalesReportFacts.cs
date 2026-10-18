@@ -42,6 +42,9 @@ public sealed record TransactionSalesReportFactsRow(
     string? MachineName,
     long? SiteId,
     string? SiteName,
+    // The local product the sale is attributed to (issue #758), or null when it is unresolved. The
+    // use case reads exactly this; it never re-matches a product from the two fields below.
+    long? ProductId,
     long? NayaxProductId,
     string? RawProductName,
     NayaxPaymentType PaymentType,

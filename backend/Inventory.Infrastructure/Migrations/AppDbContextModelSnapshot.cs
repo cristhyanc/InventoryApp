@@ -1070,6 +1070,84 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("NayaxProcessingFeeRates");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleProductConflict", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("DetectedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("DirectCandidateProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("ExternalCandidateProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("NayaxSaleId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("TransactionId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "NayaxSaleId")
+                        .IsUnique();
+
+                    b.ToTable("NayaxSaleProductConflicts");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleProductResolution", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("CandidateProductIds")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DecidedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("NayaxSaleId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("NewProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("PreviousProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("ResolvedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Rule")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("TransactionId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "NayaxSaleId");
+
+                    b.ToTable("NayaxSaleProductResolutions");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSaleTimestampRepair", b =>
                 {
                     b.Property<int>("Id")
@@ -1192,8 +1270,17 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("PaymentMethod")
                         .HasColumnType("TEXT");
 
+                    b.Property<long?>("ProductId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("ProductName")
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("ProviderProductIdIsRaw")
+                        .HasColumnType("INTEGER");
 
                     b.Property<decimal>("SettlementValue")
                         .HasColumnType("decimal(18,2)");
@@ -1210,6 +1297,8 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "ProductId");
 
                     b.HasIndex("BusinessId", "TransactionID")
                         .IsUnique();
@@ -2016,6 +2105,15 @@ namespace Inventory.Infrastructure.Migrations
                     b.Navigation("MatchedManualStockAdjustment");
 
                     b.Navigation("MatchedProduct");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.NayaxSales", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.Product", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "ProductId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.OperatingExpense", b =>

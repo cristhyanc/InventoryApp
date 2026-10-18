@@ -468,6 +468,7 @@ public class NayaxHistoricalCostTests
             TransactionID = id,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = productId,
             NayaxProductId = productId,
             ProductName = "Snack",
             SettlementValue = 3m,

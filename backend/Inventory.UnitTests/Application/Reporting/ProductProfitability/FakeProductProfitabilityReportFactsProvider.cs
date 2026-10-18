@@ -32,7 +32,7 @@ public sealed class FakeProductProfitabilityReportFactsProvider : IProductProfit
         long productId = 1, string productName = "Water", decimal sales = 30m, decimal cost = 10m,
         bool isCogsComplete = true, ReportCoverageFacts? coverage = null) => new(
         [
-            new ProductProfitabilitySaleGroupFacts(productId, productName, sales, 3m, cost, isCogsComplete,
+            new ProductProfitabilitySaleGroupFacts(productId, null, null, sales, 3m, cost, isCogsComplete,
                 isCogsComplete ? 0 : 1, isCogsComplete ? 0m : sales, 3, sales, 0m)
         ],
         [new ProductProfitabilityCatalogueEntry(productId, productName, "Drinks")])

@@ -196,7 +196,13 @@ public class BusinessOwnershipMigrationTests
         {
             await MigrateToAsync(after, ScopedUniquenessMigration);
 
-            var sales = await after.NayaxSales.AsNoTracking().OrderBy(s => s.TransactionID).ToListAsync();
+            // The three columns under test, not whole entities: this database stops at
+            // ScopedUniquenessMigration, so a column a later additive migration adds to NayaxSales
+            // does not exist here yet (issue #758's ProductId is the current example).
+            var sales = await after.NayaxSales.AsNoTracking()
+                .OrderBy(s => s.TransactionID)
+                .Select(s => new { s.Id, s.TransactionID, s.SettlementValue })
+                .ToListAsync();
 
             Assert.Equal(3, sales.Count);
             Assert.Equal(new long[] { 1001, 1002, 1003 }, sales.Select(s => s.TransactionID));

@@ -78,6 +78,7 @@ public class NayaxTransactionStatusTests
             TransactionID = 1,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = 10,
             NayaxProductId = 10,
             SettlementValue = 10m,
             MachineAuthorizationTime = new DateTime(2025, 8, 2)
@@ -136,6 +137,7 @@ public class NayaxTransactionStatusTests
             TransactionID = 1,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = 10,
             NayaxProductId = 10,
             MachineAuthorizationTime = new DateTime(2025, 8, 2)
         };
