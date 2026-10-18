@@ -60,6 +60,7 @@ public class MachinesControllerTests
                 catalog ?? Mock.Of<IProductCatalogStore>(),
                 FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
                 new ResolveMachineProductPricing(NoAgreementSiteFacts(), Time.Calendar)),
+            new GetMachineLatestSales(nayaxClient),
             new SyncMachineStockFromNayax(
                 nayaxClient, store, FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
             new ApplyMachineStockSync(store),

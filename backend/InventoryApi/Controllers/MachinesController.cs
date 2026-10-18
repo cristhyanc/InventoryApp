@@ -17,14 +17,15 @@ namespace InventoryApi.Controllers;
 /// (issue #525) - Sync Restock included, because reconciling what a machine reported it dispensed
 /// is exactly the refill work an Operator does.
 ///
-/// <para><b>The three read actions withhold their financial figures from a caller without
-/// <c>Dashboard.ViewFinancials</c></b> (issue #698). The endpoints themselves stay open to every role
+/// <para><b>The four read actions withhold their financial figures from a caller without
+/// <c>Dashboard.ViewFinancials</c></b> (issue #698, extended to the latest-sales read by issue
+/// #768). The endpoints themselves stay open to every role
 /// that may operate inventory, because that is what they are for; what changes is the shape of the
 /// response, which an <c>AuthorizeAttribute</c> cannot express. The decision is taken once per
 /// request from <see cref="CurrentCapabilities"/> - the one service that answers "what may this
 /// request do", so it cannot disagree with the capability the Dashboard summary reads, the policies
 /// the authorization middleware enforces or the list <c>GET /api/me/access</c> reports - and is
-/// handed to the response mappers, which own the two projections. No role name appears here.</para>
+/// handed to the response mappers, which own the projections. No role name appears here.</para>
 /// </summary>
 [ApiController]
 [Route("api/[controller]")]
@@ -36,6 +37,7 @@ public class MachinesController : ControllerBase
     private readonly GetMachineDashboard _getMachineDashboard;
     private readonly ListMachineDashboard _listMachineDashboard;
     private readonly ListMachineProducts _listMachineProducts;
+    private readonly GetMachineLatestSales _getMachineLatestSales;
     private readonly SyncMachineStockFromNayax _syncMachineStock;
     private readonly ApplyMachineStockSync _applyMachineStockSync;
     private readonly ResolveMachineStockDuplicate _resolveMachineStockDuplicate;
@@ -48,6 +50,7 @@ public class MachinesController : ControllerBase
         GetMachineDashboard getMachineDashboard,
         ListMachineDashboard listMachineDashboard,
         ListMachineProducts listMachineProducts,
+        GetMachineLatestSales getMachineLatestSales,
         SyncMachineStockFromNayax syncMachineStock,
         ApplyMachineStockSync applyMachineStockSync,
         ResolveMachineStockDuplicate resolveMachineStockDuplicate,
@@ -59,6 +62,7 @@ public class MachinesController : ControllerBase
         _getMachineDashboard = getMachineDashboard;
         _listMachineDashboard = listMachineDashboard;
         _listMachineProducts = listMachineProducts;
+        _getMachineLatestSales = getMachineLatestSales;
         _syncMachineStock = syncMachineStock;
         _applyMachineStockSync = applyMachineStockSync;
         _resolveMachineStockDuplicate = resolveMachineStockDuplicate;
@@ -90,6 +94,22 @@ public class MachinesController : ControllerBase
         var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
         var products = await _listMachineProducts.Handle(id, CancellationToken.None);
         return Ok(products.Select(product => ProductRecordResponseMapper.ToResponse(product, visibility)).ToList());
+    }
+
+    // The machine's latest Nayax sales (issue #768): the Sales tab of the machine-details page.
+    //
+    // A pure read of the provider's own rolling latest-sales window - it imports nothing, persists
+    // nothing, deducts no storage, recosts no inventory and applies no stock event, which the use
+    // case guarantees structurally by holding no port but the Nayax client. An unconfigured or
+    // unusable provider is answered 200 with isAvailable: false and a stable reason code, because
+    // that is a state of this business and not a failure of the call; a transport failure, a
+    // cancellation and the support-session refusal keep their own status codes.
+    [HttpGet("{id:long}/latest-sales")]
+    public async Task<ActionResult<MachineLatestSalesResponse>> GetLatestSales(long id, CancellationToken ct)
+    {
+        var visibility = await _capabilities.ForCurrentRequestAsync(ct);
+        var latest = await _getMachineLatestSales.Handle(id, ct);
+        return Ok(MachineLatestSalesResponseMapper.ToResponse(id, latest, visibility));
     }
 
     // Fetches new Nayax stock-adjustment alerts and returns a reconciliation preview; it never

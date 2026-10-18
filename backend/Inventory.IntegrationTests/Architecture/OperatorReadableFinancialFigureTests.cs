@@ -56,6 +56,10 @@ public class OperatorReadableFinancialFigureTests
         "InventoryValue",
         "Valuation",
         "Sales",
+        // Issue #768 put the first per-transaction sale amount on an Operator-readable response,
+        // and "Sales" does not match it. The fragment is the amount's own name rather than a bare
+        // "Sale", which would match every date, name and status that merely belongs to a sale.
+        "SaleAmount",
     ];
 
     /// <summary>
@@ -160,6 +164,22 @@ public class OperatorReadableFinancialFigureTests
             FigureOutcome.Withheld,
             "Issue #698: the status names why a profit is unavailable, which is a statement about "
                 + "the machine's profitability."),
+
+        // GET api/machines/{id}/latest-sales (issue #768): the machine's latest Nayax sales.
+        new(
+            "MachineLatestSaleResponse.SaleAmount",
+            FigureOutcome.Withheld,
+            "Issue #768: null without the capability, never 0, through the same "
+                + "FinancialFigureVisibility.Withhold every other mapper uses. The sale's date and "
+                + "time, reported product name and payment method stay, so the tab is still usable "
+                + "for restocking work."),
+        new(
+            "MachineLatestSalesResponse.Sales",
+            FigureOutcome.NotAFinancialAmount,
+            "The row list itself carries no amount - each row's own saleAmount is the figure, and it "
+                + "is withheld above. The list is never withheld: an Operator may see that the "
+                + "machine dispensed something, and withholding the rows would make an unavailable "
+                + "provider and an unprivileged role look identical."),
 
         // The catalogue product, on every endpoint that serves one (issue #698).
         new(
