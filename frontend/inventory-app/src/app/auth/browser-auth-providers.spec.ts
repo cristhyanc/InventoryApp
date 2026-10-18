@@ -16,8 +16,8 @@ import {
   browserAuthProviders
 } from './browser-auth-providers';
 import { configureExternalId, unconfigureExternalId } from './external-id.spec-helpers';
-import { INTENDED_DESTINATION_KEY, takeIntendedDestination } from './intended-destination';
-import { SELECTED_AUTHORITY_KEY } from './selected-authority';
+import { INTENDED_DESTINATION_KEY, peekIntendedDestination } from './intended-destination';
+import { SELECTED_AUTHORITY_KEY, readSelectedAuthority, rememberSelectedAuthority } from './selected-authority';
 import {
   E2ETestAuthGuard,
   browserAuthProviders as e2eBrowserAuthProviders,
@@ -176,7 +176,7 @@ describe('browser auth providers', () => {
 
       decide(0, '/reports/daily?machineId=7');
 
-      expect(takeIntendedDestination()).toBe('/reports/daily?machineId=7');
+      expect(peekIntendedDestination()).toBe('/reports/daily?machineId=7');
     });
 
     /**
@@ -188,7 +188,7 @@ describe('browser auth providers', () => {
 
       decide(0, '/invite');
 
-      expect(takeIntendedDestination()).toBe('/invite');
+      expect(peekIntendedDestination()).toBe('/invite');
     });
 
     it('delegates to the real guard once somebody is signed in', () => {
@@ -214,6 +214,9 @@ describe('browser auth providers', () => {
   describe('the authority each MSAL configuration is built for', () => {
     beforeEach(() => {
       localStorage.clear();
+      // A fresh tab for each case: the authority is snapshotted per tab, so a pin left behind by
+      // the previous one would be exactly the thing these tests are about.
+      sessionStorage.clear();
       unconfigureExternalId();
     });
 
@@ -248,6 +251,49 @@ describe('browser auth providers', () => {
       localStorage.setItem(SELECTED_AUTHORITY_KEY, 'externalId');
 
       expect(interceptorScopes()).toEqual([apiScopeFor('workforce')]);
+    });
+
+    /**
+     * The three configurations are built by three factories at three different moments - the
+     * interceptor's is not constructed until the first HTTP request goes through `HttpClient` -
+     * and the choice they derive from is `localStorage`, which every tab of this origin shares.
+     * Each one therefore reads the authority through `readSelectedAuthority()`, which answers
+     * from this tab's own snapshot: a second tab choosing differently in between must not leave
+     * one authority's `PublicClientApplication` asking for the other authority's scopes, which
+     * would simply fail to acquire a token.
+     *
+     * The guard's configuration stands in for the bootstrap here because a real
+     * `PublicClientApplication` cannot be constructed under jsdom (no `crypto.subtle`);
+     * `MSALInstanceFactory` reads the authority through the same one call, and
+     * `selected-authority.spec.ts` pins the snapshot itself.
+     */
+    it('builds the guard and the interceptor for one authority, whatever another tab does', () => {
+      configureExternalId();
+      localStorage.setItem(SELECTED_AUTHORITY_KEY, 'externalId');
+
+      // Bootstrap: the first configuration built in this tab takes the snapshot.
+      expect(guardScopes()).toContain(apiScopeFor('externalId'));
+
+      // Another tab now changes the shared choice, long before the interceptor is constructed.
+      localStorage.setItem(SELECTED_AUTHORITY_KEY, 'workforce');
+
+      expect(interceptorScopes()).toEqual([apiScopeFor('externalId')]);
+      expect(guardScopes()).toContain(apiScopeFor('externalId'));
+    });
+
+    /** The same shared write landing while this tab's redirect is in flight: the snapshot lives in
+     * `sessionStorage` and survives the round trip, so the callback page load rebuilds every
+     * configuration for the authority that started the journey. */
+    it('comes back from a redirect into the authority that started it', () => {
+      configureExternalId();
+      rememberSelectedAuthority('externalId');
+
+      localStorage.setItem(SELECTED_AUTHORITY_KEY, 'workforce');
+
+      // The callback page load builds everything again, in the same tab.
+      expect(readSelectedAuthority()).toBe('externalId');
+      expect(guardScopes()).toContain(apiScopeFor('externalId'));
+      expect(interceptorScopes()).toEqual([apiScopeFor('externalId')]);
     });
   });
 

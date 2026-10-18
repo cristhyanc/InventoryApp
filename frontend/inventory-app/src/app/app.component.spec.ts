@@ -19,6 +19,7 @@ import { SuperAdminBusinessesService } from './services/super-admin-businesses.s
 import { BusinessService, CurrentBusiness } from './services/business.service';
 import { SupportSessionService, SupportSessionState } from './support-session/support-session.service';
 import { configureExternalId, unconfigureExternalId } from './auth/external-id.spec-helpers';
+import { peekIntendedDestination, rememberIntendedDestination } from './auth/intended-destination';
 import { SELECTED_AUTHORITY_KEY } from './auth/selected-authority';
 import { SignInService } from './auth/sign-in.service';
 
@@ -1665,6 +1666,7 @@ describe('AppComponent sign-in choice (issue #711)', () => {
   beforeEach(() => {
     stubMatchMedia(true);
     localStorage.clear();
+    sessionStorage.clear();
     unconfigureExternalId();
     // A refused redirect is still logged, exactly as before; the tests below assert what the
     // person is shown, and the log would only make the run noisy.
@@ -1738,6 +1740,38 @@ describe('AppComponent sign-in choice (issue #711)', () => {
     await fixture.whenStable();
 
     expect(TestBed.inject(SignInService).take()).toBe('failed');
+  });
+
+  /**
+   * The page the visitor asked for has to survive the cancellation too, or the retry the sign-in
+   * page offers quietly lands them on the dashboard instead of where they were going. An invite
+   * acceptance page is the case that matters most: being sent to the dashboard after cancelling
+   * once leaves the invite unaccepted with nothing on screen saying so.
+   */
+  it('keeps the page the visitor asked for when a cancelled journey comes back', async () => {
+    configureExternalId();
+    rememberIntendedDestination('/invite');
+    const { fixture } = await render({
+      signedIn: false,
+      redirect: throwError(() => ({ errorCode: 'access_denied' }))
+    });
+    await fixture.whenStable();
+
+    expect(TestBed.inject(Router).url).toBe('/sign-in');
+    expect(peekIntendedDestination()).toBe('/invite');
+  });
+
+  /** And is released by the one callback that completes, which is MSAL's own cue to navigate
+   * there: holding it any longer would return a later sign-in to a stale page. */
+  it('releases the destination once the hosted sign-in completes', async () => {
+    configureExternalId();
+    rememberIntendedDestination('/reports/daily');
+    const { fixture } = await render({
+      redirect: of({ account } as AuthenticationResult)
+    });
+    await fixture.whenStable();
+
+    expect(peekIntendedDestination()).toBeNull();
   });
 });
 

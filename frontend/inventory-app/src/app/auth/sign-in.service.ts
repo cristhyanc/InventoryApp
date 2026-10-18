@@ -2,7 +2,7 @@ import { Inject, Injectable, InjectionToken } from '@angular/core';
 import { MsalService } from '@azure/msal-angular';
 import { IPublicClientApplication, PublicClientApplication, RedirectRequest } from '@azure/msal-browser';
 import { AuthorityId, clientIdFor, createMsalConfig, loginRequestFor } from '../auth-config';
-import { takeIntendedDestination } from './intended-destination';
+import { peekIntendedDestination } from './intended-destination';
 import { rememberSelectedAuthority } from './selected-authority';
 
 /** Why a hosted sign-in did not finish, as the sign-in page needs to explain it. */
@@ -64,12 +64,18 @@ export class SignInService {
    * Redirects to `authority`'s hosted sign-in page. For `externalId` that is the External ID user
    * flow a human configured, which is where Google is offered: this application sends no provider
    * hint, invents no query parameter and never talks to Google itself (design § 4, journey C).
+   *
+   * The page the visitor asked for is **read and left in place**: a redirect that cannot start,
+   * and a hosted journey that comes back cancelled, both end with the person back on the sign-in
+   * page pressing an action again, and that attempt has to return them to the page they asked for
+   * rather than to the application's home page. It is cleared by the callback that completes
+   * (`AppComponent`), and reusing it never extends its own 15-minute window.
    */
   async signIn(authority: AuthorityId): Promise<void> {
     this.failure = null;
     rememberSelectedAuthority(authority);
 
-    const destination = takeIntendedDestination();
+    const destination = peekIntendedDestination();
     const request: RedirectRequest = {
       ...loginRequestFor(authority),
       ...(destination === null ? {} : { redirectStartPage: destination })

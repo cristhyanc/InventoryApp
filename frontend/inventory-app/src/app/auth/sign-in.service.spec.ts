@@ -3,7 +3,11 @@ import { MsalService } from '@azure/msal-angular';
 import { IPublicClientApplication } from '@azure/msal-browser';
 import { apiScopeFor, clientIdFor } from '../auth-config';
 import { configureExternalId, unconfigureExternalId } from './external-id.spec-helpers';
-import { INTENDED_DESTINATION_KEY, rememberIntendedDestination } from './intended-destination';
+import {
+  INTENDED_DESTINATION_KEY,
+  INTENDED_DESTINATION_LIFETIME_MS,
+  rememberIntendedDestination
+} from './intended-destination';
 import { SELECTED_AUTHORITY_KEY } from './selected-authority';
 import { AUTHORITY_CLIENT_FACTORY, SignInService } from './sign-in.service';
 
@@ -109,14 +113,16 @@ describe('SignInService (issue #711)', () => {
     expect(request.domainHint).toBeUndefined();
   });
 
-  it('hands MSAL the page the visitor asked for, and takes it out of the tab in the same step', async () => {
+  it('hands MSAL the page the visitor asked for, and keeps it until the sign-in completes', async () => {
     const { service, customerIdentityLoginRedirect } = createHarness();
     rememberIntendedDestination('/reports/daily');
 
     await service.signIn('externalId');
 
     expect(customerIdentityLoginRedirect.mock.calls[0][0].redirectStartPage).toBe('/reports/daily');
-    expect(sessionStorage.getItem(INTENDED_DESTINATION_KEY)).toBeNull();
+    // Still held: only the callback that completes releases it (`AppComponent`), because a
+    // cancelled or refused journey comes back carrying nothing and has to be retried with it.
+    expect(sessionStorage.getItem(INTENDED_DESTINATION_KEY)).not.toBeNull();
   });
 
   it('starts a redirect with no start page when nothing was asked for', async () => {
@@ -139,6 +145,51 @@ describe('SignInService (issue #711)', () => {
     await expect(service.signIn('externalId')).rejects.toBeDefined();
 
     expect(bootstrappedLoginRedirect).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A redirect that never left the page is exactly the case the sign-in page offers a retry for,
+   * and that retry has to go back to the page the visitor asked for - not quietly to the home
+   * page. The destination is therefore still held after the failure.
+   */
+  it('keeps the destination when the redirect could not start, so the retry still returns there', async () => {
+    const { service, customerIdentityLoginRedirect } = createHarness();
+    rememberIntendedDestination('/reports/daily');
+    customerIdentityLoginRedirect.mockRejectedValueOnce({ errorCode: 'network_error' });
+
+    await expect(service.signIn('externalId')).rejects.toBeDefined();
+    await service.signIn('externalId');
+
+    expect(customerIdentityLoginRedirect.mock.calls[1][0].redirectStartPage).toBe('/reports/daily');
+  });
+
+  /** The same, for a failure before the authority's own instance even exists, and for the one
+   * destination that matters most: an invite the person was part-way through accepting. */
+  it('keeps an invite destination when the chosen authority client could not be built', async () => {
+    const { service, customerIdentityLoginRedirect, createClient } = createHarness();
+    rememberIntendedDestination('/invite');
+    createClient.mockRejectedValueOnce(new Error('crypto unavailable'));
+
+    await expect(service.signIn('externalId')).rejects.toBeDefined();
+    await service.signIn('externalId');
+
+    expect(customerIdentityLoginRedirect.mock.calls[0][0].redirectStartPage).toBe('/invite');
+  });
+
+  /** Retrying reuses the destination rather than re-recording it, so an abandoned sign-in still
+   * expires exactly when it would have. */
+  it('does not extend the destination window by retrying inside it', async () => {
+    const { service, customerIdentityLoginRedirect } = createHarness();
+    const storedAt = Date.now() - INTENDED_DESTINATION_LIFETIME_MS + 1_000;
+    sessionStorage.setItem(INTENDED_DESTINATION_KEY, JSON.stringify({ url: '/reports/daily', storedAt }));
+    customerIdentityLoginRedirect.mockRejectedValueOnce({ errorCode: 'network_error' });
+
+    await expect(service.signIn('externalId')).rejects.toBeDefined();
+    await service.signIn('externalId');
+
+    const held = JSON.parse(sessionStorage.getItem(INTENDED_DESTINATION_KEY) ?? 'null') as { storedAt: number };
+    expect(held.storedAt).toBe(storedAt);
+    expect(customerIdentityLoginRedirect.mock.calls[1][0].redirectStartPage).toBe('/reports/daily');
   });
 
   it('tells a cancelled hosted sign-in apart from a broken one', () => {

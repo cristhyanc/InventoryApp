@@ -38,10 +38,16 @@ import { needsAuthorityChoice, readSelectedAuthority } from './selected-authorit
  * replacement can be total: a build swaps the whole authentication story, instead of a flag
  * inside the composition deciding at runtime which one applies.
  *
- * **Which authority this page load signs in against is decided here, once** (issue #711). MSAL
- * partitions its cache by client id and authority, so the instance is built for the authority
- * `selected-authority.ts` remembers rather than repointed later; with no customer identity tenant
- * configured that is always the workforce authority and nothing below changes behaviour at all.
+ * **Which authority this page load signs in against is decided once, and all three configurations
+ * below are built from that one decision** (issue #711). MSAL partitions its cache by client id
+ * and authority, so the instance is built for the authority `selected-authority.ts` reports rather
+ * than repointed later. The three factories here run at different moments - the interceptor's not
+ * until the first HTTP request - and the browser-wide choice they derive from is shared by every
+ * tab, so `readSelectedAuthority()` answers from this tab's own immutable snapshot of it: another
+ * tab choosing differently in between cannot hand this instance the other authority's scopes, and
+ * cannot change which authority a redirect already in flight comes back into. With no customer
+ * identity tenant configured that answer is always the workforce authority and nothing here
+ * changes behaviour at all.
  */
 export function MSALInstanceFactory(): IPublicClientApplication {
   return new PublicClientApplication(createMsalConfig(readSelectedAuthority()));

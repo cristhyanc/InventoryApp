@@ -20,9 +20,20 @@
  * destination of `/auth` would return the visitor to the callback page they just came from, and one
  * of `/sign-in` would return them to the chooser for ever. Neither is a page anybody asked for.
  *
- * **Where it is held.** `sessionStorage`, one tab only, never sent to a server, with the same
- * 15-minute window and read-and-remove discipline as the pending invite token
- * (`access/pending-invite-token.ts`), so an abandoned sign-in leaves nothing waiting in the tab.
+ * **Where it is held, and until when.** `sessionStorage`, one tab only, never sent to a server,
+ * with the same 15-minute window as the pending invite token (`access/pending-invite-token.ts`).
+ * It is held until a sign-in **completes**, not until it is read: a hosted journey that is
+ * cancelled, refused or could not start at all comes back carrying nothing, and the retry the
+ * sign-in page offers has to return the visitor to the page they asked for rather than quietly to
+ * the application's home page. {@link peekIntendedDestination} therefore reads without consuming,
+ * {@link clearIntendedDestination} is what the completed callback calls, and an abandoned sign-in
+ * still leaves nothing usable in the tab because the window is enforced on every read.
+ *
+ * **A retry never extends that window.** Reusing a destination only reads it, so `storedAt` stays
+ * the instant the guard recorded it: fifteen minutes is fifteen minutes from the page the visitor
+ * asked for, however many attempts happen inside it. Only a fresh refusal by the guard records a
+ * new destination with a new instant.
+ *
  * An invite is unaffected by any of this: its token travels in its own store and the destination
  * recorded for it is the tokenless `/invite`, exactly as before.
  */
@@ -78,7 +89,8 @@ function isControlCharacter(character: string): boolean {
   return code < 0x20 || code === 0x7f;
 }
 
-function forget(): void {
+/** Forgets the held destination. Called when a sign-in completes, and on an unusable one. */
+export function clearIntendedDestination(): void {
   try {
     sessionStorage.removeItem(INTENDED_DESTINATION_KEY);
   } catch {
@@ -91,7 +103,7 @@ export function rememberIntendedDestination(url: string): void {
   if (!isInternalDestination(url)) {
     // Not somewhere to return to. Drop whatever was held rather than keep an older destination
     // that this navigation has superseded.
-    forget();
+    clearIntendedDestination();
     return;
   }
 
@@ -102,8 +114,14 @@ export function rememberIntendedDestination(url: string): void {
   }
 }
 
-/** Reads the held destination and removes it in the same step, so it is only ever used once. */
-export function takeIntendedDestination(): string | null {
+/**
+ * Reads the held destination, leaving it in place for a sign-in that has to be tried again.
+ *
+ * The store is readable by anything running in this tab, so what comes out of it is checked again
+ * rather than trusted because it went in through this module, and a destination that is expired,
+ * tampered with or unreadable is dropped here rather than left to be re-read on every attempt.
+ */
+export function peekIntendedDestination(): string | null {
   let raw: string | null = null;
   try {
     raw = sessionStorage.getItem(INTENDED_DESTINATION_KEY);
@@ -111,12 +129,19 @@ export function takeIntendedDestination(): string | null {
     return null;
   }
 
-  forget();
-
   if (raw === null) {
     return null;
   }
 
+  const usable = readUsable(raw);
+  if (usable === null) {
+    clearIntendedDestination();
+  }
+
+  return usable;
+}
+
+function readUsable(raw: string): string | null {
   try {
     const parsed = JSON.parse(raw) as Partial<StoredDestination> | null;
     const usable =

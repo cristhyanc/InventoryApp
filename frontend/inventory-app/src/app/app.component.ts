@@ -21,7 +21,7 @@ import { RolePreviewService } from './role-preview/role-preview.service';
 import { BusinessService } from './services/business.service';
 import { SupportSessionService } from './support-session/support-session.service';
 import { isExternalIdConfigured, loginRequest } from './auth-config';
-import { SIGN_IN_ROUTE } from './auth/intended-destination';
+import { SIGN_IN_ROUTE, clearIntendedDestination } from './auth/intended-destination';
 import { forgetSelectedAuthority } from './auth/selected-authority';
 import { SignInService } from './auth/sign-in.service';
 
@@ -301,6 +301,12 @@ export class AppComponent implements OnInit, OnDestroy {
         next: (result: AuthenticationResult | null) => {
           if (result?.account) {
             this.authService.instance.setActiveAccount(result.account);
+
+            // The hosted journey completed, so the page the visitor asked for has done its job:
+            // MSAL holds it as the redirect start page and is navigating there itself. It is kept
+            // until this point precisely so a cancelled or broken journey can be retried with it
+            // (issue #711), and this is the one completion that releases it.
+            clearIntendedDestination();
           }
           this.updateLoginState();
         },

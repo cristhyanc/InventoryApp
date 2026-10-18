@@ -847,7 +847,7 @@ The shape is § 9.2's: the authority is chosen once, explicitly, before any redi
 has its own client id, its own authority URL and therefore its own MSAL cache partition; the choice
 is remembered per browser; there is no silent fallback. `ActorIdentity`, `EntraActorIdentityAccessor`
 and the API's two schemes are untouched, there is no schema change and no API contract change.
-Four decisions are worth recording because they are not literally what § 9 and § 12 say:
+Six decisions are worth recording because they are not literally what § 9 and § 12 say:
 
 - **The second button says "Continue with Google", not § 9.2's indicative "Sign in with Google or
   email".** Journey D is #712 and is not shipped, and journey B is not in v1 at all (§ 13 item 4),
@@ -864,6 +864,25 @@ Four decisions are worth recording because they are not literally what § 9 and 
   is the issue's own instruction rather than a workaround, and it is also why the supporting line
   above exists. A genuinely single-step Google action would need a confirmed mechanism and a
   human-approved UX revision; it is not implemented here.
+- **"Remembered per browser" is read through a per-tab snapshot.** § 9.2 says the choice is
+  remembered; `localStorage` is what remembers it, and it is shared by every tab of this origin.
+  The MSAL instance, the guard's request and the interceptor's scopes are built by three separate
+  factories at three different moments, so a second tab writing a different choice in between
+  would give one authority's client the other's scopes, and the same write during a redirect would
+  return the visitor into a tab bootstrapped for an authority that did not start their journey.
+  Each tab therefore pins its answer in `sessionStorage` - per tab, and it survives the round trip
+  - and re-pins it when somebody chooses. The remembered choice is unchanged; only which read a
+  tab trusts is. The pin is checked against the configuration on every read, so § 15.1's rollback
+  lever still reaches an open tab, and a sign-out clears both.
+- **The intended destination is held until a sign-in completes, not until it is read.** § 9.1's
+  open-redirect protection is "there is no caller-supplied return URL", and that is unchanged: the
+  destination still comes from the router state the guard refused and is still re-validated on
+  every read. What changed is when it is released. Consuming it at the start of an attempt lost it
+  for exactly the journeys § 9.3 asks to be preserved - a redirect that could not start, and a
+  cancelled hosted journey - leaving the retry on the home page instead of the page the person
+  asked for, which for `/invite` means a page saying nothing about the invitation still waiting.
+  The completed callback releases it, and a retry only ever reads it, so the 15-minute window of
+  § 10.2 is never extended by trying again.
 - **The gate is registered under the `MsalGuard` token rather than added to every route.**
   `app.routes.ts` names `MsalGuard` on about forty routes; `SignInAuthorityGuard` therefore takes
   that token's place and delegates to the real guard under `MSAL_REDIRECT_GUARD`, which is the same

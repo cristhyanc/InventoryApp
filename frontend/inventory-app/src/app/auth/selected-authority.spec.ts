@@ -1,6 +1,7 @@
 import { configureExternalId, unconfigureExternalId } from './external-id.spec-helpers';
 import {
   SELECTED_AUTHORITY_KEY,
+  TAB_AUTHORITY_KEY,
   forgetSelectedAuthority,
   hasSelectedAuthority,
   needsAuthorityChoice,
@@ -19,6 +20,8 @@ import {
 describe('the selected authority (issue #711)', () => {
   beforeEach(() => {
     localStorage.clear();
+    // A fresh tab: nothing pinned yet, so the first read takes its snapshot from the shared record.
+    sessionStorage.clear();
     unconfigureExternalId();
   });
 
@@ -88,6 +91,59 @@ describe('the selected authority (issue #711)', () => {
 
       expect(readSelectedAuthority()).toBe('workforce');
       expect(needsAuthorityChoice(false)).toBe(false);
+    });
+
+    /**
+     * The shared record belongs to the browser; what a tab builds its MSAL instance, guard request
+     * and interceptor scopes from is this tab's snapshot of it. The three are built by separate
+     * factories at separate moments - the interceptor's not until the first HTTP request - so a
+     * second tab writing a different choice in between must not reach any of them.
+     */
+    describe('the per-tab snapshot (issue #711)', () => {
+      it('pins the first answer, and ignores another tab changing the shared choice afterwards', () => {
+        expect(readSelectedAuthority()).toBe('workforce');
+        expect(sessionStorage.getItem(TAB_AUTHORITY_KEY)).toBe('workforce');
+
+        // Another tab of this origin chooses the customer identity authority.
+        localStorage.setItem(SELECTED_AUTHORITY_KEY, 'externalId');
+
+        expect(readSelectedAuthority()).toBe('workforce');
+      });
+
+      /**
+       * Including while a redirect this tab started is in flight: `sessionStorage` survives the
+       * round trip, so the callback bootstraps the authority that began the journey.
+       */
+      it('keeps this tab on the authority its own redirect started, across the callback', () => {
+        rememberSelectedAuthority('externalId');
+        expect(sessionStorage.getItem(TAB_AUTHORITY_KEY)).toBe('externalId');
+
+        localStorage.setItem(SELECTED_AUTHORITY_KEY, 'workforce');
+
+        expect(readSelectedAuthority()).toBe('externalId');
+      });
+
+      it('takes its snapshot from the shared choice when a new tab opens with one on record', () => {
+        localStorage.setItem(SELECTED_AUTHORITY_KEY, 'externalId');
+
+        expect(readSelectedAuthority()).toBe('externalId');
+        expect(sessionStorage.getItem(TAB_AUTHORITY_KEY)).toBe('externalId');
+      });
+
+      it('drops a pin for an authority the configuration no longer has, which is the rollback lever', () => {
+        rememberSelectedAuthority('externalId');
+        unconfigureExternalId();
+
+        expect(readSelectedAuthority()).toBe('workforce');
+        expect(sessionStorage.getItem(TAB_AUTHORITY_KEY)).toBe('workforce');
+      });
+
+      it('clears the pin with the choice on sign-out', () => {
+        rememberSelectedAuthority('externalId');
+        forgetSelectedAuthority();
+
+        expect(sessionStorage.getItem(TAB_AUTHORITY_KEY)).toBeNull();
+      });
     });
   });
 });
