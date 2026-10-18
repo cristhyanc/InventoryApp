@@ -1,6 +1,6 @@
 # Customer identity: the Microsoft Entra External ID design (issue #709)
 
-**Status: proposed design, not implemented.** Nothing in this document describes how InventoryApp
+**Status: approved design (merged with #709), not implemented.** Nothing in this document describes how InventoryApp
 authenticates today. Today's behaviour is, and until an implementation task ships remains, exactly
 what [docs/architecture.md § Authentication and authorization](architecture.md#authentication-and-authorization)
 and [README.md § Authentication configuration](../README.md#authentication-configuration) describe:
@@ -30,6 +30,13 @@ them. Section 2 is entirely of that second kind.
 
 A **[TBC-H]** item that a human checks and finds to be wrong, or cannot confirm, is a blocker for the
 dependent task, not a detail to work around — see § 13 and § 16.
+
+**Verification results (2026-10-18).** Every **[TBC-H]** item was checked against Microsoft's
+official External ID documentation; the outcome of each is recorded in § 13. Where a check corrected
+a statement, the corrected text is in place in the section concerned (§ 4 journey B, § 4 "The
+`profile` scope is required", § 5.1 rule 2, § 11 T6, § 14.2, § 16). The remaining inline
+**[TBC-H]** markers are kept so the original reasoning stays traceable; § 13 is authoritative for
+their status.
 
 ## 2. What exists today (read from the code, not recollected)
 
@@ -101,18 +108,27 @@ accepts an ID token, and no implementation task may introduce a path that does.
 
 | | **A. Workforce Microsoft (today, unchanged)** | **B. Microsoft through External ID** | **C. Google through External ID** | **D. Local email + password in External ID** |
 | --- | --- | --- | --- | --- |
-| **Supported account types** | Entra ID work/school accounts in *any* Entra tenant (`common`) | Microsoft accounts federated into the External ID tenant; whether that means personal MSA, work/school, or both is a provider capability **[TBC-H]** | Google consumer and Workspace accounts, through a Google OAuth client the tenant is configured with **[TBC-H]** | Email address plus password, created in the External ID tenant **[TBC-H]** |
-| **SPA authority** | `https://login.microsoftonline.com/common` (in source today) | `https://<tenant>.ciamlogin.com/<tenant-id>/` — exact host and path form **[TBC-H]** | Same as B (the SPA never talks to Google; External ID does) | Same as B |
+| **Supported account types** | Entra ID work/school accounts in *any* Entra tenant (`common`) | **Not offered in v1 (§ 13 item 4).** External ID has no built-in Microsoft account provider: personal Microsoft accounts are added as a custom OIDC provider pointing at `login.live.com`, and work/school accounts only one named Entra tenant at a time, with no "any tenant" option equivalent to `common`. Work/school users therefore stay on journey A. Personal Microsoft accounts through custom OIDC may be added later as its own approved task; no child of #708 currently owns it | Google consumer and Workspace accounts, through a Google OAuth client the tenant is configured with **[TBC-H]** | Email address plus password, created in the External ID tenant **[TBC-H]** |
+| **SPA authority** | `https://login.microsoftonline.com/common` (in source today) | `https://<tenant-subdomain>.ciamlogin.com/<tenant-id>/` (endpoints under `oauth2/v2.0/`); verified in § 13 item 2 | Same as B (the SPA never talks to Google; External ID does) | Same as B |
 | **Who the user authenticates to** | Their own Entra tenant | External ID, which redirects to Microsoft and back | External ID, which redirects to Google and back | External ID itself |
 | **Upstream provider identity** | — (this *is* the upstream) | Microsoft `sub`/`oid` in the user's home tenant | Google `sub` | — (no upstream) |
 | **Identity the API receives** | `tid` = the user's home tenant id, `oid` = their object id in it | `tid` = the **External ID tenant id** (one value for every B/C/D user), `oid` = the user's object id in that tenant **[TBC-H]** | Same shape as B **[TBC-H]** | Same shape as B **[TBC-H]** |
-| **API access-token issuer** | `https://login.microsoftonline.com/<tid>/v2.0`, validated against the token's own `tid` | The External ID tenant's v2 issuer, one fixed value **[TBC-H]** | Same as B | Same as B |
+| **API access-token issuer** | `https://login.microsoftonline.com/<tid>/v2.0`, validated against the token's own `tid` | The External ID tenant's v2 issuer, one fixed value: `https://<tenant-id>.ciamlogin.com/<tenant-id>/v2.0`, taken from the tenant's metadata document (§ 13 item 2) | Same as B | Same as B |
 | **API access-token audience** | The audience of the **workforce** API app registration (`AzureAd:ClientId` today) | The audience of a **separate API app registration in the External ID tenant** — a different client id, because an app registration belongs to one tenant | Same as B | Same as B |
 | **Required scope** | `access_as_user` in `scp` (unchanged) | `access_as_user` in `scp`, exposed by the External ID API registration | Same as B | Same as B |
 | **Claims the API maps identity from** | `tid` + `oid` only | `tid` + `oid` only | `tid` + `oid` only — **never** the Google `sub`, and never an `idp` claim | `tid` + `oid` only — **never** the email address |
 | **Claims the API reads display-only** | `name`, `preferred_username`/`email` | same | same | same |
 | **Authoritative source of a verified email** | The user's Entra tenant verified the mailbox when the account was created; the token's `preferred_username` is nevertheless display-only here (§ 10) | The upstream Microsoft account's verification, as reflected by External ID **[TBC-H]** | Google's verification, as reflected by External ID **[TBC-H]** | External ID's own sign-up verification **[TBC-H]** |
 | **What the API does with "verified email"** | **Nothing today, and nothing under this design.** No authorization, membership, invite or Super Admin decision reads an email address (§ 10) | same | same | same |
+
+### The `profile` scope is required
+
+`oid` and `tid` are issued to an application only when the token request includes the `profile`
+scope (§ 13 item 3). MSAL Browser adds `openid` and `profile` to interactive requests by default,
+but the External ID token request must not rely on that silently: #711 and #712 must include
+`profile` explicitly or prove with a test that it is present, and #710's tests must show that an
+External ID token missing `oid` or `tid` leaves the caller unidentifiable (`ActorIdentity` fails
+closed, so the risk is that nobody can sign in, not that the wrong person can).
 
 ### Why one shared `tid` is safe, and what it costs
 
@@ -161,7 +177,9 @@ token that fails the scope check is `403`, as today.
      authority, or a tenant allowlist, because any of those would silently break existing users in
      other tenants.
    - **External ID scheme (new, single-tenant and pinned).** `iss` must equal **one literal value**:
-     the v2 issuer of the one configured External ID tenant **[TBC-H]**. Pinned, not templated: no
+     the v2 issuer of the one configured External ID tenant, which Microsoft documents as
+     `https://<tenant-id>.ciamlogin.com/<tenant-id>/v2.0` and says to take from the tenant's metadata
+     document rather than build by hand (§ 13 item 2). Pinned, not templated: no
      wildcard, no repository-authored pattern, no tenant placeholder, and no second External ID
      tenant.
 
@@ -514,7 +532,7 @@ invite redemption, tenancy, and administrator elevation.
 | **T3** | **ID token used as an access token** | The SPA's ID token is sent as the bearer token; it names the right user and is signed by a trusted authority. | Audience and `scp` checks reject it (§ 4, § 5.1 rule 6). No code path accepts an ID token. | Required test, per authority. |
 | **T4** | **Token replay / stolen token** | A bearer token is captured and reused before it expires. | HTTPS only; short access-token lifetime; no token in a URL, a log, an audit event or an error message; the invite token likewise never in a URL (§ 10.2). Unchanged by this design. | Residual and accepted, as today: a stolen unexpired bearer token is usable until it expires. Token binding/DPoP is out of scope. |
 | **T5** | **Malicious account linking** | An attacker links their Google or email identity to a victim's account — classically by claiming the victim's email address — and inherits the victim's business and role. | **Structurally impossible under Option C: there is no linking flow.** A new identity is a new actor with no membership and no inherited anything; email is never an identity (§ 10.1); no automatic linking by email, ever. | The strongest argument for Option C. If linking is ever revived, #713's full requirements apply and this row must be re-done. |
-| **T6** | **Free identity creation widens the membership-free surface** | Self-service sign-up makes a validly issued, trusted-`tid` token available to anyone. The three membership-not-required endpoints then face an unauthenticated-in-practice population, and per-identity rate limits can be reset by signing up again. | The three endpoints are already written for a caller who belongs nowhere: `/api/me/account-state` names no business; `/api/invites/redeem` needs a 256-bit token; `/api/onboarding/business-applications` is behind a flag that is `false` and is rate-limited. Every other endpoint is `403` without a membership. | **New risk introduced by this change.** #714 must test it with an External ID identity that holds no membership. A human must confirm what MFA and anti-abuse controls External ID offers (email verification at sign-up, bot detection, password policy, lockout) **[TBC-H]** before approving #710, and the onboarding flag must stay off until then. Consider per-IP limiting as its own reviewed issue if the data warrants it. |
+| **T6** | **Free identity creation widens the membership-free surface** | Self-service sign-up makes a validly issued, trusted-`tid` token available to anyone. The three membership-not-required endpoints then face an unauthenticated-in-practice population, and per-identity rate limits can be reset by signing up again. | The three endpoints are already written for a caller who belongs nowhere: `/api/me/account-state` names no business; `/api/invites/redeem` needs a 256-bit token; `/api/onboarding/business-applications` is behind a flag that is `false` and is rate-limited. Every other endpoint is `403` without a membership. | **New risk introduced by this change.** #714 must test it with an External ID identity that holds no membership. Verified in § 13 item 8: email verification at sign-up, smart lockout and basic HTTP protections are built in and on by default, but **bot and sign-up fraud protection is not built in** (it needs a third-party integration or a WAF) and no built-in per-IP throttling setting exists. The onboarding flag must stay off until a human decides on that protection. Consider per-IP limiting as its own reviewed issue if the data warrants it. |
 | **T7** | **Invite redemption abuse** | A guessed or replayed invite token grants a membership; or an invite is redeemed by the wrong person. | 256 bits of randomness, stored only hashed, single-use, 7-day fixed lifetime, `(BusinessId, TokenHash)` scoped, redeemable only into the caller's **own** membership, refused outright when the caller already holds an active membership. All unchanged. | An invite link is a bearer credential by design: whoever holds it may join. Unchanged by this design; stated so it is not mistaken for a regression. |
 | **T8** | **Cross-tenant / cross-business leakage** | An identity resolves the wrong business, or a request chooses one. | Business comes only from an active membership, a support session's stored row, or nothing. No business id is ever accepted from request input. Query filters plus `BusinessOwnershipEnforcer`. All unchanged — this design adds no business-resolution path. | #714 re-runs the two-business isolation tests with identities from both issuers. |
 | **T9** | **Administrator elevation** | Somebody becomes the Super Admin, or reaches a platform-admin surface. | The Super Admin is one configured `(tid, oid)` pair outside the database, matched as a whole pair; no membership row, email address or role can create it; it stays on the workforce tenant (§ 8). Support sessions and role preview are gated on that same policy and are read-only. | A human with production configuration access can change the pair — that is the intended control. #714 must verify an External ID identity reaches no platform-admin endpoint. |
@@ -554,32 +572,72 @@ alone.** Before #710 is given a readiness label, a human must record — on #709
 follow-up commit to this file — the result of verifying each item. **An item that is unsupported, or
 that cannot be confirmed, blocks approval. Model recollection is not verification.**
 
-- [ ] External ID is the current Microsoft product for customer identity, and a new tenant can be
-      created today **[TBC-H]**
-- [ ] The authority host/path form and the exact v2 issuer value an External ID tenant uses **[TBC-H]**
-- [ ] **The claim shape of an access token for all three journeys: does it carry `tid` and `oid`, and
-      are both GUIDs, for Microsoft-federated, Google-federated and local email/password users?**
-      This is § 7's load-bearing assumption and the single most important item here **[TBC-H]**
-- [ ] Which Microsoft account types can be federated in (personal MSA, work/school, both) **[TBC-H]**
-- [ ] Google federation is supported, what must be configured on the Google side, and how a user is
-      routed to it **[TBC-H]**
-- [ ] How sign-up/sign-in **user flows** work in the current product: that a flow must be created,
-      that each intended identity provider is enabled **inside** the flow rather than only at tenant
-      level, and that the SPA application must be explicitly associated with the flow before it can
-      use it — see
-      [Add your application to the user flow](https://learn.microsoft.com/en-us/entra/external-id/customers/how-to-user-flow-add-application)
-      **[TBC-H]**
-- [ ] Local email/password sign-up exists, verifies the mailbox at sign-up, and offers self-service
-      password reset and recovery **[TBC-H]**
-- [ ] MFA and anti-abuse controls available (and whether they cost extra or need a premium tier):
-      email verification, bot/fraud detection, password policy, lockout, per-IP throttling **[TBC-H]**
-- [ ] Current price, the free monthly-active-user allowance, and what is billed per feature **[TBC-H]**
-- [ ] Whether an app registration in the External ID tenant can expose an `access_as_user` scope the
-      SPA can request, exactly as the workforce registration does **[TBC-H]**
-- [ ] Whether authorization code with PKCE is the available SPA flow and implicit/hybrid can be left
-      disabled **[TBC-H]**
-- [ ] Whether a verification claim for email exists at all, if a future feature wants to display one
-      **[TBC-H]**
+### Results recorded 2026-10-18
+
+Checked against Microsoft's official External ID documentation, read from its published source
+(the public `MicrosoftDocs/entra-docs` repository as of 2026-10-17, which learn.microsoft.com is
+built from). Paths below are relative to that repository's `docs/external-id/` folder. Two items
+are only partly confirmed and one statement was corrected; none blocks #710.
+
+- [x] **External ID is the current Microsoft product for customer identity, and a new tenant can be
+      created today.** Confirmed. Azure AD B2C has not been sold to new customers since
+      1 May 2025. Evidence: `customers/overview-customers-ciam.md` § About Azure AD B2C;
+      `customers/how-to-create-external-tenant-portal.md`.
+- [x] **The authority form and the exact v2 issuer.** Confirmed. Issuer
+      `https://<tenant-id>.ciamlogin.com/<tenant-id>/v2.0`; endpoints
+      `https://<tenant-subdomain>.ciamlogin.com/<tenant-id>/oauth2/v2.0/…`. Validate against the
+      issuer the metadata document returns, not a hand-built value. Evidence:
+      `customers/migrate-from-cognito-to-external-id.md` (endpoints and claim-mapping table).
+- [x] **The claim shape of an access token for all three journeys.** Confirmed, with one
+      condition. Every sign-up, local or federated, creates a user object in the External ID
+      directory; `oid` is that object's immutable GUID, the same across applications, and `tid`
+      is the tenant GUID. `sub` is pairwise and is not equal to `oid`, which confirms § 5.1 rule
+      8. **Condition:** `oid` and `tid` are only issued when the `profile` scope is requested
+      (§ 4, "The `profile` scope is required"). Evidence:
+      `customers/concept-authentication-methods-customers.md` ("A user object is created for them
+      in your directory"); `../identity-platform/access-token-claims-reference.md` (`oid`, `tid`,
+      `sub`); `customers/enable-external-id-high-scale-compatibility-mode.md`. Decoding one token
+      from a test tenant during § 14.2's staging verification remains the final practical check.
+- [x] **Which Microsoft account types can be federated in.** Answered, and the original assumption
+      was wrong. There is no built-in Microsoft provider. Personal Microsoft accounts are added as
+      a custom OIDC provider (`login.live.com`, with its own app registration and client secret);
+      work/school accounts only one named Entra tenant at a time. Journey B is therefore not
+      offered in v1 (§ 4). Evidence: `customers/how-to-microsoft-accounts-federation-customers.md`;
+      `customers/how-to-entra-id-federation-customers.md`.
+- [x] **Google federation.** Confirmed as a built-in social provider. It needs a Google OAuth
+      client and must be added to the user flow. Evidence:
+      `customers/how-to-google-federation-customers.md`.
+- [x] **How sign-up/sign-in user flows work.** Confirmed exactly as § 14.2 describes: a provider
+      configured in the tenant appears only once added to a user flow, an application gets a
+      sign-in experience only once added to a flow, and an application can have only one flow.
+      Evidence: `customers/how-to-add-identity-provider-to-user-flow-customers.md`;
+      [Add your application to the user flow](https://learn.microsoft.com/en-us/entra/external-id/customers/how-to-user-flow-add-application).
+- [x] **Local email/password sign-up verifies the mailbox and offers password reset.** Confirmed:
+      a one-time code verifies the email at sign-up, the reset link sends a code to the mailbox, and
+      "Email with password" is the default local option. Evidence:
+      `customers/concept-authentication-methods-customers.md`.
+- [x] **MFA and anti-abuse controls.** Partly built in. MFA by email one-time code (no extra
+      charge), SMS (paid add-on, also usable for password reset) and passkeys for local accounts;
+      smart lockout and basic HTTP protections are on by default. Bot and sign-up fraud protection
+      is **not** built in: it needs a third party (Arkose Labs, HUMAN Security) or a WAF
+      (Cloudflare, Akamai, Azure WAF). No built-in per-IP throttling setting was found. Password
+      policy configurability was not checked. Evidence:
+      `customers/concept-multifactor-authentication-customers.md`;
+      `customers/concept-security-customers.md`; `customers/concept-supported-features-customers.md`.
+- [x] **Current price and free allowance.** Confirmed: the core offer is free for the first 50,000
+      monthly active users; add-ons have no free tier; SMS is billed per transaction by country.
+      Per-unit prices are published only on the Azure pricing page. Evidence:
+      `customers/faq-customers.md`; `external-identities-pricing.md` § Premium add-ons.
+- [x] **An External ID API registration can expose `access_as_user`.** Confirmed ("Expose an API":
+      same as workforce). Evidence: `customers/concept-supported-features-customers.md`.
+- [x] **Authorization code with PKCE is available and implicit/hybrid can stay disabled.**
+      Confirmed: PKCE is supported, and implicit grant is supported but opt-in. Evidence:
+      `customers/concept-supported-features-customers.md`.
+- [x] **Whether a verification claim for email exists.** Partly. For federated OIDC providers,
+      External ID requires the upstream `email_verified` to be true before it creates the account;
+      no "verified" claim is documented in the tokens External ID issues to the application. § 10's
+      position (no decision reads an email address) is unaffected. Evidence:
+      `customers/reference-oidc-claims-mapping-customers.md`.
 
 ## 14. Deployment, rollout and the human-only portal work
 
@@ -622,7 +680,8 @@ sign-in is removed. Removing it later would be its own decision, with its own mi
 - Register the **SPA** application in that tenant as a public client using authorization code with
   PKCE, with exactly the redirect URIs in use (`http://localhost:4200/auth`, the deployed Static Web
   App origin's `/auth`) and the post-logout URIs, and grant it delegated access to the API scope.
-- Configure the Microsoft and Google identity providers **in the tenant**, including creating the
+- Configure the Google identity provider **in the tenant** (journey B, Microsoft through External ID,
+  is not offered in v1; see § 13 item 4), including creating the
   Google OAuth client in Google Cloud and registering its client id and secret **in the External ID
   tenant** — that secret lives in the provider, never in this repository, a pipeline, or an
   application setting.
@@ -649,8 +708,8 @@ sign-in is removed. Removing it later would be its own decision, with its own mi
 **Staging verification of the user flow association, before production activation.** Configuring a
 provider is not the same as a user being able to use it, so the setup above is not finished until a
 human has confirmed **in staging** that the associated application actually exposes and completes
-**every** supported journey. For each of Microsoft-federated (journey B), Google (journey C) and
-local email + password (journey D): the journey is offered on the sign-in page the SPA reaches
+**every** supported journey. For each of Google (journey C) and local email + password
+(journey D), plus Microsoft-federated (journey B) only if it is later approved (§ 13 item 4): the journey is offered on the sign-in page the SPA reaches
 through the associated user flow; a new user can complete it end to end, including the email
 verification and the password-reset entry point for D; the SPA returns to `/auth` and acquires an API
 access token for `access_as_user`; and the API accepts that token and resolves the expected
@@ -717,9 +776,9 @@ for people are identical to § 15.1.
 | --- | --- | --- |
 | **#708** (parent) | Proceed; **remove #713 from the launch prerequisites** | Record Option C as the approved rollout and this file as the design of record |
 | **#709** (this) | Complete on merge; § 13's checklist is a separate human step before #710 | Design, decision table, threat model, rollout, rollback. No code |
-| **#710** (identity foundation and API token validation) | Ready **after** § 13 is recorded, and only if the GUID assumption is confirmed | The `ExternalId` configuration section; the second named bearer scheme and the issuer-selecting policy scheme, with the existing multi-tenant workforce validator and its issuer-to-`tid` binding left exactly as it is; per-scheme issuer, audience and tenant-binding rules (§ 5.1); empty-configuration fail-closed; **the complete § 5.4 regression suite, including two different workforce tenants and every issuer/tenant/audience mismatch**, which covers T1/T2/T3/T10; the composition tests extended so the `E2ETest` host still registers the synthetic scheme and nothing else. **No change to `ActorIdentity` or `EntraActorIdentityAccessor`**, and no schema change |
-| **#711** (Google sign-in) | After #710 | SPA authority selection, the second MSAL instance with its own cache, Google journey end to end, the welcome-screen wording of § 12, invite continuation re-verified |
-| **#712** (email/password) | After #710 | The same for the local journey, including the provider-hosted reset/recovery entry point. **No password, hash, reset token or recovery code in this repository** |
+| **#710** (identity foundation and API token validation) | Ready **after** § 13 is recorded, and only if the GUID assumption is confirmed | The `ExternalId` configuration section; the second named bearer scheme and the issuer-selecting policy scheme, with the existing multi-tenant workforce validator and its issuer-to-`tid` binding left exactly as it is; per-scheme issuer, audience and tenant-binding rules (§ 5.1), with the External ID issuer taken from the tenant's metadata document; a test that an External ID token without `oid` or `tid` (no `profile` scope) is unidentifiable; empty-configuration fail-closed; **the complete § 5.4 regression suite, including two different workforce tenants and every issuer/tenant/audience mismatch**, which covers T1/T2/T3/T10; the composition tests extended so the `E2ETest` host still registers the synthetic scheme and nothing else. **No change to `ActorIdentity` or `EntraActorIdentityAccessor`**, and no schema change |
+| **#711** (Google sign-in) | After #710 | SPA authority selection, the second MSAL instance with its own cache, the `profile` scope in the External ID token request (§ 4), Google journey end to end, the welcome-screen wording of § 12, invite continuation re-verified |
+| **#712** (email/password) | After #710 | The same for the local journey, including the provider-hosted reset/recovery entry point and the `profile` scope (§ 4). Mailbox verification is enforced by the provider's sign-up flow (§ 13 item 7). **No password, hash, reset token or recovery code in this repository** |
 | **#713** (linking/migration) | **Deferred — not required.** A human records that status; it is removed from the launch prerequisites and must not be given a readiness label unless a human first reopens the linking decision | — |
 | **#714** (security, staging, rollout validation) | Last | The provider/account-state matrix across both issuers; **identity separation in place of linking validation**, as #713 directs; T6, T8, T9; two-business isolation with identities from both issuers; **§ 14.2's staging verification that the associated application exposes and completes each supported journey**; the § 15 rollback rehearsal; human staging sign-off |
 
