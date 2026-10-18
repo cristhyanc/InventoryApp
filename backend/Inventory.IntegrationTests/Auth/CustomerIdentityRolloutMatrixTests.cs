@@ -394,13 +394,19 @@ public sealed class CustomerIdentityRolloutMatrixTests : IClassFixture<CustomerI
     {
         await _factory.ResetAsync();
 
-        string[] reads =
+        // Each read with the answer the configured administrator must get from it, so the positive
+        // control below cannot drift from the surface being refused. The answers are the endpoints'
+        // own documented ones, not all `200`: the member roster is the deactivated-business surface
+        // of issue #545, so an active business is `409` from a caller the policy admitted, and
+        // "no support session is open" is `204` by design.
+        (string Path, HttpStatusCode Administrator)[] reads =
         [
-            "/api/super-admin/businesses",
-            "/api/super-admin/businesses/pending-count",
-            $"/api/super-admin/businesses/{ApiFactory.CustomerIdentityBusinessId}/members",
-            "/api/super-admin/support-sessions/active",
-            "/api/admin/diagnostics/access",
+            ("/api/super-admin/businesses", HttpStatusCode.OK),
+            ("/api/super-admin/businesses/pending-count", HttpStatusCode.OK),
+            ($"/api/super-admin/businesses/{ApiFactory.CustomerIdentityBusinessId}/members",
+                HttpStatusCode.Conflict),
+            ("/api/super-admin/support-sessions/active", HttpStatusCode.NoContent),
+            ("/api/admin/diagnostics/access", HttpStatusCode.OK),
         ];
 
         foreach (var client in new[]
@@ -412,7 +418,7 @@ public sealed class CustomerIdentityRolloutMatrixTests : IClassFixture<CustomerI
             _factory.CustomerIdentity(ApiFactory.AdministratorObjectId),
         })
         {
-            foreach (var read in reads)
+            foreach (var (read, _) in reads)
             {
                 Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync(read)).StatusCode);
             }
@@ -430,12 +436,14 @@ public sealed class CustomerIdentityRolloutMatrixTests : IClassFixture<CustomerI
                     new { reason = "Looking into a report" })).StatusCode);
         }
 
-        // The configured workforce administrator is not refused, which is what makes the refusals
-        // above a boundary rather than a broken surface.
+        // The configured workforce administrator gets each endpoint's own answer, which is what makes
+        // the refusals above a boundary rather than a broken surface. The exact status is asserted
+        // rather than "not Forbidden", because a `401`, a `404` or a `500` would satisfy that and
+        // prove nothing about the surface still being there.
         var administrator = _factory.Workforce(ApiFactory.AdministratorObjectId);
-        foreach (var read in reads)
+        foreach (var (read, expected) in reads)
         {
-            Assert.NotEqual(HttpStatusCode.Forbidden, (await administrator.GetAsync(read)).StatusCode);
+            Assert.Equal(expected, (await administrator.GetAsync(read)).StatusCode);
         }
     }
 

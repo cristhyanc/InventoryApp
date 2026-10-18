@@ -34,10 +34,12 @@ namespace InventoryApi.Tests.Auth;
 /// retained and become usable again the moment the configuration is restored" is a claim about data
 /// surviving a configuration change, not about either state on its own.</para>
 ///
-/// <para>Lever 2, reverting the code, is deliberately not simulated: with no schema change and no
-/// migration in this design it is an ordinary deployment of an earlier commit, and its outcome for
-/// people is identical to lever 1's. What a code revert would remove is exactly what an empty
-/// configuration section already stops registering, which
+/// <para>Lever 2 is deliberately not simulated, and it is <em>not</em> "deploy an earlier commit":
+/// § 15.2 makes it a focused forward fix against the current base, because this design adding no
+/// schema and no migration says nothing about whether some earlier whole-application build is
+/// compatible with the database in use - a human's documented check, not a behaviour any test here
+/// could stand in for. What removing this design's code takes out of the build is exactly what an
+/// empty configuration section already stops registering, which
 /// <see cref="ExternalIdBearerSchemeCompositionTests"/> pins.</para>
 ///
 /// <para>The observability requirement is here too, because an outage and a rollback are when the
@@ -220,18 +222,20 @@ public sealed class CustomerIdentityRollbackRehearsalTests : IDisposable
 
         var logs = new RecordingLoggerProvider();
 
+        string acceptedBearerToken;
+        string expiredBearerToken;
         using (var configured = CreateHost(customerIdentityConfigured: true, logs: logs))
         {
             // A local email/password account, whose token carries a display-only mailbox, redeems the
             // invite: the success path, which is where the token could reach an audit event.
-            var joiner = Bearer(
-                configured, Tokens.LocalAccountAccessToken(CustomerIdentityJoinerObjectId, Mailbox));
+            acceptedBearerToken = Tokens.LocalAccountAccessToken(CustomerIdentityJoinerObjectId, Mailbox);
             Assert.Equal(
                 HttpStatusCode.OK,
-                (await joiner.PostAsJsonAsync("/api/invites/redeem", new { token = inviteToken })).StatusCode);
+                (await Bearer(configured, acceptedBearerToken)
+                    .PostAsJsonAsync("/api/invites/redeem", new { token = inviteToken })).StatusCode);
 
             // And an expired token, which is the ordinary end of a session.
-            var expired = Tokens.Token(
+            expiredBearerToken = Tokens.Token(
                 Tokens.ExternalIdSigningKey,
                 Tokens.ExternalIdIssuer,
                 Tokens.ExternalIdApiClientId,
@@ -240,7 +244,7 @@ public sealed class CustomerIdentityRollbackRehearsalTests : IDisposable
                 expires: DateTime.UtcNow.AddHours(-1));
             Assert.Equal(
                 HttpStatusCode.Unauthorized,
-                (await Bearer(configured, expired).GetAsync("/api/me/access")).StatusCode);
+                (await Bearer(configured, expiredBearerToken).GetAsync("/api/me/access")).StatusCode);
         }
 
         string untrustedIssuerToken;
@@ -259,8 +263,17 @@ public sealed class CustomerIdentityRollbackRehearsalTests : IDisposable
         // absences rather than an empty string.
         Assert.NotEmpty(recorded);
 
-        Assert.DoesNotContain(inviteToken, recorded, StringComparison.Ordinal);
-        Assert.DoesNotContain(untrustedIssuerToken, recorded, StringComparison.Ordinal);
+        // Every bearer token these three requests presented, not only the refused one: an accepted
+        // token and an expired one are the same secret in a log as a rejected one is, and the claim
+        // this test makes is about all of them.
+        foreach (var secret in new[]
+        {
+            inviteToken, acceptedBearerToken, expiredBearerToken, untrustedIssuerToken,
+        })
+        {
+            Assert.DoesNotContain(secret, recorded, StringComparison.Ordinal);
+        }
+
         Assert.DoesNotContain(Mailbox, recorded, StringComparison.OrdinalIgnoreCase);
     }
 

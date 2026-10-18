@@ -113,7 +113,7 @@ earlier branch.
 | 34 | **Rollback for legacy users: no change whatsoever.** The same workforce token resolves the same business and role, on the same database, with the second issuer gone | A | same test | passed |
 | 35 | **Preserved memberships and outstanding invitations.** A rolled-back deployment retains the customer identity membership (active, same role, same business) and its live invite (pending, not cancelled, not used); restoring the three settings restores the member's access unchanged and the invite is still redeemable | A | `…A_rollback_retains_the_memberships_and_the_live_invites_it_cannot_serve` | passed |
 | 36 | **The legacy Super Admin recovery route stays tested.** The configured workforce pair reaches the platform-admin reads and can still deactivate a business while customer identity sign-in is off; the same object id presented from the customer tenant does not even authenticate | A | `…The_legacy_super_admin_recovery_route_still_works_while_customer_identity_signin_is_off` | passed |
-| 37 | **Nothing sensitive is logged while observing failures.** A refused issuer, an expired token and a successful redemption leave no bearer token, no invitation token and no mailbox in the logs | A | `…An_authentication_failure_or_a_redemption_logs_no_token_and_no_invitation_secret` | passed |
+| 37 | **Nothing sensitive is logged while observing failures.** A refused issuer, an expired token and a successful redemption leave no invitation token and no mailbox in the logs, and none of the three bearer tokens those requests presented — the accepted one, the expired one and the untrusted one — appears either | A | `…An_authentication_failure_or_a_redemption_logs_no_token_and_no_invitation_secret` | passed |
 | 38 | The browser half of the rollback lever reaches a tab part-way through the new journey: the pinned choice is dropped, the journey cannot be started against the removed authority, and a waiting invite is untouched | B | `auth/customer-identity-journey.spec.ts`, `auth/selected-authority.spec.ts` | passed |
 
 ### 2.6 The hosted-provider rows — all `not verified`
@@ -222,17 +222,25 @@ somewhere more durable.
 Rehearse § 6.1 against staging, with a real customer identity member of a staging business:
 
 1. Record, before the drill: that member's business and role, and the id and expiry of one live invite.
-2. Clear the three `ExternalId__*` settings (and the SPA's, if the drill covers the browser).
+2. Clear the three `ExternalId__*` settings and restart the API. If the drill covers the browser too,
+   clear the SPA's four identifiers and build and deploy **the current commit** — the SPA half is a
+   build, not a settings edit (§ 6.1).
 3. Confirm that member cannot sign in at all, and that a workforce member's access is untouched.
 4. Confirm in the database that their membership row and the invite are unchanged.
 5. Restore the settings. Confirm the member's access, business and role return unchanged and the
    invite is still redeemable (if its 7 days have not run out — if they have, an Owner re-issues it,
    which is the documented outcome, not a failure).
 
+The drill stays on the deployed build throughout. **Deploying an earlier commit is not part of it**,
+and it is not rehearsed here or anywhere else in this document: § 6.2 says why, and what a human
+would have to check first.
+
 ## 4. Phased enablement
 
-The phases are design § 14.1's; this is their current state. Each phase is independently revertible,
-and the workforce journey is untouched in all of them.
+The phases are design § 14.1's; this is their current state. Each phase can be undone independently
+**in § 6's sense** — the configuration lever on the deployed build, or a forward fix for a code
+change, never a redeployment of an earlier build — and the workforce journey is untouched in all of
+them.
 
 | Phase | What it is | State |
 | --- | --- | --- |
@@ -291,13 +299,23 @@ tenant's portal.
 
 ## 6. Incident, recovery and rollback
 
-### 6.1 Lever 1 — disable the new sign-in (configuration, minutes, no deployment)
+### 6.1 Lever 1 — disable the new sign-in on the build that is already deployed
 
-Clear `ExternalId__Instance`, `ExternalId__TenantId` and `ExternalId__ClientId` on the API (and the
-SPA's four `externalIdSettings`, which is a build). The second bearer scheme is not registered, the
-customer identity action is not rendered, and every External ID token is refused. Verify afterwards:
-the startup line reports "not configured", a workforce member signs in and sees their own business,
-and a customer identity token is `401`.
+**This is the rollback.** Both halves stay on the current, compatible code — nothing earlier is
+deployed — but they are not the same kind of change, and only one of them is a matter of minutes:
+
+| Half | How it is turned off | What it costs |
+| --- | --- | --- |
+| **The API's second issuer** | Clear `ExternalId__Instance`, `ExternalId__TenantId` and `ExternalId__ClientId`. They are ordinary application settings, read once at startup | A settings edit and a restart. **No deployment, minutes** |
+| **The SPA's customer identity option** | Clear the four `externalIdSettings` in `frontend/inventory-app/src/app/auth-config.ts` | They are **build-time** values, so this is a new build and a deployment **of the current commit** — not minutes, and a human release step |
+
+Order matters, and the API half is the one that stops access: with the three settings empty the second
+bearer scheme is not registered and every External ID token is refused, so the journey grants nothing
+even while an already-served browser bundle still renders the action and fails at the end of it.
+Removing the action itself is the follow-up build, and it is cosmetic by comparison.
+
+Verify afterwards: the startup line reports "not configured", a workforce member signs in and sees
+their own business, and a customer identity token is `401`.
 
 Who is affected is design § 15.1's table, and the automated rehearsal of it is rows 33–38: workforce
 users see no change at all; customer identity users lose access entirely, because there is no linking
@@ -305,28 +323,54 @@ and so no fallback identity; their memberships, their roles and the outstanding 
 **retained, untouched**, and work again the moment the settings are restored; the provider, its
 registrations and its users are not touched at all.
 
-### 6.2 Lever 2 — revert the code
+### 6.2 Lever 2 — a forward fix against the current base, not an earlier build
 
-Reverting #710, #711 and #712 removes the second scheme and the second authority from the build. This
-design changes no schema and migrates no data, so that is an ordinary deployment of an earlier commit
-with no data step, no backfill and no down-migration, and the outcome for people is identical to
-lever 1's.
+If the code itself has to change, the supported shape is a **focused forward fix or revert pull
+request against the current `develop`**, validated, reviewed and deployed by a human through the
+ordinary release route. It removes the second scheme or the second authority while keeping every
+applied migration and every current data contract in place, and the outcome for the people affected
+is then lever 1's.
+
+**Redeploying an earlier whole-application build is not a rollback this document offers.** That the
+identity design adds no schema and migrates no data says nothing about the safety of an earlier
+*build*, because a build carries every other change made since it, and the database it meets is
+today's. `AGENTS.md` § Database and migrations is explicit that normal Production startup applies
+pending migrations automatically and **fails closed rather than serve requests against a schema its
+code does not match**, and the repository's recovery constraints are forward-only in several places
+that have nothing to do with identity. Two of them are already on this branch's own base:
+
+- a release that reads the retired `ProductExternalIds`/`CategoryExternalIds` link tables is
+  **explicitly unsupported** after issue #759, and those tables stay in the schema only until #760
+  drops them; and
+- issue #758 changed which column a stored sale's local product is read from, so an earlier binary
+  would reinstate the name/number re-derivation that change removed.
+
+So an earlier binary is an option only after a human has performed and **documented a schema and data
+compatibility check for that exact commit against the database in use** — which migrations have been
+applied since it, and whether every data contract it reads still holds. Nothing here promises that an
+identity-free commit is safe to deploy, and this is not an agent-executable step in any case:
+`AGENTS.md` § Security and deployment safeguards reserves release, deployment and recovery decisions
+for a human.
 
 ### 6.3 Which lever, and when
 
 | Symptom | Lever |
 | --- | --- |
-| The new journey is broken, abused, or offered when it should not be | **1.** It is a configuration edit and takes minutes |
+| The new journey is broken, abused, or offered when it should not be | **1.** The API half is a settings edit and a restart, and takes minutes; the SPA half follows as a build of the current commit |
 | The startup line reports the configuration is unusable | **Neither.** Workforce sign-in is already unaffected and External ID tokens are already refused; fix the setting |
 | The customer identity authority is unreachable | **Neither.** It already fails closed. Lever 1 only if the broken journey must stop being offered |
-| A defect in the second scheme's validation, or in the SPA's authority handling | **1 first**, then 2 for the fix's own deployment |
+| A defect in the second scheme's validation, or in the SPA's authority handling | **1 first** — it is the immediate stop — then a **forward fix** (§ 6.2) for the correction's own release. Never an earlier build as the first move |
 | An External ID user must keep working | **Neither.** Invite a workforce identity they control — a new, separate membership. A rollback cannot recover their access |
 
 ### 6.4 What rollback is not
 
 It is not a way to recover a customer identity user's access; it does not touch the identity provider,
-and deleting the tenant is part of no rollback described here; and it is not a data operation, because
-there is no data to revert.
+and deleting the tenant is part of no rollback described here.
+
+It is not a data operation either — this design adds no schema and no data, so there is nothing
+identity-related to revert — but that is a statement about *this* design's data and nothing more. It
+is not a licence to treat an earlier whole-application build as data-safe, which is § 6.2's subject
+and a human's documented compatibility check.
 
 ## 7. Production go/no-go checklist
 

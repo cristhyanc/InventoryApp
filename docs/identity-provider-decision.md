@@ -332,7 +332,7 @@ choice, provided no test key or metadata stub is reachable from a non-test code 
 | Account linking (#713) | Mandatory, up front | Mandatory | **Not required** |
 | Schema change | Likely (identity re-key, or a link table) | Likely | **None** |
 | Existing-account continuity | At risk: a failed re-key strands a user from their business | At risk during the transition window | **Guaranteed — nothing about existing accounts is touched** |
-| Rollback | Hard: reverting code does not un-re-key rows | Medium: partially linked users are in a mixed state | **Easy: remove one configuration section** (§ 15) |
+| Rollback | Hard: reverting code does not un-re-key rows | Medium: partially linked users are in a mixed state | **Easy: empty one configuration section on the deployed build** (§ 15.1; a code change is a forward fix, § 15.2) |
 | Operational complexity | One authority, one issuer — simplest *end state* | Two authorities plus a linking flow and its own threat surface — the most complex | Two authorities, no linking — one extra issuer and nothing else |
 | Cost | One External ID tenant **[TBC-H]** | Same **[TBC-H]** | Same **[TBC-H]** |
 | New Google / email-password users | Supported | Supported | **Supported** |
@@ -341,7 +341,8 @@ choice, provided no test key or metadata stub is reachable from a non-test code 
 **Recommendation: Option C.** It is the only option that cannot strand an existing user, because it
 changes nothing about them; it delivers the parent issue's actual business outcome (a customer can
 sign in with Google or an email address without holding a Microsoft work account); it needs no
-schema change and no migration; and its rollback is a configuration edit. Its one real cost is that
+schema change and no migration; and its rollback is a configuration edit on the deployed build
+(§ 15.1), never a redeployment of an earlier one. Its one real cost is that
 the application has two authorities to keep configured and tested for as long as both exist, and the
 one real product limitation is the two-identities consequence in § 12 — which is a limitation to
 state plainly to users, not a security problem.
@@ -671,8 +672,9 @@ are only partly confirmed and one statement was corrected; none blocks #710.
 
 ### 14.1 Incremental coexistence, in phases
 
-Each phase is independently deployable and independently revertible. The workforce path is untouched
-in all of them.
+Each phase is independently deployable, and each can be undone independently in § 15's sense — the
+configuration lever on the deployed build, or a forward fix for a code change, never a redeployment
+of an earlier build. The workforce path is untouched in all of them.
 
 1. **Phase 0 — approval.** Merge this document. No code, no configuration, no tenant.
 2. **Phase 1 — human verification.** § 13's checklist. No code.
@@ -765,11 +767,16 @@ shipped state is fail-closed.
 
 Rollback has two distinct levers, and conflating them is the mistake to avoid.
 
-### 15.1 Lever 1 — disable the new login (configuration, minutes, no deployment)
+### 15.1 Lever 1 — disable the new login on the deployed build
 
-Clear the production `ExternalId__*` application settings (and the SPA's equivalent). The second
-bearer scheme is not registered, the second authority button is not rendered, and the API rejects
-every External ID token as an untrusted issuer.
+Clear the production `ExternalId__*` application settings: they are read once at startup, so this is
+a settings edit and a restart — **no deployment, minutes** — and it is what stops access, because the
+second bearer scheme is then not registered and the API rejects every External ID token as an
+untrusted issuer. The SPA's equivalent four identifiers are **build-time** values, so removing the
+second authority button is a build and a deployment of the **current** commit rather than a settings
+edit; until it ships, an already-served bundle may still offer a journey that can no longer grant
+anything. The operational split is [docs/identity-rollout-verification.md](identity-rollout-verification.md)
+§ 6.1.
 
 **Observable outcomes:**
 
@@ -784,12 +791,24 @@ every External ID token as an untrusted issuer.
 | Support sessions, role previews | No change; they are gated on that same pair. |
 | Business data | **No change.** No schema change and no data migration is part of this design, so there is nothing to revert. |
 
-### 15.2 Lever 2 — revert the code
+### 15.2 Lever 2 — a forward fix, not an earlier build
 
-Reverting #710/#711/#712 removes the second scheme and the SPA's second authority from the build.
-Because **this design changes no schema and migrates no data**, a code revert is an ordinary
-deployment of an earlier commit with no data step, no backfill and no down-migration. The outcomes
-for people are identical to § 15.1.
+If the code itself must change, the supported shape is a **focused forward fix or revert pull request
+against the current `develop`**, released by a human through the ordinary route: it removes the second
+scheme or the SPA's second authority while preserving every applied migration and every current data
+contract, and the outcomes for people are then identical to § 15.1.
+
+That **this design changes no schema and migrates no data** is true, and it means this design
+contributes no data step, no backfill and no down-migration. It does **not** make an earlier
+whole-application build a safe deployment: such a build carries every unrelated change made since it
+and meets today's database. `AGENTS.md` § Database and migrations has normal Production startup
+applying pending migrations automatically and **failing closed rather than serving requests against a
+schema its code does not match**, and several of the repository's data contracts are forward-only
+regardless of identity — a release that reads the link tables retired by #759 is explicitly
+unsupported, and #758 changed which column a stored sale's local product is read from. An earlier
+binary is therefore an option only after a human has performed and documented a schema and data
+compatibility check for that exact commit against the database in use; this document promises no such
+compatibility. See [docs/identity-rollout-verification.md](identity-rollout-verification.md) § 6.2.
 
 ### 15.3 What rollback is *not*
 
@@ -1022,11 +1041,14 @@ What the automated half added, beyond what #710, #711 and #712 already proved:
   identity token, the untouched workforce journey, the retained active membership and its role, the
   retained live invite (pending, not cancelled, not used), the restored access and the still-redeemable
   invite, and the legacy Super Admin recovery route still working while the new sign-in is off.
-  Lever 2 is deliberately not simulated: with no schema change there is nothing a code revert does
-  that an empty configuration section does not already cover.
+  Lever 2 is deliberately not simulated: what removing this design's code takes out of the build is
+  exactly what an empty configuration section already does not register, and the part of § 15.2 a
+  test cannot stand in for — whether some earlier build is compatible with the database in use — is a
+  human's documented check, not a behaviour of this design.
 - **Observability without a credential in it.** The same class asserts that a refused issuer, an
-  expired token and a successful redemption leave no bearer token, no invitation token and no mailbox
-  in the logs — the one thing an operator reading logs during a rollout could otherwise create.
+  expired token and a successful redemption leave no invitation token, no mailbox and none of the
+  three bearer tokens those requests presented in the logs — the one thing an operator reading logs
+  during a rollout could otherwise create.
 - **The browser journeys, composed.**
   `frontend/inventory-app/src/app/auth/customer-identity-journey.spec.ts` runs the real units as whole
   journeys rather than one at a time: an interrupted invite acceptance through a cancellation and a
