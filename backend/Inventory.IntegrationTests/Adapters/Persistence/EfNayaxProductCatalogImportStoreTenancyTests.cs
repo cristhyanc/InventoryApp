@@ -1,4 +1,5 @@
 using Inventory.Application.Imports;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
@@ -39,9 +40,10 @@ public class EfNayaxProductCatalogImportStoreTenancyTests : IDisposable
 
         using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
-        setup.Businesses.AddRange(
-            new Business { Id = BusinessA, Name = "Vending A", Status = BusinessStatus.Active, CreatedAtUtc = DateTime.UtcNow },
-            new Business { Id = BusinessB, Name = "Vending B", Status = BusinessStatus.Active, CreatedAtUtc = DateTime.UtcNow });
+        // Both sell through Nayax (issue #759): each is a business whose catalogue a Nayax import
+        // may write, which is what makes the isolation below the tenant filter's work rather than a
+        // missing provider's.
+        setup.Businesses.AddRange(NayaxBusiness(BusinessA, "Vending A"), NayaxBusiness(BusinessB, "Vending B"));
         setup.SaveChanges();
     }
 
@@ -50,6 +52,15 @@ public class EfNayaxProductCatalogImportStoreTenancyTests : IDisposable
         _connection.Dispose();
         GC.SuppressFinalize(this);
     }
+
+    private static Business NayaxBusiness(int id, string name) => new()
+    {
+        Id = id,
+        Name = name,
+        Status = BusinessStatus.Active,
+        SalesProvider = ExternalProvider.Nayax,
+        CreatedAtUtc = DateTime.UtcNow,
+    };
 
     [Fact]
     public async Task Imported_rows_are_stamped_with_the_importing_business_and_leave_the_other_untouched()
@@ -76,13 +87,13 @@ public class EfNayaxProductCatalogImportStoreTenancyTests : IDisposable
         Assert.Equal("B cola", other.Name);
         Assert.Equal(2m, other.UnitPrice);
 
-        // The provider links the import writes are stamped the same way and are equally confined
-        // (issue #732): business B's catalogue gains none, so another business's import can neither
-        // claim B's rows nor record a Nayax id inside B.
-        var productLink = await verify.ProductExternalIds.SingleAsync();
-        Assert.Equal((BusinessA, "100", 100L), (productLink.BusinessId, productLink.ExternalId, productLink.ProductId));
-        var categoryLink = await verify.CategoryExternalIds.SingleAsync();
-        Assert.Equal((BusinessA, "10", 10L), (categoryLink.BusinessId, categoryLink.ExternalId, categoryLink.CategoryId));
+        // The provider ids the import records are on the rows it created, so they are confined by
+        // exactly the same stamp (issues #732 and #759): business B's catalogue gains none, so
+        // another business's import can neither claim B's rows nor record a Nayax id inside B.
+        Assert.Equal("100", imported.ExternalProductId);
+        Assert.Equal("10", (await verify.Categories.SingleAsync(category => category.Id == 10)).ExternalCategoryId);
+        Assert.Null(other.ExternalProductId);
+        Assert.Null((await verify.Categories.SingleAsync(category => category.Id == 20)).ExternalCategoryId);
     }
 
     /// <summary>

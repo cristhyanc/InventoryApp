@@ -1,6 +1,8 @@
 using System.Data.Common;
 using Inventory.Application.Nayax;
+using Inventory.Domain.Exceptions;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -54,6 +56,87 @@ public class EfNayaxConnectionStoreTests
         Assert.Equal(ActiveKeyId, stored.EncryptionKeyId);
         Assert.NotEqual(Token, stored.AccessTokenCiphertext);
         Assert.DoesNotContain(Token, stored.AccessTokenCiphertext, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Storing a provider's credentials is what records that the business sells through it (issue
+    /// #759): the sales provider is what makes the external ids on that business's products and
+    /// categories Nayax ids, so it cannot be left for a separate step somebody might not take.
+    /// </summary>
+    [Fact]
+    public async Task A_first_save_records_that_the_business_sells_through_Nayax()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        Assert.Null(await fixture.ReadSalesProviderAsync(fixture.BusinessA));
+
+        await fixture.StoreFor(fixture.BusinessA).SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        Assert.Equal(ExternalProvider.Nayax, await fixture.ReadSalesProviderAsync(fixture.BusinessA));
+        // Only the business whose credentials were stored: the claim is scoped to the context's own
+        // resolved business, not to whichever row came first.
+        Assert.Null(await fixture.ReadSalesProviderAsync(fixture.BusinessB));
+    }
+
+    /// <summary>
+    /// A later save of the same provider's credentials is the ordinary case - a rotated token - and
+    /// leaves the recorded provider exactly as it is rather than rewriting it.
+    /// </summary>
+    [Fact]
+    public async Task A_later_save_leaves_the_recorded_sales_provider_alone()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+        await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+
+        var resaved = await store.SaveCredentialAsync(OtherOperatorId, OtherToken, CancellationToken.None);
+
+        Assert.Equal(2, resaved.CredentialRevision);
+        Assert.Equal(ExternalProvider.Nayax, await fixture.ReadSalesProviderAsync(fixture.BusinessA));
+    }
+
+    /// <summary>
+    /// A business has one sales provider, and changing it is a separate design (#761), so credentials
+    /// for a different provider are refused - and refused <em>before</em> anything is written, which
+    /// is what the absent credential row proves: a token that may not be used must not be sitting
+    /// encrypted in the database either.
+    /// </summary>
+    [Fact]
+    public async Task A_save_is_refused_when_the_business_sells_through_another_provider()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        await fixture.ForceSalesProviderAsync(fixture.BusinessA, (ExternalProvider)99);
+
+        var refused = await Assert.ThrowsAsync<DomainConflictException>(
+            () => fixture.StoreFor(fixture.BusinessA)
+                .SaveCredentialAsync(OperatorId, Token, CancellationToken.None));
+
+        Assert.Contains("one sales provider", refused.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Token, refused.Message, StringComparison.Ordinal);
+        Assert.Empty(await fixture.AllRowsAsync());
+        Assert.Equal((ExternalProvider)99, await fixture.ReadSalesProviderAsync(fixture.BusinessA));
+    }
+
+    /// <summary>
+    /// The same refusal must not destroy a credential that is already stored, which is the case that
+    /// matters in production: a business that is working today keeps working. The state is arranged
+    /// out of band, because nothing in the application can produce it - which is the point: even
+    /// then, the refusal lands before the write.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_save_leaves_an_existing_credential_untouched()
+    {
+        await using var fixture = await StoreFixture.CreateAsync();
+        var store = fixture.StoreFor(fixture.BusinessA);
+        var stored = await store.SaveCredentialAsync(OperatorId, Token, CancellationToken.None);
+        await fixture.ForceSalesProviderAsync(fixture.BusinessA, (ExternalProvider)99);
+
+        await Assert.ThrowsAsync<DomainConflictException>(
+            () => store.SaveCredentialAsync(OtherOperatorId, OtherToken, CancellationToken.None));
+
+        var row = await fixture.ReadRowAsync(fixture.BusinessA);
+        Assert.Equal(
+            (OperatorId, stored.CredentialRevision),
+            (row.OperatorId, row.CredentialRevision));
     }
 
     /// <summary>
@@ -794,6 +877,33 @@ public class EfNayaxConnectionStoreTests
         {
             await using var context = TestAppDbContext.Unrestricted(_options);
             return await context.BusinessNayaxConnections.AsNoTracking().ToListAsync();
+        }
+
+        /// <summary>The business's recorded sales provider (issue #759), or <c>null</c> for none.</summary>
+        public async Task<ExternalProvider?> ReadSalesProviderAsync(int businessId)
+        {
+            await using var context = TestAppDbContext.Unrestricted(_options);
+            return await context.Businesses
+                .AsNoTracking()
+                .Where(business => business.Id == businessId)
+                .Select(business => business.SalesProvider)
+                .SingleAsync();
+        }
+
+        /// <summary>
+        /// Writes a business's sales provider with raw SQL, which is the only way to arrange a
+        /// business whose provider is not Nayax: a claim may only fill an empty column and
+        /// <c>BusinessSalesProviderEnforcer</c> refuses every other change. Nayax is also the one
+        /// provider this application implements, so a second one is written as the stored value it
+        /// would have - what is under test is that a save refuses a provider that is not the
+        /// business's, not how many members the enum has.
+        /// </summary>
+        public async Task ForceSalesProviderAsync(int businessId, ExternalProvider provider)
+        {
+            await using var command = _connection.CreateCommand();
+            command.CommandText =
+                $"UPDATE Businesses SET SalesProvider = {(int)provider} WHERE Id = {businessId};";
+            await command.ExecuteNonQueryAsync();
         }
 
         /// <summary>Every stored value of the credentials table, as text, for a plaintext sweep.</summary>

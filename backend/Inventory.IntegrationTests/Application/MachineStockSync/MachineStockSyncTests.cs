@@ -41,8 +41,38 @@ public class MachineStockSyncTests
     private const long ProductId = 200;
     private static readonly DateTime EventTime = new(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
 
-    private static AppDbContext CreateInMemoryDb(string dbName) =>
-        TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(dbName).Options);
+    /// <summary>
+    /// The business every fixture here belongs to. It is stated rather than left unscoped since
+    /// issue #759: a Nayax product id resolves to a local product only while the owning business's
+    /// <c>SalesProvider</c> is Nayax, which is a fact about a business row, so these fixtures need
+    /// one - and running them as a business is closer to what a request does anyway.
+    /// </summary>
+    private const int SellerBusinessId = 1;
+
+    private static AppDbContext CreateInMemoryDb(string dbName)
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(dbName).Options;
+        SeedSellerBusiness(options);
+        return TestAppDbContext.For(options, SellerBusinessId);
+    }
+
+    /// <summary>
+    /// Adds the one business these fixtures act as, selling through Nayax (issue #759), through an
+    /// unrestricted context because a business row is what tenancy is resolved *from*.
+    /// </summary>
+    private static void SeedSellerBusiness(DbContextOptions<AppDbContext> options)
+    {
+        using var setup = TestAppDbContext.Unrestricted(options);
+        setup.Businesses.Add(new Business
+        {
+            Id = SellerBusinessId,
+            Name = "Vending A",
+            Status = BusinessStatus.Active,
+            SalesProvider = ExternalProvider.Nayax,
+            CreatedAtUtc = EventTime,
+        });
+        setup.SaveChanges();
+    }
 
     /// <summary>
     /// Opens <paramref name="connection"/>, creates the schema on it, and returns options for a
@@ -55,8 +85,12 @@ public class MachineStockSyncTests
     {
         await connection.OpenAsync();
         var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
-        await using var schema = TestAppDbContext.Unrestricted(options);
-        await schema.Database.EnsureCreatedAsync();
+        await using (var schema = TestAppDbContext.Unrestricted(options))
+        {
+            await schema.Database.EnsureCreatedAsync();
+        }
+
+        SeedSellerBusiness(options);
         return options;
     }
 
@@ -95,9 +129,15 @@ public class MachineStockSyncTests
     private static Product SeedCostedProduct(
         AppDbContext db, long id, string name, int quantityInStock, decimal unitCost = 1m)
     {
+        // The product carries its Nayax id (issue #732, on the row since #759), as the backfill and
+        // then the copy recorded it for data that already existed: the Nayax product id and the
+        // local id are the same number here, so these cases keep asserting the same matches while
+        // the use case resolves them through Product.ExternalProductId (issue #733) rather than by
+        // comparing the remote id with Product.Id.
         var product = new Product
         {
             Id = id,
+            ExternalProductId = NayaxExternalId.From(id),
             Name = name,
             QuantityInStock = quantityInStock,
             CostingQuantity = quantityInStock,
@@ -105,17 +145,6 @@ public class MachineStockSyncTests
             AverageUnitCost = unitCost
         };
         db.Products.Add(product);
-
-        // The product's Nayax link (issue #732), recorded as the backfill did for data that already
-        // existed: the Nayax product id and the local id are the same number here, so these cases
-        // keep asserting the same matches while the use case resolves them through the link table
-        // (issue #733) rather than by comparing the remote id with Product.Id.
-        db.ProductExternalIds.Add(new ProductExternalId
-        {
-            Provider = ExternalProvider.Nayax,
-            ExternalId = NayaxExternalId.From(id),
-            ProductId = id,
-        });
 
         db.StockAdjustments.Add(new StockAdjustment
         {
@@ -590,12 +619,9 @@ public class MachineStockSyncTests
     public async Task A_failure_while_applying_rolls_back_so_no_event_is_marked_processed_without_its_movement()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-        var options = new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options;
-        await using (var schema = TestAppDbContext.Unrestricted(options))
-            await schema.Database.EnsureCreatedAsync();
+        var options = await CreateSqliteDbAsync(connection);
 
-        await using var db = TestAppDbContext.Unrestricted(options);
+        await using var db = TestAppDbContext.For(options, SellerBusinessId);
         SeedCostedProduct(db, ProductId, "Coke 375mL", 10);
         await db.SaveChangesAsync();
 
@@ -615,7 +641,7 @@ public class MachineStockSyncTests
 
         Assert.Equal(NayaxStockEventApplyOutcome.Error, result.Results[0].Outcome);
 
-        await using var verify = TestAppDbContext.Unrestricted(options);
+        await using var verify = TestAppDbContext.For(options, SellerBusinessId);
         Assert.Equal(10, (await verify.Products.FindAsync(ProductId))!.QuantityInStock);
         Assert.Empty(await verify.StockAdjustments.Where(x => x.Reason == StockAdjustmentReason.MachineRefill).ToListAsync());
         Assert.Equal(
@@ -912,7 +938,7 @@ public class MachineStockSyncTests
         int eventId;
         int manualAdjustmentId;
         int? returnedAdjustmentId;
-        await using (var db = TestAppDbContext.Unrestricted(options))
+        await using (var db = TestAppDbContext.For(options, SellerBusinessId))
         {
             var (_, apply, resolve, seededEventId, seededManualId) = await SeedDuplicateScenarioAsync(db);
             eventId = seededEventId;
@@ -931,7 +957,7 @@ public class MachineStockSyncTests
         }
 
         // A fresh context reads only what the transaction actually committed.
-        await using var verify = TestAppDbContext.Unrestricted(options);
+        await using var verify = TestAppDbContext.For(options, SellerBusinessId);
 
         var nayaxMovement = Assert.Single(
             await verify.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
@@ -970,7 +996,7 @@ public class MachineStockSyncTests
         int eventId;
         int? firstAdjustmentId;
         DateTime? firstResolvedAt;
-        await using (var db = TestAppDbContext.Unrestricted(options))
+        await using (var db = TestAppDbContext.For(options, SellerBusinessId))
         {
             var (_, _, resolve, seededEventId, _) = await SeedDuplicateScenarioAsync(db);
             eventId = seededEventId;
@@ -981,12 +1007,12 @@ public class MachineStockSyncTests
             firstAdjustmentId = first.StockAdjustmentId;
         }
 
-        await using (var read = TestAppDbContext.Unrestricted(options))
+        await using (var read = TestAppDbContext.For(options, SellerBusinessId))
             firstResolvedAt = (await read.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId)).DuplicateResolvedAt;
 
         // A second request, with its own context and store, sees only the committed state - so this
         // is persisted idempotency rather than a change tracker still holding the first result.
-        await using (var db = TestAppDbContext.Unrestricted(options))
+        await using (var db = TestAppDbContext.For(options, SellerBusinessId))
         {
             var second = await ResolveUseCase(db).Handle(
                 MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
@@ -995,7 +1021,7 @@ public class MachineStockSyncTests
             Assert.Equal(firstAdjustmentId, second.StockAdjustmentId);
         }
 
-        await using var verify = TestAppDbContext.Unrestricted(options);
+        await using var verify = TestAppDbContext.For(options, SellerBusinessId);
         Assert.Single(await verify.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
         Assert.Equal(12, (await verify.Products.FindAsync(ProductId))!.QuantityInStock);
 
@@ -1017,7 +1043,7 @@ public class MachineStockSyncTests
             .ThrowsAsync(new InvalidOperationException("simulated rebuild failure"));
 
         int eventId;
-        await using (var db = TestAppDbContext.Unrestricted(options))
+        await using (var db = TestAppDbContext.For(options, SellerBusinessId))
         {
             var (_, _, resolve, seededEventId, _) = await SeedDuplicateScenarioAsync(db, failingRebuild.Object);
             eventId = seededEventId;
@@ -1029,7 +1055,7 @@ public class MachineStockSyncTests
             Assert.Null(result.StockAdjustmentId);
         }
 
-        await using var verify = TestAppDbContext.Unrestricted(options);
+        await using var verify = TestAppDbContext.For(options, SellerBusinessId);
 
         // Nothing partially committed: no Nayax movement, storage still only reduced by the manual
         // refill, and the event still unresolved so the operator can retry the same decision.
@@ -1058,7 +1084,7 @@ public class MachineStockSyncTests
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         var options = await CreateSqliteDbAsync(connection);
-        await using var db = TestAppDbContext.Unrestricted(options);
+        await using var db = TestAppDbContext.For(options, SellerBusinessId);
         SeedCostedProduct(db, ProductId, "Coke 375mL", 20);
         await db.SaveChangesAsync();
 
@@ -1079,7 +1105,7 @@ public class MachineStockSyncTests
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         var options = await CreateSqliteDbAsync(connection);
-        await using var db = TestAppDbContext.Unrestricted(options);
+        await using var db = TestAppDbContext.For(options, SellerBusinessId);
         SeedCostedProduct(db, ProductId, "Coke 375mL", 20);
         await db.SaveChangesAsync();
 
@@ -1104,7 +1130,7 @@ public class MachineStockSyncTests
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         var options = await CreateSqliteDbAsync(connection);
-        await using var db = TestAppDbContext.Unrestricted(options);
+        await using var db = TestAppDbContext.For(options, SellerBusinessId);
         var (sync, _, resolve, eventId, _) = await SeedDuplicateScenarioAsync(db);
 
         var resolved = await resolve.Handle(

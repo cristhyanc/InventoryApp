@@ -79,7 +79,24 @@ public class AddProductAndSupplierGstRulesMigrationTests
                     .Where(name => name.Contains("Gst", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
 
             // No rule is inferred for any existing row, and nothing is backfilled.
-            var product = await after.Products.SingleAsync();
+            //
+            // Projected rather than materialised as the entity, because this upgrade test
+            // deliberately stands on a schema older than the current model: it must read the columns
+            // the migration under test is about, not every column a later migration added
+            // (`Product.ExternalProductId`, issue #759). The assertions are unchanged.
+            var product = await after.Products
+                .Select(row => new
+                {
+                    row.GstRule,
+                    row.Name,
+                    row.Sku,
+                    row.UnitPrice,
+                    row.AverageUnitCost,
+                    row.QuantityInStock,
+                    row.CostingQuantity,
+                    row.InventoryValue,
+                })
+                .SingleAsync();
             Assert.Equal(GstRules.None, product.GstRule);
             var supplier = await after.Suppliers.SingleAsync();
             Assert.Equal(GstRules.None, supplier.ProductLineGstDefault);

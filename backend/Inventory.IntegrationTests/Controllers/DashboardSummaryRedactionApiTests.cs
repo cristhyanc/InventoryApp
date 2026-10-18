@@ -227,6 +227,9 @@ public sealed class DashboardSummaryRedactionApiTests : IClassFixture<DashboardS
                 Name = "Vending Co",
                 TimeZoneId = "Australia/Sydney",
                 Status = BusinessStatus.Active,
+                // Selling through Nayax (issue #759), which is what storing Nayax credentials
+                // records and what makes the id below a Nayax product id.
+                SalesProvider = ExternalProvider.Nayax,
                 CreatedAtUtc = CreatedAt,
             });
 
@@ -239,21 +242,15 @@ public sealed class DashboardSummaryRedactionApiTests : IClassFixture<DashboardS
             {
                 Id = ProductId,
                 BusinessId = BusinessId,
+                // The product's Nayax id (issue #732, on the row since #759), without which the
+                // machine selection resolves to no local product at all (issue #733). Every imported
+                // product has one in production.
+                ExternalProductId = NayaxExternalId.From(ProductId),
                 Name = "Coke",
                 QuantityInStock = 12,
                 LowStockThreshold = 5,
                 RestockTo = 24,
                 InventoryValue = InventoryValueAtCost,
-            });
-
-            // The product's Nayax link (issue #732), without which the machine selection resolves to
-            // no local product at all (issue #733). Every imported product has one in production.
-            db.ProductExternalIds.Add(new ProductExternalId
-            {
-                BusinessId = BusinessId,
-                Provider = ExternalProvider.Nayax,
-                ExternalId = NayaxExternalId.From(ProductId),
-                ProductId = ProductId,
             });
 
             // A completed sale a few hours ago, so a caller who may see the week's revenue has a

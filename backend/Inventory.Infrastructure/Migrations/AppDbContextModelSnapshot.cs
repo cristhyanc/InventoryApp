@@ -48,6 +48,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("RejectionReason")
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("SalesProvider")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("Status")
                         .HasColumnType("INTEGER");
 
@@ -212,6 +215,10 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ExternalCategoryId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -221,6 +228,10 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId");
 
                     b.HasIndex("Name");
+
+                    b.HasIndex("BusinessId", "ExternalCategoryId")
+                        .IsUnique()
+                        .HasFilter("\"ExternalCategoryId\" IS NOT NULL");
 
                     b.ToTable("Categories");
                 });
@@ -1309,6 +1320,10 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ExternalProductId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("GstRule")
                         .HasColumnType("INTEGER");
 
@@ -1355,6 +1370,10 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("Sku");
 
                     b.HasIndex("SupplierId");
+
+                    b.HasIndex("BusinessId", "ExternalProductId")
+                        .IsUnique()
+                        .HasFilter("\"ExternalProductId\" IS NOT NULL");
 
                     b.ToTable("Products");
                 });

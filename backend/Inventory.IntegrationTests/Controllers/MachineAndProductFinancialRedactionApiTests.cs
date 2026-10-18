@@ -436,6 +436,9 @@ public sealed class MachineAndProductFinancialRedactionApiTests
                 Name = "Vending Co",
                 TimeZoneId = "Australia/Sydney",
                 Status = BusinessStatus.Active,
+                // Selling through Nayax (issue #759), which is what makes the product's recorded
+                // external id a Nayax product id.
+                SalesProvider = ExternalProvider.Nayax,
                 CreatedAtUtc = CreatedAt,
             });
 
@@ -448,6 +451,10 @@ public sealed class MachineAndProductFinancialRedactionApiTests
             {
                 Id = ProductId,
                 BusinessId = BusinessId,
+                // The product's Nayax id (issue #732, on the row since #759), without which the
+                // machine slot resolves to no local product at all (issue #733). Every imported
+                // product has one in production.
+                ExternalProductId = NayaxExternalId.From(ProductId),
                 Name = "Coke",
                 UnitPrice = UnitPrice,
                 AverageUnitCost = AverageUnitCost,
@@ -459,16 +466,6 @@ public sealed class MachineAndProductFinancialRedactionApiTests
                 IsActive = true,
                 CreatedAt = CreatedAt,
                 UpdatedAt = CreatedAt,
-            });
-
-            // The product's Nayax link (issue #732), without which the machine slot resolves to no
-            // local product at all (issue #733). Every imported product has one in production.
-            db.ProductExternalIds.Add(new ProductExternalId
-            {
-                BusinessId = BusinessId,
-                Provider = ExternalProvider.Nayax,
-                ExternalId = NayaxExternalId.From(ProductId),
-                ProductId = ProductId,
             });
 
             // An effective processing fee rate, so the costed machine's direct profit is a real

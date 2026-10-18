@@ -97,11 +97,24 @@ public interface INayaxConnectionStore
     /// A save is atomic, and it takes part in a transaction already in progress on the same unit of
     /// work rather than committing on its own, so a save and the status write that follows it can be
     /// one change that either lands completely or not at all.
+    ///
+    /// <para><strong>It also records that the business sells through Nayax</strong> (issue #759,
+    /// parent #329 decision P1 as revised on 18 October 2026). A business has zero or one sales
+    /// provider, and storing a provider's credentials is the one thing that sets it: an
+    /// implementation claims <c>Nayax</c> while the business has no provider, in the same atomic
+    /// change as the credential, and refuses the save when the business already sells through a
+    /// different one - because that would be a provider switch, which is a separate design (#761).
+    /// A provider that is already <c>Nayax</c> is left exactly as it is. The claim belongs here
+    /// rather than in each caller so that no path can store credentials without recording the
+    /// provider they belong to, and so neither can land without the other.</para>
     /// </summary>
     /// <param name="operatorId">The Nayax operator id the token belongs to.</param>
     /// <param name="accessToken">The Lynx API access token to store encrypted.</param>
     /// <param name="cancellationToken">The request's cancellation token.</param>
     /// <returns>The stored connection, including its new revision. Never includes the token.</returns>
+    /// <exception cref="Domain.Exceptions.DomainConflictException">
+    /// The business's sales provider is a different provider, so nothing was stored.
+    /// </exception>
     Task<NayaxConnection> SaveCredentialAsync(
         string operatorId,
         string accessToken,

@@ -19,9 +19,9 @@ public static class ProductMatcher
     /// Matches a Nayax product identifier against the catalogue's own ids, which is only correct
     /// while <c>Product.Id</c> *is* the Nayax product id.
     ///
-    /// <para>A caller that holds a Nayax id coming from Nayax data resolves it through the
-    /// <c>ProductExternalIds</c> link table first and uses <see cref="MatchLinked"/> instead (issues
-    /// #733 and #745). What is still matched here is a <em>stored</em> <c>NayaxSales.NayaxProductId</c>
+    /// <para>A caller that holds a Nayax id coming from Nayax data resolves it through the recorded
+    /// provider id first and uses <see cref="MatchLinked"/> instead (issues #733, #745 and #759).
+    /// What is still matched here is a <em>stored</em> <c>NayaxSales.NayaxProductId</c>
     /// value, which the latest-sales synchronization writes as the local product id it matched, so
     /// re-resolving it as a Nayax id would turn a known local product into an unknown one: the
     /// costing, timestamp-repair and reporting paths that read that column are #747 (A2c) and #734
@@ -35,18 +35,18 @@ public static class ProductMatcher
 
     /// <summary>
     /// The same matching rule for a Nayax product id that has already been resolved through the
-    /// provider identity link table (issue #745, parent #329 decision A2b):
-    /// <paramref name="linkedProductId"/> is the <em>local</em> product id a
-    /// <c>ProductExternalIds</c> link named, or <see langword="null"/> when the business holds no
-    /// Nayax link for that id.
+    /// provider identity recorded on the local row (issue #745, parent #329 decision A2b;
+    /// <c>Product.ExternalProductId</c> since issue #759): <paramref name="linkedProductId"/> is the
+    /// <em>local</em> product id that recorded id named, or <see langword="null"/> when the business
+    /// has that Nayax id on no product.
     ///
-    /// <para>Only the identity step changes. A linked local product the catalogue holds is the match
-    /// and short-circuits the name fallback, exactly as an id match always has; an unlinked Nayax id
-    /// is an unknown identity and falls back to the unambiguous name match, exactly as an id no
-    /// catalogue row carried always has. What it can no longer do is match the local product whose
+    /// <para>Only the identity step changes. A resolved local product the catalogue holds is the
+    /// match and short-circuits the name fallback, exactly as an id match always has; an unresolved
+    /// Nayax id is an unknown identity and falls back to the unambiguous name match, exactly as an id
+    /// no catalogue row carried always has. What it can no longer do is match the local product whose
     /// id happens to equal the Nayax id - after #735 (A4) that is a coincidence, and before it the
-    /// #732 (A1) backfill means every id a link can resolve resolves to the same row it did
-    /// before.</para>
+    /// #732 (A1) backfill and the #759 copy mean every id this resolves resolves to the same row it
+    /// did before.</para>
     /// </summary>
     public static long? MatchLinked(
         IEnumerable<ProductMatchCandidate> candidates, long? linkedProductId, string? nayaxProductName)

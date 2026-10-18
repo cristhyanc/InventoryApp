@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 
 namespace Inventory.Infrastructure.Models;
@@ -127,6 +128,29 @@ public class Business
     /// because the text is missing.
     /// </summary>
     public string? RejectionReason { get; set; }
+
+    /// <summary>
+    /// The one external system this business's sales come from, or <c>null</c> when it has none
+    /// (issue #759, parent #329 decision P1 as revised on 18 October 2026).
+    ///
+    /// Zero or one, deliberately: operators do not run two sales providers at once, so this column
+    /// is the issuer of every <see cref="Product.ExternalProductId"/> and
+    /// <see cref="Category.ExternalCategoryId"/> the business holds. That is what lets a provider id
+    /// be a column on the local row rather than a link table carrying its own provider.
+    ///
+    /// Nullable because inventory works fully without a provider: purchases, stock, costing and the
+    /// business's own expenses need none, and <c>null</c> is a real state rather than a missing
+    /// value to be guessed at.
+    ///
+    /// <strong>Fixed once set.</strong> Storing a provider's credentials claims it while it is null
+    /// (<see cref="Inventory.Domain.Providers.SalesProviderPolicy"/>), and nothing changes it
+    /// afterwards: no endpoint writes it, and
+    /// <see cref="Data.BusinessSalesProviderEnforcer"/> refuses a change on <c>SaveChanges</c>.
+    /// Switching provider is a separate design (#761). Never serialised out - it is integration
+    /// configuration, not part of any business response.
+    /// </summary>
+    [JsonIgnore]
+    public ExternalProvider? SalesProvider { get; set; }
 
     public DateTime CreatedAtUtc { get; set; }
 

@@ -250,6 +250,9 @@ public sealed class LowStockReorderMetadataApiTests : IClassFixture<LowStockReor
                 Name = "Vending Co",
                 TimeZoneId = "Australia/Sydney",
                 Status = BusinessStatus.Active,
+                // Selling through Nayax (issue #759), which is what makes the product's recorded
+                // external id a Nayax product id.
+                SalesProvider = ExternalProvider.Nayax,
                 CreatedAtUtc = CreatedAt,
             });
 
@@ -278,21 +281,14 @@ public sealed class LowStockReorderMetadataApiTests : IClassFixture<LowStockReor
             {
                 Id = StockedProductId,
                 BusinessId = BusinessId,
+                // The stocked product's Nayax id (issue #732, on the row since #759), without which
+                // the machine selection resolves to no local product at all (issue #733). Every
+                // imported product has one in production.
+                ExternalProductId = NayaxExternalId.From(StockedProductId),
                 Name = StockedProductName,
                 QuantityInStock = 40,
                 LowStockThreshold = 5,
                 RestockTo = 24,
-            });
-
-            // The stocked product's Nayax link (issue #732), without which the machine selection
-            // resolves to no local product at all (issue #733). Every imported product has one in
-            // production.
-            db.ProductExternalIds.Add(new ProductExternalId
-            {
-                BusinessId = BusinessId,
-                Provider = ExternalProvider.Nayax,
-                ExternalId = NayaxExternalId.From(StockedProductId),
-                ProductId = StockedProductId,
             });
 
             await db.SaveChangesAsync();

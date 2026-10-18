@@ -16,19 +16,19 @@ namespace InventoryApi.Tests.Application.Imports;
 
 /// <summary>
 /// How the uploaded Nayax sales import resolves a row's remote <c>NayaxProductID</c> to a local
-/// product (issue #745, parent #329 decision A2b): through this business's <c>ProductExternalIds</c>
-/// link, read once per import by <c>INayaxProductLinkStore</c>, never by comparing the remote id
-/// with <c>Product.Id</c>.
+/// product (issue #745, parent #329 decision A2b): through the provider id recorded on this
+/// business's product - <c>Product.ExternalProductId</c> since issue #759 - read once per import by
+/// <c>INayaxProductLinkStore</c>, never by comparing the remote id with <c>Product.Id</c>.
 ///
 /// The observable effect is which product's inventory cost the import replays, because that is the
 /// one decision the import makes from the match: a completed sale's product is replayed from the
-/// earliest instant that touched it. Every fixture links a Nayax id to a local id with a
+/// earliest instant that touched it. Every fixture records a Nayax id on a local row whose key is a
 /// <strong>different</strong> value, which is the only shape that tells the lookup apart from the
 /// coincidence it replaces, and the row's product name is deliberately one no local product carries
-/// so the name fallback cannot stand in for the link.
+/// so the name fallback cannot stand in for the recorded id.
 ///
-/// Relational SQLite over the real import, the real EF import store and the real link store, so the
-/// path asserted is the one production runs.
+/// Relational SQLite over the real import, the real EF import store and the real lookup store, so
+/// the path asserted is the one production runs.
 /// </summary>
 public class ImportNayaxSalesNayaxLinkTests : IDisposable
 {
@@ -49,8 +49,7 @@ public class ImportNayaxSalesNayaxLinkTests : IDisposable
 
         using var setup = TestAppDbContext.Unrestricted(_options);
         setup.Database.EnsureCreated();
-        setup.Businesses.Add(
-            new Business { Id = 1, Name = "Vending A", Status = BusinessStatus.Active, CreatedAtUtc = DateTime.UtcNow });
+        setup.Businesses.Add(NayaxBusiness(1, "Vending A"));
         setup.SaveChanges();
     }
 
@@ -61,13 +60,11 @@ public class ImportNayaxSalesNayaxLinkTests : IDisposable
     }
 
     [Fact]
-    public async Task A_row_is_matched_to_the_product_its_Nayax_link_names()
+    public async Task A_row_is_matched_to_the_product_that_carries_its_Nayax_id()
     {
         await using var db = TestAppDbContext.For(_options, 1);
-        db.Products.Add(new Product { Id = 5001, Name = "Snack", QuantityInStock = 10 });
+        db.Products.Add(NayaxProduct(localProductId: 5001, nayaxProductId: 777, "Snack"));
         db.InventoryCostTransitionBaselines.Add(Baseline(5001));
-        await db.SaveChangesAsync();
-        db.ProductExternalIds.Add(NayaxLink(nayaxProductId: 777, localProductId: 5001));
         await db.SaveChangesAsync();
         var rebuild = new Mock<IRebuildProductCost>();
 
@@ -109,30 +106,22 @@ public class ImportNayaxSalesNayaxLinkTests : IDisposable
     }
 
     /// <summary>
-    /// A link belongs to one business, so another business's link is not an answer here: the row's
-    /// Nayax id stays unknown and nothing is replayed, which is the tenant boundary the lookup
+    /// A recorded provider id belongs to one business's row, so another business's is not an answer
+    /// here: the row's Nayax id stays unknown and nothing is replayed, which is the tenant boundary the lookup
     /// inherits from the ordinary query filters rather than from a predicate of its own.
     /// </summary>
     [Fact]
-    public async Task Another_businesss_link_does_not_match_this_businesss_import()
+    public async Task Another_businesss_recorded_id_does_not_match_this_businesss_import()
     {
         using (var setup = TestAppDbContext.Unrestricted(_options))
         {
-            setup.Businesses.Add(new Business
-            {
-                Id = 2,
-                Name = "Vending B",
-                Status = BusinessStatus.Active,
-                CreatedAtUtc = DateTime.UtcNow,
-            });
+            setup.Businesses.Add(NayaxBusiness(2, "Vending B"));
             await setup.SaveChangesAsync();
         }
 
         await using (var other = TestAppDbContext.For(_options, 2))
         {
-            other.Products.Add(new Product { Id = 6001, Name = "Business B snack" });
-            await other.SaveChangesAsync();
-            other.ProductExternalIds.Add(NayaxLink(nayaxProductId: 777, localProductId: 6001));
+            other.Products.Add(NayaxProduct(localProductId: 6001, nayaxProductId: 777, "Business B snack"));
             await other.SaveChangesAsync();
         }
 
@@ -170,13 +159,27 @@ public class ImportNayaxSalesNayaxLinkTests : IDisposable
             Times.Once);
     }
 
-    private static ProductExternalId NayaxLink(long nayaxProductId, long localProductId) =>
+    /// <summary>
+    /// A local product carrying a Nayax id that is deliberately not its own key (issue #759), which
+    /// is the only shape that tells the recorded id apart from the coincidence it replaces.
+    /// </summary>
+    private static Product NayaxProduct(long localProductId, long nayaxProductId, string name) =>
         new()
         {
-            Provider = ExternalProvider.Nayax,
-            ExternalId = NayaxExternalId.From(nayaxProductId),
-            ProductId = localProductId,
+            Id = localProductId,
+            ExternalProductId = NayaxExternalId.From(nayaxProductId),
+            Name = name,
+            QuantityInStock = 10,
         };
+
+    private static Business NayaxBusiness(int id, string name) => new()
+    {
+        Id = id,
+        Name = name,
+        Status = BusinessStatus.Active,
+        SalesProvider = ExternalProvider.Nayax,
+        CreatedAtUtc = DateTime.UtcNow,
+    };
 
     private static InventoryCostTransitionBaseline Baseline(long productId) =>
         new()

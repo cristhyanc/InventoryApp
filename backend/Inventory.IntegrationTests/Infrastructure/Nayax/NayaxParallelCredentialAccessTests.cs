@@ -85,11 +85,11 @@ public class NayaxParallelCredentialAccessTests
     {
         await using var fixture = await RequestFixture.CreateAsync();
         await fixture.ConnectAsync(fixture.BusinessA, OperatorA, TokenA, NayaxConnectionStatus.Ready);
-        // The local product the machines' Nayax product id names, through the real link table: a
+        // The local product the machines' Nayax product id names, through the real recorded id: a
         // local id deliberately different from the remote one, so the resolved need is attributed to
-        // the product the link points at (issue #733).
+        // the product that carries the remote id (issue #733).
         await fixture.AddProductAsync(fixture.BusinessA, LocalProductId, "Chips");
-        await fixture.LinkNayaxProductAsync(fixture.BusinessA, ProductId, LocalProductId);
+        await fixture.RecordNayaxProductIdAsync(fixture.BusinessA, ProductId, LocalProductId);
         await using var request = fixture.Request(fixture.BusinessA);
         var handler = new FanOutHandler(Respond.Catalogue, concurrentMachineProductRequests: MachineIds.Length);
         var useCase = new CalculateReorderNeeds(
@@ -300,7 +300,7 @@ public class NayaxParallelCredentialAccessTests
         await using var fixture = await RequestFixture.CreateAsync();
         await fixture.ConnectAsync(fixture.BusinessA, OperatorA, TokenA, NayaxConnectionStatus.Ready);
         await fixture.AddProductAsync(fixture.BusinessA, LocalProductId, "Chips");
-        await fixture.LinkNayaxProductAsync(fixture.BusinessA, ProductId, LocalProductId);
+        await fixture.RecordNayaxProductIdAsync(fixture.BusinessA, ProductId, LocalProductId);
         await using var request = fixture.Request(fixture.BusinessA);
         var handler = new FanOutHandler(Respond.Catalogue, concurrentMachineProductRequests: MachineIds.Length);
         var useCase = new GetSiteSummaries(
@@ -432,19 +432,16 @@ public class NayaxParallelCredentialAccessTests
         }
 
         /// <summary>
-        /// Records the Nayax link (issue #732) that makes <paramref name="nayaxProductId"/> name the
-        /// local product <paramref name="productId"/>, so the fan-outs below resolve a product the
-        /// way a real request does - through the link table, on the request's own context.
+        /// Records the Nayax id (issue #732, on the product row since #759) that makes
+        /// <paramref name="nayaxProductId"/> name the local product <paramref name="productId"/>, so
+        /// the fan-outs below resolve a product the way a real request does - from the product row,
+        /// on the request's own context.
         /// </summary>
-        public async Task LinkNayaxProductAsync(int businessId, long nayaxProductId, long productId)
+        public async Task RecordNayaxProductIdAsync(int businessId, long nayaxProductId, long productId)
         {
             await using var db = TestAppDbContext.For(_setupOptions, businessId);
-            db.ProductExternalIds.Add(new ProductExternalId
-            {
-                Provider = ExternalProvider.Nayax,
-                ExternalId = NayaxExternalId.From(nayaxProductId),
-                ProductId = productId,
-            });
+            var product = await db.Products.SingleAsync(row => row.Id == productId);
+            product.ExternalProductId = NayaxExternalId.From(nayaxProductId);
             await db.SaveChangesAsync();
         }
 

@@ -171,6 +171,11 @@ public class AppDbContext : DbContext
     /// #584): the business's lifecycle status is what decides whether its data may be reached at
     /// all, so a status nobody declared is refused here rather than stored as a business whose
     /// access state nobody chose.
+    ///
+    /// <see cref="BusinessSalesProviderEnforcer"/> joins them on the same terms (issue #759): the
+    /// business's sales provider is the issuer of every external id its products and categories
+    /// hold, so a change to it - which would reinterpret those ids as another system's - is refused
+    /// centrally rather than trusted not to be written.
     /// </summary>
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -178,6 +183,7 @@ public class AppDbContext : DbContext
         BusinessTimeZoneEnforcer.Enforce(this);
         BusinessAbnEnforcer.Enforce(this);
         BusinessStatusEnforcer.Enforce(this);
+        BusinessSalesProviderEnforcer.Enforce(this);
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
@@ -189,6 +195,7 @@ public class AppDbContext : DbContext
         BusinessTimeZoneEnforcer.Enforce(this);
         BusinessAbnEnforcer.Enforce(this);
         BusinessStatusEnforcer.Enforce(this);
+        BusinessSalesProviderEnforcer.Enforce(this);
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
@@ -198,6 +205,7 @@ public class AppDbContext : DbContext
         ConfigureMemberInvites(modelBuilder);
         ConfigureSupportSessions(modelBuilder);
         ConfigureProviderLinks(modelBuilder);
+        ConfigureProviderIdentityColumns(modelBuilder);
         ConfigureProviderDataCoverage(modelBuilder);
 
         modelBuilder.Entity<Product>()
@@ -911,7 +919,68 @@ public class AppDbContext : DbContext
     }
 
     /// <summary>
+    /// Maps the provider identity of a business, a product and a category (issue #759, parent #329
+    /// decision P1 as revised on 18 October 2026).
+    ///
+    /// <para><strong>One provider per business, so the provider id is a column.</strong>
+    /// <c>Business.SalesProvider</c> names the one external system a business's sales come from, or
+    /// nothing at all; <c>Product.ExternalProductId</c> and <c>Category.ExternalCategoryId</c> hold
+    /// that provider's id for the row. The provider is therefore a fact about the business rather
+    /// than a column of every mapping, which is what replaced the link tables of issue #732
+    /// (<see cref="ConfigureProviderLinks"/>, kept unread until #760 drops them).</para>
+    ///
+    /// <para><strong>Opaque text with the same bound as a link's.</strong> The column is
+    /// <see cref="ExternalId.MaxLength"/> characters of text, stored as written and compared
+    /// exactly - a provider that issues a code or a GUID needs no schema change, and
+    /// <c>Inventory.Domain.Providers.NayaxExternalId</c> stays the one conversion for Nayax's
+    /// numeric ids.</para>
+    ///
+    /// <para><strong>Unique per business, among the rows that have one.</strong> The index is
+    /// filtered on <c>IS NOT NULL</c>, because "this row has no provider id" is a real state that
+    /// every row of a business with no provider is in, and a plain unique index would allow exactly
+    /// one of them. It is scoped by business for the reason every constraint over an externally
+    /// supplied value is (docs/architecture.md § Tenant ownership): two operators' catalogues may
+    /// legitimately both contain product 100, and a global index would let whichever imported first
+    /// deny the other its own id. There is deliberately no uniqueness the other way round - a local
+    /// row holds at most one provider id because the column is single-valued, which is the
+    /// simplification this model exists for.</para>
+    ///
+    /// <para>No foreign key and no cascade are needed any more: the id is on the row it belongs to,
+    /// so it cannot name another business's row and cannot outlive a deleted one. The
+    /// <c>(BusinessId, Id)</c> alternate keys on <c>Products</c> and <c>Categories</c> stay as the
+    /// link tables' principal key until #760.</para>
+    /// </summary>
+    private static void ConfigureProviderIdentityColumns(ModelBuilder modelBuilder)
+    {
+        // No HasConversion and no default: a nullable enum maps to a nullable INTEGER, and null -
+        // "no sales provider" - is the value an existing business keeps unless the migration found
+        // evidence of one. ExternalProvider is numbered from 1, so no stored integer this
+        // application writes means Nayax by accident.
+        modelBuilder.Entity<Business>().Property(business => business.SalesProvider);
+
+        var product = modelBuilder.Entity<Product>();
+        product.Property(x => x.ExternalProductId).HasMaxLength(ExternalId.MaxLength);
+        product
+            .HasIndex(x => new { x.BusinessId, x.ExternalProductId })
+            .IsUnique()
+            .HasFilter(@"""ExternalProductId"" IS NOT NULL");
+
+        var category = modelBuilder.Entity<Category>();
+        category.Property(x => x.ExternalCategoryId).HasMaxLength(ExternalId.MaxLength);
+        category
+            .HasIndex(x => new { x.BusinessId, x.ExternalCategoryId })
+            .IsUnique()
+            .HasFilter(@"""ExternalCategoryId"" IS NOT NULL");
+    }
+
+    /// <summary>
     /// Maps the provider identity link tables of issue #732 (parent #329 decision P1).
+    ///
+    /// <para><strong>Nothing reads or writes them since issue #759</strong>, which moved a provider
+    /// id onto the local row (<see cref="ConfigureProviderIdentityColumns"/>). They are still mapped
+    /// and still in the schema only because Production applies migrations at startup and the code
+    /// already running there still reads them; #760 drops both tables once this release is in
+    /// production. The mapping below is therefore history, kept accurate rather than changed.</para>
     ///
     /// Both are ordinary tenant-owned entities, so <see cref="ConfigureBusinessOwnership"/> gives
     /// each its required business key, its <c>BusinessId</c> index and its global query filter;
