@@ -9477,11 +9477,21 @@ left and the product it joined, in the same pass. Neither writer touches the pro
 migration marked **conflicting**: only an audited decision settles one.
 
 **A null `ProductId` is unresolved, and unresolved is a reported state.** No reader matches such a
-sale by name or by number. It is not costed (the same `Error`/`Pending` outcome an unmatched sale
-already had), it is consumed by no replay, the machine-stock ledger counts it as unattributed, and
-the transaction and product-profitability reports show it under the name the provider reported, with
-the existing "could not be mapped to a Product" data-quality note — visible, never silently dropped
-from a total.
+sale by name or by number. It takes no inventory-ledger cost, is consumed by no replay, the
+machine-stock ledger counts it as unattributed, and the transaction and product-profitability reports
+show it under the name the provider reported, with the existing "could not be mapped to a Product"
+data-quality note — visible, never silently dropped from a total.
+
+**Open decision: an unresolved sale that carries a provider cost is still costed from it.**
+`CostSale` reads no ledger cost for an unresolved sale, but falls through to the transaction-level
+Nayax `Product Cost Price` when the sale carries one, and returns `Costed`/`NayaxTransactionExport` —
+precedence step 2 of AGENTS.md § Inventory and historical costing invariants, pinned since before
+#758 by `An_unresolved_sale_with_a_Nayax_cost_is_costed_from_the_Nayax_export`. Issue #758's
+acceptance criteria say an unresolved sale "is not costed", which that established precedence
+contradicts, and removing the fallback would change the COGS totals existing reports already show
+for such sales. The difference was raised on PR #766 and is a human decision: either the precedence
+changes here and in AGENTS.md, or the criterion is read as "never costed *from a product's
+inventory*" and this paragraph stays. Nothing in #758 changed that branch either way.
 
 #### Migrating the sales that already exist
 
@@ -9518,15 +9528,36 @@ cover the whole of Unicode. Over an all-ASCII catalogue the two rules are identi
 character; over a catalogue holding any non-ASCII product name they are not provably identical, and
 a backfill must never assign a product the current code would not. The name step is therefore skipped
 entirely for a business whose catalogue holds a non-ASCII product name, and for a sale whose own
-product name is not ASCII. Those sales stay unresolved, and the gate below forces a human decision
-for any of them that is costed.
+product name is not ASCII. Those sales are not guessed at either: the second gate below refuses the
+release over every one of them a product's name attributes, so a human records the audited decision
+instead of the attribution being lost.
 
-**The failure gate.** Step 2 ends by counting the sales that carry a historical cost today
-(`CostingStatus` `Costed`/`LegacyEstimated`, or a stored `UnitCostAtSale`/`CostOfGoodsSold`) and
-would come out with no product. If there are any, the migration **aborts** and the release does not
-activate: such a sale would otherwise be dropped from every future cost replay while still carrying
-COGS. Uncosted unresolved sales stop nothing — they are reported as unresolved, exactly as an
-unmatched sale already was.
+**Two failure gates, for the two ways an attribution could be lost.** Step 2 ends by counting, and
+aborting the migration over, each of:
+
+1. **Costed.** A sale that carries a historical cost today (`CostingStatus`
+   `Costed`/`LegacyEstimated`, or a stored `UnitCostAtSale`/`CostOfGoodsSold`) and would come out
+   with no product. It would otherwise be dropped from every future cost replay while still carrying
+   COGS.
+2. **Attributed by a product name today.** A sale that is still unresolved, whose stored number names
+   no product of its business, and whose reported name matches exactly one product — costed or not.
+   Those are precisely the sales `ProductMatcher`'s name fallback attributed for every reader until
+   this release and step 2 could not preserve, which is the "costed *or attributed to a product
+   today*" half of #758's gate; leaving one unresolved would move its product-level revenue and its
+   machine-stock attribution.
+
+An unresolved sale that no product's name attributes and that carries no cost stops nothing — it is
+reported as unresolved, exactly as an unmatched sale already was. That is also what keeps the gate
+clearable: it only ever refuses a sale a human can name a product for. A conflicting sale is outside
+gate 2 by its own definition (its stored number *does* name a product directly) and is caught by
+gate 1 when it is costed.
+
+**One shape SQLite cannot decide.** Two names differing only in the case of a non-ASCII character
+match under .NET's fold and not under `NOCASE`, so gate 2 cannot see that such a sale was attributed.
+`resolve-nayax-sale-products --dry-run` evaluates the real `ProductMatcher` rule in .NET and marks
+every unresolved sale a product's name attributes today, which is what the pre-deploy count #758
+requires is read from — so the one case the SQL fold is blind to is still in front of a human before
+the release.
 
 **Why two migrations.** The gate can stop the release, and a migration that aborts rolls its own work
 back. Step 1 always succeeds, so the conflicts and the audit table survive a refused step 2; the
@@ -9534,7 +9565,10 @@ operator then records the decision through the command below — a human-invoked
 no migration and therefore runs while the API is refusing to start — and the next start gets past the
 gate. `AddNayaxSaleProductAssociationMigrationTests` covers both steps, both writers' row shapes, the
 conflicting-and-uncosted case, the conflicting-and-costed refusal and its recovery, the name step's
-audit row, the ambiguous and absent names, the cross-business refusal and the restricted delete.
+audit row, the ambiguous and absent names, the cross-business refusal and the restricted delete —
+and, for gate 2, an uncosted Unicode-named sale a product matches, an all-ASCII sale the catalogue
+guard skipped (refused, then activating once the decision is recorded), and an unresolved sale no
+product's name attributes, which activates the release rather than deadlocking it.
 
 **Both migrations work with the code already in production**, which applies migrations at startup
 (AGENTS.md § Database and migrations): every column and table they add is new, and the running code
@@ -9552,8 +9586,13 @@ dotnet InventoryApi.dll resolve-nayax-sale-products --decide 4821=5001 --decided
 
 A dry run writes nothing and lists, per business, every unresolved sale with its own key, its
 transaction and machine, its reported name, its provider id (only when the provenance is known), both
-recorded candidates where there are any, and whether it is costed today — that last count being
-exactly what the failure gate refuses to start over. `--apply` must be typed; `--decided-by` is
+recorded candidates where there are any, whether it is costed today, and whether exactly one
+product's name attributes it today — those last two counts being exactly what the failure gates
+refuse to start over. The name answer is `ProductMatcher`'s own rule applied in
+`ResolveNayaxSaleProducts` over the business's catalogue, never a rule of the store's, and it is
+deliberately the Domain rule rather than the migration's SQL approximation. A conflicting sale is
+never counted there: its stored number names a product directly, so the name fallback never ran for
+it. `--apply` must be typed; `--decided-by` is
 required with it, because who decided is part of the audit row. A decision names the **sale**, by the
 local key the dry run prints: there is no `--business-id` flag, and the business is the one the
 stored sale belongs to. Every write goes through `Inventory.Application.SaleProductResolution
@@ -9561,6 +9600,19 @@ stored sale belongs to. Every write goes through `Inventory.Application.SaleProd
 appends a `NayaxSaleProductResolutions` row with the candidates, the chosen product, who decided and
 when — so re-running an applied decision writes nothing and cannot move a sale off the product it
 already carries. A product the business does not hold is refused before anything is staged.
+
+**Filling the product is one guarded statement, not a comparison and then a write.**
+`EfNayaxSaleProductResolutionStore.ApplyDecisionsAsync` claims each sale with an `ExecuteUpdate`
+whose own predicate carries the expected null (`Id = @sale AND ProductId IS NULL`), inside a
+transaction that commits the claim and its audit row together or neither. The "still unresolved"
+test therefore happens in the database at the moment of the write: two runs that both read the sale
+while it was unresolved cannot both succeed, the one that arrives second settles nothing and appends
+no audit row claiming the previous value was null, and the audit trail never records a change that
+did not happen. Because the `ExecuteUpdate` bypasses `SaveChanges`, the store calls
+`SetBasedWriteEnforcer.RequireWritableScope` first, exactly as `EfNayaxConnectionStore` does for its
+own conditional writes. `ResolveNayaxSaleProductsTests` pins both halves relationally: two contexts
+that each read the unresolved sale first, and a batch whose second sale another writer settled in
+between.
 
 ### Nayax product catalogue import (issue #300)
 

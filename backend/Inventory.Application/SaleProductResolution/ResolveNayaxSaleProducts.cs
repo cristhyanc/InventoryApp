@@ -1,3 +1,5 @@
+using Inventory.Domain.Reporting.ProductMatching;
+
 namespace Inventory.Application.SaleProductResolution;
 
 /// <summary>One operator decision: this sale belongs to this local product.</summary>
@@ -23,6 +25,14 @@ public sealed record NayaxSaleProductResolutionReport(
     /// <summary>Unresolved sales whose two candidate products disagreed.</summary>
     public int ConflictingCount =>
         Unresolved.Count(sale => sale.ConflictDirectCandidateProductId.HasValue);
+
+    /// <summary>
+    /// Unresolved sales that exactly one product's name attributes today. These are the other sales
+    /// the release's failure gate refuses to start over, costed or not: the pre-release readers gave
+    /// each of them that product through <c>ProductMatcher</c>'s name fallback, so leaving one
+    /// unresolved would move its product-level revenue and machine-stock attribution.
+    /// </summary>
+    public int NameAttributableCount => Unresolved.Count(sale => sale.IsAttributableByName);
 }
 
 /// <summary>
@@ -43,8 +53,11 @@ public sealed record NayaxSaleProductResolutionReport(
 /// here updates or deletes an audit row.</para>
 ///
 /// <para><strong>It never chooses anything itself.</strong> With no decisions it is a report: what
-/// is unresolved, which of those are conflicting, and which carry a cost today. Every write comes
-/// from a decision the operator typed.</para>
+/// is unresolved, which of those are conflicting, which carry a cost today and which exactly one
+/// product's name attributes today - the two kinds of sale the release's failure gate refuses to
+/// start over. The name answer is the Domain <see cref="ProductMatcher"/> rule evaluated here, which
+/// is why it also covers the catalogues the migration's SQL fold could not decide about. Every write
+/// comes from a decision the operator typed.</para>
 /// </summary>
 public sealed class ResolveNayaxSaleProducts
 {
@@ -60,7 +73,7 @@ public sealed class ResolveNayaxSaleProducts
     {
         ArgumentNullException.ThrowIfNull(decisions);
 
-        var unresolved = await _store.ListUnresolvedAsync(cancellationToken);
+        var unresolved = await ListUnresolvedAsync(cancellationToken);
         var unresolvedById = unresolved.ToDictionary(sale => sale.SaleId);
         var applicable = decisions.Where(decision => unresolvedById.ContainsKey(decision.SaleId)).ToList();
 
@@ -71,7 +84,7 @@ public sealed class ResolveNayaxSaleProducts
             applicable.Select(decision => decision.ProductId).Distinct().ToList(), cancellationToken);
 
         var refusals = new List<string>();
-        var applied = new List<AppliedNayaxSaleProductResolution>();
+        var decidable = new List<NayaxSaleProductDecision>();
 
         foreach (var decision in applicable)
         {
@@ -83,34 +96,67 @@ public sealed class ResolveNayaxSaleProducts
                 continue;
             }
 
-            if (dryRun)
-            {
-                applied.Add(new AppliedNayaxSaleProductResolution(
-                    decision.SaleId, unresolvedById[decision.SaleId].TransactionId, decision.ProductId));
-                continue;
-            }
-
-            if (!await _store.StageDecisionAsync(
-                    decision.SaleId, decision.ProductId, decidedBy, cancellationToken))
-            {
-                refusals.Add(
-                    $"Sale {decision.SaleId}: no unresolved sale with that key, so nothing was written.");
-                continue;
-            }
-
-            applied.Add(new AppliedNayaxSaleProductResolution(
-                decision.SaleId, unresolvedById[decision.SaleId].TransactionId, decision.ProductId));
+            decidable.Add(decision);
         }
 
-        if (!dryRun && applied.Count > 0)
-            await _store.SaveChangesAsync(cancellationToken);
+        // One call, because the store settles each sale with a guarded statement that fills its
+        // product only while it is still null and commits the audit row with it. A sale another
+        // writer decided between the read above and this write is simply not in the answer: the
+        // decision that arrived second never moves it and never leaves an audit row claiming the
+        // previous value was null.
+        var settled = dryRun || decidable.Count == 0
+            ? decidable.Select(decision => decision.SaleId).ToHashSet()
+            : (await _store.ApplyDecisionsAsync(decidable, decidedBy, cancellationToken)).ToHashSet();
+
+        var applied = decidable
+            .Where(decision => settled.Contains(decision.SaleId))
+            .Select(decision => new AppliedNayaxSaleProductResolution(
+                decision.SaleId, unresolvedById[decision.SaleId].TransactionId, decision.ProductId))
+            .ToList();
+
+        refusals.AddRange(decidable
+            .Where(decision => !settled.Contains(decision.SaleId))
+            .Select(decision =>
+                $"Sale {decision.SaleId}: no unresolved sale with that key, so nothing was written."));
 
         // Re-read after an applied run so the report states what is still unresolved, not what was
         // unresolved before the decisions landed.
         var remaining = !dryRun && applied.Count > 0
-            ? await _store.ListUnresolvedAsync(cancellationToken)
+            ? await ListUnresolvedAsync(cancellationToken)
             : unresolved;
 
         return new NayaxSaleProductResolutionReport(remaining, applied, refusals, dryRun);
     }
+
+    /// <summary>
+    /// The store's unresolved list with <see cref="UnresolvedNayaxSale.IsAttributableByName"/>
+    /// decided here, over the caller's catalogue and the Domain rule.
+    /// </summary>
+    private async Task<IReadOnlyList<UnresolvedNayaxSale>> ListUnresolvedAsync(
+        CancellationToken cancellationToken)
+    {
+        var unresolved = await _store.ListUnresolvedAsync(cancellationToken);
+        if (unresolved.Count == 0)
+            return unresolved;
+
+        var catalogue = await _store.GetProductCandidatesAsync(cancellationToken);
+        return unresolved
+            .Select(sale => sale with { IsAttributableByName = IsAttributableByName(catalogue, sale) })
+            .ToList();
+    }
+
+    /// <summary>
+    /// Whether exactly one product's name attributes this sale under the Domain rule - the same
+    /// <see cref="ProductMatcher"/> name fallback every reader applied before the association was
+    /// persisted, so this answers "was this sale attributed to a product today?" for the half of
+    /// issue #758's failure gate that is not about cost.
+    ///
+    /// <para>A conflicting sale is never attributable this way: its stored number names a product
+    /// directly, so the name fallback never ran for it, and nothing but an audited decision may
+    /// settle a disagreement two recorded identifiers already raised.</para>
+    /// </summary>
+    private static bool IsAttributableByName(
+        IReadOnlyList<ProductMatchCandidate> catalogue, UnresolvedNayaxSale sale) =>
+        !sale.ConflictDirectCandidateProductId.HasValue
+        && ProductMatcher.Match(catalogue, null, sale.ProductName) is not null;
 }

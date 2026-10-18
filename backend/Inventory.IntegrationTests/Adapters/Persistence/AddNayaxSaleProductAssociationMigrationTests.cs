@@ -20,7 +20,9 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// whose two candidate products disagree must come out <em>unresolved and conflicting</em>, even
 /// when its name would match exactly one product, because nothing may choose between two recorded
 /// identifiers; the same disagreement on a sale that carries a cost must stop the release outright
-/// rather than silently drop that sale from every future replay; and the whole thing must work the
+/// rather than silently drop that sale from every future replay; a sale the name step could not
+/// preserve but a product's name attributes today must stop it as well, costed or not, because the
+/// readers gave it that product until this release; and the whole thing must work the
 /// same over a row the latest-sales synchronization wrote (which stored the local product id in
 /// <c>NayaxProductId</c>) and a row the uploaded export wrote (which stored the raw provider id).
 /// </summary>
@@ -244,6 +246,98 @@ public class AddNayaxSaleProductAssociationMigrationTests
 
         Assert.Equal(
             [(905L, (long?)null), (906L, null)],
+            await fixture.AssociationsAsync());
+
+        await using var db = fixture.Context();
+        Assert.Empty(await db.NayaxSaleProductResolutions.AsNoTracking().ToListAsync());
+    }
+
+    /// <summary>
+    /// A product whose name is not ASCII, for the sales the SQL fold may not decide about.
+    /// </summary>
+    private const string UnicodeProduct = """
+        INSERT INTO Products (Id, Name, UnitPrice, AverageUnitCost, QuantityInStock, LowStockThreshold,
+                              RestockTo, IsActive, CreatedAt, UpdatedAt, BusinessId, GstRule)
+            VALUES (5004, 'Café', 4.00, 1.50, 6, 1, 10, 1,
+                    '2026-01-01 00:00:00', '2026-01-01 00:00:00', 1, 0);
+        """;
+
+    /// <summary>
+    /// The name step may not resolve a sale whose own name is not ASCII, because <c>NOCASE</c> is
+    /// not provably the Domain fold there - but that sale <em>was</em> attributed to the one product
+    /// whose name matches it, by every reader, until this release. Dropping it silently would move
+    /// product-level revenue and machine-stock attribution, so the release is refused instead, even
+    /// though the sale carries no cost.
+    /// </summary>
+    [Fact]
+    public async Task A_Unicode_name_a_product_matches_stops_the_release_even_uncosted()
+    {
+        await using var fixture = await SeededAsync(
+            UnicodeProduct + Sale(910, nayaxProductId: 424242, productName: "Café"));
+
+        await fixture.MigrateAsync(AssociationMigration);
+        var refused = await Assert.ThrowsAsync<SqliteException>(() => fixture.MigrateAsync(NameMigration));
+        Assert.Contains("a product name attributes today", refused.Message, StringComparison.Ordinal);
+
+        await using var db = fixture.Context();
+        Assert.Null((await db.NayaxSales.AsNoTracking().SingleAsync()).ProductId);
+        Assert.Empty(await db.NayaxSaleProductResolutions.AsNoTracking().ToListAsync());
+    }
+
+    /// <summary>
+    /// The same refusal for an all-ASCII sale name the <em>catalogue</em> guard skipped: one
+    /// non-ASCII product name anywhere in the business stops the whole name step, and an unresolved
+    /// sale 'Chips' names exactly one product. And it comes up once a human has recorded the
+    /// audited decision, which is the point of refusing rather than guessing.
+    /// </summary>
+    [Fact]
+    public async Task An_ASCII_name_the_catalogue_guard_skipped_stops_the_release_until_a_decision()
+    {
+        await using var fixture = await SeededAsync(
+            UnicodeProduct + Sale(911, nayaxProductId: 424242, productName: "Chips (3.50)"));
+
+        await fixture.MigrateAsync(AssociationMigration);
+        var refused = await Assert.ThrowsAsync<SqliteException>(() => fixture.MigrateAsync(NameMigration));
+        Assert.Contains("a product name attributes today", refused.Message, StringComparison.Ordinal);
+
+        await using (var decide = fixture.Context())
+        {
+            var sale = await decide.NayaxSales.SingleAsync();
+            decide.NayaxSaleProductResolutions.Add(new NayaxSaleProductResolution
+            {
+                NayaxSaleId = sale.Id,
+                TransactionId = sale.TransactionID,
+                NewProductId = 5001,
+                Rule = NayaxSaleProductResolutionRule.OperatorDecision,
+                DecidedBy = "A. Operator",
+                ResolvedAtUtc = new DateTime(2026, 10, 18, 0, 0, 0, DateTimeKind.Utc),
+            });
+            sale.ProductId = 5001;
+            await decide.SaveChangesAsync();
+        }
+
+        await fixture.MigrateAsync(NameMigration);
+
+        await using var db = fixture.Context();
+        Assert.Equal(5001, (await db.NayaxSales.AsNoTracking().SingleAsync()).ProductId);
+    }
+
+    /// <summary>
+    /// The gate only ever refuses a sale a human can name a product for. An unresolved, uncosted
+    /// sale that no product's name attributes - in either alphabet - was attributed to nothing
+    /// before this release either, so it stays unresolved and the release activates. Without this,
+    /// a catalogue holding one accented name could refuse a release nobody could ever clear.
+    /// </summary>
+    [Fact]
+    public async Task An_unresolved_sale_no_product_name_attributes_still_activates_the_release()
+    {
+        await using var fixture = await MigratedAsync(
+            UnicodeProduct
+            + Sale(912, nayaxProductId: 424242, productName: "Thé noir")
+            + Sale(913, nayaxProductId: 424242, productName: "Nothing like it"));
+
+        Assert.Equal(
+            [(912L, (long?)null), (913L, null)],
             await fixture.AssociationsAsync());
 
         await using var db = fixture.Context();

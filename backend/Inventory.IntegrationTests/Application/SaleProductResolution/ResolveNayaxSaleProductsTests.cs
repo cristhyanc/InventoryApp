@@ -193,6 +193,129 @@ public class ResolveNayaxSaleProductsTests : IDisposable
         Assert.Null((await db.NayaxSaleProductResolutions.AsNoTracking().SingleAsync()).CandidateProductIds);
     }
 
+    /// <summary>
+    /// Two operators over two contexts, both of which read the sale while it was still unresolved -
+    /// the shape a read-then-write gets wrong, because the comparison happens before either
+    /// transaction begins and the database serializing the writes does not undo it. The expected
+    /// null is the UPDATE's own predicate, so the decision that arrives second moves nothing, and
+    /// appends no audit row claiming the sale had no product before it.
+    /// </summary>
+    [Fact]
+    public async Task A_decision_from_a_stale_read_cannot_move_a_sale_another_context_decided()
+    {
+        var saleId = await SeedConflictingSaleAsync(costed: true);
+
+        await using var firstDb = Context(BusinessA);
+        await using var secondDb = Context(BusinessA);
+        var first = new EfNayaxSaleProductResolutionStore(firstDb, new FakeClock(DecidedAt));
+        var second = new EfNayaxSaleProductResolutionStore(secondDb, new FakeClock(DecidedAt));
+
+        // Both reads happen first: neither context can see the other's decision coming.
+        Assert.Single(await first.ListUnresolvedAsync(CancellationToken.None));
+        Assert.Single(await second.ListUnresolvedAsync(CancellationToken.None));
+
+        var winner = await first.ApplyDecisionsAsync(
+            [new NayaxSaleProductDecision(saleId, ExternalCandidate)], "A. Operator", CancellationToken.None);
+        var loser = await second.ApplyDecisionsAsync(
+            [new NayaxSaleProductDecision(saleId, DirectCandidate)], "B. Operator", CancellationToken.None);
+
+        Assert.Equal([saleId], winner);
+        Assert.Empty(loser);
+
+        await using var db = Context(BusinessA);
+        Assert.Equal(ExternalCandidate, (await db.NayaxSales.AsNoTracking().SingleAsync()).ProductId);
+        var audit = await db.NayaxSaleProductResolutions.AsNoTracking().SingleAsync();
+        Assert.Equal(ExternalCandidate, audit.NewProductId);
+        Assert.Equal("A. Operator", audit.DecidedBy);
+    }
+
+    /// <summary>
+    /// The same interference inside one batch: another writer settles the second sale after the run
+    /// read its unresolved list. The first sale is still decided and audited, the second is refused,
+    /// and the batch leaves no evidence about a sale it did not settle.
+    /// </summary>
+    [Fact]
+    public async Task A_batch_whose_second_sale_was_settled_meanwhile_writes_only_the_decision_it_made()
+    {
+        var firstSaleId = await SeedConflictingSaleAsync(costed: false);
+        long secondSaleId;
+        await using (var seed = Context(BusinessA))
+        {
+            var sale = Sale(5052, costed: false);
+            seed.NayaxSales.Add(sale);
+            await seed.SaveChangesAsync();
+            secondSaleId = sale.Id;
+        }
+
+        await using var db = Context(BusinessA);
+        var store = new EfNayaxSaleProductResolutionStore(db, new FakeClock(DecidedAt));
+        var unresolved = await store.ListUnresolvedAsync(CancellationToken.None);
+        Assert.Equal(2, unresolved.Count);
+
+        await using (var interfering = Context(BusinessA))
+        {
+            var sale = await interfering.NayaxSales.SingleAsync(x => x.Id == secondSaleId);
+            sale.ProductId = DirectCandidate;
+            await interfering.SaveChangesAsync();
+        }
+
+        var applied = await store.ApplyDecisionsAsync(
+            [
+                new NayaxSaleProductDecision(firstSaleId, ExternalCandidate),
+                new NayaxSaleProductDecision(secondSaleId, ExternalCandidate),
+            ],
+            "A. Operator",
+            CancellationToken.None);
+
+        Assert.Equal([firstSaleId], applied);
+
+        await using var verify = Context(BusinessA);
+        var audit = await verify.NayaxSaleProductResolutions.AsNoTracking().SingleAsync();
+        Assert.Equal(firstSaleId, audit.NayaxSaleId);
+        Assert.Equal(DirectCandidate, (await verify.NayaxSales.AsNoTracking().SingleAsync(x => x.Id == secondSaleId)).ProductId);
+    }
+
+    /// <summary>
+    /// Issue #758's failure gate refuses the release over a sale exactly one product's name
+    /// attributes today, costed or not, because every reader gave it that product until this
+    /// release. The dry run says which sales those are, over the real Domain rule - which is also
+    /// the honest answer for a catalogue the migration's SQL fold could not decide about.
+    /// </summary>
+    [Fact]
+    public async Task A_sale_one_product_name_attributes_is_reported_as_named_by_a_product()
+    {
+        await using (var seed = Context(BusinessA))
+        {
+            var sale = Sale(5053, costed: false);
+            sale.ProductName = "Unrelated snack (1.50)";
+            seed.NayaxSales.Add(sale);
+            await seed.SaveChangesAsync();
+        }
+
+        var report = await RunAsync([], dryRun: true);
+
+        Assert.True(Assert.Single(report.Unresolved).IsAttributableByName);
+        Assert.Equal(1, report.NameAttributableCount);
+    }
+
+    /// <summary>
+    /// A conflicting sale is never reported as named by a product, however unambiguous its name is:
+    /// its stored number names a product directly, so the name fallback never ran for it, and
+    /// nothing but an audited decision may settle a disagreement two identifiers already raised.
+    /// </summary>
+    [Fact]
+    public async Task A_conflicting_sale_is_never_reported_as_named_by_a_product()
+    {
+        await SeedConflictingSaleAsync(costed: false);
+
+        var report = await RunAsync([], dryRun: true);
+
+        var sale = Assert.Single(report.Unresolved);
+        Assert.Equal("Imported bar", sale.ProductName);
+        Assert.False(sale.IsAttributableByName);
+        Assert.Equal(0, report.NameAttributableCount);
+    }
+
     private async Task<NayaxSaleProductResolutionReport> RunAsync(
         IReadOnlyCollection<NayaxSaleProductDecision> decisions, bool dryRun)
     {

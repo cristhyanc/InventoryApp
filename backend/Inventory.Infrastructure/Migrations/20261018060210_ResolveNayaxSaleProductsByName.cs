@@ -31,14 +31,39 @@ namespace Inventory.Infrastructure.Migrations
     /// holding any non-ASCII product name they are not provably identical, and a backfill must never
     /// assign a product the current code would not. So the name step is skipped entirely for a
     /// business whose catalogue holds a non-ASCII product name, or for a sale whose own product name
-    /// is not ASCII. Those sales stay unresolved - and if any of them is costed, the gate below stops
-    /// the release so a human resolves it through the audited command rather than a guess.</para>
+    /// is not ASCII. Those sales are not guessed at - they are refused by the second gate below, so a
+    /// human resolves each one through the audited command rather than losing the attribution it had.
+    /// </para>
     ///
-    /// <para><strong>The failure gate.</strong> A sale that carries a historical cost today and would
-    /// come out with no product aborts the migration, naming the rule rather than the rows. Such a
-    /// sale would otherwise be silently dropped from every future cost replay while still carrying
-    /// COGS, which is the one outcome this slice exists to prevent. Uncosted unresolved sales do not
-    /// stop anything: they are reported as unresolved, exactly as an unmatched sale already was.</para>
+    /// <para><strong>Two failure gates, for the two ways an attribution could be lost.</strong> Both
+    /// abort the migration naming the rule rather than the rows, because the message reaches the
+    /// startup log.</para>
+    ///
+    /// <list type="number">
+    ///   <item><strong>Costed.</strong> A sale that carries a historical cost today and would come
+    ///   out with no product. It would otherwise be silently dropped from every future cost replay
+    ///   while still carrying COGS.</item>
+    ///   <item><strong>Attributed by name today.</strong> A sale that is still unresolved, whose
+    ///   stored number names no product of its business, and whose reported name matches exactly one
+    ///   product - costed or not. Those are precisely the sales the pre-release readers attributed
+    ///   through <c>ProductMatcher</c>'s name fallback and this step could not preserve, which is
+    ///   the "costed <em>or attributed to a product today</em>" half of issue #758's gate. Leaving
+    ///   one unresolved would move product-level revenue and machine-stock attribution, so the
+    ///   release is refused until an audited decision records the product.</item>
+    /// </list>
+    ///
+    /// <para>An unresolved sale that no product's name attributes and that carries no cost stops
+    /// nothing: it is reported as unresolved, exactly as an unmatched sale already was. That is also
+    /// what keeps the gate clearable - it only ever refuses a sale a human can name a product for.
+    /// A conflicting sale is excluded from gate 2 by its own definition (its stored number does name
+    /// a product directly), and is covered by gate 1 when it is costed.</para>
+    ///
+    /// <para><strong>One shape SQLite cannot decide.</strong> Two names that differ only in the case
+    /// of a non-ASCII character match under .NET's fold and not under <c>NOCASE</c>, so gate 2
+    /// cannot see that such a sale was attributed. <c>resolve-nayax-sale-products --dry-run</c>
+    /// evaluates the real <c>ProductMatcher</c> rule in .NET and marks every unresolved sale a
+    /// product's name attributes today, which is what the pre-deploy count issue #758 requires is
+    /// read from.</para>
     ///
     /// <para><c>Down</c> deliberately does nothing. It cannot un-know which product a sale belongs
     /// to, and clearing the column would discard an attribution the forward step proved; the
@@ -117,6 +142,25 @@ namespace Inventory.Infrastructure.Migrations
               AND {CandidateCount} = 1
             """;
 
+        /// <summary>
+        /// A sale the pre-release readers attributed through the name fallback and this step did not
+        /// preserve: still unresolved, its stored number names no product of its business - so the
+        /// id branch of <c>ProductMatcher</c> did not answer, and the sale is not a conflicting one -
+        /// and exactly one product's name matches. Over the all-ASCII zone the name step above has
+        /// already resolved every such sale, so what is left here is what that step skipped.
+        /// </summary>
+        private const string AttributedByNameToday =
+            $"""
+            sale."ProductId" IS NULL
+              AND sale."ProductName" IS NOT NULL
+              AND {NormalizedSaleName} <> ''
+              AND NOT EXISTS (
+                  SELECT 1 FROM "Products" direct
+                  WHERE direct."BusinessId" = sale."BusinessId"
+                    AND direct."Id" = sale."NayaxProductId")
+              AND {CandidateCount} = 1
+            """;
+
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
@@ -154,6 +198,17 @@ namespace Inventory.Infrastructure.Migrations
                   AND ("CostingStatus" IN (1, 2)
                        OR "UnitCostAtSale" IS NOT NULL
                        OR "CostOfGoodsSold" IS NOT NULL)
+                """);
+
+            RefuseWhenNotZero(
+                migrationBuilder,
+                "A Nayax sale that a product name attributes today would be left with no local "
+                    + "product, so this release is refused rather than activated. Run "
+                    + "'resolve-nayax-sale-products --dry-run' to list them, record an audited "
+                    + "decision for each with --apply, and start again. Nothing was changed.",
+                $"""
+                SELECT COUNT(*) FROM "NayaxSales" sale
+                WHERE {AttributedByNameToday}
                 """);
 
             DropGuard(migrationBuilder);

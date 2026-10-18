@@ -217,10 +217,12 @@ row.
 
 The dry run writes nothing and lists, per business, every unresolved sale with its own key, its
 transaction, its machine, its reported product name, both recorded candidate products where there
-are any, and whether it carries a historical cost today. That last count matters: **the application
-refuses to start while any sale that is costed today has no product**, because such a sale would
-otherwise be dropped from every future cost replay while still carrying COGS. The command applies no
-migration, so it is runnable exactly when startup is refusing for that reason.
+are any, whether it carries a historical cost today, and whether exactly one product's name
+attributes it today. Those last two counts matter: **the application refuses to start while any sale
+that is costed today has no product**, because such a sale would otherwise be dropped from every
+future cost replay while still carrying COGS, and **while any sale a product's name attributes today
+has no product**, costed or not, because every reader gave it that product until this release. The
+command applies no migration, so it is runnable exactly when startup is refusing for either reason.
 
 A decision names the sale by the key the dry run prints — there is no business flag, and the
 business is the one the stored sale belongs to. Each applied decision fills only a product that is

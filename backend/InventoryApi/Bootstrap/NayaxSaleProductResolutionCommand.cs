@@ -15,8 +15,9 @@ namespace InventoryApi.Bootstrap;
 /// about them (issue #758, parent #329 decision A2c).
 ///
 /// <para>It is a human-invoked command for the same reason the others are: it writes a financial
-/// attribution, and the release deliberately refuses to start while a sale that is costed today
-/// would be left unresolved. Starting the web host and running this command are mutually exclusive
+/// attribution, and the release deliberately refuses to start while a sale that is costed today, or
+/// that exactly one product's name attributes today, would be left unresolved. Starting the web host
+/// and running this command are mutually exclusive
 /// paths through <c>Program.cs</c>, and this one applies no migration - which is what lets an
 /// operator record the decision the failure gate is waiting for while the API is refusing to come
 /// up.</para>
@@ -170,6 +171,10 @@ public static class NayaxSaleProductResolutionCommand
             output.WriteLine(
                 $"  ... costed today      : {report.UnresolvedCostedCount.ToString(CultureInfo.InvariantCulture)}"
                     + "   <- the release refuses to start while this is above zero");
+            output.WriteLine(
+                $"  ... named by a product: {report.NameAttributableCount.ToString(CultureInfo.InvariantCulture)}"
+                    + "   <- and while this is, costed or not: one product's name attributes each of"
+                    + " them today");
 
             foreach (var sale in report.Unresolved)
             {
@@ -185,6 +190,7 @@ public static class NayaxSaleProductResolutionCommand
                         + $" name '{sale.ProductName ?? "(none)"}'"
                         + $" provider id {Describe(sale.ProviderProductId)}"
                         + $" costed {(sale.IsCosted ? "yes" : "no")}"
+                        + $" named by a product {(sale.IsAttributableByName ? "yes" : "no")}"
                         + $" - {candidates}");
             }
 

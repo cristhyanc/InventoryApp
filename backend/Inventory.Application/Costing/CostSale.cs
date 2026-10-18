@@ -58,8 +58,14 @@ public sealed class CostSale : ICostSale
         // The product the sale is persisted against (issue #758). Deliberately not re-derived from
         // the provider's product id or the reported name: that association was decided once by the
         // writer that stored the sale, and re-deciding it here would let a product rename or a
-        // duplicate name move historical COGS. An unresolved sale has no product and is left
-        // uncosted below, exactly as an unmatched one already was.
+        // duplicate name move historical COGS.
+        //
+        // An unresolved sale reads no ledger cost and consumes no inventory. It does still take the
+        // transaction-level Nayax cost below when the sale carries one, which is precedence step 2
+        // of AGENTS.md § Inventory and historical costing invariants and exactly what an unmatched
+        // sale has always done - not a new outcome this change introduced. Issue #758 asks for an
+        // unresolved sale not to be costed at all, which that established precedence contradicts,
+        // so the difference is raised on PR #766 for a human decision rather than settled here.
         var productId = sale.ProductId;
 
         var baselineCutoff = productId is null
