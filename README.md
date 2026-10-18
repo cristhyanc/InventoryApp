@@ -219,7 +219,7 @@ The application requires a Microsoft Entra sign-in. Click **Sign in** in the hea
 
 Authentication uses Microsoft Entra ID (Azure AD): ASP.NET Core / `Microsoft.Identity.Web` validates bearer tokens on the API, and the Angular SPA signs users in with MSAL (`@azure/msal-angular`, `@azure/msal-browser`). See [docs/architecture.md](docs/architecture.md#authentication-and-authorization) for the full boundary description.
 
-**Planned, not implemented:** [docs/identity-provider-decision.md](docs/identity-provider-decision.md) holds the proposed design for signing in with Google or a verified email address and password through Microsoft Entra External ID, beside the workforce Microsoft sign-in (issue #709). It is a design awaiting human confirmation of several provider details and describes nothing the application does today — everything below is current behaviour.
+**Planned, not implemented:** [docs/identity-provider-decision.md](docs/identity-provider-decision.md) holds the approved design for signing in with Google or a verified email address and password through Microsoft Entra External ID, beside the workforce Microsoft sign-in (issue #709). Its provider details were checked against Microsoft's documentation (its § 13), and it describes nothing the application does today — everything below is current behaviour.
 
 Non-secret configuration already committed to the repository:
 
