@@ -126,8 +126,8 @@ describe('SignInComponent (issue #711)', () => {
       const { fixture } = createHarness();
       fixture.detectChanges();
 
-      expect(fixture.nativeElement.querySelectorAll('input').length).toBe(0);
-      expect(fixture.nativeElement.querySelectorAll('form').length).toBe(0);
+      expect(fixture.nativeElement.querySelectorAll('input')).toHaveLength(0);
+      expect(fixture.nativeElement.querySelectorAll('form')).toHaveLength(0);
     });
 
     it('signs the customer identity action in against the customer identity authority', () => {
