@@ -62,8 +62,11 @@ export class SignInService {
 
   /**
    * Redirects to `authority`'s hosted sign-in page. For `externalId` that is the External ID user
-   * flow a human configured, which is where Google is offered: this application sends no provider
-   * hint, invents no query parameter and never talks to Google itself (design § 4, journey C).
+   * flow a human configured, which is where both of its journeys are offered - Google, and
+   * registering or signing in with an email address and password (design § 4, journeys C and D).
+   * This application sends no provider hint, invents no query parameter, never talks to Google
+   * itself, and never carries a password, a verification code or a reset code: every credential
+   * step happens on the provider's hosted pages and nothing about one reaches this request.
    *
    * The page the visitor asked for is **read and left in place**: a redirect that cannot start,
    * and a hosted journey that comes back cancelled, both end with the person back on the sign-in

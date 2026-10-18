@@ -8,23 +8,39 @@ const FAILURE_MESSAGES: Record<SignInFailureKind, string> = {
 };
 
 /**
- * The sign-in page at `/sign-in` (issue #711), where a signed-out visitor chooses which trusted
- * authority to sign in against **before any redirect starts** - the design's § 9.2 requirement, and
- * the reason this page exists at all: with two authorities, silently probing one of them would
- * decide who the caller is on their behalf.
+ * The sign-in page at `/sign-in` (issue #711, extended by #712), where a signed-out visitor chooses
+ * which trusted authority to sign in against **before any redirect starts** - the design's § 9.2
+ * requirement, and the reason this page exists at all: with two authorities, silently probing one of
+ * them would decide who the caller is on their behalf.
  *
- * **Continue with Google uses the approved hosted flow and nothing else.** It redirects to the
- * configured Microsoft Entra External ID tenant's own sign-up/sign-in user flow, where a human has
- * enabled Google as a built-in provider (design § 13 item 5, § 14.2). This application sends no
- * provider hint, invents no query parameter, and never exchanges a Google token itself - the
- * identity the API receives is the one the External ID tenant issued, never the upstream Google
- * subject (design § 4, journey C, and § 7). The supporting line below the action says so, because
- * a person who presses "Continue with Google" and lands on a Microsoft page should know why.
+ * **One action for the customer identity authority, naming both of its journeys.** It redirects to
+ * the configured Microsoft Entra External ID tenant's own sign-up/sign-in user flow, where a human
+ * has enabled Google as a built-in provider and the local email-with-password option (design § 13
+ * items 5 and 7, § 14.2). One hosted flow offers both, and nothing in the verified record confirms
+ * a way for a relying application to preselect one of them, so this application sends no provider
+ * hint and invents no query parameter: a second button would send the person to the identical page
+ * and promise a choice this application does not make. Issue #711 labelled the action for Google
+ * alone because journey D had not shipped; now that it has, the label and the supporting line name
+ * both, which is also what design § 9.2 asked for and § 16 left to this task.
  *
- * **Both actions are offered only when they exist.** The Google action is rendered only while this
- * build has a complete customer identity configuration; with the shipped empty configuration this
- * page offers the one Microsoft work account action and nothing else, and no visitor is ever routed
- * here in the first place (`selected-authority.ts`, `needsAuthorityChoice`).
+ * **No password, verification code or reset link is ever handled here** (design § 16's #712 row).
+ * This page has no credential field, no registration form and no recovery link of its own:
+ * creating an account, verifying the mailbox with the provider's one-time code, and resetting a
+ * password all happen on the provider's hosted pages, and the help line says so rather than
+ * implying this application could do any of them. An expired verification or reset code is the
+ * same answer - start again from here, and the hosted page issues a new one.
+ *
+ * **A failure says one of two fixed sentences and nothing the provider sent.** A refused credential
+ * journey is exactly where "no such account" leaks: the provider's own error text names the
+ * mailbox, the directory and often the reason. {@link classifySignInFailure} reduces a failure to
+ * "cancelled" or "failed", and only these two sentences are rendered, so the page never tells the
+ * person opposite whether a mailbox has an account here.
+ *
+ * **Both actions are offered only when they exist.** The customer identity action is rendered only
+ * while this build has a complete customer identity configuration; with the shipped empty
+ * configuration this page offers the one Microsoft work account action and nothing else, says
+ * nothing about passwords or recovery, and no visitor is ever routed here in the first place
+ * (`selected-authority.ts`, `needsAuthorityChoice`).
  *
  * **It never redirects by itself.** A cancelled or failed hosted sign-in comes back here with an
  * explanation and the same two choices, and waits for the person to press one. Retrying
@@ -48,20 +64,32 @@ const FAILURE_MESSAGES: Record<SignInFailureKind, string> = {
             <p class="mb-4 text-sm text-red-600" role="alert" data-testid="sign-in-error">{{ errorMessage }}</p>
           }
 
-          @if (isGoogleOffered) {
+          @if (isCustomerIdentityOffered) {
             <button
               type="button"
               class="btn btn-primary inline-flex"
-              data-testid="sign-in-google"
-              aria-describedby="sign-in-google-hint"
+              data-testid="sign-in-customer-identity"
+              aria-describedby="sign-in-customer-identity-hint"
               [disabled]="startingAuthority !== null"
               [attr.aria-busy]="startingAuthority === 'externalId'"
-              (click)="continueWithGoogle()"
+              (click)="continueWithCustomerIdentity()"
             >
-              {{ startingAuthority === 'externalId' ? 'Taking you to sign in…' : 'Continue with Google' }}
+              {{
+                startingAuthority === 'externalId'
+                  ? 'Taking you to sign in…'
+                  : 'Continue with Google or an email address'
+              }}
             </button>
-            <p id="sign-in-google-hint" class="mt-2 text-sm text-md-gray-600">
-              You will finish signing in on Microsoft's secure sign-in page, where you choose your Google account.
+            <p id="sign-in-customer-identity-hint" class="mt-2 text-sm text-md-gray-600">
+              You will finish signing in on Microsoft's secure sign-in page, where you choose your Google account or
+              use an email address and password.
+            </p>
+
+            <p class="mt-2 text-sm text-md-gray-600" data-testid="sign-in-password-help">
+              On that page you can also create an account with any email address, verify it with the code Microsoft
+              emails you, or reset your password. Inventory Manager never sees or stores your password, and cannot
+              reset it for you. If a verification or reset code has expired, start again here and the page will send
+              you a new one.
             </p>
 
             <hr class="my-6" />
@@ -78,7 +106,7 @@ const FAILURE_MESSAGES: Record<SignInFailureKind, string> = {
             {{ startingAuthority === 'workforce' ? 'Taking you to sign in…' : 'Sign in with a Microsoft work account' }}
           </button>
 
-          @if (isGoogleOffered) {
+          @if (isCustomerIdentityOffered) {
             <p class="mt-6 text-sm text-md-gray-600" data-testid="sign-in-separate-accounts">
               Each way of signing in is a separate account here, with its own access. If you already use Inventory
               Manager, sign in the same way you did before: signing in a new way never joins you to a business you
@@ -92,7 +120,7 @@ const FAILURE_MESSAGES: Record<SignInFailureKind, string> = {
 })
 export class SignInComponent implements OnInit {
   /** Whether this deployment has a customer identity tenant at all, decided once per page. */
-  readonly isGoogleOffered = isExternalIdConfigured();
+  readonly isCustomerIdentityOffered = isExternalIdConfigured();
 
   /** The authority whose redirect is being started, which disables both actions while it runs. */
   startingAuthority: AuthorityId | null = null;
@@ -106,7 +134,7 @@ export class SignInComponent implements OnInit {
     this.errorMessage = failure === null ? null : FAILURE_MESSAGES[failure];
   }
 
-  continueWithGoogle(): void {
+  continueWithCustomerIdentity(): void {
     this.begin('externalId');
   }
 

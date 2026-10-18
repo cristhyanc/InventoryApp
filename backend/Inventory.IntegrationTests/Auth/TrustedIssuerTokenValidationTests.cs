@@ -622,6 +622,137 @@ public sealed class TrustedIssuerTokenValidationTests : IClassFixture<TrustedIss
     }
 
     /// <summary>
+    /// Issue #712's central guarantee, and the local journey's version of the one above: a mailbox
+    /// somebody proved they can read is still not an identity. A local email/password account the
+    /// customer identity tenant created - verified mailbox and all, and carrying the <em>same
+    /// address</em> as an existing workforce member - is a new actor with no membership, no role
+    /// and no inherited access, and presenting its token writes nothing that would make it one.
+    /// Registering an address somebody else already uses here is a thing the provider allows and
+    /// this application does not care about (design § 10.1 and § 12).
+    /// </summary>
+    [Fact]
+    public async Task A_local_account_that_shares_a_members_mailbox_inherits_nothing_from_them()
+    {
+        await _factory.SeedAsync();
+
+        var member = await Access(TestTokens.Token(
+            TestTokens.WorkforceSigningKey,
+            TestTokens.WorkforceIssuer(TestTokens.WorkforceTenantX),
+            TestTokens.WorkforceApiClientId,
+            TestTokens.MailboxClaims(TestTokens.WorkforceTenantX, TestTokens.TenantXOwnerObjectId)));
+
+        // A local account has no upstream provider at all: no `idp`, and the mailbox was verified by
+        // the tenant's own one-time code at sign-up (design § 13 item 7).
+        var localAccountToken = TestTokens.LocalAccountAccessToken(
+            TestTokens.LocalAccountObjectId, TestTokens.SharedMailbox);
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/me/access", localAccountToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/products", localAccountToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/business/current", localAccountToken)).StatusCode);
+
+        // The one screen they may reach is the no-membership journey, which names no business.
+        var accountState = await Get("/api/me/account-state", localAccountToken);
+        using var document = JsonDocument.Parse(await accountState.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, accountState.StatusCode);
+        Assert.Equal("NoMembership", document.RootElement.GetProperty("state").GetString());
+
+        // Nothing was linked: presenting that token creates no membership of any kind.
+        Assert.Equal(
+            0,
+            await _factory.MembershipCountAsync(TestTokens.ExternalIdTenantId, TestTokens.LocalAccountObjectId));
+
+        // And the member whose address it is keeps their own business and role, untouched.
+        Assert.Equal(HttpStatusCode.OK, member.StatusCode);
+        Assert.Equal(
+            (ApiFactory.TenantXBusinessName, nameof(BusinessRole.Owner)),
+            await ResolvedBusinessAsync(member));
+    }
+
+    /// <summary>
+    /// Duplicate registration (issue #712). The same mailbox registered a second time in the
+    /// customer identity tenant is a second directory object, so it is a second actor here: it
+    /// inherits nothing from the member who registered first, and the first member's business and
+    /// role are unchanged by its existence. Nothing in this application matches identities by
+    /// address, which is what makes the question uninteresting rather than dangerous.
+    /// </summary>
+    [Fact]
+    public async Task A_second_registration_of_one_mailbox_is_a_second_actor_with_nothing_of_the_first()
+    {
+        await _factory.SeedAsync();
+
+        var first = await Access(TestTokens.LocalAccountAccessToken(
+            TestTokens.ExternalIdMemberObjectId, TestTokens.LocalMailbox));
+        var second = TestTokens.LocalAccountAccessToken(
+            TestTokens.SecondLocalAccountObjectId, TestTokens.LocalMailbox);
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(
+            (ApiFactory.ExternalIdBusinessName, nameof(BusinessRole.Owner)),
+            await ResolvedBusinessAsync(first));
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/me/access", second)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/products", second)).StatusCode);
+        Assert.Equal(
+            0,
+            await _factory.MembershipCountAsync(
+                TestTokens.ExternalIdTenantId, TestTokens.SecondLocalAccountObjectId));
+    }
+
+    /// <summary>
+    /// A registration the provider has not finished verifying reaches no business endpoint, and
+    /// neither does a finished one (issue #712). Both halves matter: the application must not grant
+    /// anything on an unverified assertion, and it must not read a verification claim as access
+    /// either - a mailbox the provider vouched for is still just a mailbox, and
+    /// <c>email_verified</c> is one more display-only claim that decides nothing (design § 10.1 and
+    /// § 13's verification-claim item). The requests here are direct API requests, with no browser
+    /// involved, which is the form the criterion asks about.
+    /// </summary>
+    [Fact]
+    public async Task Neither_an_unverified_nor_a_verified_mailbox_claim_reaches_a_business_endpoint()
+    {
+        await _factory.SeedAsync();
+
+        var unverified = TestTokens.LocalAccountAccessToken(
+            TestTokens.LocalAccountObjectId, TestTokens.LocalMailbox, emailVerified: false);
+        var verified = TestTokens.LocalAccountAccessToken(
+            TestTokens.LocalAccountObjectId, TestTokens.LocalMailbox);
+
+        foreach (var token in new[] { unverified, verified })
+        {
+            Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/me/access", token)).StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/products", token)).StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/business/current", token)).StatusCode);
+            Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/members", token)).StatusCode);
+        }
+    }
+
+    /// <summary>
+    /// The mailbox on a member's own token is display-only data, so changing it at the provider -
+    /// an email change, or a password reset that touches nothing else - cannot move, widen or lose
+    /// the membership boundary (issue #712). The same <c>(tid, oid)</c> resolves the same business
+    /// and the same role whether the token carries a different address, an address the provider
+    /// marks unverified, or no address at all.
+    /// </summary>
+    [Fact]
+    public async Task A_members_mailbox_change_or_absence_decides_nothing_about_their_membership()
+    {
+        await _factory.SeedAsync();
+
+        var expected = (ApiFactory.ExternalIdBusinessName, nameof(BusinessRole.Owner));
+
+        var changedAddress = await Access(TestTokens.LocalAccountAccessToken(
+            TestTokens.ExternalIdMemberObjectId, "renamed@example.test"));
+        var unverifiedAddress = await Access(TestTokens.LocalAccountAccessToken(
+            TestTokens.ExternalIdMemberObjectId, TestTokens.LocalMailbox, emailVerified: false));
+        var noAddressAtAll = await Access(
+            TestTokens.ExternalIdAccessToken(TestTokens.ExternalIdMemberObjectId));
+
+        Assert.Equal(expected, await ResolvedBusinessAsync(changedAddress));
+        Assert.Equal(expected, await ResolvedBusinessAsync(unverifiedAddress));
+        Assert.Equal(expected, await ResolvedBusinessAsync(noAddressAtAll));
+    }
+
+    /// <summary>
     /// The platform administrator is one configured <c>(tid, oid)</c> pair, compared as a whole
     /// pair. A second trusted issuer does not create a second way to be it: the same object id
     /// under the customer identity tenant is a different actor, and a token forged to claim the
@@ -791,6 +922,20 @@ public sealed class TrustedIssuerTokenValidationTests : IClassFixture<TrustedIss
         public const string GoogleSubject = "108134655550123456789";
 
         /// <summary>
+        /// The directory object the customer identity tenant creates for a local email/password
+        /// sign-up (issue #712). It has no upstream provider, belongs to no business, and is used
+        /// both with the mailbox it registered and with an existing member's.
+        /// </summary>
+        public const string LocalAccountObjectId = "88888888-0000-4000-8000-000000000088";
+
+        /// <summary>A second local registration of the same mailbox: a second object, so a second
+        /// actor, and still nobody here.</summary>
+        public const string SecondLocalAccountObjectId = "99999999-0000-4000-8000-000000000099";
+
+        /// <summary>The mailbox a local account registered with. Display-only, as every address is.</summary>
+        public const string LocalMailbox = "casey@example.test";
+
+        /// <summary>
         /// One mailbox, reachable through a workforce account and through Google. It is display-only
         /// personal data in this application and decides nothing.
         /// </summary>
@@ -832,6 +977,24 @@ public sealed class TrustedIssuerTokenValidationTests : IClassFixture<TrustedIss
 
         public static string ExternalIdAccessToken(string objectId) =>
             Token(ExternalIdSigningKey, ExternalIdIssuer, ExternalIdApiClientId, Claims(ExternalIdTenantId, objectId));
+
+        /// <summary>
+        /// An access token for a local email/password account in the customer identity tenant
+        /// (issue #712, design § 4 journey D). It carries no <c>idp</c>, because there is no
+        /// upstream provider, and it carries the provider's own <c>email_verified</c> beside the
+        /// display-only address - a claim this application reads for nothing, which is exactly what
+        /// the tests using it assert.
+        /// </summary>
+        public static string LocalAccountAccessToken(string objectId, string email, bool emailVerified = true)
+        {
+            var claims = MailboxClaims(ExternalIdTenantId, objectId);
+            claims["name"] = "Casey Customer";
+            claims["preferred_username"] = email;
+            claims["email"] = email;
+            claims["email_verified"] = emailVerified;
+
+            return Token(ExternalIdSigningKey, ExternalIdIssuer, ExternalIdApiClientId, claims);
+        }
 
         public static Dictionary<string, object> Claims(string tenantId, string objectId) =>
             new(StringComparer.Ordinal)

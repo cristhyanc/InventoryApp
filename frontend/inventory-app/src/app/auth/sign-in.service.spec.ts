@@ -113,6 +113,26 @@ describe('SignInService (issue #711)', () => {
     expect(request.domainHint).toBeUndefined();
   });
 
+  /**
+   * Issue #712. Every credential step of the local journey - the password, the mailbox
+   * verification code and the reset code - happens on the provider's hosted pages, so the request
+   * this application starts carries scopes and, at most, the page to come back to. Nothing may
+   * creep into it that could carry a credential or a mailbox: no `loginHint`, no `prompt`, no
+   * extra query parameter, and no key this test does not name.
+   */
+  it('starts the hosted journey with no credential, mailbox or recovery parameter of its own', async () => {
+    const { service, customerIdentityLoginRedirect } = createHarness();
+    rememberIntendedDestination('/reports/daily');
+
+    await service.signIn('externalId');
+
+    const request = customerIdentityLoginRedirect.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(request).sort()).toEqual(['redirectStartPage', 'scopes']);
+    expect(request['loginHint']).toBeUndefined();
+    expect(request['prompt']).toBeUndefined();
+    expect(JSON.stringify(request).toLowerCase()).not.toContain('password');
+  });
+
   it('hands MSAL the page the visitor asked for, and keeps it until the sign-in completes', async () => {
     const { service, customerIdentityLoginRedirect } = createHarness();
     rememberIntendedDestination('/reports/daily');

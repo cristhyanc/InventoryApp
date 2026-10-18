@@ -109,6 +109,19 @@ describe('WelcomeComponent (issue #542)', () => {
     expect(note.textContent).toContain('never joins you to a business you already belong to');
   });
 
+  /**
+   * Issue #712. The local email/password journey lands the same person here for the same reason, so
+   * the explanation names it too rather than listing only the work account and Google.
+   */
+  it('names an email address among the separate ways of signing in', async () => {
+    const { fixture } = await render(of(known(false)));
+    fixture.detectChanges();
+
+    const note = fixture.nativeElement.querySelector('[data-testid="welcome-separate-accounts"]') as HTMLElement;
+
+    expect(note.textContent).toContain('email address');
+  });
+
   it('shows that explanation whether or not self-service onboarding is offered', async () => {
     for (const onboardingEnabled of [true, false]) {
       TestBed.resetTestingModule();
