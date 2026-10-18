@@ -50,6 +50,13 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 ///   visibly uncosted, and no product's inventory cost is replayed for it. Nothing changes for data
 ///   that predates it, because issue #732's backfill recorded every product's Nayax id as the one it
 ///   was keyed by and issue #759's migration copied that onto the product row.</item>
+///   <item><b>That answer is persisted, not re-derived</b> (issue #758, parent #329 decision A2c).
+///   The product this import resolves is stored in <c>NayaxSales.ProductId</c> and is the one
+///   association costing, the cost replay, the timestamp repair, the reports and the machine-stock
+///   ledger read; <c>NayaxSales.NayaxProductId</c> keeps only the export's own raw product id, with
+///   its provenance recorded. A row this import resolves to nothing is stored unresolved and stays
+///   visible as such - no later reader rescues it by number or by name, so a product renamed or
+///   duplicated after the import cannot move the sale.</item>
 ///   <item>The sales are saved first, the affected products' costs are replayed next, and the
 ///   replayed costs are saved last. A fatal data-quality failure in that replay therefore
 ///   propagates with the rebuilt costs unsaved, exactly as the legacy import behaved. The
@@ -127,6 +134,12 @@ public sealed class ImportNayaxSales
 
         var candidates = await _store.GetProductCandidatesAsync(cancellationToken);
 
+        // Sales whose two candidate products disagreed when issue #758 resolved the existing
+        // history. Only an audited decision names one, so a re-import updates every other fact of
+        // such a sale and leaves its product exactly as it is. Expected to be empty.
+        var conflictingTransactionIds =
+            (await _store.GetConflictingTransactionIdsAsync(cancellationToken)).ToHashSet();
+
         // The export's Nayax product ids are resolved to local product ids once, through the one
         // lookup over the recorded provider ids (issue #745, parent #329 decision A2b),
         // instead of being compared with Product.Id - which only ever worked because the local key
@@ -166,11 +179,17 @@ public sealed class ImportNayaxSales
                 continue;
             }
 
+            // The local product this row belongs to, decided here and persisted on the sale (issue
+            // #758). The rule is the one this import has always applied - the recorded provider id
+            // first (issue #745), then the unambiguous name - but its answer is now stored instead
+            // of re-derived by every later reader.
             var facts = new ImportedNayaxSale(
                 row.TransactionId,
                 row.MachineId,
                 instant.Value,
                 row.TransactionStatusId,
+                ProductMatcher.MatchLinked(
+                    candidates, LocalProductId(row.NayaxProductId, localProductIdByNayaxId), row.ProductName),
                 row.NayaxProductId,
                 row.MachineName,
                 row.SettlementValue,
@@ -189,7 +208,7 @@ public sealed class ImportNayaxSales
                 // The stored row's own product and instant are tracked before it is overwritten, so
                 // an update that moves a completed sale to another product or an earlier time
                 // replays both the product it left and the product it joined.
-                TrackStoredProduct(candidates, stored, affected);
+                TrackStoredProduct(stored, affected);
                 sale = _store.Update(
                     stored,
                     facts with
@@ -197,6 +216,12 @@ public sealed class ImportNayaxSales
                         // Never erase a transaction cost price the business already holds with a
                         // row that simply does not carry the column.
                         NayaxProductCostPrice = facts.NayaxProductCostPrice ?? stored.NayaxProductCostPrice,
+
+                        // A conflicting sale keeps the product it has - none - until a human names
+                        // one through the audited operation (issue #758).
+                        ProductId = conflictingTransactionIds.Contains(row.TransactionId)
+                            ? stored.ProductId
+                            : facts.ProductId,
                     });
                 updated++;
             }
@@ -204,7 +229,7 @@ public sealed class ImportNayaxSales
             var cost = await _saleCosting.Handle(sale, cancellationToken: cancellationToken);
             if (cost is not null)
                 _store.StageCost(sale, cost);
-            TrackImportedProduct(candidates, localProductIdByNayaxId, sale, affected);
+            TrackImportedProduct(sale, affected);
         }
 
         if (imported > 0 || updated > 0)
@@ -249,47 +274,31 @@ public sealed class ImportNayaxSales
     }
 
     /// <summary>
-    /// Records the product the row just imported affected, resolving its remote
-    /// <c>NayaxProductID</c> through the provider id recorded on the product (issue #745): a Nayax id
-    /// this business recorded nowhere names no local product, and is never taken to mean the product whose
-    /// local id happens to equal it. The name fallback is unchanged, so a row carrying no usable id
-    /// still reaches the product it names.
+    /// Records the product the row just imported affected: the association the import resolved and
+    /// persisted onto the sale (issue #758). An unresolved row affected no product's inventory and
+    /// stays visible through its own row and its costing provenance instead.
     /// </summary>
-    private static void TrackImportedProduct(
-        IReadOnlyList<ProductMatchCandidate> candidates,
-        IReadOnlyDictionary<long, long> localProductIdByNayaxId,
-        CostableSale sale,
-        IDictionary<long, DateTime> affected)
+    private static void TrackImportedProduct(CostableSale sale, IDictionary<long, DateTime> affected)
     {
         if (!NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
             return;
 
-        RecordAffectedProduct(
-            ProductMatcher.MatchLinked(
-                candidates, LocalProductId(sale.NayaxProductId, localProductIdByNayaxId), sale.ProductName),
-            sale,
-            affected);
+        RecordAffectedProduct(sale.ProductId, sale, affected);
     }
 
     /// <summary>
-    /// Records the product a <em>stored</em> sale affected before this import overwrites it.
-    ///
-    /// <para>Its <c>NayaxProductId</c> column is read exactly as it always has been, because the
-    /// column's provenance is mixed: the latest-sales synchronization writes the local product id it
-    /// matched, while this import writes the export's raw remote id. Re-resolving it as a Nayax id
-    /// would stop replaying the product a synchronized sale already names, so the stored column's
-    /// readers stay as they are until #747 (A2c) and #734 (A3) settle its meaning.</para>
+    /// Records the product a <em>stored</em> sale affected before this import overwrites it, read
+    /// from the association persisted on that row (issue #758) rather than re-derived from the
+    /// provider's product id or the reported name. That is what makes a re-import that moves a
+    /// transaction to another product replay both the product it left and the product it joined,
+    /// in one pass, from facts the previous writer decided.
     /// </summary>
-    private static void TrackStoredProduct(
-        IReadOnlyList<ProductMatchCandidate> candidates,
-        CostableSale stored,
-        IDictionary<long, DateTime> affected)
+    private static void TrackStoredProduct(CostableSale stored, IDictionary<long, DateTime> affected)
     {
         if (!NayaxTransactionStatusClassifier.IsCompletedSale(stored.TransactionStatusId))
             return;
 
-        RecordAffectedProduct(
-            ProductMatcher.Match(candidates, stored.NayaxProductId, stored.ProductName), stored, affected);
+        RecordAffectedProduct(stored.ProductId, stored, affected);
     }
 
     /// <summary>

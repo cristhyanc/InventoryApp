@@ -96,6 +96,20 @@ public class AppDbContext : DbContext
     public DbSet<StockAdjustment> StockAdjustments => Set<StockAdjustment>();
     public DbSet<Purchase> Receipts => Set<Purchase>();
     public DbSet<NayaxSales> NayaxSales => Set<NayaxSales>();
+
+    /// <summary>
+    /// Sales whose two candidate products disagreed when issue #758 resolved every existing sale's
+    /// local product. Append-only evidence; a conflicting sale stays unresolved until an audited
+    /// human decision names the product - see <see cref="NayaxSaleProductConflict"/>.
+    /// </summary>
+    public DbSet<NayaxSaleProductConflict> NayaxSaleProductConflicts => Set<NayaxSaleProductConflict>();
+
+    /// <summary>
+    /// The audit trail of every sale whose local product was filled in after the fact (issue #758):
+    /// the migration's one-off name resolution and each audited operator decision. Append-only; see
+    /// <see cref="NayaxSaleProductResolution"/>.
+    /// </summary>
+    public DbSet<NayaxSaleProductResolution> NayaxSaleProductResolutions => Set<NayaxSaleProductResolution>();
     public DbSet<NayaxMachineStockEvent> NayaxMachineStockEvents => Set<NayaxMachineStockEvent>();
 
     /// <summary>
@@ -207,6 +221,7 @@ public class AppDbContext : DbContext
         ConfigureProviderLinks(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
         ConfigureProviderDataCoverage(modelBuilder);
+        ConfigureSaleProductAssociation(modelBuilder);
 
         modelBuilder.Entity<Product>()
             .Property(p => p.UnitPrice)
@@ -1043,6 +1058,66 @@ public class AppDbContext : DbContext
             .HasForeignKey(link => new { link.BusinessId, link.CategoryId })
             .HasPrincipalKey(category => new { category.BusinessId, category.Id })
             .OnDelete(DeleteBehavior.Cascade);
+    }
+
+    /// <summary>
+    /// Maps the association between a stored sale and the local product it belongs to (issue #758,
+    /// parent #329 decision A2c), and the two append-only tables that record how an existing sale's
+    /// association was decided.
+    ///
+    /// <para><strong>The association is a foreign key on the business key, and it restricts.</strong>
+    /// <c>NayaxSales.ProductId</c> is nullable - unresolved is a real state - and the foreign key is
+    /// the pair <c>(BusinessId, ProductId)</c> against the <c>(BusinessId, Id)</c> alternate key on
+    /// <c>Products</c>, for the same reason the provider links used one: it makes "a sale names a
+    /// product of its own business" something SQLite enforces on every insert and update rather than
+    /// a rule only <see cref="BusinessOwnershipEnforcer"/> applies, and a sale attributed to another
+    /// business's product would put one business's revenue against another's inventory. The delete
+    /// behaviour is <see cref="DeleteBehavior.Restrict"/>, never cascade and never set-null: a sale
+    /// is historical financial data, and deleting the product it sold must fail loudly rather than
+    /// delete the sale or quietly detach its COGS from any product.</para>
+    ///
+    /// <para><strong>The provider is required.</strong> <c>Provider</c> records which external
+    /// system the row's identifiers came from, which a provider switch (#761) needs and which the
+    /// table's name only implies. The entity defaults it to <c>Nayax</c> and both writers set it
+    /// explicitly; <c>ExternalProvider</c> is numbered from 1, so a stored zero is not a provider.</para>
+    ///
+    /// <para><strong>The provenance flag is the column that keeps the old values honest.</strong>
+    /// <c>ProviderProductIdIsRaw</c> is false on every row that predates #758, whose
+    /// <c>NayaxProductId</c> may hold either a raw provider id or the local product id the old
+    /// synchronization wrote, and true on every row written since. Nothing reads a
+    /// provenance-unknown value as a key of anything.</para>
+    ///
+    /// <para>The index is <c>(BusinessId, ProductId)</c>: every costing, replay and report read is
+    /// "this business's sales of this product", and the tenant query filter supplies the business
+    /// predicate exactly as it does on every other owned table.</para>
+    /// </summary>
+    private static void ConfigureSaleProductAssociation(ModelBuilder modelBuilder)
+    {
+        var sale = modelBuilder.Entity<NayaxSales>();
+
+        sale.Property(x => x.Provider).IsRequired();
+        sale.Property(x => x.ProviderProductIdIsRaw).IsRequired();
+
+        sale.HasIndex(x => new { x.BusinessId, x.ProductId });
+
+        // No navigation property: a sale reads its product through the ordinary product queries, and
+        // adding one here would invite a reader to load a catalogue row where it wants a stored
+        // association. The relationship exists for the constraint.
+        sale
+            .HasOne<Product>()
+            .WithMany()
+            .HasForeignKey(x => new { x.BusinessId, x.ProductId })
+            .HasPrincipalKey(product => new { product.BusinessId, product.Id })
+            .OnDelete(DeleteBehavior.Restrict);
+
+        var conflict = modelBuilder.Entity<NayaxSaleProductConflict>();
+        conflict.HasIndex(x => new { x.BusinessId, x.NayaxSaleId }).IsUnique();
+
+        var resolution = modelBuilder.Entity<NayaxSaleProductResolution>();
+        resolution.Property(x => x.Rule).IsRequired();
+        resolution.Property(x => x.CandidateProductIds).HasMaxLength(64);
+        resolution.Property(x => x.DecidedBy).HasMaxLength(256);
+        resolution.HasIndex(x => new { x.BusinessId, x.NayaxSaleId });
     }
 
     /// <summary>

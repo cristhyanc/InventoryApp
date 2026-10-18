@@ -121,7 +121,7 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
 
             yield return new TransactionSalesReportFactsRow(
                 sale.TransactionID, sale.MachineAuthorizationTime, sale.MachineID, sale.MachineName,
-                siteId, siteName, sale.NayaxProductId, sale.ProductName,
+                siteId, siteName, sale.ProductId, sale.NayaxProductId, sale.ProductName,
                 PaymentMethodClassifier.Classify(sale.PaymentMethod), sale.PaymentMethod, sale.SettlementValue,
                 sale.NayaxProductCostPrice, sale.UnitCostAtSale, sale.CostOfGoodsSold,
                 sale.CostingStatus.ToString(), CostSourceLabel(sale), hasPersistedCost,

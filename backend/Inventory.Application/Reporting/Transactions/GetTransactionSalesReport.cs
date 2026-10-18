@@ -10,9 +10,8 @@ namespace Inventory.Application.Reporting.Transactions;
 /// <summary>
 /// The transaction sales report use case: resolves the requested date range/machine scope, then
 /// streams per-transaction facts plus effective fee-rate/commission-agreement data through the
-/// narrow <see cref="ITransactionSalesReportFactsProvider"/> port, matching each raw Nayax product
-/// identifier/name to the catalogue through the deterministic
-/// <c>Inventory.Domain.Reporting.ProductMatching.ProductMatcher</c>, invoking the Domain per-row
+/// narrow <see cref="ITransactionSalesReportFactsProvider"/> port, reading the local product each
+/// sale is persisted against (issue #758) rather than matching one, invoking the Domain per-row
 /// fee/commission/profit policy, applying status/payment/COGS/search filtering, and accumulating
 /// totals, filter options, and quality facts in one pass over the stream (use-case/presentation
 /// concerns, not vending-business rules). Totals and filter options always cover the complete
@@ -40,7 +39,6 @@ public sealed class GetTransactionSalesReport
         if (range.ToDate < range.From) range = new DateRange(range.ToDate, range.From);
 
         var facts = await _facts.GetFactsAsync(range.From, range.ToDate, filter.MachineId, cancellationToken);
-        var candidates = facts.ProductCatalogue.Select(x => new ProductMatchCandidate(x.Id, x.Name)).ToArray();
         var catalogueByName = facts.ProductCatalogue.ToDictionary(x => x.Id, x => x.Name);
 
         var status = FilterValue(filter.Status);
@@ -90,9 +88,13 @@ public sealed class GetTransactionSalesReport
 
         await foreach (var detail in facts.Transactions.WithCancellation(cancellationToken))
         {
-            var matchedProductId = ProductMatcher.Match(candidates, detail.NayaxProductId, detail.RawProductName);
-            var productName = matchedProductId.HasValue
-                ? catalogueByName[matchedProductId.Value]
+            // The association persisted on the sale (issue #758), not a match re-made per row: a
+            // transaction is reported under the same product costing and the ledgers use, and an
+            // unresolved one is reported under the name the provider gave it rather than being
+            // attached to whichever catalogue row happens to share that name today.
+            var matchedProductId = detail.ProductId;
+            var productName = matchedProductId.HasValue && catalogueByName.TryGetValue(matchedProductId.Value, out var catalogueName)
+                ? catalogueName
                 : string.IsNullOrWhiteSpace(detail.RawProductName) ? "Unmapped product" : ProductMatcher.NormalizeName(detail.RawProductName);
 
             var result = TransactionRowPolicy.Calculate(

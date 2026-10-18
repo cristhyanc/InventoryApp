@@ -1,5 +1,3 @@
-using Inventory.Domain.Reporting.ProductMatching;
-
 namespace Inventory.Application.Costing;
 
 /// <summary>
@@ -22,11 +20,11 @@ public sealed class CostPendingSales
 
     public async Task<int> Handle(long? productId = null, CancellationToken cancellationToken = default)
     {
-        var products = await _store.GetProductCandidatesAsync(cancellationToken);
+        // The persisted sale-to-product association (issue #758), never a match re-made here: a
+        // sale belongs to one product everywhere, and an unresolved sale belongs to none.
         var sales = (await _store.LoadCompletedSalesAsync(
                 new CompletedSaleSelection(PendingOnly: true), forUpdate: true, cancellationToken))
-            .Where(s => !productId.HasValue ||
-                ProductMatcher.Match(products, s.NayaxProductId, s.ProductName) == productId.Value)
+            .Where(s => !productId.HasValue || s.ProductId == productId.Value)
             .ToList();
 
         var costed = 0;

@@ -2,6 +2,7 @@ using Inventory.Application.Costing;
 using Inventory.Application.Nayax;
 using Inventory.Application.SalesSync;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Reporting.ProductMatching;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -35,9 +36,14 @@ namespace Inventory.Infrastructure.Persistence;
 /// <c>Product.Id</c>. For data that predates it nothing changes - issue #732's backfill recorded
 /// every product's Nayax id as the one it was keyed by, and issue #759's migration copied that onto
 /// <c>Product.ExternalProductId</c> - and a Nayax id recorded on no product is an unknown product,
-/// exactly as an unmatched id already was. The <em>stored</em>
-/// <c>NayaxSales.NayaxProductId</c> column is still read as the local product id this
-/// synchronization writes onto a matched sale; #747 (A2c) and #734 (A3) own that column's readers.
+/// exactly as an unmatched id already was.
+///
+/// Issue #758 (A2c) made that answer a stored fact rather than something every later reader redoes:
+/// the matched local product is written to <c>NayaxSales.ProductId</c>, the payload's own
+/// <c>NayaxProductID</c> is written to <c>NayaxSales.NayaxProductId</c> and marked raw, and the
+/// originating provider is recorded. The enrichment branch fills a stored sale's missing
+/// association the same way - except for a sale issue #758's migration marked conflicting, which
+/// only an audited decision may resolve.
 ///
 /// The one behavioural change issue #380 made here is which payload field the stored instant comes
 /// from: <c>NayaxSales.MachineAuthorizationTime</c> is a persisted true UTC instant, so it is written
@@ -91,6 +97,16 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                 .ToList(),
             cancellationToken);
 
+        // The sales whose two candidate products disagreed when issue #758 resolved the existing
+        // history. A conflicting sale is never resolved automatically - only an audited decision
+        // names its product - so the enrichment below leaves one alone however well the fresh
+        // payload would resolve. Expected to be empty: it is one tenant-filtered read of a table
+        // the migration only writes to when it finds an ambiguity it must not settle.
+        var conflictingSaleIds = (await _db.NayaxSaleProductConflicts.AsNoTracking()
+                .Select(conflict => conflict.NayaxSaleId)
+                .ToListAsync(cancellationToken))
+            .ToHashSet();
+
         foreach (var sale in sales)
         {
             var matchedProductId = ProductMatcher.MatchLinked(
@@ -115,7 +131,13 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                     TransactionID = sale.TransactionID,
                     TransactionStatusId = sale.SettlementValue > 0 ? NayaxTransactionStatusIds.Completed : NayaxTransactionStatusIds.CancelledOrDeclined250,
                     MachineID = sale.MachineID,
-                    NayaxProductId = matchedProductId ?? sale.NayaxProductId,
+                    // The local product this synchronization matched, and separately the provider's
+                    // own product id exactly as the payload carried it (issue #758). The column that
+                    // used to hold either one now holds only the latter, and says so.
+                    ProductId = matchedProductId,
+                    Provider = ExternalProvider.Nayax,
+                    NayaxProductId = sale.NayaxProductId,
+                    ProviderProductIdIsRaw = true,
                     MachineName = sale.MachineName,
                     SettlementValue = sale.SettlementValue,
                     PaymentMethod = sale.PaymentMethod,
@@ -133,7 +155,7 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
             }
 
             var enriched = false;
-            if (!existing.NayaxProductId.HasValue)
+            if (!existing.ProductId.HasValue && !conflictingSaleIds.Contains(existing.Id))
             {
                 var existingMatch = ProductMatcher.MatchLinked(
                     candidates,
@@ -141,7 +163,12 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                     sale.ProductName ?? existing.ProductName);
                 if (existingMatch is not null)
                 {
-                    existing.NayaxProductId = existingMatch.Value;
+                    // The enrichment fills the association the stored row is still missing, and
+                    // records the provider's own id beside it with its provenance (issue #758).
+                    existing.ProductId = existingMatch.Value;
+                    existing.Provider = ExternalProvider.Nayax;
+                    existing.NayaxProductId = sale.NayaxProductId;
+                    existing.ProviderProductIdIsRaw = true;
                     matchedProductId = existingMatch;
                     enriched = true;
                 }
@@ -159,15 +186,11 @@ public sealed class EfLatestNayaxSalesStore : ILatestNayaxSalesStore
                     cancellationToken: cancellationToken);
                 if (NayaxTransactionStatusClassifier.IsCompletedSale(existing.TransactionStatusId))
                 {
-                    // Deliberately the stored column, read as the local product id this
-                    // synchronization writes once it has matched one (above) - not as a Nayax id to
-                    // resolve again (issue #745). Resolving it through the provider id would turn the
-                    // local product a stored sale already names into an unknown one, which would
-                    // silently stop replaying that product's inventory cost. The stored column's own
-                    // mixed provenance - the uploaded export writes the raw remote id into it - is
-                    // what #747 (A2c) and #734 (A3) own.
-                    matchedProductId ??= ProductMatcher.Match(
-                        candidates, existing.NayaxProductId, existing.ProductName);
+                    // The association persisted on the row (issue #758) - never a match re-made
+                    // from the provider's product id or the reported name. A sale whose product a
+                    // writer already decided replays that product; an unresolved sale replays none,
+                    // which is what keeps a rename or a duplicate name out of cost history.
+                    matchedProductId ??= existing.ProductId;
                     if (matchedProductId is not null &&
                         (!affected.TryGetValue(matchedProductId.Value, out var existingAt) ||
                          existing.MachineAuthorizationTime < existingAt))

@@ -36,6 +36,19 @@ public class CostableSale
 {
     public required long TransactionId { get; init; }
     public int? TransactionStatusId { get; init; }
+
+    /// <summary>
+    /// The local product the sale is attributed to, as persisted on the row (issue #758), or
+    /// <c>null</c> when the sale is unresolved. Costing reads exactly this and never re-derives it
+    /// from <see cref="NayaxProductId"/> or <see cref="ProductName"/>: an unresolved sale is left
+    /// uncosted rather than attached to a product by a number or a name.
+    /// </summary>
+    public long? ProductId { get; init; }
+
+    /// <summary>
+    /// The provider's own product identifier, kept for the cost-price provenance and the reports
+    /// that show what the provider reported. It is never read as a local product id (issue #758).
+    /// </summary>
     public long? NayaxProductId { get; init; }
     public string? ProductName { get; init; }
     public required DateTime AuthorizationTime { get; init; }

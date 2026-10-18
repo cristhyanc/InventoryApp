@@ -1,5 +1,6 @@
 using Inventory.Application.Costing;
 using Inventory.Application.Imports;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Reporting.ProductMatching;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -36,6 +37,11 @@ public sealed class EfNayaxSalesImportStore : INayaxSalesImportStore
             .Select(product => new ProductMatchCandidate(product.Id, product.Name))
             .ToList();
 
+    public async Task<IReadOnlyCollection<long>> GetConflictingTransactionIdsAsync(CancellationToken cancellationToken) =>
+        await _db.NayaxSaleProductConflicts.AsNoTracking()
+            .Select(conflict => conflict.TransactionId)
+            .ToListAsync(cancellationToken);
+
     public async Task<CostableSale?> FindByTransactionIdAsync(long transactionId, CancellationToken cancellationToken)
     {
         var existing = await _db.NayaxSales
@@ -53,7 +59,12 @@ public sealed class EfNayaxSalesImportStore : INayaxSalesImportStore
             MachineID = sale.MachineId,
             MachineAuthorizationTime = sale.MachineAuthorizationTime,
             TransactionStatusId = sale.TransactionStatusId,
+            // The resolved local product and the export's own raw provider id, each in its own
+            // column and each said to be what it is (issue #758).
+            ProductId = sale.ProductId,
+            Provider = ExternalProvider.Nayax,
             NayaxProductId = sale.NayaxProductId,
+            ProviderProductIdIsRaw = true,
             MachineName = sale.MachineName,
             SettlementValue = sale.SettlementValue,
             PaymentMethod = sale.PaymentMethod,
@@ -72,7 +83,10 @@ public sealed class EfNayaxSalesImportStore : INayaxSalesImportStore
         var entity = AsEntity(stored);
         entity.MachineID = sale.MachineId;
         entity.TransactionStatusId = sale.TransactionStatusId;
+        entity.ProductId = sale.ProductId;
+        entity.Provider = ExternalProvider.Nayax;
         entity.NayaxProductId = sale.NayaxProductId;
+        entity.ProviderProductIdIsRaw = true;
         entity.MachineName = sale.MachineName;
         entity.SettlementValue = sale.SettlementValue;
         entity.PaymentMethod = sale.PaymentMethod;

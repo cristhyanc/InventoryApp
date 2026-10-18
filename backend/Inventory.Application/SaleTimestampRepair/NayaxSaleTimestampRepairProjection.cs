@@ -261,8 +261,8 @@ internal sealed class NayaxSaleTimestampRepairProjection
     /// <summary>
     /// The products whose costing the repair would replay, each from the earlier of its affected
     /// sales' old and new instants. Only a completed sale consumes costed inventory, and only a sale
-    /// matched to a local product has inventory to replay; an unmatched one stays visible through its
-    /// own row and its costing provenance instead.
+    /// the writer attributed to a local product has inventory to replay (issue #758); an unresolved
+    /// one stays visible through its own row and its costing provenance instead.
     /// </summary>
     private async Task<IReadOnlyList<NayaxSaleTimestampRepairProduct>> BuildAffectedProductsAsync(
         IReadOnlyList<NayaxSaleTimestampDecision> decisions,
@@ -276,7 +276,10 @@ internal sealed class NayaxSaleTimestampRepairProjection
                 || !NayaxTransactionStatusClassifier.IsCompletedSale(decision.Sale.TransactionStatusId))
                 continue;
 
-            var productId = ProductMatcher.Match(candidates, decision.Sale.NayaxProductId, decision.Sale.ProductName);
+            // The association persisted on the sale (issue #758), never a match re-made here: the
+            // repair replays exactly the product the sale is costed against, and an unresolved sale
+            // has no inventory to replay.
+            var productId = decision.Sale.ProductId;
             if (productId is null)
                 continue;
 

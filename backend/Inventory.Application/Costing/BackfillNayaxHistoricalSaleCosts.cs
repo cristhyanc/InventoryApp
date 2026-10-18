@@ -1,5 +1,3 @@
-using Inventory.Domain.Reporting.ProductMatching;
-
 namespace Inventory.Application.Costing;
 
 /// <summary>
@@ -27,11 +25,11 @@ public sealed class BackfillNayaxHistoricalSaleCosts
         long? productId = null,
         CancellationToken cancellationToken = default)
     {
-        var products = await _store.GetProductCandidatesAsync(cancellationToken);
+        // Filtered on the persisted sale-to-product association (issue #758), never on a match
+        // re-made here: an unresolved sale belongs to no product and is in no product's backfill.
         var sales = (await _store.LoadCompletedSalesAsync(
                 new CompletedSaleSelection(From: from, To: to), forUpdate: !dryRun, cancellationToken))
-            .Where(s => !productId.HasValue ||
-                ProductMatcher.Match(products, s.NayaxProductId, s.ProductName) == productId.Value)
+            .Where(s => !productId.HasValue || s.ProductId == productId.Value)
             .ToList();
         var withNayaxCost = sales.Count(s => s.NayaxProductCostPrice.HasValue);
         var invalid = sales.Count(s => s.NayaxProductCostPrice < 0);

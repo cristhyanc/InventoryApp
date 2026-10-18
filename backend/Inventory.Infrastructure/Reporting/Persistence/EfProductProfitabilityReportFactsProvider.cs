@@ -12,11 +12,13 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 ///
 /// Its completed-sale query is shared with <see cref="EfBookkeepingReportFactsProvider"/> and
 /// <see cref="EfMachineProfitabilityReportFactsProvider"/> through <see cref="EfReportingSharedQueries"/>.
-/// This adapter returns only raw sale groups (keyed by the raw Nayax product identifier/name, as
-/// query mechanics) and the catalogue candidates; it deliberately does not call the product
-/// matcher itself, since deterministic product matching is Domain business logic
-/// (<c>Inventory.Domain.Reporting.ProductMatching.ProductMatcher</c>), not a persistence concern,
-/// and is applied by <see cref="GetProductProfitabilityReport"/>. Card/cash classification is not
+/// This adapter returns sale groups keyed by the local product each sale is attributed to (issue
+/// #758, parent #329 decision A2c), plus the catalogue. It no longer matches anything: the
+/// association is persisted on the sale by the writer that stored it, so a product renamed or
+/// duplicated after the sale cannot move the sale's revenue and COGS between rows. Sales with no
+/// association group by the identity the provider reported and are presented as unresolved by
+/// <see cref="GetProductProfitabilityReport"/>, never folded into a catalogue product and never
+/// dropped from the totals. Card/cash classification is not
 /// EF-translatable, so this adapter materializes only the required sale columns and
 /// classifies/groups them in memory, matching the pattern already used by
 /// <see cref="EfBookkeepingReportFactsProvider"/>.
@@ -40,12 +42,25 @@ public sealed class EfProductProfitabilityReportFactsProvider : IProductProfitab
             .ToListAsync(cancellationToken);
 
         var saleRows = await EfReportingSharedQueries.SalesQuery(_db, from, endExclusive, machineId)
-            .Select(x => new { x.NayaxProductId, x.ProductName, x.SettlementValue, x.CostOfGoodsSold, x.PaymentMethod })
+            .Select(x => new
+            {
+                x.ProductId,
+                x.NayaxProductId,
+                x.ProductName,
+                x.SettlementValue,
+                x.CostOfGoodsSold,
+                x.PaymentMethod,
+            })
             .ToListAsync(cancellationToken);
 
+        // Grouped by the local product the sale is attributed to (issue #758). An unresolved sale
+        // has none, so it groups with the other unresolved sales that carry the same reported
+        // identity - which is a presentation grouping of rows nothing could attribute, never an
+        // attribution to a catalogue product.
         var saleGroups = saleRows
-            .GroupBy(x => new { x.NayaxProductId, x.ProductName })
+            .GroupBy(x => new { x.ProductId, NayaxProductId = x.ProductId is null ? x.NayaxProductId : null, ProductName = x.ProductId is null ? x.ProductName : null })
             .Select(g => new ProductProfitabilitySaleGroupFacts(
+                g.Key.ProductId,
                 g.Key.NayaxProductId,
                 g.Key.ProductName,
                 g.Sum(x => x.SettlementValue),
