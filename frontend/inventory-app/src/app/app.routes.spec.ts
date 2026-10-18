@@ -12,6 +12,7 @@ import { WelcomeComponent } from './access/welcome.component';
 import { ApplicationPendingComponent } from './access/application-pending.component';
 import { ApplicationRejectedComponent } from './access/application-rejected.component';
 import { routes } from './app.routes';
+import { SignInComponent } from './auth/sign-in.component';
 import { StockHistoryPageComponent } from './components/stock/stock-history-page.component';
 import { AdminImportsComponent } from './components/admin/imports/admin-imports.component';
 import { HistoricalCostRecoveryComponent } from './components/admin/historical-cost-recovery/historical-cost-recovery.component';
@@ -313,5 +314,33 @@ describe('super-admin routing (issue #546)', () => {
 
   it('loads the Super Admin Businesses page component', async () => {
     await expect(loadedComponent('super-admin/businesses')).resolves.toBe(SuperAdminBusinessesComponent);
+  });
+});
+
+/**
+ * The sign-in page (issue #711). It is the page `SignInAuthorityGuard` sends a signed-out visitor
+ * to instead of starting a redirect, so it has to be reachable without authentication - exactly
+ * like the `/auth` callback, and for the same reason.
+ */
+describe('sign-in routing (issue #711)', () => {
+  it('serves the sign-in page publicly, with no guard at all', () => {
+    expect(route('sign-in').component).toBe(SignInComponent);
+    expect(route('sign-in').canActivate).toBeUndefined();
+    expect(route('sign-in').canMatch).toBeUndefined();
+  });
+
+  it('keeps the MSAL redirect callback public beside it', () => {
+    expect(route('auth').canActivate).toBeUndefined();
+  });
+
+  /**
+   * Both are declared before the wildcard, which would otherwise swallow them and land a visitor
+   * on the dashboard they are not signed in for.
+   */
+  it('declares both authentication pages before the wildcard', () => {
+    const wildcard = routes.findIndex((candidate) => candidate.path === '**');
+
+    expect(routes.findIndex((candidate) => candidate.path === 'sign-in')).toBeLessThan(wildcard);
+    expect(routes.findIndex((candidate) => candidate.path === 'auth')).toBeLessThan(wildcard);
   });
 });

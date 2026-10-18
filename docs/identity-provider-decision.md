@@ -1,21 +1,27 @@
 # Customer identity: the Microsoft Entra External ID design (issue #709)
 
-**Status: approved design (merged with #709). § 5 is implemented by #710; everything else is still
-design.** What ships today is the API's side of the trust decision: a second named bearer scheme
-pinned to one configured External ID tenant, behind an issuer-selecting policy scheme, with the
-multi-tenant workforce validator unchanged — see
+**Status: approved design (merged with #709). § 5 is implemented by #710, and the SPA's authority
+selection and Google journey (§ 4 journey C, § 9, § 12) by #711; the rest is still design.** What
+ships today is the API's side of the trust decision — a second named bearer scheme pinned to one
+configured External ID tenant, behind an issuer-selecting policy scheme, with the multi-tenant
+workforce validator unchanged — plus the browser's side of journey C: an explicit authority choice
+at `/sign-in` with **Continue with Google**, a second MSAL configuration with its own client id and
+cache partition, and the `profile` scope named explicitly in the External ID token request. See
 [docs/architecture.md § Trusted issuers and the two bearer schemes](architecture.md#trusted-issuers-and-the-two-bearer-schemes-issue-710)
+and [§ The sign-in choice and the Google journey](architecture.md#the-sign-in-choice-and-the-google-journey-issue-711),
 and [README.md § Customer identity: a second trusted issuer](../README.md#customer-identity-a-second-trusted-issuer-issue-710)
-for the behaviour of record, and § 16 below for what #710 did and did not do.
+and [§ Signing in with Google](../README.md#signing-in-with-google-issue-711) for the behaviour of
+record, and § 16 below for what each task did and did not do.
 
-**Deferred, and not current behaviour:** the SPA's authority selection and the Google (#711) and
-local email/password (#712) journeys — the Angular application still signs in against the workforce
-`common` authority alone and offers no second option — identity linking (#713, deferred and not
-required under this recommendation), and the consolidated security, staging and rollback validation
-(#714). The `ExternalId` configuration section is **empty in source control**, so a deployment no
-human has configured behaves exactly as it did before #710: workforce Microsoft Entra ID on the
-`common` authority, MSAL in the SPA, `Microsoft.Identity.Web` validating bearer tokens on the API,
-and memberships bound to the validated Entra `(tid, oid)` claim pair.
+**Deferred, and not current behaviour:** the local email/password journey (#712) — journey D is not
+offered by the application, and journey B is not in v1 at all (§ 13 item 4) — identity linking
+(#713, deferred and not required under this recommendation), and the consolidated security, staging
+and rollback validation (#714). Both configuration sections are **empty in source control** — the
+API's `ExternalId` and the SPA's `externalIdSettings` — so a deployment no human has configured
+behaves exactly as it did before #710: workforce Microsoft Entra ID on the `common` authority, one
+MSAL authority in the SPA with no sign-in chooser and no Google action, `Microsoft.Identity.Web`
+validating bearer tokens on the API, and memberships bound to the validated Entra `(tid, oid)` claim
+pair.
 
 **Merging the pull request that adds this file is the human approval of the design** (issue #709's
 decision gate, under parent #708). Until it is merged, no downstream implementation subtask —
@@ -790,7 +796,7 @@ for people are identical to § 15.1.
 | **#708** (parent) | Proceed; **remove #713 from the launch prerequisites** | Record Option C as the approved rollout and this file as the design of record |
 | **#709** (this) | Complete on merge; § 13's checklist is a separate human step before #710 | Design, decision table, threat model, rollout, rollback. No code |
 | **#710** (identity foundation and API token validation) | **Implemented** (see the implementation note below this table) | The `ExternalId` configuration section; the second named bearer scheme and the issuer-selecting policy scheme, with the existing multi-tenant workforce validator and its issuer-to-`tid` binding left exactly as it is; per-scheme issuer, audience and tenant-binding rules (§ 5.1), with the External ID issuer taken from the tenant's metadata document; a test that an External ID token without `oid` or `tid` (no `profile` scope) is unidentifiable; empty-configuration fail-closed; **the complete § 5.4 regression suite, including two different workforce tenants and every issuer/tenant/audience mismatch**, which covers T1/T2/T3/T10; the composition tests extended so the `E2ETest` host still registers the synthetic scheme and nothing else. **No change to `ActorIdentity` or `EntraActorIdentityAccessor`**, and no schema change |
-| **#711** (Google sign-in) | After #710 | SPA authority selection, the second MSAL instance with its own cache, the `profile` scope in the External ID token request (§ 4), Google journey end to end, the welcome-screen wording of § 12, invite continuation re-verified |
+| **#711** (Google sign-in) | **Implemented** (see the implementation note below this table) | SPA authority selection, the second MSAL instance with its own cache, the `profile` scope in the External ID token request (§ 4), Google journey end to end, the welcome-screen wording of § 12, invite continuation re-verified |
 | **#712** (email/password) | After #710 | The same for the local journey, including the provider-hosted reset/recovery entry point and the `profile` scope (§ 4). Mailbox verification is enforced by the provider's sign-up flow (§ 13 item 7). **No password, hash, reset token or recovery code in this repository** |
 | **#713** (linking/migration) | **Deferred — not required.** A human records that status; it is removed from the launch prerequisites and must not be given a readiness label unless a human first reopens the linking decision | — |
 | **#714** (security, staging, rollout validation) | Last | The provider/account-state matrix across both issuers; **identity separation in place of linking validation**, as #713 directs; T6, T8, T9; two-business isolation with identities from both issuers; **§ 14.2's staging verification that the associated application exposes and completes each supported journey**; the § 15 rollback rehearsal; human staging sign-off |
@@ -830,10 +836,72 @@ decisions are worth recording because they are not literally what § 5.2 and § 
   registration is set to issue validates, and the workforce scheme's accepted set is the same two
   values the library derived by default - now stated rather than inferred.
 
-Everything this task was not allowed to do is still undone: no provider resource was created, no
-configuration value was filled in, no SPA journey was added, nothing was linked or migrated, and
-the staging verification of § 14.2 and the phase-3 sign-in check of § 14.1 remain human steps
-against a human-provisioned tenant.
+Everything that task was not allowed to do is still undone: no provider resource was created, no
+configuration value was filled in, nothing was linked or migrated, and the staging verification of
+§ 14.2 and the phase-3 sign-in check of § 14.1 remain human steps against a human-provisioned
+tenant.
+
+### How #711 implemented § 9 and § 12, and where it chose differently
+
+The shape is § 9.2's: the authority is chosen once, explicitly, before any redirect; each authority
+has its own client id, its own authority URL and therefore its own MSAL cache partition; the choice
+is remembered per browser; there is no silent fallback. `ActorIdentity`, `EntraActorIdentityAccessor`
+and the API's two schemes are untouched, there is no schema change and no API contract change.
+Six decisions are worth recording because they are not literally what § 9 and § 12 say:
+
+- **The second button says "Continue with Google", not § 9.2's indicative "Sign in with Google or
+  email".** Journey D is #712 and is not shipped, and journey B is not in v1 at all (§ 13 item 4),
+  so a label promising email sign-in would name a journey the hosted page may not offer. The design
+  left the wording to #711; the action is accompanied by a line saying the journey finishes on
+  Microsoft's hosted page, where the person chooses their Google account, because a button labelled
+  Google that lands on a Microsoft page needs to say so. #712 revisits the wording when the local
+  journey exists.
+- **No provider-selection parameter is sent, because none is confirmed.** § 13 item 5 confirms
+  Google as a built-in provider that must be *added to the user flow*, and § 13 item 6 confirms that
+  the flow is what offers a provider. Nothing in the verified record confirms a supported way for a
+  relying application to preselect one, so the application sends none - no `domain_hint`, no
+  `login_hint`, nothing invented - and the provider is chosen on the tenant's own hosted page. That
+  is the issue's own instruction rather than a workaround, and it is also why the supporting line
+  above exists. A genuinely single-step Google action would need a confirmed mechanism and a
+  human-approved UX revision; it is not implemented here.
+- **"Remembered per browser" is read through a per-tab snapshot.** § 9.2 says the choice is
+  remembered; `localStorage` is what remembers it, and it is shared by every tab of this origin.
+  The MSAL instance, the guard's request and the interceptor's scopes are built by three separate
+  factories at three different moments, so a second tab writing a different choice in between
+  would give one authority's client the other's scopes, and the same write during a redirect would
+  return the visitor into a tab bootstrapped for an authority that did not start their journey.
+  Each tab therefore pins its answer in `sessionStorage` - per tab, and it survives the round trip
+  - and re-pins it when somebody chooses. The remembered choice is unchanged; only which read a
+  tab trusts is. The pin is checked against the configuration on every read, so § 15.1's rollback
+  lever still reaches an open tab, and a sign-out clears both.
+- **The intended destination is held until a sign-in completes, not until it is read.** § 9.1's
+  open-redirect protection is "there is no caller-supplied return URL", and that is unchanged: the
+  destination still comes from the router state the guard refused and is still re-validated on
+  every read. What changed is when it is released. Consuming it at the start of an attempt lost it
+  for exactly the journeys § 9.3 asks to be preserved - a redirect that could not start, and a
+  cancelled hosted journey - leaving the retry on the home page instead of the page the person
+  asked for, which for `/invite` means a page saying nothing about the invitation still waiting.
+  The completed callback releases it, and a retry only ever reads it, so the 15-minute window of
+  § 10.2 is never extended by trying again.
+- **The gate is registered under the `MsalGuard` token rather than added to every route.**
+  `app.routes.ts` names `MsalGuard` on about forty routes; `SignInAuthorityGuard` therefore takes
+  that token's place and delegates to the real guard under `MSAL_REDIRECT_GUARD`, which is the same
+  mechanism the end-to-end build already uses. It intervenes only when a second authority is
+  configured, nobody is signed in and no choice is on record, so an unconfigured deployment's
+  behaviour is unchanged.
+- **The SPA's identifiers are build-time values in `auth-config.ts`, not runtime configuration.**
+  The MSAL instance has to exist before `ConfigService` has finished loading `assets/config.json`,
+  so the authority cannot come from that file; the four identifiers sit beside the workforce client
+  ids that are already literals there, **empty**, on the same "identifiers, not credentials"
+  classification as § 14.3. Changing them is therefore a build, which is worth knowing before the
+  production activation of § 14.1 phase 7.
+
+Two things § 10.2 and § 14.2 ask for stay human steps and were not done here: confirming in staging
+that the 15-minute pending-invite window comfortably outlasts a real Google sign-up round trip
+(extending it would be its own reviewed decision), and the § 14.2 verification that the associated
+application actually exposes and completes the journey. Both are listed in
+[README.md § Signing in with Google](../README.md#signing-in-with-google-issue-711) as the staging
+checks a human performs with their own test identity, and #714 owns the consolidated run.
 
 ## 17. Known limitations of this document
 

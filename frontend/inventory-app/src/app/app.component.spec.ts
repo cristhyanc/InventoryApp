@@ -3,8 +3,8 @@ import { Component } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
-import { AccountInfo, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
-import { BehaviorSubject, NEVER, Observable, Subject, of } from 'rxjs';
+import { AccountInfo, AuthenticationResult, EventMessage, EventType, InteractionStatus } from '@azure/msal-browser';
+import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxjs';
 import packageJson from '../../package.json';
 import { AccessService, MemberAccessState } from './access/access.service';
 import { ACCOUNT_STATES, AccountStateAnswer, AccountStateName, AccountStateService } from './access/account-state.service';
@@ -18,6 +18,10 @@ import { PlatformDiagnosticsAccessService } from './services/platform-diagnostic
 import { SuperAdminBusinessesService } from './services/super-admin-businesses.service';
 import { BusinessService, CurrentBusiness } from './services/business.service';
 import { SupportSessionService, SupportSessionState } from './support-session/support-session.service';
+import { configureExternalId, unconfigureExternalId } from './auth/external-id.spec-helpers';
+import { peekIntendedDestination, rememberIntendedDestination } from './auth/intended-destination';
+import { SELECTED_AUTHORITY_KEY } from './auth/selected-authority';
+import { SignInService } from './auth/sign-in.service';
 
 @Component({ standalone: true, template: 'page body' })
 class BlankPageComponent {}
@@ -189,6 +193,11 @@ async function render(
     access?: Observable<MemberAccessState>;
     /** The sidebar's separate platform-admin probe; defaults to refused (issue #335). */
     diagnosticsAccess?: Observable<boolean>;
+    /**
+     * What MSAL's redirect handling reports; defaults to "no interaction to handle". An error here
+     * is a cancelled or failed hosted sign-in coming back to `/auth` (issue #711).
+     */
+    redirect?: Observable<AuthenticationResult | null>;
   } = {}
 ): Promise<Rendered> {
   const signedIn = options.signedIn ?? true;
@@ -218,7 +227,7 @@ async function render(
       },
       setActiveAccount: jest.fn()
     },
-    handleRedirectObservable: () => of(null),
+    handleRedirectObservable: () => options.redirect ?? of(null),
     loginRedirect,
     logoutRedirect
   };
@@ -1646,6 +1655,123 @@ describe('AppComponent business navigation by account state (issue #676)', () =>
     expect(businessDestinations(host)).toEqual([]);
     expect(host.querySelector('main [data-testid="support-session-unresolved"]')).not.toBeNull();
     expect(host.querySelector('main')?.textContent).not.toContain('page body');
+  });
+});
+
+/**
+ * The shell's part in the authority choice (issue #711): the header's **Sign in**, forgetting the
+ * choice on sign-out, and what happens when the hosted sign-in comes back refused.
+ */
+describe('AppComponent sign-in choice (issue #711)', () => {
+  beforeEach(() => {
+    stubMatchMedia(true);
+    localStorage.clear();
+    sessionStorage.clear();
+    unconfigureExternalId();
+    // A refused redirect is still logged, exactly as before; the tests below assert what the
+    // person is shown, and the log would only make the run noisy.
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    unconfigureExternalId();
+    jest.restoreAllMocks();
+  });
+
+  it('redirects straight to the workforce authority with no second authority configured', async () => {
+    const { fixture, msal } = await render({ signedIn: false });
+
+    fixture.componentInstance.login();
+    await fixture.whenStable();
+
+    expect(msal.loginRedirect).toHaveBeenCalledTimes(1);
+    expect(TestBed.inject(Router).url).not.toBe('/sign-in');
+  });
+
+  it('opens the sign-in page instead, once a second authority is configured', async () => {
+    configureExternalId();
+    const { fixture, msal } = await render({ signedIn: false });
+
+    fixture.componentInstance.login();
+    await fixture.whenStable();
+
+    expect(msal.loginRedirect).not.toHaveBeenCalled();
+    expect(TestBed.inject(Router).url).toBe('/sign-in');
+  });
+
+  /**
+   * A sign-out ends one authority's session; the next person at this browser is asked again rather
+   * than sent silently back to the authority the previous one used (design § 9.3).
+   */
+  it('forgets the chosen authority when signing out', async () => {
+    configureExternalId();
+    localStorage.setItem(SELECTED_AUTHORITY_KEY, 'externalId');
+    const { fixture, msal } = await render();
+
+    fixture.componentInstance.logout();
+
+    expect(localStorage.getItem(SELECTED_AUTHORITY_KEY)).toBeNull();
+    expect(msal.logoutRedirect).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * A cancelled hosted journey comes back to `/auth`, whose only message is "Signing you in...".
+   * The shell takes the person to the sign-in page with the reason, and starts no second redirect:
+   * retrying a refusing authority automatically is how a callback page becomes a loop.
+   */
+  it('reports a refused redirect on the sign-in page and starts no second redirect', async () => {
+    configureExternalId();
+    const { fixture, msal } = await render({
+      signedIn: false,
+      redirect: throwError(() => ({ errorCode: 'access_denied' }))
+    });
+    await fixture.whenStable();
+
+    expect(TestBed.inject(Router).url).toBe('/sign-in');
+    expect(TestBed.inject(SignInService).take()).toBe('cancelled');
+    expect(msal.loginRedirect).not.toHaveBeenCalled();
+  });
+
+  it('tells a broken redirect apart from a cancelled one', async () => {
+    const { fixture } = await render({
+      signedIn: false,
+      redirect: throwError(() => ({ errorCode: 'endpoints_resolution_error' }))
+    });
+    await fixture.whenStable();
+
+    expect(TestBed.inject(SignInService).take()).toBe('failed');
+  });
+
+  /**
+   * The page the visitor asked for has to survive the cancellation too, or the retry the sign-in
+   * page offers quietly lands them on the dashboard instead of where they were going. An invite
+   * acceptance page is the case that matters most: being sent to the dashboard after cancelling
+   * once leaves the invite unaccepted with nothing on screen saying so.
+   */
+  it('keeps the page the visitor asked for when a cancelled journey comes back', async () => {
+    configureExternalId();
+    rememberIntendedDestination('/invite');
+    const { fixture } = await render({
+      signedIn: false,
+      redirect: throwError(() => ({ errorCode: 'access_denied' }))
+    });
+    await fixture.whenStable();
+
+    expect(TestBed.inject(Router).url).toBe('/sign-in');
+    expect(peekIntendedDestination()).toBe('/invite');
+  });
+
+  /** And is released by the one callback that completes, which is MSAL's own cue to navigate
+   * there: holding it any longer would return a later sign-in to a stale page. */
+  it('releases the destination once the hosted sign-in completes', async () => {
+    configureExternalId();
+    rememberIntendedDestination('/reports/daily');
+    const { fixture } = await render({
+      redirect: of({ account } as AuthenticationResult)
+    });
+    await fixture.whenStable();
+
+    expect(peekIntendedDestination()).toBeNull();
   });
 });
 

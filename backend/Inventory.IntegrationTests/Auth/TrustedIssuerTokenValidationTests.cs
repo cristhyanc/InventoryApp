@@ -526,6 +526,102 @@ public sealed class TrustedIssuerTokenValidationTests : IClassFixture<TrustedIss
     }
 
     /// <summary>
+    /// Issue #711's central guarantee, and the one the SPA's new Google action makes reachable: a
+    /// mailbox is not an identity. The same person's Google account, brokered by the customer
+    /// identity tenant and carrying the <em>same verified email address</em> as an existing
+    /// workforce member, is a new actor with no membership, no role and no inherited access - and
+    /// nothing is written to make it one, because identity linking is deferred (design § 12, and
+    /// § 10.1: no authorization, membership, invite or onboarding decision reads an address).
+    /// </summary>
+    [Fact]
+    public async Task A_google_identity_that_shares_a_members_mailbox_inherits_nothing_from_them()
+    {
+        await _factory.SeedAsync();
+
+        var member = await Access(TestTokens.Token(
+            TestTokens.WorkforceSigningKey,
+            TestTokens.WorkforceIssuer(TestTokens.WorkforceTenantX),
+            TestTokens.WorkforceApiClientId,
+            TestTokens.MailboxClaims(TestTokens.WorkforceTenantX, TestTokens.TenantXOwnerObjectId)));
+
+        // The same mailbox, verified by Google, on a directory object this application has never
+        // seen - which is exactly what a member signing in a second way produces.
+        var google = TestTokens.MailboxClaims(TestTokens.ExternalIdTenantId, TestTokens.GoogleFederatedObjectId);
+        google["idp"] = "google.com";
+        google["sub"] = TestTokens.GoogleSubject;
+
+        var googleToken = TestTokens.Token(
+            TestTokens.ExternalIdSigningKey,
+            TestTokens.ExternalIdIssuer,
+            TestTokens.ExternalIdApiClientId,
+            google);
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/me/access", googleToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/products", googleToken)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Get("/api/business/current", googleToken)).StatusCode);
+
+        // The one screen they may reach is the no-membership journey, which names no business.
+        var accountState = await Get("/api/me/account-state", googleToken);
+        using var document = JsonDocument.Parse(await accountState.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, accountState.StatusCode);
+        Assert.Equal("NoMembership", document.RootElement.GetProperty("state").GetString());
+
+        // Nothing was linked: presenting that token creates no membership of any kind.
+        Assert.Equal(
+            0,
+            await _factory.MembershipCountAsync(TestTokens.ExternalIdTenantId, TestTokens.GoogleFederatedObjectId));
+
+        // And the member whose address it is keeps their own business and role, untouched.
+        Assert.Equal(HttpStatusCode.OK, member.StatusCode);
+        Assert.Equal(
+            (ApiFactory.TenantXBusinessName, nameof(BusinessRole.Owner)),
+            await ResolvedBusinessAsync(member));
+    }
+
+    /// <summary>
+    /// The identity is the one the broker issued, never the upstream provider's subject
+    /// (design § 4, journey C, and § 7's explicit prohibitions). A Google-federated token resolves
+    /// through its External ID <c>oid</c> while the Google <c>sub</c> and <c>idp</c> beside it are
+    /// read by nothing - and a token carrying only that upstream subject is nobody at all, however
+    /// exactly the subject matches a stored object id.
+    /// </summary>
+    [Fact]
+    public async Task A_customer_identity_is_its_directory_object_id_never_the_upstream_google_subject()
+    {
+        await _factory.SeedAsync();
+
+        var brokered = TestTokens.MailboxClaims(TestTokens.ExternalIdTenantId, TestTokens.ExternalIdMemberObjectId);
+        brokered["idp"] = "google.com";
+        brokered["sub"] = TestTokens.GoogleSubject;
+
+        var resolved = await Access(TestTokens.Token(
+            TestTokens.ExternalIdSigningKey,
+            TestTokens.ExternalIdIssuer,
+            TestTokens.ExternalIdApiClientId,
+            brokered));
+
+        var subjectInsteadOfObjectId = await Access(TestTokens.Token(
+            TestTokens.ExternalIdSigningKey,
+            TestTokens.ExternalIdIssuer,
+            TestTokens.ExternalIdApiClientId,
+            new Dictionary<string, object>(StringComparer.Ordinal)
+            {
+                ["tid"] = TestTokens.ExternalIdTenantId,
+                ["sub"] = TestTokens.ExternalIdMemberObjectId,
+                ["idp"] = "google.com",
+                ["scp"] = "access_as_user",
+            }));
+
+        Assert.Equal(HttpStatusCode.OK, resolved.StatusCode);
+        Assert.Equal(
+            (ApiFactory.ExternalIdBusinessName, nameof(BusinessRole.Owner)),
+            await ResolvedBusinessAsync(resolved));
+
+        // Authenticated, but nobody: `sub` is read by nothing, so there is no actor to resolve.
+        Assert.Equal(HttpStatusCode.Forbidden, subjectInsteadOfObjectId.StatusCode);
+    }
+
+    /// <summary>
     /// The platform administrator is one configured <c>(tid, oid)</c> pair, compared as a whole
     /// pair. A second trusted issuer does not create a second way to be it: the same object id
     /// under the customer identity tenant is a different actor, and a token forged to claim the
@@ -685,6 +781,21 @@ public sealed class TrustedIssuerTokenValidationTests : IClassFixture<TrustedIss
         public const string ExternalIdMemberObjectId = "33333333-0000-4000-8000-000000000033";
         public const string ExternalIdStrangerObjectId = "44444444-0000-4000-8000-000000000044";
 
+        /// <summary>
+        /// The directory object the customer identity tenant created for a Google sign-up
+        /// (issue #711). It belongs to no business, and shares a mailbox with the Tenant X Owner.
+        /// </summary>
+        public const string GoogleFederatedObjectId = "77777777-0000-4000-8000-000000000077";
+
+        /// <summary>An upstream Google subject: opaque, not a GUID, and read by nothing here.</summary>
+        public const string GoogleSubject = "108134655550123456789";
+
+        /// <summary>
+        /// One mailbox, reachable through a workforce account and through Google. It is display-only
+        /// personal data in this application and decides nothing.
+        /// </summary>
+        public const string SharedMailbox = "dana@example.test";
+
         /// <summary>One object id that exists as a member in two different trusted tenants.</summary>
         public const string SharedObjectId = "55555555-0000-4000-8000-000000000055";
 
@@ -729,6 +840,20 @@ public sealed class TrustedIssuerTokenValidationTests : IClassFixture<TrustedIss
                 ["oid"] = objectId,
                 ["scp"] = "access_as_user",
             };
+
+        /// <summary>
+        /// The same claims plus the display-only profile ones every real sign-in token carries
+        /// (issue #524), including <see cref="SharedMailbox"/> - so a test can put one mailbox on
+        /// two different identities and prove the address decides nothing.
+        /// </summary>
+        public static Dictionary<string, object> MailboxClaims(string tenantId, string objectId)
+        {
+            var claims = Claims(tenantId, objectId);
+            claims["name"] = "Dana Operator";
+            claims["preferred_username"] = SharedMailbox;
+            claims["email"] = SharedMailbox;
+            return claims;
+        }
 
         public static string Token(
             SecurityKey signingKey,
@@ -816,7 +941,15 @@ public sealed class TrustedIssuerTokenValidationTests : IClassFixture<TrustedIss
                 Business(3, ExternalIdBusinessName));
 
             db.BusinessMemberships.AddRange(
-                Membership(1, TestTokens.WorkforceTenantX, TestTokens.TenantXOwnerObjectId, BusinessRole.Owner),
+                // This member's mailbox is also reachable through Google (issue #711), which is
+                // what `A_google_identity_that_shares_a_members_mailbox_inherits_nothing_from_them`
+                // presents from the customer identity tenant.
+                Membership(
+                    1,
+                    TestTokens.WorkforceTenantX,
+                    TestTokens.TenantXOwnerObjectId,
+                    BusinessRole.Owner,
+                    TestTokens.SharedMailbox),
                 Membership(2, TestTokens.WorkforceTenantY, TestTokens.TenantYManagerObjectId, BusinessRole.Manager),
                 Membership(3, TestTokens.ExternalIdTenantId, TestTokens.ExternalIdMemberObjectId, BusinessRole.Owner),
                 // The same object id in two trusted tenants: two actors, two businesses, two roles.
@@ -893,13 +1026,28 @@ public sealed class TrustedIssuerTokenValidationTests : IClassFixture<TrustedIss
                 CreatedAtUtc = CreatedAt,
             };
 
+        /// <summary>
+        /// How many membership rows exist for one identity, read outside the tenant filters. It is
+        /// what proves nothing was *linked*: a Google identity sharing a member's mailbox must not
+        /// gain a membership by presenting a token (issue #711).
+        /// </summary>
+        public async Task<int> MembershipCountAsync(string directoryTenantId, string objectId)
+        {
+            await using var db = TestAppDbContext.Unrestricted(
+                new DbContextOptionsBuilder<AppDbContext>().UseSqlite(_connection).Options);
+
+            return await db.BusinessMemberships.CountAsync(
+                membership => membership.DirectoryTenantId == directoryTenantId && membership.ObjectId == objectId);
+        }
+
         private static BusinessMembership Membership(
-            int businessId, string directoryTenantId, string objectId, BusinessRole role) =>
+            int businessId, string directoryTenantId, string objectId, BusinessRole role, string? email = null) =>
             new()
             {
                 BusinessId = businessId,
                 DirectoryTenantId = directoryTenantId,
                 ObjectId = objectId,
+                Email = email,
                 Role = role,
                 IsActive = true,
                 CreatedAtUtc = CreatedAt,
