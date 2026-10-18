@@ -1281,6 +1281,50 @@ the filters and fields below.
 **A connected business sees no change here either.** Every filter, field and category is exactly as
 before.
 
+## Machine details: Sales and Products
+
+Opening a machine (**Machines → a machine**) shows its most recent Nayax sales first, with the
+machine's product table in a second tab (issue #768).
+
+- **Two tabs, Sales then Products, and Sales is selected on arrival at every machine.** They are a
+  proper tab list: the arrow keys move between them, `Home` and `End` jump to the ends, and each tab
+  names its own panel for a screen reader. Switching tabs makes no new Nayax call — the panel you
+  came from keeps what it already read.
+- **Sales is Nayax's rolling latest-sales window, not this machine's sales history.** It is whatever
+  Nayax currently reports as the machine's most recent transactions, newest first: the endpoint
+  behind it guarantees no date range, no row count and no paging, so the page promises none of
+  those. For a complete period use the reports, which are built from the sales this application has
+  imported.
+- **Each sale shows its date and time, the product name Nayax reported, the payment method and the
+  amount**, with the currency code Nayax reported when it reported one. Times are shown in your
+  business's own time zone. A value Nayax did not report reads **Not reported** rather than being
+  filled in with a zero or a guessed date, and **no transaction status is shown**: the documented
+  Nayax endpoint for this read declares none, so the page does not invent one. No cost or profit is
+  derived here.
+- **Refresh re-reads Nayax, and changes nothing.** It is disabled while a request is in flight. A
+  refresh imports no sale, moves no stock, recosts no inventory and applies no stock event — reading
+  this tab a hundred times leaves every report, cost and quantity exactly as it was. Importing sales
+  is still the separate sales sync.
+- **Five different answers, never one that reads as "no sales".** A window Nayax reported as empty
+  says so; a business with **no sales provider connected** is told exactly that, as information
+  rather than a fault, because inventory and purchasing work fully without one; a connection that
+  **needs reconnecting** and a **permission Nayax has not granted** each say what to do about it; and
+  a request that **failed** offers Refresh and says plainly that it does not mean the machine has no
+  sales.
+- **The amount is a financial figure.** A role without `Dashboard.ViewFinancials` — today an
+  Operator — still sees every sale's date and time, reported product name and payment method, and
+  reads **Not available for your role** where the amount would be. The API withholds the amount and
+  its currency, as `null` and never `0`, so this is not a client-side hide; Products stays fully
+  usable. A platform administrator in a [support session](#super-admin-support-sessions) sees no
+  Nayax data at all here, because a session resolves no Nayax credentials.
+- **Products is the same product table as before**, with the same fields, the same financial
+  redaction and the same per-product Restock control. It is read the first time you open that tab for
+  a machine, so opening a machine does not fetch it, and **Sync Restock stays its own section above
+  the tabs**.
+
+See [docs/architecture.md § Machine latest sales](docs/architecture.md#machine-latest-sales-issue-768)
+for the read boundary, the verified Nayax contract and the authorization rule.
+
 ## Business settings (Admin page)
 
 **Admin → Business Settings** is where an Owner reads and changes their own business's name,
