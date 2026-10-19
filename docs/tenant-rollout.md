@@ -630,7 +630,7 @@ Read the `Database` line, and then act on it:
 
 This command never leaves a credential it stored without its status, because the two are one
 transaction. A connection that is stored but *not* `Ready` therefore did not come from here, and
-re-running this command does not repair it: use **Re-test** on Admin → Nayax Settings, as
+re-running this command does not repair it: use **Re-test** on Admin → Integrations, as
 [Re-running it](#re-running-it) describes. The credential table must not be edited by hand in any
 case.
 
@@ -675,7 +675,7 @@ deployed and this command has been applied, verify through the application:
 If Nayax fails after the cutover, the credential is the first thing to check — re-run
 `migrate-nayax-connection --dry-run` and read what it reports is stored. It is a diagnostic here
 and nothing more: it reports the stored status and will not change it, so a `NeedsAttention`
-connection is recovered through **Re-test** on Admin → Nayax Settings rather than by applying this
+connection is recovered through **Re-test** on Admin → Integrations rather than by applying this
 command again. Do not edit the credential table by hand; the token is encrypted and its key id is
 stored with it.
 
@@ -734,7 +734,8 @@ Nothing here needs configuration, and no step of the rollout procedure changes.
   issue #506 now exists as well — test a pasted operator id and token (#536), save the tested pair
   and re-test the stored one (#537; see
   [docs/architecture.md § Saving a tested connection and re-testing it](architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)).
-  Issue #538 added the Owner-facing wizard over those endpoints on Admin → Nayax Settings (see
+  Issue #538 added the Owner-facing wizard over those endpoints on Admin → Integrations, which
+  issue #729 renamed from Nayax Settings (see
   [docs/architecture.md § The Nayax connection wizard](architecture.md#the-nayax-connection-wizard-issue-538)),
   so an Owner can now connect, save and re-test their own account from the application. Since
   issue #541 the *application* side of onboarding exists too, behind a flag that is off by default

@@ -1553,7 +1553,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax **catalogue** is no longer part of that limit either: its products and categories used to be keyed by the Nayax `NayaxProductID`/`ProductGroupID`, which is one global identifier space, so two businesses could not both import the same Nayax product — issue #735 made a created row's key the database's own and left the provider's id as a per-business column, and `EfNayaxProductCatalogImportStoreTenancyTests` proves two businesses importing the same ids, see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735). The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Nayax Settings, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax **catalogue** is no longer part of that limit either: its products and categories used to be keyed by the Nayax `NayaxProductID`/`ProductGroupID`, which is one global identifier space, so two businesses could not both import the same Nayax product — issue #735 made a created row's key the database's own and left the provider's id as a per-business column, and `EfNayaxProductCatalogImportStoreTenancyTests` proves two businesses importing the same ids, see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735). The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Integrations, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
 
 #### Membership roles and capabilities (issue #521)
 
@@ -1628,11 +1628,11 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Reports (all of them, and their CSV/XLSX exports) | `api/reports/*`, `GET api/reports/{report}/export` | `Reports.View` | ✘ | ✔ | ✔ |
 | Admin → Imports | `api/imports/products`, `api/imports/nayax-sales`, `api/imports/pending-xml` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
-| Admin → Nayax Settings | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
-| Admin → Nayax Settings → connection wizard, Test (issue #536, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
-| Admin → Nayax Settings → connection wizard, Save and Re-test (issue #537, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Integrations → connection wizard, Test (issue #536, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Integrations → connection wizard, Save and Re-test (issue #537, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Connection banners on every page that needs Nayax (issue #539) | `GET api/settings/nayax-connection/status` (issue #537) | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Admin → Costing Repair | `api/admin/inventory-cost-repair/*` (preview, apply, history) | `Data.Repair` | ✘ | ✘ | ✔ |
 | Admin → Inventory AVCO Transition Baseline | `api/admin/inventory-cost-transition/*` (preview, apply, preview-all, apply-all) | `Data.Repair` | ✘ | ✘ | ✔ |
@@ -2816,7 +2816,7 @@ machine-check flag all stay exactly as they were. The dry run and the apply agre
 run predicts the stored status rather than `Ready`, and the apply attempts no write at all, not
 even the conditional status write. This is what keeps a re-run from reviving a connection a Nayax
 `401` moved to `NeedsAttention`: that verdict came from Nayax, this command never calls Nayax, and
-only a connection test — the Owner's re-test on Admin → Nayax Settings — can conclude a new status.
+only a connection test — the Owner's re-test on Admin → Integrations — can conclude a new status.
 A matching pair stored but not yet `Ready` is therefore left on `PendingPermissions` as well, and
 is also a re-test rather than a re-run.
 
@@ -3401,7 +3401,8 @@ endpoints' capability rows.
 ### The Nayax connection wizard (issue #538)
 
 Issue #538 — the Owner-facing slice of #506, under #328 — is the screen over the endpoints above: a
-six-step wizard on Admin → Nayax Settings, beside the processing-fee editor it did not replace. It is
+six-step wizard on Admin → Integrations (called Nayax Settings until issue #729), beside the
+processing-fee editor it did not replace. It is
 **frontend only**: it adds no endpoint, changes no contract and holds no rule of its own.
 
 `NayaxConnectionWizardComponent` and the presentational `NayaxConnectionChecklistComponent`
@@ -3751,14 +3752,17 @@ and they are the first realized part of the target `layout/` folder described be
 
 | File | Responsibility |
 | --- | --- |
-| `layout/navigation.ts` | The navigation data (`primaryNavigation`) and the pure matching rules `navLinks`, `activeNavRoute` and `activeNavGroup` |
+| `layout/navigation.ts` | The navigation data (`primaryNavigation`) and the pure matching rules `navLinks`, `activeNavRoute`, `activeNavLink` and `activeNavGroup`, plus `navLockOf` (issue #729) |
 | `layout/sidebar-nav.component.*` | Renders that data, owns which groups are expanded, and resolves the active entry from the router |
 | `layout/user-menu.component.ts` | The top-right signed-in user control: the active account and a sign-out item, or a sign-in button |
 | `app.component.*` | The shell layout, the sidebar open/collapsed state and its handlers, the narrow layout's top-bar opener, the wide-versus-narrow layout decision, the MSAL identity it passes to the user menu, and whether the sidebar offers the ordinary business navigation at all (issue #676) |
 
-`primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Machines`,
-`Sites`, `Expenses`) and expandable groups (`Products`, `Purchases`, `Reports`, `Admin`). Each
-destination also declares the capability its own page needs, and the sidebar renders only the ones
+`primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Expenses`, and the
+live provider destinations `Machines`, `Sites` and `Site Commissions`), expandable groups
+(`Inventory`, `Purchases`, `Reports`, `Admin`) and, since issue #729, one section heading over the
+live provider destinations — see [Provider-locked
+navigation](#provider-locked-navigation-issue-729) for the order, the renames and the lock states.
+Each destination also declares the capability its own page needs, and the sidebar renders only the ones
 the signed-in member holds — see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)
 below — while whether it renders any of them at all follows the authenticated account state the
 shell passes it (issue #676, see [Account-state
@@ -4262,7 +4266,7 @@ named business-admin mutation families the parent issue called out - Business Se
 Settings, and members/users/invitations - each judged by the same question: does this page's route
 capability stay granted inside a session?
 
-**Business Settings and Nayax Settings needed the guard, because their capabilities are granted.**
+**Business Settings and Integrations needed the guard, because their capabilities are granted.**
 `Business.Manage` and `Integration.Manage` are both in `SupportSessionAccessPolicy.Capabilities`
 (see [Hiding write controls and support-view messages](#hiding-write-controls-and-support-view-messages-issue-554)
 for why a granted capability is the wrong signal for a write control), so a Super Admin's support
@@ -5073,9 +5077,12 @@ destination over the same `unavailable` answer a confirmed member's failed probe
 `navigationFor` drops each destination whose capability the member does not hold and drops a group
 once all of its children are gone. An Operator is therefore offered no `Expenses`, no `Reports`
 group and no `Admin` group; a Manager's `Admin` group holds `Site Commission Agreements` and
-`Imports` without `Nayax Settings` or any of the five repairs; an Owner is offered every declared
-destination. `Reports → Site Commissions` follows the API and declares `SiteCommissions.Manage`
-rather than `Reports.View` ([issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526)).
+`Imports` without `Integrations` or any of the five repairs; an Owner is offered every declared
+destination. `Site Commissions` follows the API and declares `SiteCommissions.Manage`
+rather than `Reports.View` ([issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526));
+since issue #729 it is a live provider destination rather than a child of the `Reports` group, and
+the provider answer is applied **after** this capability filter — see [Provider-locked
+navigation](#provider-locked-navigation-issue-729).
 Until the capability set has been read the sidebar renders **no** destination, because a menu that
 offered everything and then took entries away would show entries that were never this member's —
 and it renders none again from the moment the signed-in identity changes until the new identity's
@@ -5469,7 +5476,7 @@ themselves regardless of what this page renders.
 | `services/member.service.ts` | `MemberService`: the four `/api/members` calls, and `BUSINESS_ROLES`, the three published role names mirrored for the role-change and invite-creation dropdowns |
 | `services/member-invite.service.ts` | `MemberInviteService`: the three `/api/members/invites` calls |
 
-**Composition, not a grown page.** Per [Page composition boundary](#page-composition-boundary-issue-191), the Members and Invites sections are each a distinct workflow with its own substantial UI, state, actions and error lifecycle, so each is its own feature component injecting its own service - the same shape `NayaxConnectionWizardComponent` composes into the Nayax Settings page - rather than two sets of state grown directly into `AdminUsersComponent`.
+**Composition, not a grown page.** Per [Page composition boundary](#page-composition-boundary-issue-191), the Members and Invites sections are each a distinct workflow with its own substantial UI, state, actions and error lifecycle, so each is its own feature component injecting its own service - the same shape `NayaxConnectionWizardComponent` composes into the Integrations page - rather than two sets of state grown directly into `AdminUsersComponent`.
 
 **Every refusal is shown exactly as the API phrases it.** Neither section interprets, reworks or duplicates a membership rule: a role change or revocation that would leave the business with no active Owner, a reinstatement of someone who has since joined another business, a role change on a revoked membership, and a cancellation of a used or expired invite are all `409` sentences read from `error.error.message` (the `ProblemDetails` extension `DomainExceptionHandler` writes) and shown through the toast unchanged - see [Member management](#member-management-list-role-revoke-and-reinstate-issue-533) and [Invite links](#invite-links-create-list-and-cancel-issue-531) for what each sentence is. The confirmation dialog before a role change, a revoke, a reinstate or a cancel is a safety prompt only; the server's own rule, re-checked under its write lock, is what actually decides the request.
 
@@ -5872,7 +5879,10 @@ therefore cannot be built on this signal as it stands, and neither is invented h
   refused;
 - issue #729's "waiting for Nayax permission (naming the missing permission)" wording. The
   application knows its own check names, not the Nayax permission an operator has to grant, and a
-  name nothing published must not be guessed.
+  name nothing published must not be guessed. Issue #729 therefore names the refused **read** and
+  its endpoint - the only authoritative name there is - and prints no permission key; its own
+  record states what Nayax's documentation does and does not publish, and what naming the key
+  would need. See [Provider-locked navigation](#provider-locked-navigation-issue-729).
 
 Closing either needs a backend contract change - the status response (or a new read) publishing each
 declared check's last outcome, and an authoritative Nayax statement of the permission behind it -
@@ -5943,8 +5953,9 @@ the page reports on.
 **What is deliberately not here.** The home Dashboard and Needs Ordering keep issue #727's own
 answer, derived from the summary and the reorder listing they already fetch: those responses are
 authoritative about the cards beside them, and a second probe would be a second answer that could
-disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b), and the menu is
-issue #729 (E2).
+disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b). The menu was
+issue #729 (E2), and it reads this signal through
+[Provider-locked navigation](#provider-locked-navigation-issue-729).
 
 **What proves it.** `provider/provider-availability.service.spec.ts` covers the status derivation,
 the one-read-per-session cache, the retry after a failed read, the four per-feature states, a usable
@@ -5968,6 +5979,164 @@ cover each screen's hidden control, its error state, and the empty list neither 
 re-test, including the per-feature permissions a re-test found, granted and refused alike;
 `nayax-status-banner.component.spec.ts` covers three banners costing one read; and
 `support-session.service.spec.ts` covers the answer being forgotten on a context transition.
+
+### Provider-locked navigation (issue #729)
+
+Child E2 of issue #329 (decision P6), after [the shared availability signal of issue
+#728](#shared-provider-availability-and-error-versus-empty-states-issue-728). It puts that one
+answer in the menu, so the application says which features need a sales provider **before** a page
+has to. It is frontend only: no endpoint, no contract and no rule of its own, and every answer it
+renders comes from `ProviderAvailabilityService`.
+
+**The order is the statement.** `primaryNavigation` is now: `Dashboard`, `Pick List`, the
+`Inventory` group, `Purchases`, `Expenses`, `Reports`, `Admin` — everything that works with no
+provider at all — then one `NavSectionHeading` ("Needs Nayax") and the three live provider
+destinations under it: `Machines`, `Sites` and `Site Commissions`. A heading is a heading, not a
+control: it toggles nothing, links nowhere, renders as an `<h2>` over the entries after it, and
+`navigationFor` drops it when every entry under it was left out, because a heading over nothing
+claims a section this member does not have.
+
+**Two renames, and one name per destination.** The `Products` group is `Inventory` (decision P11),
+because it holds the whole of the business's own stock keeping, all of which works without a
+provider; the Products **page** inside it keeps its own name, its URL and its breadcrumb. `Nayax
+Settings` is `Integrations`, in the sidebar, on the `/admin` hub card and in the page's own heading
+and breadcrumb — one destination with one name — and its URL (`/admin/nayax-settings`) is unchanged.
+Every other breadcrumb is untouched: a breadcrumb parent is the real page that owns a child route,
+and a sidebar group heading is not a page, so renaming a group and moving the site commission report
+into its own menu section change no trail (`breadcrumb-routes.spec.ts`).
+
+**Two declarations on a `NavLink`, because the two cases are not the same.**
+
+| Declaration | What it means | What the menu does |
+| --- | --- | --- |
+| `lockedWithout: ProviderFeature` | the destination's page is a live Nayax read | shown **locked** while the shared answer refuses that read, and its route redirects to the "needs a provider" page |
+| `hiddenWithoutProvider: true` | a provider repair or admin tool | left out of the menu entirely until the connection is usable |
+
+Locking rather than hiding is the point for the first: a page an operator could have used, and could
+use again by connecting Nayax, has to stay visible and explain itself. Hiding is right for the
+second — Admin → `Imports` (the Nayax sales and settlement imports) and Admin → `Nayax Sale
+Timestamp Repair` — because with no provider there is nothing of the provider's to import or repair,
+so a locked entry would offer a tool for data that does not exist. `Integrations` carries neither: it
+is where a connection is made, so it can never depend on one. The costing and GST repairs carry
+neither either — they are the business's own data.
+
+**`provider/provider-lock.ts` is the one place that answer becomes a verdict about a destination**,
+and it holds nothing but pure functions, because the menu, the route guard and the page the guard
+redirects to must agree about one destination. A menu that locked a page which then opened, or a page
+that refused an entry the menu offered, is what that separation prevents.
+
+| Function | Answer |
+| --- | --- |
+| `providerLockOf(availability)` | `open`, `connect` or `permission` - `providerFeatureOffered` with the refused case split in two |
+| `providerToolsOffered(connection)` | whether the repair and admin tools are offered: `usable` or `unknown` |
+| `providerFeatureReadLabels(feature)` | the declared Nayax reads that feature needs, each named with its endpoint |
+| `providerLockSummary` / `providerLockSentence` | the one line a locked entry carries, and the sentence its page shows |
+
+`connect` and `permission` are kept apart for the reason issue #728 keeps `notConnected` and
+`permissionNotGranted` apart: they need opposite things from an operator. Telling somebody whose
+credentials work that Nayax is not connected sends them to re-enter a token that was never the
+problem. And `unknown` is `open`, for the same fail-open reason the banners and the filters offer a
+feature nothing has refused: a status probe that failed must not lock a page whose own request would
+have answered it, so an unread status locks nothing and withholds no repair tool.
+
+**Capability rules apply first.** `navigationFor` filters by capability and only then by the provider
+answer, so an entry the role may not see stays **hidden** rather than becoming a locked advertisement
+for a page that role never had. On the routes, `requireProvider` is declared **after**
+`requireCapability` for the same reason: a member whose role does not include `/reports/site-commissions`
+reaches the "access not allowed" page, not an invitation to connect a provider they still could not
+use.
+
+**Historical reports are never locked** (decision P5). Bookkeeping, Daily, Transactions,
+Reconciliation, machine profitability, product profitability, GST and the reporting dashboard read
+**stored** data, so they stay in the `Reports` group, carry no provider guard on their routes at all,
+and report their own availability states instead (issues #730 and #731). Previously imported sales
+stay readable after a disconnect. The site commission report is the one report in the provider
+section, and it is not an exception: a site is known only from the live fleet read's `CustomerID`, so
+with no usable provider it has no sites to report on and the API itself answers `isAvailable: false`
+(see [Site commissions](#site-commissions) in AGENTS.md and issue #731). Its breadcrumb still names
+`Reports` as its parent page, because `/reports` is still the page that owns that route.
+
+**`requireProvider(feature)` is the URL half of a locked entry** (`provider/provider-lock.guard.ts`),
+and it is presentation exactly as `requireCapability` is: every endpoint behind these pages resolves
+the business's own Nayax credentials and answers `409` itself, whatever the router did. What the
+guard changes is that typing `/machines` with no provider reaches one explanation instead of a page
+of refusals, so the menu entry and the URL behave identically. It carries the refused URL to the page
+as the `from` query parameter, which decides nothing: the page resolves the destination from the
+declared navigation through `activeNavLink` and re-reads the availability answer itself, so a URL
+somebody typed cannot make it say a page is locked when it is not.
+
+**`ProviderLockedComponent` (`/needs-provider`) explains, and never refuses.** Like
+`/access-not-allowed` it is where a guard *sends* somebody, so it declares no capability of its own -
+the destinations that redirect to it need different ones, each already checked - and it is never a
+dead end: it links to the Dashboard and says what still works without a provider. The two locks read
+differently, which is the whole reason they are separate states:
+
+- **`connect`** - "Machines is unavailable because Nayax is not connected", with a **Connect** button
+  to `/admin/nayax-settings` for a member who holds `Integration.Manage`, and "Ask the business Owner
+  to connect Nayax" for one who does not, rather than a dead button.
+- **`permission`** - "Machines is waiting for a Nayax permission", the connection stated as working,
+  and the refused read named with its endpoint: "Machine list (GET machines)". **No Connect button**,
+  because re-entering credentials that already work fixes nothing; the action is to have the
+  permission granted and then re-test on Integrations.
+
+**What is named, and what is deliberately not.** Issue #729 asks for the permission message to name
+the missing permission. What exists to name is the **read**: `PROVIDER_FEATURE_CHECKS` (issue #728)
+maps a feature to the reads this application declares in
+`Inventory.Domain.Nayax.NayaxConnectionCheck`, and `provider/nayax-read-areas.ts` words each one with
+its endpoint. That file is the **one** vocabulary for naming a refused Nayax area, shared with the
+Owner's connection checklist and support request (issue #538), which is why it moved out of
+`nayax-connection-checklist.component.ts` and is re-exported from there: two wordings for one refusal
+is how a screen ends up asking Nayax for the wrong permission.
+
+The Nayax permission **key** behind one of these reads is not printed, because nothing published
+states it. Nayax's own developer documentation publishes a permission key and OAuth scope per
+endpoint for its three dashboard-widget report endpoints only (`lynx_report_get_widgets`,
+`lynx_report_get_widget_data`, `lynx_report_get_widget`), and for none of the five reads this
+application depends on — `GET machines`, `GET machines/{id}/machineProducts`,
+`GET machines/{id}/lastSales`, `GET operators/{operatorId}/products`,
+`GET operators/{operatorId}/productGroups`; its app-tokens page documents only the *format* of a
+scope (`{domain}:{action}`) with examples. The server does not say which operation was refused either
+— `NayaxConnectionExceptionHandler` deliberately keeps
+`NayaxPermissionNotGrantedException.Operation` out of the `409` body. So naming the Nayax permission
+would mean guessing a name, which [issue #728's own
+record](#shared-provider-availability-and-error-versus-empty-states-issue-728) already refused and
+which AGENTS.md § Nayax contract verification forbids. Naming the read and its endpoint is the
+authoritative thing this application can say, and it is what a support request to Nayax has to ask
+for. Printing the permission key needs a published Nayax statement of it, and is a reviewed decision
+of its own.
+
+**One shared read, and none at all without a business.** `SidebarNavComponent` subscribes to
+`ProviderAvailabilityService.load()` only while the shell says the business navigation is `offered`:
+a signed-out visitor and an account with no usable membership resolve no business, so there is no
+connection to read a status for. That subscription is deliberately **its own**, beside the existing
+`combineLatest` over the access answers rather than another arm of it - the provider answer changes
+what the menu renders and nothing else, and re-asking the platform-admin probe or the
+pending-applications count because a connection status settled would be one extra request per page
+load. It starts `undefined`, so the menu renders immediately and locks nothing until the answer
+settles. A locked entry keeps its `routerLink` and is **marked, not disabled**: clicking it is how an
+operator reaches the explanation, so it carries a visible `Locked` badge, the lock sentence as its
+`title` and the same sentence for a screen reader, and no `aria-disabled` - which would be untrue of
+a link that does navigate.
+
+**What proves it.** `provider/provider-lock.spec.ts` covers every lock state, the fail-open `unknown`,
+the tools gate over all four connection states, the read labels and both sentences.
+`layout/navigation.spec.ts` covers the declared order and the section, the `Inventory` rename with
+Products keeping its own name, the live provider destinations and the reports that are never locked
+(including the machine profitability report that shares the `Machines` label), each lock state per
+status and per role, the per-feature case where one refused read locks its destinations and leaves a
+granted one open, the repair tools hidden and offered, the group dropped when the provider's was its
+only child, and the capability rule applying first. `layout/sidebar-nav.component.spec.ts` covers the
+rendered section heading, a locked entry still being a link with its badge and sentence, the
+permission lock's own wording, the reports linked and unlocked with no provider, the hidden repair
+tools, the one status read however many entries depend on it, and the read never made for a withheld
+business menu. `provider/provider-lock.guard.spec.ts` covers the URL half: the page opening, each
+refusal redirecting with the exact refused URL, a detail URL, the granted sibling read, and the
+unreadable status that opens the page. `provider/provider-locked.component.spec.ts` covers both
+messages, the Connect button offered and withheld, the named read, the destination resolved from a
+detail URL, the page opened with no destination, and the answer re-read rather than taken from the
+URL. `app.routes.spec.ts` covers the guard order on every live provider route and its absence from
+every report over stored data. `layout/breadcrumbs/breadcrumb-routes.spec.ts` covers the trails that
+did not change and the one label that did.
 
 ### Target feature boundaries
 
