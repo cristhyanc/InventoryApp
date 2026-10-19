@@ -614,7 +614,7 @@ jobs:
   dispatch-architecture:
     name: Dispatch trusted architecture pass
     needs: implement
-    if: always() && needs.implement.outputs.dispatch_architecture == 'true'
+    if: always() && needs.implement.outputs.dispatch_architecture == 'true' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       actions: write

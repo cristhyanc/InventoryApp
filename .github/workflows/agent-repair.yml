@@ -323,7 +323,7 @@ jobs:
   dispatch-validation:
     name: Dispatch exact-SHA validation
     needs: repair
-    if: always() && needs.repair.outputs.dispatch_validation == 'true'
+    if: always() && needs.repair.outputs.dispatch_validation == 'true' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       actions: write

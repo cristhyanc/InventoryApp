@@ -237,12 +237,17 @@ describe('validate.yml status-context contract', () => {
   });
 
   it('rejects a report-status job that ignores the context resolved by the context job', () => {
-    const detached = replaceOnce(
-      validateWorkflow,
-      'STATUS_CONTEXT: ${{ needs.context.outputs.status_context }}',
-      "STATUS_CONTEXT: ${{ 'agent-validation' }}",
-    );
-    assert.throws(() => verifyValidationModeIsolation(detached, 'fixture'), /report-status publishes 'agent-validation' but the context job resolved 'merge-validation'/);
+    // Both status jobs (pending and final) must publish the context the context job resolved.
+    const [before, pending, final] = validateWorkflow.split('STATUS_CONTEXT: ${{ needs.context.outputs.status_context }}');
+    assert.ok(final !== undefined, 'fixture must contain both status jobs');
+    const detach = "STATUS_CONTEXT: ${{ 'agent-validation' }}";
+    const keep = 'STATUS_CONTEXT: ${{ needs.context.outputs.status_context }}';
+    for (const [job, detached] of [
+      ['report-pending', [before, detach, pending, keep, final].join('')],
+      ['report-status', [before, keep, pending, detach, final].join('')],
+    ]) {
+      assert.throws(() => verifyValidationModeIsolation(detached, 'fixture'), new RegExp(`${job} publishes 'agent-validation' but the context job resolved 'merge-validation'`));
+    }
   });
 });
 
@@ -337,7 +342,7 @@ describe('preserved guards', () => {
 
     const noSuccessGate = replaceOnce(architectureWorkflow, '[ "$ARCHITECTURE_JOB_RESULT" = "success" ]', '[ "$ARCHITECTURE_JOB_RESULT" != "failure" ]');
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: noSuccessGate }) }), /agent-architecture.yml finalize/);
-    const skippedOnRejectedTarget = replaceOnce(architectureWorkflow, '    if: always()\n', "    if: always() && needs.context.result == 'success'\n");
+    const skippedOnRejectedTarget = replaceOnce(architectureWorkflow, "    if: always() && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n", "    if: always() && needs.context.result == 'success' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n");
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: skippedOnRejectedTarget }) }), /agent-architecture.yml finalize/);
     const noDuplicateCheck = replaceOnce(architectureWorkflow, 'select(.context == "agent-validation")', 'select(.context == "merge-validation")');
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: noDuplicateCheck }) }), /agent-architecture.yml finalize/);
@@ -579,7 +584,7 @@ describe('review dispatch contract', () => {
     for (const unsafe of [
       replaceOnce(request, '            --ref main \\\n', ''),
       replaceOnce(request, '          [ "$validation_state" = "success" ] \\\n            ||', '          true \\\n            ||'),
-      replaceOnce(request, '    steps:\n', '    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n'),
+      replaceOnce(request, '    steps:\n      - name: Set up Node.js\n', '    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n      - name: Set up Node.js\n'),
       replaceOnce(request, '  pull_request_target:\n', '  pull_request:\n'),
     ]) {
       assert.throws(() => runContractChecks({ read: readWithOverrides({ [reviewRequestPath]: unsafe }) }), /agent-review-request.yml/);

@@ -300,7 +300,7 @@ jobs:
     # outcome. No checkout and no Anthropic credential: it reads the review only from this run's own
     # review artifact (actions: read), verified by scripts/agent-review-transport.mjs fetched from
     # the trusted workflow commit, and the live pull request state through the API.
-    if: always() && needs.context.result == 'success'
+    if: always() && needs.context.result == 'success' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     needs:
       - context
       - review

@@ -27,9 +27,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  isolation-gate:
+    name: Refuse review dispatch until runner isolation is verified
+    # The dispatch-review job holds a GITHUB_TOKEN with actions: write, so it is skipped
+    # until a human confirms the self-hosted runners are reset or ephemeral per job (issue #645
+    # review). This job makes that refusal a visible failure on the same event.
+    if: |
+      vars.INVENTORY_RUNNER_ISOLATION_VERIFIED != 'true' &&
+      github.event.label.name == 'agent-review' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.base.ref == 'develop' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'agent/issue-')
+    runs-on: [self-hosted, linux, x64, inventory-agent]
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require verified runner isolation for credentialed jobs
+        run: |
+          echo "::error::Review dispatch is disabled until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Self-hosted runner placement."
+          exit 1
+
   dispatch-review:
     name: Dispatch a fresh review of the validated head
     if: |
+      vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' &&
       github.event.label.name == 'agent-review' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.base.ref == 'develop' &&

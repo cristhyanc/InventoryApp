@@ -151,3 +151,17 @@ test('the production baseline is recorded only after the API is healthy', () => 
   const frontendBeforeRecord = replaceInJob('deploy-frontend', '      - record-release\n', '');
   assert.throws(() => verifyDeployProductionWorkflow(frontendBeforeRecord), /must need 'record-release'/);
 });
+
+test('the API is not deployed until the tool baseline is verified for whichever runner uploads the frontend', () => {
+  // Issue #645 review: deploy-frontend's host is chosen only after the API changed, so its Docker
+  // prerequisite has to be established for every runner before deploy-api can run.
+  const baseline = " && vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true'";
+  const apiWithoutBaseline = replaceInJob('deploy-api', baseline, '');
+  assert.throws(() => verifyDeployProductionWorkflow(apiWithoutBaseline), /deploy-api/);
+  const frontendWithoutBaseline = replaceInJob('deploy-frontend', baseline, '');
+  assert.throws(() => verifyDeployProductionWorkflow(frontendWithoutBaseline), /deploy-frontend/);
+  const silentRefusal = replaceInJob('resolve', '- name: Require a verified tool baseline on every runner', '- name: Something else');
+  assert.throws(() => verifyDeployProductionWorkflow(silentRefusal), /resolve/);
+  const gatedAlways = replaceInJob('record-release', "    if: vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n", "    if: always() && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n");
+  assert.throws(() => verifyDeployProductionWorkflow(gatedAlways), /record-release/);
+});

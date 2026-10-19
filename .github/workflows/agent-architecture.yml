@@ -492,7 +492,7 @@ jobs:
       - architecture
     # Runs even when the target check fails, so a rejected or broken handoff never leaves the
     # issue in agent-working with nothing scheduled.
-    if: always()
+    if: always() && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:

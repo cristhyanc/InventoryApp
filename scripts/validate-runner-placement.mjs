@@ -15,10 +15,13 @@ const LOCAL_REUSABLE_WORKFLOW = /^\.\/\.github\/workflows\/[\w.-]+\.ya?ml$/;
 // A self-hosted runner has no GitHub-hosted image tools, so a job that runs `node` installs it
 // with the pinned actions/setup-node step before its first use instead of assuming one on PATH.
 export const SETUP_NODE_STEP = 'uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0';
-// Jobs that receive a long-lived secret, a reusable-workflow secret mapping or Azure OIDC run only
-// once a human confirms the persistent runners are reset or ephemeral per job (issue #645 review).
-// The condition must be on the job itself: secrets reach the runner when the job starts, so a step
-// that fails afterwards would already be too late.
+// Jobs that receive a credential run only once a human confirms the persistent runners are reset or
+// ephemeral per job (issue #645 review). A credential is any secret other than the job's own token,
+// a reusable-workflow secret mapping, Azure OIDC, or a GITHUB_TOKEN with any write scope, declared
+// on the job or inherited from the workflow: an earlier job's leftover process could use a write
+// token to forge statuses or reviews, dispatch workflows or delete branches while the job runs.
+// The condition must be on the job itself: credentials reach the runner when the job starts, so a
+// step that fails afterwards would already be too late.
 export const ISOLATION_CONDITION = "vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'";
 export const ISOLATION_GATE_STEP = 'Require verified runner isolation for credentialed jobs';
 // The workflows whose credentialed jobs a person starts, so a refusal must fail visibly, not skip.
@@ -28,6 +31,10 @@ export const VISIBLE_ISOLATION_GATE_WORKFLOWS = [
   '.github/workflows/agent-review.yml',
   '.github/workflows/agent-repair.yml',
   '.github/workflows/deploy-production.yml',
+  '.github/workflows/validate.yml',
+  '.github/workflows/agent-head-update.yml',
+  '.github/workflows/agent-review-request.yml',
+  '.github/workflows/agent-branch-cleanup.yml',
 ];
 const NODE_INVOCATION = /(^|[\s;(|&"'`$])node\s+(--test\b|-e\b|"|\$|[\w./-]+\.m?js\b)/m;
 
@@ -91,58 +98,82 @@ function nodeSetupViolation(where, job) {
   return setupAt < 0 || setupAt > nodeAt ? `${where}: runs node without first installing it with ${SETUP_NODE_STEP}.` : undefined;
 }
 
-const isCredentialed = (job) =>
-  /secrets\.(?!GITHUB_TOKEN\b)[A-Za-z_]/.test(job) || /^ {4}secrets:/m.test(job) || /^ {6}id-token: write$/m.test(job);
+/**
+ * The value of `key:` at `indent` spaces, with the lines indented under it, or undefined when the key
+ * is absent. Read line by line so that no pattern can backtrack across the workflow text.
+ */
+function blockValue(text, key, indent) {
+  const prefix = `${' '.repeat(indent)}${key}:`;
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => line.startsWith(prefix));
+  if (start < 0) return undefined;
+  const block = [lines[start].slice(prefix.length)];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.startsWith(' '.repeat(indent + 2))) break;
+    block.push(line);
+  }
+  return block.join('\n');
+}
+
+// GitHub expressions only; `secrets` in a comment or a log message is not a reference.
+const expressions = (job) => [...job.matchAll(/\$\{\{([^}]*)\}\}/g)].map((match) => match[1]);
+const JOB_TOKEN = /\bsecrets\s*(?:\.\s*GITHUB_TOKEN\b|\[\s*['"]GITHUB_TOKEN['"]\s*\])/g;
+const SECRETS_CONTEXT = /\bsecrets\b/;
+
+/** True when the permissions value grants write, or is absent everywhere and so takes the repository default. */
+function grantsWrite(permissions) {
+  if (permissions === undefined) return true;
+  const value = permissions.replace(/#.*$/gm, '');
+  return /\bwrite-all\b/.test(value) || /:\s*write\b/.test(value);
+}
+
+function isCredentialed(job, workflowPermissions) {
+  if (expressions(job).some((expression) => SECRETS_CONTEXT.test(expression.replace(JOB_TOKEN, '')))) return true;
+  if (/^ {4}secrets:/m.test(job)) return true;
+  return grantsWrite(blockValue(job, 'permissions', 4) ?? workflowPermissions);
+}
 
 /** The job-level `if:`, joined into one line whether written inline or as a `|`/`>-` block. */
 function jobCondition(job) {
-  const lines = job.split('\n');
-  const start = lines.findIndex((line) => line.startsWith('    if:'));
-  if (start < 0) return '';
-  const inline = lines[start].slice('    if:'.length).trim();
-  let text = inline;
-  if (/^[|>][-+]?$/.test(inline)) {
-    const block = [];
-    for (const line of lines.slice(start + 1)) {
-      if (!line.startsWith('      ')) break;
-      block.push(line);
-    }
-    text = block.join(' ');
-  }
+  const value = blockValue(job, 'if', 4);
+  if (value === undefined) return '';
+  const [first, ...rest] = value.split('\n');
+  const text = /^[|>][-+]?$/.test(first.trim()) ? rest.join(' ') : first.trim();
   return text.replace(/^\$\{\{([\s\S]*)\}\}$/, '$1').replace(/\s+/g, ' ').trim();
 }
 
-/** True when `||` appears outside parentheses, which would let another branch bypass the condition. */
-function hasTopLevelOr(expression) {
+/** The expression's operands of `&&` outside parentheses, or undefined when a top-level `||` lets a branch bypass them. */
+function topLevelConjuncts(expression) {
+  const conjuncts = [];
   let depth = 0;
+  let start = 0;
   for (let index = 0; index < expression.length; index += 1) {
     const char = expression[index];
     if (char === '(') depth += 1;
     else if (char === ')') depth -= 1;
-    else if (depth === 0 && expression.startsWith('||', index)) return true;
+    else if (depth === 0 && expression.startsWith('||', index)) return undefined;
+    else if (depth === 0 && expression.startsWith('&&', index)) {
+      conjuncts.push(expression.slice(start, index).trim());
+      start = index + 2;
+    }
   }
-  return false;
+  conjuncts.push(expression.slice(start).trim());
+  return conjuncts;
 }
 
-function isolationViolation(where, job) {
-  if (!isCredentialed(job)) return undefined;
-  const condition = jobCondition(job);
-  let rest;
-  if (condition === ISOLATION_CONDITION) rest = '';
-  else if (condition.startsWith(`${ISOLATION_CONDITION} && `)) rest = condition.slice(ISOLATION_CONDITION.length + 4);
-  else if (condition.endsWith(` && ${ISOLATION_CONDITION}`)) rest = condition.slice(0, -(ISOLATION_CONDITION.length + 4));
-  if (rest === undefined || hasTopLevelOr(rest)) {
-    return `${where}: receives a secret or OIDC token, so its job-level if: must require ${ISOLATION_CONDITION} with a top-level &&.`;
-  }
-  return undefined;
+function isolationViolation(where, job, workflowPermissions) {
+  if (!isCredentialed(job, workflowPermissions)) return undefined;
+  if (topLevelConjuncts(jobCondition(job))?.includes(ISOLATION_CONDITION)) return undefined;
+  return `${where}: receives a secret, an OIDC token or a write-capable GITHUB_TOKEN, so its job-level if: must require ${ISOLATION_CONDITION} with a top-level &&.`;
 }
 
-function jobViolations(where, job) {
+function jobViolations(where, job, workflowPermissions) {
   const runsOn = jobValues(job, 'runs-on');
   const uses = jobValues(job, 'uses');
-  if (uses.length > 0) return [...reusableWorkflowViolations(where, uses, runsOn), isolationViolation(where, job)].filter(Boolean);
+  const isolation = isolationViolation(where, job, workflowPermissions);
+  if (uses.length > 0) return [...reusableWorkflowViolations(where, uses, runsOn), isolation].filter(Boolean);
   if (runsOn.length !== 1) return [`${where}: must declare exactly one runs-on: ${SELF_HOSTED_RUNS_ON} (found ${runsOn.length}).`];
-  return [runsOnViolation(where, runsOn[0]), nodeSetupViolation(where, job), isolationViolation(where, job)].filter(Boolean);
+  return [runsOnViolation(where, runsOn[0]), nodeSetupViolation(where, job), isolation].filter(Boolean);
 }
 
 /** Returns a list of violations for one workflow; an empty list means it satisfies the contract. */
@@ -151,8 +182,9 @@ export function runnerPlacementViolations(workflowText, source) {
   const violations = text.includes(RETIRED_RUNNER_SWITCH)
     ? [`${source}: still reads the retired ${RETIRED_RUNNER_SWITCH} runner switch, which allowed a GitHub-hosted fallback.`]
     : [];
+  const workflowPermissions = blockValue(text.slice(0, text.search(/^jobs:/m)), 'permissions', 0);
   for (const [id, job] of Object.entries(workflowJobs(text, source))) {
-    violations.push(...jobViolations(`${source} job '${id}'`, job));
+    violations.push(...jobViolations(`${source} job '${id}'`, job, workflowPermissions));
   }
   if (VISIBLE_ISOLATION_GATE_WORKFLOWS.includes(source) && !text.includes(`      - name: ${ISOLATION_GATE_STEP}\n`)) {
     violations.push(`${source}: has no '${ISOLATION_GATE_STEP}' step, so a refused credentialed job would be skipped silently.`);

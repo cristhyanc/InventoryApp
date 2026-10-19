@@ -71,6 +71,19 @@ jobs:
             exit 1
           fi
 
+      - name: Require a verified tool baseline on every runner
+        # Any runner in the pool can take any deploy job, so the host that later uploads the
+        # frontend is unknown when the API is deployed. A check on that host would come after the
+        # API had already changed. deploy-api and deploy-frontend therefore run only once a human
+        # has run the runner diagnostic on every runner in the pool and recorded the result.
+        env:
+          RUNNER_BASELINE_VERIFIED: ${{ vars.INVENTORY_RUNNER_BASELINE_VERIFIED }}
+        run: |
+          if [ "$RUNNER_BASELINE_VERIFIED" != "true" ]; then
+            echo "::error::Deployment is disabled until a human runs the Inventory agent runner diagnostic on every self-hosted runner and sets the repository variable INVENTORY_RUNNER_BASELINE_VERIFIED to true. See docs/automation.md § Self-hosted runner placement."
+            exit 1
+          fi
+
       - name: Check out main history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -270,7 +283,7 @@ jobs:
 
   deploy-api:
     name: Deploy API
-    if: github.ref == 'refs/heads/main' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
+    if: github.ref == 'refs/heads/main' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' && vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true'
     needs:
       - resolve
       - validate
@@ -397,6 +410,8 @@ jobs:
   # startup or migration then fails leaves the last healthy release as the baseline.
   record-release:
     name: Record production backend release
+    # Without a status function this still runs only when every job it needs succeeded.
+    if: vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     needs:
       - resolve
       - deploy-api
@@ -427,7 +442,7 @@ jobs:
 
   deploy-frontend:
     name: Deploy frontend
-    if: github.ref == 'refs/heads/main' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
+    if: github.ref == 'refs/heads/main' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' && vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true'
     needs:
       - resolve
       - build
