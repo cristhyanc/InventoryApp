@@ -96,10 +96,19 @@ const isCredentialed = (job) =>
 
 /** The job-level `if:`, joined into one line whether written inline or as a `|`/`>-` block. */
 function jobCondition(job) {
-  const match = /^ {4}if:(.*)\n((?: {6,}.*\n)*)/m.exec(job);
-  if (!match) return '';
-  const inline = match[1].trim();
-  const text = /^[|>][-+]?$/.test(inline) ? match[2] : inline;
+  const lines = job.split('\n');
+  const start = lines.findIndex((line) => line.startsWith('    if:'));
+  if (start < 0) return '';
+  const inline = lines[start].slice('    if:'.length).trim();
+  let text = inline;
+  if (/^[|>][-+]?$/.test(inline)) {
+    const block = [];
+    for (const line of lines.slice(start + 1)) {
+      if (!line.startsWith('      ')) break;
+      block.push(line);
+    }
+    text = block.join(' ');
+  }
   return text.replace(/^\$\{\{([\s\S]*)\}\}$/, '$1').replace(/\s+/g, ' ').trim();
 }
 
