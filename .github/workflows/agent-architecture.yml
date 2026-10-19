@@ -42,7 +42,7 @@ concurrency:
 jobs:
   context:
     name: Verify architecture target
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:
       pull-requests: read
@@ -58,6 +58,11 @@ jobs:
       checker_name: ${{ steps.context.outputs.checker_name }}
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Verify exact agent pull request
         id: context
         env:
@@ -111,7 +116,7 @@ jobs:
     needs: context
     # Every Claude route: a fresh Claude invocation with no implementation conversation state.
     if: needs.context.outputs.checker == 'claude'
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 45
     # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
     # permission and no App or Copilot credential. Its result is schema-validated structured output,
@@ -126,6 +131,11 @@ jobs:
       findings_digest: ${{ steps.package.outputs.digest }}
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Check out exact implementation head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -233,7 +243,7 @@ jobs:
   sonar:
     name: Read SonarCloud issues on the implementation head
     needs: context
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 20
     # Read-only and deterministic: no model runs here. The trusted script from this workflow's own
     # commit waits for the SonarCloud check run on the exact head SHA, then reads the pull request's
@@ -247,6 +257,11 @@ jobs:
       issues: ${{ steps.sonar.outputs.issues }}
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Check out trusted workflow commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -273,7 +288,7 @@ jobs:
     # Runs only after a successful Claude architecture check. A failed SonarCloud read
     # never blocks: the sonar job's result is not required, and a missing count is treated as zero.
     if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) }}
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 120
     permissions:
       contents: read
@@ -285,6 +300,12 @@ jobs:
       head_sha: ${{ steps.architecture_result.outputs.head_sha }}
 
     steps:
+      - name: Set up Node.js for trusted helper scripts
+        # The self-hosted runner has no preinstalled Node.js; the npm-cached setup below needs the checkout.
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Check out exact implementation head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -459,7 +480,7 @@ jobs:
     # Runs even when the target check fails, so a rejected or broken handoff never leaves the
     # issue in agent-working with nothing scheduled.
     if: always()
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:
       actions: write
@@ -470,6 +491,11 @@ jobs:
       contents: read
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Record architecture outcome and dispatch exact-SHA validation
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

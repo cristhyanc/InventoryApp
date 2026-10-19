@@ -103,7 +103,7 @@ test('failed validation, preflight or backend health prevents downstream deploym
   const frontendWithoutHealth = replaceInJob('deploy-frontend', '      - verify-api\n', '');
   assert.throws(() => verifyDeployProductionWorkflow(frontendWithoutHealth), /must need 'verify-api'/);
 
-  const healthAlways = replaceInJob('verify-api', '    runs-on: ubuntu-latest\n', '    if: always()\n    runs-on: ubuntu-latest\n');
+  const healthAlways = replaceInJob('verify-api', '    runs-on: [self-hosted, linux, x64, inventory-agent]\n', '    if: always()\n    runs-on: [self-hosted, linux, x64, inventory-agent]\n');
   assert.throws(() => verifyDeployProductionWorkflow(healthAlways), /verify-api/);
 
   const noValidation = replaceInJob('validate', 'bash scripts/validate.sh', 'echo skipped');
@@ -145,7 +145,7 @@ test('the production baseline is recorded only after the API is healthy', () => 
   const recordedOnUpload = replaceInJob('record-release', '      - verify-api\n', '');
   assert.throws(() => verifyDeployProductionWorkflow(recordedOnUpload), /record-release' must need 'verify-api'/);
 
-  const recordedAlways = replaceInJob('record-release', '    runs-on: ubuntu-latest\n', '    if: always()\n    runs-on: ubuntu-latest\n');
+  const recordedAlways = replaceInJob('record-release', '    runs-on: [self-hosted, linux, x64, inventory-agent]\n', '    if: always()\n    runs-on: [self-hosted, linux, x64, inventory-agent]\n');
   assert.throws(() => verifyDeployProductionWorkflow(recordedAlways), /record-release/);
 
   const frontendBeforeRecord = replaceInJob('deploy-frontend', '      - record-release\n', '');

@@ -40,7 +40,7 @@ concurrency:
 jobs:
   package:
     name: Package and upload a fixture review
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:
       contents: read
@@ -60,6 +60,11 @@ jobs:
       CHECKER: claude
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -149,7 +154,7 @@ jobs:
   verify:
     name: Fetch and verify the review artifact
     needs: package
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:
       contents: read
@@ -163,6 +168,11 @@ jobs:
       CHECKER: claude
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

@@ -53,9 +53,7 @@ jobs:
   preflight:
     name: Validate issue documentation-impact declaration
     if: (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null
-    # Uses the shared INVENTORY_AGENT_SELF_HOSTED_ALL selector (default off: a fresh
-    # GitHub-hosted runner). See docs/automation.md before enabling it.
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:
       contents: read
@@ -91,7 +89,7 @@ jobs:
     name: Implement issue with Claude
     needs: [preflight, model]
     if: needs.preflight.result == 'success' && needs.model.result == 'success' && (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 180
     permissions:
       contents: read
@@ -604,7 +602,7 @@ jobs:
     name: Dispatch trusted architecture pass
     needs: implement
     if: always() && needs.implement.outputs.dispatch_architecture == 'true'
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       actions: write
       pull-requests: read
@@ -612,6 +610,11 @@ jobs:
       contents: read
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Verify pull request and dispatch trusted architecture workflow
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

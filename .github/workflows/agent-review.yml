@@ -48,7 +48,7 @@ concurrency:
 jobs:
   context:
     name: Resolve review context
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       contents: read
       pull-requests: read
@@ -64,6 +64,11 @@ jobs:
       review_relation: ${{ steps.context.outputs.review_relation }}
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Resolve and verify pull request
         id: context
         env:
@@ -132,7 +137,7 @@ jobs:
     needs: context
     # Claude reviews only as a separate same-provider invocation, on the full-claude fallback.
     if: needs.context.outputs.reviewer == 'claude'
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 45
     # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
     # permission, so the model cannot publish, label, dispatch or push even if it tried. Its only
@@ -152,6 +157,11 @@ jobs:
       artifact_digest: ${{ steps.package.outputs.digest }}
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Check out pull request head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -282,7 +292,7 @@ jobs:
     needs:
       - context
       - review
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       pull-requests: write
       statuses: write
@@ -291,6 +301,11 @@ jobs:
       actions: read
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Guard and publish review
         id: publish
         env:

@@ -28,7 +28,7 @@ jobs:
   cleanup:
     name: Delete branches of a closed agent pull request
     if: github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'agent/issue-')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:
       contents: write

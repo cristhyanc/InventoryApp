@@ -63,6 +63,7 @@ Inventory App/
 ├── scripts/validate.ps1           Windows/PowerShell validation
 ├── scripts/validate.sh            Bash validation
 ├── scripts/run-agent-evals.mjs    Agent Evals runner
+├── scripts/validate-runner-placement.mjs  Every workflow job on the self-hosted runners
 ├── AGENTS.md                      Engineering and agent safeguards
 └── CLAUDE.md                      Claude Code entry point (points to AGENTS.md and docs)
 ```
@@ -966,6 +967,10 @@ Failure output (screenshots and traces) is written under `frontend/inventory-app
 - Rules are chosen to catch defects rather than style: unused variables and imports, `==` vs `===`, unreachable and constant-condition code, Angular template errors, and Angular lifecycle/interface mistakes are **errors**. Accessibility findings, `trackBy`, `any` and stray `console.log` are **warnings** so they are visible without blocking a build.
 - `npm run test` runs the Jest suite (`jest-preset-angular`, configured through `frontend/inventory-app/jest.config.js`/`tsconfig.spec.json`/`setup-jest.ts`) once and exits; it is not a watch-mode command. `*.spec.ts` files sit next to the code they test.
 - `npm audit` is reported but not enforced. The outstanding high/critical advisories are all in the Angular 19 build toolchain (`@angular-devkit/build-angular` → `vite`, `webpack-dev-server`, `tar`, …) and every published fix requires a major Angular upgrade, which is a separate, deliberate piece of work. Review the printed report; do not run `npm audit fix --force`.
+
+### GitHub Actions runners
+
+Every GitHub Actions job in this repository, Deploy Production included, runs on the self-hosted Linux x64 runners labelled `[self-hosted, linux, x64, inventory-agent]`. Nothing falls back to a GitHub-hosted runner, and `scripts/validate-runner-placement.mjs` fails validation if a workflow tries to. While no runner is online, jobs wait in the queue. To start them, bring the runner VM and its runner service back up and confirm the runner shows **Idle** under Repository Settings → Actions → Runners. The runner host must provide `git`, `curl`, `jq`, `tar`, `gzip`, `unzip`, `/usr/bin/gh`, the Azure CLI and a Docker daemon. Jobs install .NET and Node.js themselves. Run **Actions → Inventory agent runner diagnostic** to check a runner. See [docs/automation.md § Self-hosted runner placement](docs/automation.md#self-hosted-runner-placement-issue-645) for the isolation limits of a persistent runner and the cost boundaries.
 
 ## Important domain rules
 
