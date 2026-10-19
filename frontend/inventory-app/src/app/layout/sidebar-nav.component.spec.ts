@@ -1,6 +1,6 @@
-import { provideHttpClient, withInterceptors } from '@angular/common/http';
+import { HttpErrorResponse, provideHttpClient, withInterceptors } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
-import { Component } from '@angular/core';
+import { Component, EnvironmentProviders, Provider } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { MsalBroadcastService, MsalService } from '@azure/msal-angular';
@@ -18,10 +18,13 @@ import {
   nayaxConnectionStatusDouble,
   provideNayaxConnectionStatus
 } from '../provider/provider-availability.spec-helpers';
+import { PROVIDER_LOCKED_PATH } from '../provider/provider-lock';
+import { requireProvider } from '../provider/provider-lock.guard';
 import { ConfigService } from '../services/config.service';
 import {
   NayaxConnectionCheckLine,
   NayaxConnectionService,
+  NayaxConnectionState,
   NayaxConnectionStatusName
 } from '../services/nayax-connection.service';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
@@ -1372,5 +1375,159 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
 
     expect(connections.status).toHaveBeenCalledTimes(1);
     expect(link(fixture.nativeElement as HTMLElement, '/machines')?.textContent).toContain('Locked');
+  });
+});
+
+/**
+ * The menu follows the shared answer for as long as it is mounted (issue #729). An Owner connects
+ * Nayax in Integrations, loses the credentials, has one read refused, or starts a support session
+ * on another business without ever leaving the page - and a menu built from the answer read when
+ * the sidebar was created would go on locking what now works, or offering what no longer does,
+ * while `requireProvider` asks again on every navigation and reaches the opposite verdict. One
+ * destination may not have two answers, so every transition below is asserted on the **same**
+ * sidebar, never on a recreated one.
+ */
+describe('SidebarNavComponent provider changes while it stays mounted (issue #729)', () => {
+  function lockText(host: HTMLElement, route: string): string {
+    return link(host, route)?.textContent ?? '';
+  }
+
+  function availability(): ProviderAvailabilityService {
+    return TestBed.inject(ProviderAvailabilityService);
+  }
+
+  function connected(status: NayaxConnectionStatusName): NayaxConnectionState {
+    return { status, machineChecksPending: false };
+  }
+
+  /** A `409` exactly as the API writes it when Nayax refused one read for lack of permission. */
+  function permissionRefused(): HttpErrorResponse {
+    return new HttpErrorResponse({ status: 409, error: { code: 'nayax_permission_not_granted' } });
+  }
+
+  /** The sidebar on its own, for the tests that need a router of their own as well. */
+  async function mount(providers: readonly (Provider | EnvironmentProviders)[]): Promise<Rendered> {
+    await TestBed.configureTestingModule({
+      imports: [SidebarNavComponent],
+      providers: [
+        { provide: AccessService, useValue: { access$: of(EVERY_CAPABILITY) } },
+        { provide: PlatformDiagnosticsAccessService, useValue: { granted$: of(false) } },
+        { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } },
+        ...providers
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(SidebarNavComponent);
+    fixture.componentRef.setInput('businessNavigation', 'offered');
+    fixture.detectChanges();
+
+    return { fixture, component: fixture.componentInstance, host: fixture.nativeElement as HTMLElement };
+  }
+
+  it('unlocks the live entries and offers the provider tools when a connection is saved', async () => {
+    const { fixture, host } = await render({ providerStatus: 'NotConfigured' });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+    expect(lockText(host, '/machines')).toContain('Locked');
+    expect(link(host, '/admin/imports')).toBeNull();
+
+    availability().accept(connected('Ready'));
+    fixture.detectChanges();
+
+    for (const route of ['/machines', '/sites', '/reports/site-commissions']) {
+      expect(lockText(host, route)).not.toContain('Locked');
+      expect(link(host, route)?.getAttribute('title')).toBeNull();
+    }
+    expect(link(host, '/admin/imports')).not.toBeNull();
+    expect(link(host, '/admin/nayax-sale-timestamp-repair')).not.toBeNull();
+  });
+
+  it('locks them again, and withdraws the provider tools, when the credentials stop working', async () => {
+    const { fixture, host } = await render({ providerStatus: 'Ready' });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+    expect(lockText(host, '/machines')).not.toContain('Locked');
+    expect(link(host, '/admin/imports')).not.toBeNull();
+
+    availability().accept(connected('NeedsAttention'));
+    fixture.detectChanges();
+
+    expect(lockText(host, '/machines')).toContain('Locked');
+    expect(link(host, '/machines')?.getAttribute('title')).toBe('Machines is unavailable because Nayax is not connected.');
+    expect(link(host, '/admin/imports')).toBeNull();
+    expect(link(host, '/admin/nayax-sale-timestamp-repair')).toBeNull();
+  });
+
+  /**
+   * A refusal retained by a page's own request is evidence the menu has to render too: the
+   * connection is still working, so the tools stay and the message names a permission rather than
+   * a missing connection.
+   */
+  it('locks a destination as a Nayax permission when a refusal is retained for its read', async () => {
+    const { fixture, host } = await render({ providerStatus: 'PendingPermissions' });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+    expect(lockText(host, '/machines')).not.toContain('Locked');
+
+    availability().noteRefusal(permissionRefused(), 'machineFleet');
+    fixture.detectChanges();
+
+    expect(lockText(host, '/machines')).toContain('Locked');
+    expect(link(host, '/machines')?.getAttribute('title')).toBe('Machines is waiting for a Nayax permission.');
+    // The connection itself is unaffected, so the repair tools are still offered.
+    expect(link(host, '/admin/imports')).not.toBeNull();
+  });
+
+  /**
+   * A support session starts or ends on another business (issues #669, #670): the previous
+   * business's answer is forgotten, and the menu asks for this one's rather than keeping locks that
+   * were about a connection it no longer resolves.
+   */
+  it('renders the new business\'s answer when the context is reset, the menu staying offered', async () => {
+    const answers: NayaxConnectionStatusName[] = ['Ready', 'NotConfigured'];
+    const connections = {
+      status: jest.fn(() => of(connected(answers.shift() ?? 'NotConfigured')))
+    } as unknown as NayaxConnectionService;
+    const { fixture, host } = await mount([
+      provideRouter([{ path: '**', component: BlankPageComponent }]),
+      { provide: NayaxConnectionService, useValue: connections }
+    ]);
+    expect(lockText(host, '/machines')).not.toContain('Locked');
+
+    availability().reset();
+    fixture.detectChanges();
+
+    expect(connections.status).toHaveBeenCalledTimes(2);
+    expect(lockText(host, '/machines')).toContain('Locked');
+  });
+
+  /**
+   * The agreement the locked menu exists for: after the same change, the entry and the URL answer
+   * the same way. The route is guarded by the real `requireProvider`, so what is compared is the
+   * application's two surfaces rather than two copies of one rule.
+   */
+  it('agrees with the route guard about a destination before and after the connection changes', async () => {
+    const { fixture, host } = await mount([
+      provideRouter([
+        { path: 'machines', canActivate: [requireProvider('machineFleet')], component: BlankPageComponent },
+        { path: PROVIDER_LOCKED_PATH, component: BlankPageComponent },
+        { path: '**', component: BlankPageComponent }
+      ]),
+      provideNayaxConnectionStatus('NotConfigured')
+    ]);
+    const router = TestBed.inject(Router);
+
+    await router.navigateByUrl('/machines');
+    fixture.detectChanges();
+    expect(router.url).toBe(`/${PROVIDER_LOCKED_PATH}?from=%2Fmachines`);
+    expect(lockText(host, '/machines')).toContain('Locked');
+
+    availability().accept(connected('Ready'));
+    fixture.detectChanges();
+
+    await router.navigateByUrl('/machines');
+    fixture.detectChanges();
+    expect(router.url).toBe('/machines');
+    expect(lockText(host, '/machines')).not.toContain('Locked');
   });
 });

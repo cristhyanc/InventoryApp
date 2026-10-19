@@ -64,10 +64,12 @@ export const PRIMARY_NAVIGATION_ID = 'primary-navigation';
  * It owns no provider decision either (issue #729). Whether a live provider destination is locked,
  * and whether the provider repair tools are offered at all, comes from the shared availability
  * signal of issue #728 through `navigationFor` and `navLockOf`; this component subscribes to that
- * one shared read and renders its answer. Unlike the capability set the menu is **not** held back
- * for it: nothing is locked until the answer settles, because an unread status is not a refusal,
- * and a withheld business menu asks for no provider answer at all - there is no business to ask
- * about.
+ * one shared answer and renders it, and goes on rendering it for as long as it is mounted, so a
+ * connection made, lost or switched while the operator is on a page updates the menu there and
+ * then instead of waiting for the next full page load. Unlike the capability set the menu is
+ * **not** held back for it: nothing is locked until the answer settles, because an unread status
+ * is not a refusal, and a withheld business menu asks for no provider answer at all - there is no
+ * business to ask about.
  *
  * The host renders as `display: contents` (issue #455) so it contributes no box of its own: the
  * shell's `items-stretch` row needs to stretch the actual white `<nav>` panel to the row's full
@@ -226,12 +228,18 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
     // the provider answer changes what the menu *renders*, and nothing else - the platform-admin
     // probe and the pending-applications count answer different questions, and re-asking either one
     // because a connection status settled would be one extra request per page load.
+    //
+    // It `watch`es rather than `load`s because this menu outlives the answer: an Owner who connects
+    // Nayax in Integrations, loses the credentials, or starts a support session on another business
+    // never leaves this component, so a menu built from the answer read at mount would go on
+    // locking what now works - and disagreeing with `requireProvider`, which asks again on every
+    // navigation. Watching costs no extra probe (see `ProviderAvailabilityService.watch`).
     this.businessNavigation$
       .pipe(
         distinctUntilChanged(),
         switchMap((visibility) =>
           visibility === 'offered'
-            ? this.providerAvailability.load().pipe(
+            ? this.providerAvailability.watch().pipe(
                 catchError(() => of(undefined)),
                 startWith(undefined)
               )

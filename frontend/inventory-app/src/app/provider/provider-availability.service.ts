@@ -1,6 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { Injectable } from '@angular/core';
-import { Observable, catchError, map, of, shareReplay } from 'rxjs';
+import { BehaviorSubject, Observable, catchError, map, of, shareReplay, startWith, switchMap } from 'rxjs';
 import {
   NayaxConnectionCheckLine,
   NayaxConnectionService,
@@ -65,6 +65,16 @@ import {
  * (issue #727): withholding a connected business's machine filter because one probe failed, or
  * because nothing has yet stated a permission, would be a worse error than showing a filter whose
  * own request then reports its own failure.
+ *
+ * **An answer is read once, not held for ever.** {@link ProviderAvailabilityService.load} answers
+ * the caller that asks and completes, which is what a page resolving its own state wants; a surface
+ * that stays mounted across a reconnect - the sidebar of issue #729 - asks with
+ * {@link ProviderAvailabilityService.watch} instead, and is told again every time this session's
+ * answer changes. Without it an Owner who saves working credentials in Integrations would keep a
+ * menu whose locks were decided before the connection existed, while the route guards, which ask
+ * per navigation, had already moved on: three surfaces, two verdicts. Observing a change is **not**
+ * a second probe - `accept` and `noteRefusal` state the new answer themselves, and only `reset`,
+ * which says this is a different business, makes the next ask read the status again.
  *
  * See docs/architecture.md § Shared provider availability and error-versus-empty states.
  */
@@ -233,6 +243,14 @@ export class ProviderAvailabilityService {
   /** Bumped whenever the cached answer is replaced; an older read must not overwrite a newer one. */
   private generation = 0;
 
+  /**
+   * Bumped whenever something a subscriber can observe changed, which is what {@link watch} waits
+   * on. It is deliberately not {@link generation}: that one guards a read in flight and is bumped
+   * only when the *status* is replaced, while a retained permission refusal changes no status and
+   * still changes every answer derived from it.
+   */
+  private readonly revision$ = new BehaviorSubject(0);
+
   constructor(private readonly connections: NayaxConnectionService) {}
 
   /**
@@ -247,6 +265,22 @@ export class ProviderAvailabilityService {
    */
   load(): Observable<ProviderAvailability> {
     return this.publishedStatus().pipe(map((status) => this.availabilityOf(status)));
+  }
+
+  /**
+   * The same answer as {@link load}, for a surface that stays mounted and must keep agreeing with
+   * the ones that re-read per navigation: it emits the current answer and then emits again every
+   * time this session's answer changes - a save or re-test accepted, a refusal retained, the
+   * business context forgotten - until the subscriber unsubscribes. It never completes.
+   *
+   * `undefined` is "nothing is known yet", emitted before the first answer settles and again while
+   * a change is being answered, so a subscriber renders the fail-open state rather than the
+   * previous business's locks while the new answer is on its way. Only a {@link reset} actually
+   * re-reads the status: an accepted state and a retained refusal are answers in hand, so a change
+   * costs no request and the one-read-per-context rule is untouched.
+   */
+  watch(): Observable<ProviderAvailability | undefined> {
+    return this.revision$.pipe(switchMap(() => this.load().pipe(startWith(undefined))));
   }
 
   /** What is known about one feature, from the one shared read and this session's evidence. */
@@ -277,6 +311,7 @@ export class ProviderAvailabilityService {
     this.permissions = checks === undefined
       ? UNKNOWN_PROVIDER_PERMISSIONS
       : providerPermissionsOfChecks(checks);
+    this.publishChange();
   }
 
   /**
@@ -304,7 +339,12 @@ export class ProviderAvailabilityService {
   noteRefusal(error: unknown, feature: ProviderFeature): NayaxUnavailability | null {
     const unavailability = nayaxUnavailabilityOfError(error);
     if (unavailability === PERMISSION_NOT_GRANTED_REASON) {
-      this.permissions = withProviderPermission(this.permissions, feature, 'denied');
+      // A refusal this session had already retained states nothing new, and a list that refuses
+      // once per row would otherwise tell every subscriber the same thing several times.
+      if (this.permissions[feature] !== 'denied') {
+        this.permissions = withProviderPermission(this.permissions, feature, 'denied');
+        this.publishChange();
+      }
       return unavailability;
     }
     if (unavailability !== NAYAX_NOT_CONNECTED_REASON) {
@@ -315,6 +355,7 @@ export class ProviderAvailabilityService {
     if (published !== null) {
       this.generation++;
       this.status$ = of(published);
+      this.publishChange();
     }
     return unavailability;
   }
@@ -329,6 +370,14 @@ export class ProviderAvailabilityService {
     this.generation++;
     this.status$ = undefined;
     this.permissions = UNKNOWN_PROVIDER_PERMISSIONS;
+    // This is the one change that leaves nothing cached, so a subscriber of `watch` asks for the
+    // new business's status here - once, shared by all of them, exactly as the first read was.
+    this.publishChange();
+  }
+
+  /** Tells every {@link watch} subscriber that the answer they were given no longer stands. */
+  private publishChange(): void {
+    this.revision$.next(this.revision$.value + 1);
   }
 
   /** The published status, read once per business context and shared. */

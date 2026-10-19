@@ -275,6 +275,93 @@ describe('ProviderAvailabilityService (issue #728)', () => {
   });
 });
 
+/**
+ * `watch` (issue #729): the answer a surface that stays mounted across a reconnect needs. A menu
+ * built from the answer read when it was created would go on locking what now works, while the
+ * route guards, which ask per navigation, had already moved on - and the whole point of the locked
+ * menu is that the entry, the route and the page reach the same verdict.
+ */
+describe('ProviderAvailabilityService.watch (issue #729)', () => {
+  /** Every answer a subscriber has been given so far; the stubbed status read answers at once. */
+  function watched(service: ProviderAvailabilityService): readonly (ProviderAvailability | undefined)[] {
+    const seen: (ProviderAvailability | undefined)[] = [];
+    service.watch().subscribe((availability) => seen.push(availability));
+    return seen;
+  }
+
+  function connections(seen: readonly (ProviderAvailability | undefined)[]): readonly (string | undefined)[] {
+    return seen.map((availability) => availability?.connection);
+  }
+
+  function latest(seen: readonly (ProviderAvailability | undefined)[]): ProviderAvailability | undefined {
+    return seen[seen.length - 1];
+  }
+
+  it('answers nothing-known first and then the settled answer, from the one shared read', () => {
+    const { service, status } = createHarness(() => of(state('NotConfigured')));
+
+    const first = watched(service);
+    const second = watched(service);
+
+    expect(connections(first)).toEqual([undefined, 'notConnected']);
+    expect(connections(second)).toEqual([undefined, 'notConnected']);
+    expect(status).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells a subscriber that is already listening about the state a save or re-test established', () => {
+    const { service, status } = createHarness(() => of(state('NotConfigured')));
+    const seen = watched(service);
+
+    service.accept(state('Ready'));
+
+    expect(connections(seen)).toEqual([undefined, 'notConnected', undefined, 'usable']);
+    // The accepted state is an answer in hand, so observing it costs no second probe.
+    expect(status).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells it about a refusal retained against one feature, and leaves every other feature alone', () => {
+    const { service } = createHarness(() => of(state('PendingPermissions')));
+    const seen = watched(service);
+
+    service.noteRefusal(permissionNotGranted(), 'machineFleet');
+
+    expect(latest(seen)?.features).toEqual(featuresWith({ machineFleet: 'permissionNotGranted' }));
+  });
+
+  it('says nothing new for a refusal this session had already retained', () => {
+    const { service } = createHarness(() => of(state('PendingPermissions')));
+    const seen = watched(service);
+    service.noteRefusal(permissionNotGranted(), 'machineFleet');
+    const told = seen.length;
+
+    service.noteRefusal(permissionNotGranted(), 'machineFleet');
+
+    expect(seen.length).toBe(told);
+  });
+
+  it('reads the new status once for a change of business context, and forgets the old evidence', () => {
+    const answers: NayaxConnectionStatusName[] = ['Ready', 'NotConfigured'];
+    const { service, status } = createHarness(() => of(state(answers.shift() ?? 'Ready')));
+    const seen = watched(service);
+    service.noteRefusal(permissionNotGranted(), 'machineFleet');
+
+    service.reset();
+
+    expect(connections(seen).slice(-2)).toEqual([undefined, 'notConnected']);
+    expect(latest(seen)?.permissions.machineFleet).toBe('unknown');
+    expect(status).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves load a one-shot answer that completes, for a caller that asks once', () => {
+    const { service } = createHarness(() => of(state('Ready')));
+    const completed = jest.fn();
+
+    service.load().subscribe({ complete: completed });
+
+    expect(completed).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('ProviderAvailabilityService.noteRefusal (issue #728)', () => {
   it('reports the not-connected answer and records the status the refusal published', async () => {
     const { service, status } = createHarness(() => of(state('Ready')));

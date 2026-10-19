@@ -5794,6 +5794,19 @@ many banners, filters and forms want it, the endpoint is asked a single time. `l
 **settled** answer, so no screen renders a decision that has not been made. A read that failed emits
 `unknown` and drops the shared attempt, so the next screen asks again.
 
+**`load()` answers once; `watch()` keeps answering.** `load()` completes, which is what a page
+resolving its own state or a route guard asking per navigation wants. A surface that stays mounted
+across a reconnect — the sidebar of
+[issue #729](#provider-locked-navigation-issue-729) — subscribes with `watch()` instead and is told
+again every time this session's answer changes: a state `accept`ed, a refusal retained by
+`noteRefusal`, a context forgotten by `reset`. Without it such a surface would hold the answer read
+when it was created while the guards had already moved on, and one destination would have two
+verdicts. Observing a change is **not** a second probe: `accept` and `noteRefusal` state the new
+answer themselves, so only `reset` — which says this is a different business — makes the next ask
+read the status again, and that read is still the one shared read. `watch()` emits `undefined`
+before the first answer settles and again while a change is being answered, so a subscriber shows
+the fail-open state rather than the previous business's locks while the new answer is on its way.
+
 **The answer has one overall state and one state per feature.** `ProviderConnection` is `usable`,
 `needsAttention`, `notConnected` or `unknown`. `providerConnectionOf` is a translation of
 `Inventory.Domain.Nayax.NayaxConnectionStatusGate` and not a second opinion - `Ready` and
@@ -6106,7 +6119,7 @@ for. Printing the permission key needs a published Nayax statement of it, and is
 of its own.
 
 **One shared read, and none at all without a business.** `SidebarNavComponent` subscribes to
-`ProviderAvailabilityService.load()` only while the shell says the business navigation is `offered`:
+`ProviderAvailabilityService.watch()` only while the shell says the business navigation is `offered`:
 a signed-out visitor and an account with no usable membership resolve no business, so there is no
 connection to read a status for. That subscription is deliberately **its own**, beside the existing
 `combineLatest` over the access answers rather than another arm of it - the provider answer changes
@@ -6117,6 +6130,17 @@ settles. A locked entry keeps its `routerLink` and is **marked, not disabled**: 
 operator reaches the explanation, so it carries a visible `Locked` badge, the lock sentence as its
 `title` and the same sentence for a screen reader, and no `aria-disabled` - which would be untrue of
 a link that does navigate.
+
+**The menu follows the answer for as long as it is mounted.** It `watch`es rather than `load`s
+because the sidebar outlives the answer: an Owner who saves working credentials on `Integrations`,
+loses them, has one read refused by a page's own request, or starts a support session on another
+business never leaves this component, and `requireProvider` asks again on every navigation. A menu
+built from the answer read at mount would go on locking what now works - or offering a repair tool
+for a provider that is gone - and disagree with the route and the locked page about the same
+destination, which is exactly the agreement `provider-lock.ts` exists to guarantee. Following the
+answer costs no extra probe (see
+[`watch()`](#shared-provider-availability-and-error-versus-empty-states-issue-728)); only a context
+reset reads a status, for the business the tab now resolves.
 
 **What proves it.** `provider/provider-lock.spec.ts` covers every lock state, the fail-open `unknown`,
 the tools gate over all four connection states, the read labels and both sentences.
@@ -6129,7 +6153,15 @@ only child, and the capability rule applying first. `layout/sidebar-nav.componen
 rendered section heading, a locked entry still being a link with its badge and sentence, the
 permission lock's own wording, the reports linked and unlocked with no provider, the hidden repair
 tools, the one status read however many entries depend on it, and the read never made for a withheld
-business menu. `provider/provider-lock.guard.spec.ts` covers the URL half: the page opening, each
+business menu; its `provider changes while it stays mounted` block proves the same sidebar - never a
+recreated one - unlocks and offers the tools when a connection is accepted, locks them and withdraws
+the tools when the credentials stop working, locks a destination as a *permission* when a refusal is
+retained for its read, renders the new business's answer after a context reset, and reaches the same
+verdict as `requireProvider` before and after the change.
+`provider/provider-availability.service.spec.ts` covers `watch()` itself: the settled answer after
+the nothing-known one, each kind of change told to a subscriber already listening, no second probe
+for an accepted state, nothing said twice for a refusal already retained, the one new read for a
+context reset, and `load()` still completing for a caller that asks once. `provider/provider-lock.guard.spec.ts` covers the URL half: the page opening, each
 refusal redirecting with the exact refused URL, a detail URL, the granted sibling read, and the
 unreadable status that opens the page. `provider/provider-locked.component.spec.ts` covers both
 messages, the Connect button offered and withheld, the named read, the destination resolved from a

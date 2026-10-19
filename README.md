@@ -1378,6 +1378,10 @@ before a page has to.
 - **An unread connection status locks nothing.** If the status cannot be read, the menu offers every
   entry unlocked and each page's own request reports its own outcome, for the same reason a failed
   probe hides no filter above.
+- **The menu updates as soon as the connection does; no page reload is needed.** Save or re-test a
+  token on Admin → Integrations and the locked entries unlock and the provider's tools reappear
+  there and then; lose the connection, or have Nayax refuse one read, and they lock again with the
+  message that fits. The menu, the page and the URL always agree about the same destination.
 
 **A connected business sees no change in the menu either**, beyond the two renames and the new order.
 
