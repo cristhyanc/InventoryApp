@@ -80,8 +80,11 @@ public class ProductsControllerTests
     }
 
     private static ProductResponse SingleProduct(ActionResult<IEnumerable<ProductResponse>> result) =>
-        Assert.Single(Assert.IsAssignableFrom<IEnumerable<ProductResponse>>(
-            Assert.IsType<OkObjectResult>(result.Result).Value));
+        Assert.Single(Products(result));
+
+    private static IEnumerable<ProductResponse> Products(ActionResult<IEnumerable<ProductResponse>> result) =>
+        Assert.IsAssignableFrom<IEnumerable<ProductResponse>>(
+            Assert.IsType<OkObjectResult>(result.Result).Value);
 
     private static ProductUpdateDto UpdateDto(int lowStockThreshold, int restockTo) =>
         new("Coke", null, null, 1m, lowStockThreshold, restockTo, "unit", null, null, true);
@@ -217,7 +220,7 @@ public class ProductsControllerTests
         });
         await db.SaveChangesAsync();
 
-        var product = SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None));
+        var product = SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None));
 
         Assert.Equal(1, product.Id);
         Assert.Equal("Coke", product.Name);
@@ -296,6 +299,220 @@ public class ProductsControllerTests
         Assert.Equal(12, (await db.Products.FindAsync(1L))!.RestockTo);
     }
 
+    /// <summary>
+    /// The create route issue #736 added (parent #329 decision P2): a business with no sales
+    /// provider creates its own product, and the response is the created product under its new id,
+    /// in the same shape <c>GET</c> answers.
+    /// </summary>
+    [Fact]
+    public async Task Create_PersistsTheProduct_AndAnswersCreatedWithIt()
+    {
+        using var db = CreateDbContext();
+        db.Categories.Add(new Category { Id = 3, Name = "Drinks" });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Create(
+            new ProductCreateDto("Coke", "SKU-1", "A can", 3.50m, 0, 5, 10, "can", 3, null, true),
+            CancellationToken.None);
+
+        var created = Assert.IsType<CreatedAtActionResult>(result.Result);
+        var product = Assert.IsType<ProductResponse>(created.Value);
+        Assert.Equal(("Coke", 3.50m, (long?)3), (product.Name, product.UnitPrice, product.CategoryId));
+        Assert.Equal(nameof(ProductsController.Get), created.ActionName);
+        Assert.Equal(product.Id, (await db.Products.SingleAsync()).Id);
+    }
+
+    [Fact]
+    public async Task Create_WithNoName_ReturnsBadRequestAndPersistsNothing()
+    {
+        using var db = CreateDbContext();
+
+        var result = await CreateController(db).Create(
+            new ProductCreateDto("  ", null, null, 1m, 0, 5, 10, "unit", null, null, true),
+            CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Equal(Inventory.Domain.Products.ProductCataloguePolicy.NameRequiredMessage, badRequest.Value);
+        Assert.Empty(await db.Products.ToListAsync());
+    }
+
+    [Fact]
+    public async Task Create_WithANegativePrice_ReturnsBadRequest()
+    {
+        using var db = CreateDbContext();
+
+        var result = await CreateController(db).Create(
+            new ProductCreateDto("Coke", null, null, -1m, 0, 5, 10, "unit", null, null, true),
+            CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Equal(
+            Inventory.Domain.Products.ProductCataloguePolicy.NegativeUnitPriceMessage,
+            badRequest.Value);
+    }
+
+    /// <summary>
+    /// The three fields the update route started accepting in issue #736. The refusals a
+    /// provider-linked product gets are proved against the real relational adapter in
+    /// <c>InventoryApi.Tests.Adapters.Persistence.EfProductCatalogueWriteTests</c>.
+    /// </summary>
+    [Fact]
+    public async Task Update_PersistsTheNameThePriceAndTheCategory()
+    {
+        using var db = CreateDbContext();
+        db.Categories.Add(new Category { Id = 3, Name = "Drinks" });
+        db.Products.Add(new Product { Id = 1, Name = "Coke", UnitPrice = 1m, LowStockThreshold = 5, RestockTo = 10 });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Update(
+            1, new ProductUpdateDto("Coke Zero", null, null, 4.25m, 5, 10, "can", 3, null, true));
+
+        Assert.IsType<NoContentResult>(result);
+        var product = await db.Products.FindAsync(1L);
+        Assert.Equal(("Coke Zero", 4.25m, (long?)3), (product!.Name, product.UnitPrice, product.CategoryId));
+    }
+
+    [Fact]
+    public async Task Update_WithNoName_ReturnsBadRequestAndChangesNothing()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Coke", LowStockThreshold = 5, RestockTo = 10 });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Update(
+            1, new ProductUpdateDto(null!, null, null, 1m, 5, 10, "unit", null, null, true));
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal("Coke", (await db.Products.FindAsync(1L))!.Name);
+    }
+
+    /// <summary>
+    /// The catalogue response says which fields the business's sales provider manages, so the UI can
+    /// lock them: nothing for a product this business maintains itself, the name and the category
+    /// for one the provider named.
+    /// </summary>
+    [Fact]
+    public async Task GetAll_DeclaresWhichFieldsTheProviderManages()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Local", ExternalProductId = null });
+        await db.SaveChangesAsync();
+
+        var local = SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None));
+        Assert.Empty(local.ProviderManagedFields!);
+
+        db.Products.Single().ExternalProductId = "100";
+        await db.SaveChangesAsync();
+
+        var linked = SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None));
+        Assert.Equal(new[] { "name", "categoryId" }, linked.ProviderManagedFields!);
+    }
+
+    /// <summary>
+    /// Issue #736's retirement criterion at the API boundary: a deactivated product is hidden from
+    /// the catalogue listing, which is the list every product dropdown is built from, and
+    /// <c>includeRetired=true</c> is the one explicit way to ask for every product the business owns.
+    /// The reorder alerts and the Pick List already refuse a retired product through their own
+    /// Domain rules.
+    /// </summary>
+    [Fact]
+    public async Task GetAll_LeavesARetiredProductOutOfTheListing_UnlessItIsAskedFor()
+    {
+        using var db = CreateDbContext();
+        db.Products.AddRange(
+            new Product { Id = 1, Name = "Coke", IsActive = true },
+            new Product { Id = 2, Name = "Discontinued", IsActive = false });
+        await db.SaveChangesAsync();
+        var controller = CreateController(db);
+
+        var working = Products(await controller.GetAll(null, null, null, null, null, CancellationToken.None));
+        var whole = Products(await controller.GetAll(null, null, null, null, true, CancellationToken.None));
+
+        Assert.Equal(["Coke"], working.Select(product => product.Name));
+        Assert.Equal(["Coke", "Discontinued"], whole.Select(product => product.Name).Order());
+    }
+
+    /// <summary>
+    /// The other half of the same criterion - the history a retired product keeps stays reachable.
+    /// Reading one by id is unchanged by retirement, which is what lets a client show it, read its
+    /// stock history and reactivate it.
+    /// </summary>
+    [Fact]
+    public async Task Get_AnswersARetiredProduct()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Discontinued", IsActive = false });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Get(1);
+
+        var product = Assert.IsType<ProductResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal("Discontinued", product.Name);
+        Assert.False(product.IsActive);
+    }
+
+    /// <summary>
+    /// Reactivation, end to end over the API's own actions: a retired product is out of the listing,
+    /// the explicit listing is how it is found again, and setting <c>isActive</c> back puts it in the
+    /// working catalogue with nothing else changed.
+    /// </summary>
+    [Fact]
+    public async Task Update_ReactivatesARetiredProduct_AndItReturnsToTheListing()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product
+        {
+            Id = 1,
+            Name = "Discontinued",
+            QuantityInStock = 7,
+            LowStockThreshold = 5,
+            RestockTo = 10,
+            IsActive = false,
+        });
+        await db.SaveChangesAsync();
+        var controller = CreateController(db);
+
+        Assert.Empty(Products(await controller.GetAll(null, null, null, null, null, CancellationToken.None)));
+        var retired = SingleProduct(
+            await controller.GetAll(null, null, null, null, true, CancellationToken.None));
+        Assert.False(retired.IsActive);
+
+        Assert.IsType<NoContentResult>(await controller.Update(
+            1, new ProductUpdateDto("Discontinued", null, null, 1m, 5, 10, "unit", null, null, true)));
+
+        var reactivated = SingleProduct(
+            await controller.GetAll(null, null, null, null, null, CancellationToken.None));
+        Assert.True(reactivated.IsActive);
+        Assert.Equal(7, reactivated.QuantityInStock);
+    }
+
+    /// <summary>
+    /// A product with history is refused with <c>409</c> and the message naming what refers to it -
+    /// never a <c>204</c> that erased a stock movement through the cascade (issue #736).
+    /// </summary>
+    [Fact]
+    public async Task Delete_ProductWithHistory_ReturnsConflictWithTheRefusal()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Coke" });
+        await db.SaveChangesAsync();
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 1,
+            QuantityChange = 4,
+            QuantityAfter = 4,
+            Reason = StockAdjustmentReason.Restock,
+        });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).Delete(1, CancellationToken.None);
+
+        var conflict = Assert.IsType<ConflictObjectResult>(result);
+        Assert.Contains("1 stock movement", (string)conflict.Value!, StringComparison.Ordinal);
+        Assert.True(await db.Products.AnyAsync(product => product.Id == 1));
+        Assert.Single(db.StockAdjustments);
+    }
+
     [Fact]
     public async Task Delete_ExistingProduct_ReturnsNoContent()
     {
@@ -303,7 +520,7 @@ public class ProductsControllerTests
         db.Products.Add(new Product { Id = 1, Name = "Coke" });
         await db.SaveChangesAsync();
 
-        Assert.IsType<NoContentResult>(await CreateController(db).Delete(1));
+        Assert.IsType<NoContentResult>(await CreateController(db).Delete(1, CancellationToken.None));
     }
 
     [Fact]
@@ -311,7 +528,7 @@ public class ProductsControllerTests
     {
         using var db = CreateDbContext();
 
-        Assert.IsType<NotFoundResult>(await CreateController(db).Delete(999));
+        Assert.IsType<NotFoundResult>(await CreateController(db).Delete(999, CancellationToken.None));
     }
 
     [Fact]
@@ -472,7 +689,7 @@ public class ProductsControllerTests
         await db.SaveChangesAsync();
 
         var json = System.Text.Json.JsonSerializer.Serialize(
-            SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None)),
+            SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None)),
             new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
 
         Assert.DoesNotContain("gstRule", json, StringComparison.OrdinalIgnoreCase);

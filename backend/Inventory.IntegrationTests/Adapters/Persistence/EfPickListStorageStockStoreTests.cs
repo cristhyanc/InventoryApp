@@ -48,6 +48,34 @@ public class EfPickListStorageStockStoreTests
         Assert.Equal(42, product.QuantityInStock);
     }
 
+    /// <summary>
+    /// The retirement flag reaches the use case as a fact rather than being applied as a predicate
+    /// here (issue #736): this adapter still returns the retired product, and
+    /// <c>Inventory.Application.PickList.GetPickList</c> is where it is left off the pick list. That
+    /// keeps the rule in one readable place and keeps this read usable by any later caller that
+    /// needs a retired product's storage quantity.
+    /// </summary>
+    [Fact]
+    public async Task GetStorageProductsAsync_ReportsWhetherTheProductIsActive()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
+        await using (var seed = TestAppDbContext.For(options, BusinessA))
+        {
+            seed.Products.Add(new Product { Id = 100, Name = "Coke Zero", QuantityInStock = 42, IsActive = true });
+            seed.Products.Add(new Product { Id = 200, Name = "Retired bar", QuantityInStock = 3, IsActive = false });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = TestAppDbContext.For(options, BusinessA);
+        var store = new EfPickListStorageStockStore(db);
+
+        var result = await store.GetStorageProductsAsync([100, 200], CancellationToken.None);
+
+        Assert.True(result[100].IsActive);
+        Assert.False(result[200].IsActive);
+    }
+
     [Fact]
     public async Task GetStorageProductsAsync_OnlyReturnsTheRequestedIds()
     {

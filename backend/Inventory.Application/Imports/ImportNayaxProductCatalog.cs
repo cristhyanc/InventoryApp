@@ -1,5 +1,7 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
+using Inventory.Domain.Exceptions;
+using Inventory.Domain.Providers;
 
 namespace Inventory.Application.Imports;
 
@@ -44,9 +46,29 @@ public sealed class ImportNayaxProductCatalog
     /// <summary>
     /// Imports the operator's current catalogue. A failed Nayax read propagates, so a partial
     /// remote snapshot can never be applied as a complete one.
+    ///
+    /// <para>Refused outright for a business that holds products the import cannot recognise
+    /// (issue #736, parent #329 decision P2): see <see cref="ManualCatalogueImportPolicy"/> for why
+    /// duplicating them is worse than refusing. The refusal is a
+    /// <see cref="DomainConflictException"/> - a request that conflicts with the state of the data,
+    /// which the HTTP boundary publishes as <c>409</c> with this message (docs/architecture.md
+    /// § Domain and application error mapping).</para>
+    ///
+    /// <para><strong>The count is asked twice, and the second answer is the one the import is
+    /// decided on.</strong> The first runs before the two remote reads, so a business the import
+    /// would duplicate spends no Nayax call at all; that is an optimisation, not the guard. The
+    /// remote reads take as long as Nayax takes, and a person can create a manual product while they
+    /// are in flight, so the authoritative count is read again inside the transaction the apply
+    /// commits in: the read the decision rests on, the comparison and the write are one operation,
+    /// and a catalogue that became manual in between is refused with nothing written rather than
+    /// duplicated (AGENTS.md § Automated task contract, on stale-state guarantees).</para>
     /// </summary>
     public async Task Handle(CancellationToken cancellationToken)
     {
+        var productsWithNoProviderId = await _store.CountProductsWithNoProviderIdAsync(cancellationToken);
+        if (ManualCatalogueImportPolicy.Refusal(productsWithNoProviderId) is { } refusal)
+            throw new DomainConflictException(refusal);
+
         // Two independent remote reads, so they stay a concurrent fan-out. Each resolves the
         // business's Nayax credentials through the request's scoped context (issue #520), and those
         // two reads are serialized by EfNayaxConnectionStore rather than by holding the remote
@@ -76,8 +98,19 @@ public sealed class ImportNayaxProductCatalog
                 product.ProductGroupId));
         }
 
+        // Opened only now, with the remote catalogue already in hand, so no Nayax request is ever
+        // made while a database transaction is held open. Disposing it without the commit below
+        // rolls back everything the apply staged.
+        await using var transaction = await _store.BeginTransactionAsync(cancellationToken);
+
+        var manualProducts = await _store.CountProductsWithNoProviderIdAsync(cancellationToken);
+        if (ManualCatalogueImportPolicy.Refusal(manualProducts) is { } conflict)
+            throw new DomainConflictException(conflict);
+
         await _store.ApplyAsync(
             new NayaxProductCatalogImport(categories, products, _clock.UtcNow),
             cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
     }
 }

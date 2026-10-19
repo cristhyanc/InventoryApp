@@ -237,12 +237,17 @@ describe('validate.yml status-context contract', () => {
   });
 
   it('rejects a report-status job that ignores the context resolved by the context job', () => {
-    const detached = replaceOnce(
-      validateWorkflow,
-      'STATUS_CONTEXT: ${{ needs.context.outputs.status_context }}',
-      "STATUS_CONTEXT: ${{ 'agent-validation' }}",
-    );
-    assert.throws(() => verifyValidationModeIsolation(detached, 'fixture'), /report-status publishes 'agent-validation' but the context job resolved 'merge-validation'/);
+    // Both status jobs (pending and final) must publish the context the context job resolved.
+    const [before, pending, final] = validateWorkflow.split('STATUS_CONTEXT: ${{ needs.context.outputs.status_context }}');
+    assert.ok(final !== undefined, 'fixture must contain both status jobs');
+    const detach = "STATUS_CONTEXT: ${{ 'agent-validation' }}";
+    const keep = 'STATUS_CONTEXT: ${{ needs.context.outputs.status_context }}';
+    for (const [job, detached] of [
+      ['report-pending', [before, detach, pending, keep, final].join('')],
+      ['report-status', [before, keep, pending, detach, final].join('')],
+    ]) {
+      assert.throws(() => verifyValidationModeIsolation(detached, 'fixture'), new RegExp(`${job} publishes 'agent-validation' but the context job resolved 'merge-validation'`));
+    }
   });
 });
 
@@ -337,7 +342,7 @@ describe('preserved guards', () => {
 
     const noSuccessGate = replaceOnce(architectureWorkflow, '[ "$ARCHITECTURE_JOB_RESULT" = "success" ]', '[ "$ARCHITECTURE_JOB_RESULT" != "failure" ]');
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: noSuccessGate }) }), /agent-architecture.yml finalize/);
-    const skippedOnRejectedTarget = replaceOnce(architectureWorkflow, '    if: always()\n', "    if: always() && needs.context.result == 'success'\n");
+    const skippedOnRejectedTarget = replaceOnce(architectureWorkflow, "    if: always() && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n", "    if: always() && needs.context.result == 'success' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n");
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: skippedOnRejectedTarget }) }), /agent-architecture.yml finalize/);
     const noDuplicateCheck = replaceOnce(architectureWorkflow, 'select(.context == "agent-validation")', 'select(.context == "merge-validation")');
     assert.throws(() => runContractChecks({ read: readWithOverrides({ [architecturePath]: noDuplicateCheck }) }), /agent-architecture.yml finalize/);
@@ -579,7 +584,7 @@ describe('review dispatch contract', () => {
     for (const unsafe of [
       replaceOnce(request, '            --ref main \\\n', ''),
       replaceOnce(request, '          [ "$validation_state" = "success" ] \\\n            ||', '          true \\\n            ||'),
-      replaceOnce(request, '    steps:\n', '    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n'),
+      replaceOnce(request, '    steps:\n      - name: Set up Node.js\n', '    steps:\n      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n      - name: Set up Node.js\n'),
       replaceOnce(request, '  pull_request_target:\n', '  pull_request:\n'),
     ]) {
       assert.throws(() => runContractChecks({ read: readWithOverrides({ [reviewRequestPath]: unsafe }) }), /agent-review-request.yml/);
@@ -868,7 +873,7 @@ describe('guarded publication contract', () => {
   });
 
   it('rejects a publisher that checks out code or holds the model credential', () => {
-    const withCheckout = replaceOnce(reviewWorkflow, '    steps:\n      - name: Guard and publish review\n', '    steps:\n      - uses: actions/checkout@v4\n      - name: Guard and publish review\n');
+    const withCheckout = replaceOnce(reviewWorkflow, '    steps:\n      - name: Set up Node.js\n        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0\n        with:\n          node-version: 20\n\n      - name: Guard and publish review\n', '    steps:\n      - uses: actions/checkout@v4\n      - name: Set up Node.js\n        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0\n        with:\n          node-version: 20\n\n      - name: Guard and publish review\n');
     assertPublicationRejects({ [reviewPath]: withCheckout }, /publish job: contains forbidden text: actions\/checkout/);
   });
 
@@ -975,12 +980,12 @@ describe('Claude-only review contract (Claude implements; separate Claude invoca
   it('rejects a review hand-off through job outputs, untrusted transport code or a long-lived artifact', () => {
     const reviewJob = reviewWorkflow.split('\n  review:\n')[1].split('\n  publish:\n')[0];
     for (const [unsafe, reason] of [
-      [replaceOnce(reviewWorkflow, '      artifact_id: ${{ steps.upload.outputs.artifact-id }}\n      artifact_digest: ${{ steps.package.outputs.digest }}\n\n    steps:\n      - name: Check out pull request head\n        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        with:\n          ref: ${{ needs.context.outputs.head_sha }}\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Run Claude Code review agent', '      artifact_id: ${{ steps.upload.outputs.artifact-id }}\n      artifact_digest: ${{ steps.package.outputs.digest }}\n      structured_output: ${{ steps.review_agent.outputs.structured_output }}\n\n    steps:\n      - name: Check out pull request head\n        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        with:\n          ref: ${{ needs.context.outputs.head_sha }}\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Run Claude Code review agent'), /agent-review.yml review outputs/],
+      [replaceOnce(reviewWorkflow, '      artifact_id: ${{ steps.upload.outputs.artifact-id }}\n      artifact_digest: ${{ steps.package.outputs.digest }}\n\n    steps:\n      - name: Set up Node.js\n        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0\n        with:\n          node-version: 20\n\n      - name: Check out pull request head\n        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        with:\n          ref: ${{ needs.context.outputs.head_sha }}\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Run Claude Code review agent', '      artifact_id: ${{ steps.upload.outputs.artifact-id }}\n      artifact_digest: ${{ steps.package.outputs.digest }}\n      structured_output: ${{ steps.review_agent.outputs.structured_output }}\n\n    steps:\n      - name: Set up Node.js\n        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0\n        with:\n          node-version: 20\n\n      - name: Check out pull request head\n        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0\n        with:\n          ref: ${{ needs.context.outputs.head_sha }}\n          fetch-depth: 0\n          persist-credentials: false\n\n      - name: Run Claude Code review agent'), /agent-review.yml review outputs/],
       [reviewWorkflow.replace(reviewJob, reviewJob.replace('node "$transport" package', 'node scripts/agent-review-transport.mjs package')), /agent-review.yml review review transport/],
       [reviewWorkflow.replace(reviewJob, reviewJob.replace('retention-days: 1', 'retention-days: 90')), /agent-review.yml review review transport/],
       [replaceOnce(reviewWorkflow, '          REVIEW_REDACT_PROVIDER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n', ''), /agent-review.yml review review transport/],
       [reviewWorkflow.replace(reviewJob, reviewJob.replace('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2', 'actions/upload-artifact@v4')), /agent-review.yml review review transport/],
-      [replaceOnce(reviewWorkflow, '      issues: read\n      actions: read\n\n    steps:\n      - name: Guard and publish review', '      issues: read\n\n    steps:\n      - name: Guard and publish review'), /agent-review.yml publish transport/],
+      [replaceOnce(reviewWorkflow, '      issues: read\n      actions: read\n\n    steps:\n      - name: Set up Node.js\n        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0\n        with:\n          node-version: 20\n\n      - name: Guard and publish review', '      issues: read\n\n    steps:\n      - name: Set up Node.js\n        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0\n        with:\n          node-version: 20\n\n      - name: Guard and publish review'), /agent-review.yml publish transport/],
       [replaceOnce(reviewWorkflow, "          REVIEW_ARTIFACT_ID: ", "          REVIEW_OUTPUT: ${{ needs.review.outputs.structured_output }}\n          REVIEW_ARTIFACT_ID: "), /agent-review.yml publish (job|transport)/],
       [replaceOnce(reviewWorkflow, 'not_published publication-failed "the review result could not be delivered: ', 'not_published ready "the review result could not be delivered: '), /agent-review.yml publish transport/],
       [replaceOnce(reviewWorkflow, 'contract|wrong-sha) not_published provider-failed', 'contract|wrong-sha|missing) not_published provider-failed'), /agent-review.yml publish transport/],
@@ -1029,7 +1034,7 @@ describe('Claude-only review contract (Claude implements; separate Claude invoca
     rejects({ [validatePath]: replaceOnce(validateWorkflow, 'gh workflow run agent-review.yml', 'gh workflow run other-review.yml') }, /validate.yml review dispatcher/);
     const dispatcherEnv = '          HEAD_SHA: ${{ needs.context.outputs.head_sha }}\n          EXPECTED_AGENT_AUTHOR: ${{ vars.AGENT_AUTOMATION_APP_BOT_LOGIN }}\n        run: |';
     rejects({ [validatePath]: replaceOnce(validateWorkflow, dispatcherEnv, dispatcherEnv.replace('        run: |', '          COPILOT_AGENT_TOKEN: ${{ secrets.COPILOT_AGENT_TOKEN }}\n        run: |')) }, /validate.yml review dispatcher/);
-    rejects({ [validatePath]: replaceOnce(validateWorkflow, '      pull-requests: read\n      issues: read\n      contents: read\n\n    steps:\n      - name: Reverify current head and dispatch review', '      pull-requests: write\n      issues: write\n      contents: read\n\n    steps:\n      - name: Reverify current head and dispatch review') }, /validate.yml review dispatcher/);
+    rejects({ [validatePath]: replaceOnce(validateWorkflow, '      pull-requests: read\n      issues: read\n      contents: read\n\n    steps:\n      - name: Set up Node.js\n        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0\n        with:\n          node-version: 20\n\n      - name: Reverify current head and dispatch review', '      pull-requests: write\n      issues: write\n      contents: read\n\n    steps:\n      - name: Set up Node.js\n        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0\n        with:\n          node-version: 20\n\n      - name: Reverify current head and dispatch review') }, /validate.yml review dispatcher/);
   });
 
   it('rejects a Claude fix pass that runs without architecture findings or SonarCloud issues', () => {
@@ -1040,7 +1045,7 @@ describe('Claude-only review contract (Claude implements; separate Claude invoca
   it('rejects an architecture checker that is not selected by the verified route, or not read-only', () => {
     for (const [from, to, reason] of [
       // The checker runs only for a verified Claude route.
-      ["    if: needs.context.outputs.checker == 'claude'\n", '', /agent-architecture.yml same-provider Claude check/],
+      ["    if: needs.context.outputs.checker == 'claude' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n", '', /agent-architecture.yml same-provider Claude check/],
       // The route table: no route maps to Copilot.
       ['full-claude) checker=claude;', 'full-claude) checker=copilot;', /agent-architecture.yml context|checker=copilot/],
       ['cross-claude) checker=claude;', 'cross-claude) checker=copilot;', /agent-architecture.yml context|checker=copilot/],

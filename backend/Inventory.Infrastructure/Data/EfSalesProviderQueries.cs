@@ -79,4 +79,31 @@ internal static class EfSalesProviderQueries
             .SingleOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false) == provider;
     }
+
+    /// <summary>
+    /// The current business's sales provider, or <see langword="null"/> when it has none, no business
+    /// is resolved, or no such business row exists (issue #736).
+    ///
+    /// <para>This is the <em>naming</em> shape of the question, not a third guard: its one caller
+    /// reads it to tell an operator which system manages a field it just refused to change
+    /// (<see cref="ProviderManagedCatalogueFields"/>). A writer that must refuse to run for the
+    /// wrong provider still asks <see cref="CurrentBusinessSellsThroughAsync"/>, which fails closed;
+    /// a <see langword="null"/> here only makes a message say "this business's sales provider"
+    /// instead of its name, and never widens what may be read or written.</para>
+    /// </summary>
+    public static async Task<ExternalProvider?> CurrentBusinessSalesProviderAsync(
+        AppDbContext db, CancellationToken cancellationToken)
+    {
+        if (db.CurrentBusinessId is not { } businessId)
+        {
+            return null;
+        }
+
+        return await db.Businesses
+            .AsNoTracking()
+            .Where(business => business.Id == businessId)
+            .Select(business => business.SalesProvider)
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
 }

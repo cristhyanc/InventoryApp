@@ -317,6 +317,15 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/Products/{id:long}/gst-rule", "PUT", Capability.InventoryOperate)]
     [InlineData("api/products/{productId:long}/inventory-count/apply", "POST", Capability.InventoryOperate)]
     [InlineData("api/Categories", "GET", Capability.InventoryOperate)]
+
+    // The manual catalogue write surface (issue #736): maintaining the catalogue is the same
+    // day-to-day inventory work as refilling from it, so it declares the capability the catalogue
+    // reads already declare rather than introducing one.
+    [InlineData("api/Products", "POST", Capability.InventoryOperate)]
+    [InlineData("api/Products/{id:long}", "DELETE", Capability.InventoryOperate)]
+    [InlineData("api/Categories", "POST", Capability.InventoryOperate)]
+    [InlineData("api/Categories/{id:long}", "PUT", Capability.InventoryOperate)]
+    [InlineData("api/Categories/{id:long}", "DELETE", Capability.InventoryOperate)]
     [InlineData("api/products/{productId:long}/stock", "POST", Capability.InventoryOperate)]
     [InlineData("api/stock-history", "GET", Capability.InventoryOperate)]
     [InlineData("api/Machines", "GET", Capability.InventoryOperate)]

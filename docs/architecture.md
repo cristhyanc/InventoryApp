@@ -1753,13 +1753,13 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | `Dashboard.View` | `GET api/business/current`, `GET api/settings/nayax-connection/status` | none | Already safe |
 | `Dashboard.View` + `Inventory.Operate` | `POST api/nayax-sales-sync` | none — `204`, or `429` with `Retry-After` | Already safe |
 | `PickList.View` | `GET api/pick-list` | none — storage quantity, target, quantity to pick and MDB codes | Already safe |
-| `Inventory.Operate` | `GET api/products`, `GET api/products/{id}`, `GET api/products/alerts/low-stock`, `GET api/machines/{id}/products` | `inventoryValue`; and, nested in `stockAdjustments`, each movement's `inventoryValueAfter` | `inventoryValue` withheld by [#698](#machine-and-product-financial-redaction-issue-698); `inventoryValueAfter` **redacted here** |
+| `Inventory.Operate` | `GET api/products`, `GET api/products/{id}`, `GET api/products/alerts/low-stock`, `GET api/machines/{id}/products`, `POST api/products` (issue #736, which answers the created product in the same shape) | `inventoryValue`; and, nested in `stockAdjustments`, each movement's `inventoryValueAfter` | `inventoryValue` withheld by [#698](#machine-and-product-financial-redaction-issue-698); `inventoryValueAfter` **redacted here** |
 | `Inventory.Operate` | `GET api/machines`, `GET api/machines/{id}` | six periods' gross revenue, six direct-profit figures, `profitabilityStatus` | Withheld by [#698](#machine-and-product-financial-redaction-issue-698) |
 | `Inventory.Operate` | `GET api/sites`, `GET api/sites/{id}/products` | `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`; `estimatedCardProfit` | Withheld by [#697](#site-financial-redaction-issue-697) |
 | `Inventory.Operate` | `GET api/products/{productId}/stock`, `POST api/products/{productId}/stock` | each movement's `inventoryValueAfter` | **Redacted here** |
 | `Inventory.Operate` | `GET api/stock-history` | each movement's `inventoryValueAfter` | **Redacted here** |
 | `Inventory.Operate` | `GET api/products/{id}/price-history`, `GET api/products/{productId}/stock/restock-cost-suggestion` | none — supplier unit costs and the suggested restock unit cost | Already safe (unit cost, kept visible by the decision) |
-| `Inventory.Operate` | `GET api/categories`, `GET api/categories/{id}`, `POST api/products/{productId}/inventory-count/apply`, `GET`/`PUT api/products/{id}/gst-rule`, `PUT`/`DELETE api/products/{id}` | none | Already safe |
+| `Inventory.Operate` | `GET api/categories`, `GET api/categories/{id}`, `POST api/categories`, `PUT`/`DELETE api/categories/{id}` (the three category writes of issue #736), `POST api/products/{productId}/inventory-count/apply`, `GET`/`PUT api/products/{id}/gst-rule`, `PUT`/`DELETE api/products/{id}` | none — status codes, a category's name and description, and the refusal sentences | Already safe |
 | `Inventory.Operate` | `POST api/machines/{id}/sync-restock` and its `apply`/`resolve-duplicate`/`resolve-manual` actions, `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts` | none — machine-stock quantities, discrepancies and per-event outcomes | Already safe |
 | `Purchasing.Operate` | `GET api/purchases`, `GET api/purchases/{id}`, `POST api/purchases`, `PUT api/purchases/{id}` | each line's nested product `inventoryValue` | **Redacted here**. The purchase's own `totalAmount`, `deliveryCost`, `packageCost`, line `unitCost`, `lineTotal` and the input-GST block stay visible by the decision |
 | `Purchasing.Operate` | `GET api/supplierorders`, `GET api/supplierorders/{id}`, `POST api/supplierorders` | each line's nested product `inventoryValue` | **Redacted here**. `quantityOrdered`, `quantityReceived`, `unitPrice` and `outstandingQuantity` stay visible |
@@ -6729,7 +6729,7 @@ Reconciliation applies the same separation as bookkeeping, and adds a third cate
 
 **The JSON field this value is imported from is confirmed (issue #363).** A human confirmed from a live `GET /v1/operators/{OperatorID}/products` response that the product selling price field is `ProductDefaultRetailPrice`, matching the Nayax developer portal, which documents that field on `GET /v1/operators/{OperatorID}/products` and `GET /v1/products/{NayaxProductID}` and documents no bare `RetailPrice` field on either endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` above correctly use. The operator-catalogue DTO `Inventory.Application.Nayax.NayaxProduct.ProductDefaultRetailPrice` binds that confirmed JSON name. Products already imported with `UnitPrice` of `0` under the previous, unconfirmed `RetailPrice` mapping are not backfilled by this change; whether to backfill them is a separate decision.
 
-The public property name `UnitPrice` is retained for API/contract compatibility. Only the Nayax catalog import may change its value; `Inventory.Application.Products.UpdateProduct` (whose `ProductUpdateFields` carries no price at all) and the product edit UI treat it as Nayax-managed and read-only. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
+The public property name `UnitPrice` is retained for API/contract compatibility. **Since issue #736 the business owns this value too** (parent #329 decision P2 and P3): `PUT /api/products/{id}` accepts it, `ProductUpdateFields` carries it, and the only bound on it is that it is not negative (`Inventory.Domain.Products.ProductCataloguePolicy`). It had to become editable, because a business with no sales provider has no import to set it. The product edit screen still presents it, the name and the category as read-only inputs; unlocking them is issue #737 (B2), and until then the screen sends the stored values back unchanged. The Nayax catalogue import still overwrites it for a product the provider names, and a local price edit of such a product is accepted rather than refused — the price is deliberately *not* one of the provider-managed fields that are locked, which are the product's name and category only (see [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)); #739 is where the operator chooses per field whether to keep the local price or take the provider's. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
 
 ### Purchase GST classification (issue #429)
 
@@ -8340,6 +8340,15 @@ selection with no Nayax link, or whose product has no matching row in that tenan
 excluded from the result rather than assigned a fabricated zero storage quantity, so the tenant
 boundary can never be papered over as a data gap.
 
+**A retired product is not picked (issue #736).** `IsActive` is how a product with history is taken
+out of use, so a selection resolving to a product whose `IsActive` is false is left off the pick
+list - the same rule the reorder alerts (`ProductReorderPolicy.IsReorderAlert`), the site stock lists
+(`SiteStockPolicy`) and the machine refill alerts (`MachineRefillAlertPolicy`) already apply. The
+flag travels as a fact on `PickListStorageProduct` and the exclusion is made in `GetPickList`, not as
+a predicate in the adapter, so it is stated where every other pick rule is and so the storage lookup
+stays usable by a later caller that needs a retired product's quantity. Nothing about the product,
+its machine slots or its stock changes.
+
 The projection returns, per product: its physical `QuantityInStock` (untouched), the total quantity
 to pick across the selected machines, and a storage-shortage quantity (`max(0, total to pick -
 QuantityInStock)`) projected when the combined pick quantity would exceed what is physically on the
@@ -9901,6 +9910,132 @@ own conditional writes. `ResolveNayaxSaleProductsTests` pins both halves relatio
 that each read the unresolved sale first, and a batch whose second sale another writer settled in
 between.
 
+### Manual catalogue: who owns a product's fields (issue #736)
+
+A business with no sales provider has to be able to keep its own catalogue, and a business with one
+must not have the provider's values quietly overwritten locally. Issue #736 (parent #329 decision
+P2) settles both with one idea: **a local row's fields are this business's, except the ones the
+provider's import rewrites on every run.**
+
+**The write surface.** `POST api/products`, `PUT api/products/{id}` and `DELETE api/products/{id}`
+on `ProductsController`, and `POST api/categories`, `PUT api/categories/{id}` and
+`DELETE api/categories/{id}` on `CategoriesController`. They declare the same `Inventory.Operate`
+capability the catalogue reads declare — maintaining the catalogue is the same day-to-day inventory
+work as refilling from it — so no capability is added, a read-only support session is refused them
+by the central `GET`/`HEAD` rule (issue #551), and the business is resolved from the caller's
+membership as everywhere else. `PUT api/products/{id}` now also binds `name`, `unitPrice` and
+`categoryId`, which the request body always carried and the action used to ignore.
+
+**Provider-managed fields.** `Inventory.Domain.Providers.ProviderManagedCatalogueFields` is the one
+statement of which fields a provider owns: a product carrying an `ExternalProductId` has its `name`
+and `categoryId` managed, a category carrying an `ExternalCategoryId` has its `name` managed, and a
+row with no external id has nothing managed. The product and category responses publish that list as
+`providerManagedFields`, so a client locks exactly the inputs the server refuses — the same function
+produces both, which is what stops the lock and the enforcement from drifting apart. A *change* to a
+managed field is refused with `400` and a message naming the provider; submitting the stored value is
+not a change, so a client may send the whole row back, and the price, SKU, unit, supplier, restock
+settings and active flag stay editable for every product. Nothing here clears an external id; if a
+future provider switch (#761) does, the fields become editable again with no further change.
+
+`providerManagedFields` is the one key the catalogue response gained, appended last, and it is
+absent (`null`, omitted from the JSON) wherever a product or category is carried inside another
+resource — a purchase line's or a supplier order line's product snapshot, a machine slot's product,
+and a product's nested `category`. Those payloads are pinned contracts and none of them is an
+editing surface, so they say nothing about locks rather than saying "none".
+
+**Deletion.** `Inventory.Domain.Products.ProductDeletionPolicy` refuses a product that anything
+refers to: stock movements, purchase lines, supplier order lines, sales (through the sale's own
+persisted `ProductId`, issue #758), machine stock counts, and costing records (an inventory-cost
+transition baseline or a costing repair). Two of those foreign keys cascade and four are restricted,
+so without the refusal a delete would either erase inventory history or fail inside the database;
+the refusal names what is in the way and points at `IsActive`, which is how a product is retired —
+it keeps all of its history, stays out of the catalogue listing, the reorder alerts and the Pick
+List, and can be reactivated. A
+provider-managed product is refused for its own reason: the next import would create it again. The
+`NayaxSales.ProductId` foreign key stays `Restrict`, never cascade and never set-null.
+`Inventory.Domain.Categories.CategoryCataloguePolicy` refuses a category products still use, with
+the count in the message, because `Product.CategoryId` is set to null when its category disappears.
+A refused delete answers `409` with that message; a validation refusal answers `400`.
+
+**Where each rule is decided.** The deterministic ones — a name is required, a price is not
+negative, a category name is required — are Domain policies the use cases apply before anything is
+read. The ones that are statements about *stored* rows are decided inside the EF adapter, in the
+same relational transaction as the write: which provider-managed fields the row carries, whether the
+category named belongs to this business, whether the name is already used, and what refers to the
+product. That is deliberate rather than convenient: a use-case read followed by a separate write is
+a window in which a product can gain a stock movement that the delete then cascades away, or a name
+can be taken between the check and the insert. Category-name uniqueness is **not** a database
+constraint — this issue adds no migration — so the window is the only thing holding it; the names
+are compared without case or surrounding space, in memory over this business's own categories,
+because SQLite's `=` on text is case-sensitive and its `LIKE` is case-insensitive only for ASCII.
+
+**A product's category may not cross a business.** The category id is the one thing a request
+supplies that could point a tenant-owned row at another business's, so create and update both check
+it through the tenant-filtered read and refuse an unknown one with the same message either way — a
+category of another business is invisible, exactly like one that does not exist.
+
+**Creating a product with opening stock is one transaction.** `POST api/products` is the first
+public path that writes stock through `IProductStore.CreateAsync`, and that create performs three
+writes: the product, the opening `StockAdjustment` that explains its `QuantityInStock`, and the cost
+rebuild that movement implies. `EfProductStore.CreateAsync` commits them as a single relational
+transaction, so a cancellation or a failure part-way through leaves nothing at all rather than a
+persisted quantity whose ledger and costing position were never written — under a request the caller
+saw fail and would retry, which would otherwise create a second product beside the first.
+
+**Retirement, and the two catalogues it creates.** `IsActive` is the retirement path the deletion
+refusal points at, and a retired product is one the business has taken out of use: it must not be
+offered to purchase from, count, pick or refill, and none of its history may move. So there are two
+reads of the catalogue, and every caller says which one it wants —
+`Inventory.Application.Products.ProductCatalogFilter.IncludeRetired` has no unset value:
+
+- **The working catalogue** leaves retired products out, in the SQL
+  (`EfProductCatalogStore.Filtered`, beside the search/category/supplier narrowing). It is what
+  `GET api/products` answers, and therefore every product dropdown an Angular screen builds from it.
+  The reorder alerts and the Pick List reach the same answer through their own Domain rules, which
+  stay the authority there: `Inventory.Domain.Products.ProductReorderPolicy.IsReorderAlert` requires
+  an active product, and `Inventory.Application.PickList.GetPickList` drops a retired product from
+  the picking matrix with a stated rule rather than by absence (so does `SiteStockPolicy` for the
+  site stock lists and `MachineRefillAlertPolicy` for the machine refill alerts).
+- **The whole catalogue** is every product the business owns, asked for explicitly:
+  `GET api/products?includeRetired=true`, and `ProductCatalogFilter.None` for the two internal
+  consumers that resolve activity themselves — the home Dashboard summary and
+  `ListMachineProducts`, where a machine slot or a refill alert naming a retired product must still
+  be able to describe it. Narrowing `None` would silently stop both describing those rows.
+
+Reading one product is unchanged by retirement: `GET api/products/{id}` answers a retired product
+like any other, because retirement decides what a listing offers to work with, never what the
+business may look at. That read, the explicit listing, and `PUT api/products/{id}` with
+`isActive: true` are the reactivation path; all of the product's history, its machine slots and its
+stock are untouched throughout.
+
+**`GET api/products` hiding retired products is a deliberate read-contract change** (issue #736's
+criterion that a deactivated product is hidden from lists, pick lists and reorder while keeping its
+history and staying reactivatable). The Angular screens are issue #737 (B2) and still call the
+endpoint without the parameter, so until they pass `includeRetired=true` the four places that need a
+retired product show only active ones: the catalogue page (which is how a retired product is found
+again to reactivate), the Admin costing-repair and AVCO-transition tools, and the stock-history
+product filter. Those four call sites plus a "show retired" control on the catalogue page are the
+frontend scope this change hands to #737; nothing on the server depends on them.
+
+**The provider import is refused for a manual catalogue, for now.**
+`Inventory.Domain.Providers.ManualCatalogueImportPolicy`: while the business holds products with no
+external id, `POST api/imports/products` answers `409` with how many they are, before anything is
+written, because the import identifies a product only by the provider's own id and would create a
+duplicate of each of them. A business whose products all carry one imports exactly as before. The
+catalogue review (issue #738 for the API, #739 for the screen) is what replaces the refusal with a
+deliberate link-or-create per product.
+
+**That count is asked twice, and the second answer is the one the import is decided on.** The first
+read runs before the two remote catalogue reads, so a business the import would duplicate spends no
+Nayax call at all — an optimisation, not the guard. The remote reads take as long as Nayax takes,
+and a person can commit a `POST api/products` while they are in flight, so
+`ImportNayaxProductCatalog` opens the import's write transaction
+(`INayaxProductCatalogImportStore.BeginTransactionAsync`) once the snapshot is in hand and re-reads
+`CountProductsWithNoProviderIdAsync` inside it: the authoritative read, the comparison and the write
+are one operation, and a catalogue that became manual in between is refused with nothing committed
+rather than duplicated. The transaction is opened only after the remote reads, so no Nayax request
+is ever made while a database transaction is held open.
+
 ### Nayax product catalogue import (issue #300)
 
 `POST api/imports/products` is a one-way sync of the Nayax operator catalogue into the local
@@ -9928,16 +10063,22 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   started concurrently on that shared context are now awaited one at a time (see
   [Concurrency inside one request](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)).
   That keeps the new-versus-existing decision and the write it feeds together *within one request*,
-  and nothing more: this import has no cross-request isolation, and the single scoped `AppDbContext`
-  provides none. Its reads run outside the transaction `SaveChangesAsync` opens, with no lock, no
-  expected-state comparison and no concurrency token, so two overlapping imports can both decide the
+  and nothing more: the adapter has no cross-request isolation of its own, and the single scoped
+  `AppDbContext` provides none. There is no lock, no expected-state comparison and no concurrency
+  token, so two overlapping imports can both decide the
   same product is new (the later `SaveChanges` then fails on the filtered unique index over
   `(BusinessId, ExternalProductId)`, which since #735 is what refuses a duplicated identity in place
   of the primary key) and a local catalogue
-  edit committed between the read and the write is overwritten by whichever writer commits last.
-  This is the legacy behaviour, carried over unchanged; making the import safe under concurrent
-  callers needs an explicit transaction or concurrency token and is a behaviour change for its own
-  issue.
+  edit to a provider-linked row committed between the read and the write is overwritten by whichever
+  writer commits last.
+  This is the legacy behaviour, carried over unchanged; making the import's upsert safe under
+  concurrent callers needs a concurrency token and is a behaviour change for its own issue.
+- The one cross-request window issue #736 did close is the manual-catalogue guard, because there the
+  stale answer is not a lost edit but a duplicated catalogue. `BeginTransactionAsync` on the same
+  port gives the use case a transaction it opens *after* the remote reads and holds across the
+  authoritative `CountProductsWithNoProviderIdAsync` and `ApplyAsync`, so a product created while
+  Nayax was being read refuses the whole import (`409`) with nothing committed — see
+  [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736).
 - Only four fields are Nayax-managed: `Name`, `Description`, `UnitPrice` (from the catalogue
   `ProductDefaultRetailPrice`, never the Nayax `ProductCostPrice` - see
   [Product selling price](#product-selling-price), including the confirmed field name recorded
@@ -9974,8 +10115,14 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   [Tenant ownership](#tenant-ownership-issue-64) — `EfNayaxProductCatalogImportStoreTenancyTests`
   pins both halves: two businesses importing the same product and group ids, and one business's
   import never reading, rewriting or deleting another business's catalogue row.
+- Since issue #736 the use case refuses to run at all for a business that holds products with no
+  external id, before either remote read: the import would create a duplicate of every one of them,
+  because it identifies a product only by the provider's own id. See
+  [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736);
+  the catalogue review (#738/#739) is what replaces the refusal.
 - `ImportsController.ImportProducts` calls the use case directly; the route, the constant `true`
-  `200 OK` body and the status codes are unchanged. The action now also binds the request's
+  `200 OK` body and the status codes are unchanged, except for that refusal, which reaches the
+  caller as the centrally mapped `409` of a `DomainConflictException`. The action now also binds the request's
   `CancellationToken` and passes it through the Nayax and persistence calls, which the legacy
   signature did not. `ImportService.Products.cs` and `IImportService.ImportProductsAsync` are gone,
   and `ImportService` no longer takes an `INayaxLynxClient` at all - the legacy service's last

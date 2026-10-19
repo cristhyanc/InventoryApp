@@ -36,7 +36,7 @@ public class ImportsControllerProductsTests
         nayax.Setup(client => client.GetProductsAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([new NayaxProduct { NayaxProductId = 100, ProductName = "Chips", ProductDefaultRetailPrice = 3.50m }]);
         nayax.Setup(client => client.GetProductGroupssAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
-        var store = new Mock<INayaxProductCatalogImportStore>();
+        var store = ImportStore();
         var controller = Controller(nayax.Object, store.Object);
 
         var result = await controller.ImportProducts(CancellationToken.None);
@@ -60,7 +60,7 @@ public class ImportsControllerProductsTests
         nayax.Setup(client => client.GetProductsAsync(It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("upstream unavailable"));
         nayax.Setup(client => client.GetProductGroupssAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
-        var store = new Mock<INayaxProductCatalogImportStore>();
+        var store = ImportStore();
         var controller = Controller(nayax.Object, store.Object);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => controller.ImportProducts(CancellationToken.None));
@@ -68,6 +68,19 @@ public class ImportsControllerProductsTests
         store.Verify(
             x => x.ApplyAsync(It.IsAny<NayaxProductCatalogImport>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    /// <summary>
+    /// A loose import-store double whose transaction is a real object: since issue #736 the use case
+    /// opens one for the authoritative manual-catalogue check it decides the write on, and Moq's
+    /// default <c>Task&lt;T&gt;</c> would hand back a null transaction to commit.
+    /// </summary>
+    private static Mock<INayaxProductCatalogImportStore> ImportStore()
+    {
+        var store = new Mock<INayaxProductCatalogImportStore>();
+        store.Setup(x => x.BeginTransactionAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Mock.Of<INayaxProductCatalogImportTransaction>());
+        return store;
     }
 
     private static ImportsController Controller(INayaxLynxClient nayax, INayaxProductCatalogImportStore store) =>

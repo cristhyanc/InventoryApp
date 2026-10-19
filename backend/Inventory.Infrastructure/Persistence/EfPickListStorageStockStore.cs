@@ -27,11 +27,11 @@ public sealed class EfPickListStorageStockStore : IPickListStorageStockStore
         var products = await _db.Products
             .AsNoTracking()
             .Where(p => productIds.Contains(p.Id))
-            .Select(p => new { p.Id, p.Name, p.QuantityInStock })
+            .Select(p => new { p.Id, p.Name, p.QuantityInStock, p.IsActive })
             .ToListAsync(cancellationToken);
 
         return products.ToDictionary(
             p => p.Id,
-            p => new PickListStorageProduct(p.Id, p.Name, p.QuantityInStock));
+            p => new PickListStorageProduct(p.Id, p.Name, p.QuantityInStock, p.IsActive));
     }
 }

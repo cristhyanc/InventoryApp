@@ -46,6 +46,8 @@ public sealed class FakeProductCatalogStore : IProductCatalogStore
     {
         var products = _products.AsEnumerable();
 
+        if (!filter.IncludeRetired) products = products.Where(product => product.IsActive);
+
         if (!string.IsNullOrWhiteSpace(filter.Search))
             products = products.Where(product => product.Name.Contains(filter.Search, StringComparison.Ordinal)
                 || (product.Sku is not null && product.Sku.Contains(filter.Search, StringComparison.Ordinal)));

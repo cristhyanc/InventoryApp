@@ -17,6 +17,15 @@ namespace InventoryApi.Tests.DTOs;
 /// bytes, so a key that is renamed, reordered, added, dropped, or given a different value fails
 /// here rather than in a client. The explicit key list is asserted as well, so a future change to
 /// <em>both</em> sides at once still has to be a conscious one.
+///
+/// <para><strong>The contract has moved exactly once, in issue #736</strong>, whose acceptance
+/// criteria require the catalogue response to say which fields the business's sales provider
+/// manages so the UI can lock them. That is one appended key, <c>providerManagedFields</c>: the
+/// comparison below is still byte for byte against the entity, with that one key expected after the
+/// entity's last one, so every key a client already read keeps its name, type, value and position.
+/// Nothing else may move this reference without its own issue. The nested product snapshots on a
+/// purchase, a supplier order and a machine slot do not carry the key at all - it is <c>null</c>
+/// there and omitted - so their own contract tests are untouched.</para>
 /// </summary>
 public class ProductJsonContractTests
 {
@@ -136,6 +145,19 @@ public class ProductJsonContractTests
         OnOrderQuantity = record.OnOrderQuantity,
     };
 
+    /// <summary>
+    /// The entity's JSON with issue #736's one appended key, which is the whole of the catalogue
+    /// response's current contract. Written as an append to the reference value rather than as a
+    /// second literal, so the test still fails if any legacy key moves by a single byte.
+    /// </summary>
+    private static string ExpectedJson(ProductRecord record, string providerManagedFields)
+    {
+        var entity = JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults);
+        return string.Concat(
+            entity.AsSpan(0, entity.Length - 1),
+            $",\"providerManagedFields\":{providerManagedFields}}}");
+    }
+
     [Fact]
     public void Response_serializes_byte_for_byte_like_the_entity_it_replaced()
     {
@@ -144,7 +166,24 @@ public class ProductJsonContractTests
         var response = JsonSerializer.Serialize(
             ProductRecordResponseMapper.ToResponse(record, FinancialFigureVisibility.Visible), WebDefaults);
 
-        Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), response);
+        Assert.Equal(ExpectedJson(record, "[]"), response);
+    }
+
+    /// <summary>
+    /// The appended key for a product the business's sales provider names: the two fields
+    /// <c>PUT /api/products/{id}</c> refuses a change to, in the order the one Domain statement of
+    /// that rule lists them. A product nobody but this business maintains answers an empty array -
+    /// a real answer, which the two byte-for-byte tests above assert.
+    /// </summary>
+    [Fact]
+    public void Response_declares_the_provider_managed_fields_of_a_linked_product()
+    {
+        var record = FullyPopulatedRecord() with { IsProviderManaged = true };
+
+        var response = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(record, FinancialFigureVisibility.Visible), WebDefaults);
+
+        Assert.Equal(ExpectedJson(record, "[\"name\",\"categoryId\"]"), response);
     }
 
     /// <summary>
@@ -172,7 +211,7 @@ public class ProductJsonContractTests
         var response = JsonSerializer.Serialize(
             ProductRecordResponseMapper.ToResponse(record, FinancialFigureVisibility.Visible), WebDefaults);
 
-        Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults), response);
+        Assert.Equal(ExpectedJson(record, "[]"), response);
         Assert.Contains("\"category\":null", response, StringComparison.Ordinal);
         Assert.Contains("\"supplier\":null", response, StringComparison.Ordinal);
         Assert.Contains("\"stockAdjustments\":[]", response, StringComparison.Ordinal);
@@ -196,9 +235,14 @@ public class ProductJsonContractTests
                 "restockTo", "needToOrder", "unit", "isActive", "lastEatBefore1", "lastEatBefore2",
                 "createdAt", "updatedAt", "categoryId", "category", "supplierId", "supplier",
                 "stockAdjustments", "isLowStock", "isReorderAlert",
+
+                // Issue #736's one appended key, last so every key above keeps its position.
+                "providerManagedFields",
             },
             document.RootElement.EnumerateObject().Select(property => property.Name));
 
+        // The nested category is a snapshot, not an editing surface, so it says nothing about which
+        // of its fields a provider manages and keeps exactly the three keys it always had.
         Assert.Equal(
             new[] { "id", "name", "description" },
             document.RootElement.GetProperty("category").EnumerateObject().Select(property => property.Name));

@@ -117,6 +117,27 @@ public sealed record ProductResponse
     public bool IsLowStock => ProductReorderPolicy.IsLowStock(QuantityInStock, LowStockThreshold);
 
     public bool IsReorderAlert => ProductReorderPolicy.IsReorderAlert(IsActive, NeedToOrder);
+
+    /// <summary>
+    /// The fields the business's sales provider manages on this product (issue #736, parent #329
+    /// decision P2): <c>["name", "categoryId"]</c> for a product the provider named, an empty array
+    /// for one this business maintains itself. A client locks exactly these inputs, which is exactly
+    /// the set <c>PUT /api/products/{id}</c> refuses a change to.
+    ///
+    /// <para><strong>The one key the catalogue response gained</strong>, and it is appended last so
+    /// every key a client already read keeps its name, type, value and position - the comparison
+    /// <c>InventoryApi.Tests.DTOs.ProductJsonContractTests</c> makes against the entity this
+    /// response replaced. It is an additive change the issue's acceptance criteria require ("product
+    /// and category responses say which fields are provider-managed, so the UI can lock them").</para>
+    ///
+    /// <para><see langword="null"/> - and then omitted from the JSON entirely - wherever a product is
+    /// carried inside another resource: a purchase line's or a supplier order line's product
+    /// snapshot, and a machine slot's product. Those payloads are pinned contracts of their own and
+    /// none of them is an editing surface, so they say nothing about locks rather than saying
+    /// "none".</para>
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? ProviderManagedFields { get; init; }
 }
 
 /// <summary>

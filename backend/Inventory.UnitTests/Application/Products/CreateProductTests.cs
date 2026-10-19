@@ -5,8 +5,14 @@ namespace InventoryApi.Tests.Application.Products;
 
 public class CreateProductTests
 {
-    private static ProductCreateFields ValidFields(int lowStockThreshold = 5, int restockTo = 10, decimal? initialUnitCost = null) =>
-        new("Coke", "SKU-1", null, 1.5m, 0, lowStockThreshold, restockTo, "unit", null, null, true, initialUnitCost);
+    private static ProductCreateFields ValidFields(
+        int lowStockThreshold = 5,
+        int restockTo = 10,
+        decimal? initialUnitCost = null,
+        string name = "Coke",
+        decimal unitPrice = 1.5m) =>
+        new(name, "SKU-1", null, unitPrice, 0, lowStockThreshold, restockTo, "unit", null, null, true,
+            initialUnitCost);
 
     [Fact]
     public async Task Handle_PersistsAndReturnsTheNewProductId_WhenFieldsAreValid()
@@ -32,6 +38,60 @@ public class CreateProductTests
         Assert.False(result.IsValid);
         Assert.Equal(Inventory.Domain.Products.ProductInitialCostPolicy.NegativeInitialUnitCostMessage, result.ValidationError);
         Assert.Null(store.LastCreated);
+    }
+
+    /// <summary>
+    /// Issue #736 gave the create use case its first route, and with it the two catalogue
+    /// invariants a manually created product needs.
+    /// </summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Handle_RejectsAMissingName_WithoutPersisting(string name)
+    {
+        var store = new FakeProductStore();
+
+        var result = await new CreateProduct(store).Handle(ValidFields(name: name), CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Equal(Inventory.Domain.Products.ProductCataloguePolicy.NameRequiredMessage, result.ValidationError);
+        Assert.Null(store.LastCreated);
+    }
+
+    [Fact]
+    public async Task Handle_RejectsANegativeUnitPrice_WithoutPersisting()
+    {
+        var store = new FakeProductStore();
+
+        var result = await new CreateProduct(store).Handle(
+            ValidFields(unitPrice: -0.01m), CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Equal(
+            Inventory.Domain.Products.ProductCataloguePolicy.NegativeUnitPriceMessage,
+            result.ValidationError);
+        Assert.Null(store.LastCreated);
+    }
+
+    /// <summary>
+    /// The store's own refusal - a category this business does not own - reaches the caller with its
+    /// message rather than as a created product.
+    /// </summary>
+    [Fact]
+    public async Task Handle_ReportsTheStoresOwnRefusal()
+    {
+        var store = new FakeProductStore
+        {
+            RefusalToReturn = Inventory.Domain.Products.ProductCataloguePolicy.UnknownCategoryMessage,
+        };
+
+        var result = await new CreateProduct(store).Handle(ValidFields(), CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Equal(
+            Inventory.Domain.Products.ProductCataloguePolicy.UnknownCategoryMessage,
+            result.ValidationError);
+        Assert.Null(result.ProductId);
     }
 
     [Fact]

@@ -40,7 +40,7 @@ env:
 jobs:
   resolve:
     name: Resolve release commit
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:
       contents: read
@@ -58,6 +58,31 @@ jobs:
         run: |
           echo "::error::Deploy Production must be started from main; this run was started from $RUN_REF."
           exit 1
+
+      - name: Require verified runner isolation for credentialed jobs
+        # Issue #645 review: jobs that receive a long-lived secret, an App key or Azure OIDC are skipped
+        # until a human confirms the self-hosted runners are reset or ephemeral per job. This step makes
+        # that refusal a visible failure instead of a silent skip.
+        env:
+          RUNNER_ISOLATION_VERIFIED: ${{ vars.INVENTORY_RUNNER_ISOLATION_VERIFIED }}
+        run: |
+          if [ "$RUNNER_ISOLATION_VERIFIED" != "true" ]; then
+            echo "::error::Credentialed jobs are disabled until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Self-hosted runner placement."
+            exit 1
+          fi
+
+      - name: Require a verified tool baseline on every runner
+        # Any runner in the pool can take any deploy job, so the host that later uploads the
+        # frontend is unknown when the API is deployed. A check on that host would come after the
+        # API had already changed. deploy-api and deploy-frontend therefore run only once a human
+        # has run the runner diagnostic on every runner in the pool and recorded the result.
+        env:
+          RUNNER_BASELINE_VERIFIED: ${{ vars.INVENTORY_RUNNER_BASELINE_VERIFIED }}
+        run: |
+          if [ "$RUNNER_BASELINE_VERIFIED" != "true" ]; then
+            echo "::error::Deployment is disabled until a human runs the Inventory agent runner diagnostic on every self-hosted runner and sets the repository variable INVENTORY_RUNNER_BASELINE_VERIFIED to true. See docs/automation.md § Self-hosted runner placement."
+            exit 1
+          fi
 
       - name: Check out main history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -119,7 +144,7 @@ jobs:
   validate:
     name: Validate release commit
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -149,7 +174,7 @@ jobs:
   preflight:
     name: Migration preflight
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:
       contents: read
@@ -208,7 +233,7 @@ jobs:
   build:
     name: Build release artifacts
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -258,14 +283,14 @@ jobs:
 
   deploy-api:
     name: Deploy API
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' && vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true'
     needs:
       - resolve
       - validate
       - preflight
       - build
     environment: VmInventoryApi_Env
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -274,6 +299,16 @@ jobs:
       webapp_url: ${{ steps.deploy.outputs.webapp-url }}
 
     steps:
+      - name: Check runner tools for the API deployment
+        run: |
+          missing=0
+          for tool in az jq curl; do
+            if ! command -v "$tool" >/dev/null 2>&1; then echo "::error::$tool is not installed on runner $RUNNER_NAME."; missing=1; fi
+          done
+          if [ ! -x /usr/bin/gh ]; then echo "::error::/usr/bin/gh is not installed on runner $RUNNER_NAME."; missing=1; fi
+          [ "$missing" -eq 0 ] || exit 1
+          echo "Runner $RUNNER_NAME has the tools the API deployment needs."
+
       - name: Announce release and migrations
         env:
           RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
@@ -307,6 +342,16 @@ jobs:
           name: api-${{ needs.resolve.outputs.sha }}
           path: ${{ runner.temp }}/api
 
+      - name: Isolate the Azure CLI profile to this job
+        # The self-hosted runner is persistent: keep the Azure CLI login in this job's temporary
+        # directory, which the runner discards, instead of the runner account's ~/.azure.
+        run: |
+          set -euo pipefail
+          profile="$RUNNER_TEMP/azure-cli-profile"
+          rm -rf "$profile"
+          mkdir -m 700 "$profile"
+          echo "AZURE_CONFIG_DIR=$profile" >> "$GITHUB_ENV"
+
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -323,14 +368,16 @@ jobs:
 
       - name: Azure Logout
         if: always()
-        run: az logout || true
+        run: |
+          az logout || true
+          if [ -n "${AZURE_CONFIG_DIR:-}" ]; then rm -rf "$AZURE_CONFIG_DIR"; fi
 
   verify-api:
     name: Verify API health
     needs:
       - resolve
       - deploy-api
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 20
     permissions: {}
 
@@ -363,11 +410,13 @@ jobs:
   # startup or migration then fails leaves the last healthy release as the baseline.
   record-release:
     name: Record production backend release
+    # Without a status function this still runs only when every job it needs succeeded.
+    if: vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     needs:
       - resolve
       - deploy-api
       - verify-api
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:
       deployments: write
@@ -393,7 +442,7 @@ jobs:
 
   deploy-frontend:
     name: Deploy frontend
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' && vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true'
     needs:
       - resolve
       - build
@@ -401,7 +450,7 @@ jobs:
       - verify-api
       - record-release
     environment: VmInventoryApi_Env
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 20
     permissions:
       contents: read
@@ -409,6 +458,19 @@ jobs:
       url: ${{ steps.deploy.outputs.static_web_app_url }}
 
     steps:
+      - name: Check runner tools for the frontend deployment
+        run: |
+          missing=0
+          for tool in docker curl; do
+            if ! command -v "$tool" >/dev/null 2>&1; then echo "::error::$tool is not installed on runner $RUNNER_NAME."; missing=1; fi
+          done
+          if [ ! -x /usr/bin/gh ]; then echo "::error::/usr/bin/gh is not installed on runner $RUNNER_NAME."; missing=1; fi
+          [ "$missing" -eq 0 ] || exit 1
+          echo "Runner $RUNNER_NAME has the tools the frontend deployment needs."
+
+      - name: Check the Docker daemon is reachable
+        run: docker info >/dev/null || { echo "::error::The Docker daemon is not reachable by the runner account on $RUNNER_NAME."; exit 1; }
+
       - name: Reverify release SHA is in main
         env:
           GH_TOKEN: ${{ github.token }}
@@ -471,7 +533,7 @@ jobs:
       - record-release
       - verify-api
       - deploy-frontend
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 5
     permissions: {}
 

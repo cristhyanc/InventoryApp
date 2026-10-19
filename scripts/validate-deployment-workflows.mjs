@@ -16,6 +16,13 @@ import { readRepositoryFile, repositoryRoot } from './validate-agent-workflows.m
 export const deployProductionPath = '.github/workflows/deploy-production.yml';
 export const PRODUCTION_ENVIRONMENT = 'VmInventoryApi_Env';
 export const RELEASE_SHA = '${{ needs.resolve.outputs.sha }}';
+// Issue #645 review: credentialed jobs wait for a human to verify runner isolation, and the deploy
+// jobs also wait for a human to verify the tool baseline on every runner, because the host that
+// uploads the frontend is not known when the API is deployed.
+export const RUNNER_ISOLATION_CONDITION = "vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'";
+export const RUNNER_BASELINE_CONDITION = "vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true'";
+export const DEPLOY_JOB_CONDITION = `if: github.ref == 'refs/heads/main' && ${RUNNER_ISOLATION_CONDITION} && ${RUNNER_BASELINE_CONDITION}`;
+const RUNNER_BASELINE_STEP = '- name: Require a verified tool baseline on every runner';
 
 // Text that only a production deployment needs. No other workflow may contain any of it.
 export const DEPLOYMENT_MARKERS = Object.freeze([
@@ -244,6 +251,8 @@ export function verifyDeployProductionWorkflow(text, source = deployProductionPa
   const resolveJob = jobs.resolve;
   requireOrder(resolveJob, "if: github.ref != 'refs/heads/main'", 'uses: actions/checkout', `${source} job 'resolve'`);
   requireText(resolveJob, 'exit 1', `${source} job 'resolve'`);
+  requireOrder(resolveJob, RUNNER_BASELINE_STEP, 'uses: actions/checkout', `${source} job 'resolve'`);
+  requireText(resolveJob, 'if [ "$RUNNER_BASELINE_VERIFIED" != "true" ]; then', `${source} job 'resolve'`);
   requireText(resolveJob, 'merge-base --is-ancestor "$sha" refs/remotes/origin/main', `${source} job 'resolve'`);
   requireText(resolveJob, '^[0-9a-f]{40}$', `${source} job 'resolve'`);
   requirePermissions(jobs, 'resolve', { contents: 'read', deployments: 'read' }, source);
@@ -268,7 +277,7 @@ export function verifyDeployProductionWorkflow(text, source = deployProductionPa
   forbidEnvironment(jobs, 'build', source);
 
   const deployApi = jobs['deploy-api'];
-  requireText(deployApi, "if: github.ref == 'refs/heads/main'", `${source} job 'deploy-api'`);
+  requireText(deployApi, `${DEPLOY_JOB_CONDITION}\n`, `${source} job 'deploy-api'`);
   requireText(deployApi, `environment: ${PRODUCTION_ENVIRONMENT}`, `${source} job 'deploy-api'`);
   requireNeeds(jobs, 'deploy-api', ['resolve', 'validate', 'preflight', 'build'], source);
   requirePermissions(jobs, 'deploy-api', { contents: 'read', 'id-token': 'write' }, source);
@@ -283,8 +292,11 @@ export function verifyDeployProductionWorkflow(text, source = deployProductionPa
   requirePermissions(jobs, 'record-release', { deployments: 'write' }, source);
   forbidEnvironment(jobs, 'record-release', source);
   requireNeeds(jobs, 'record-release', ['resolve', 'deploy-api', 'verify-api'], source);
-  if (/^ {4}if:/m.test(jobs['record-release'])) {
-    fail(source, "job 'record-release' must run only when 'verify-api' succeeded (no custom if:)");
+  // Its only allowed condition is the isolation gate, which has no status function, so GitHub
+  // still runs the job only when every job it needs succeeded.
+  const recordConditions = jobs['record-release'].match(/^ {4}if:.*$/gm) ?? [];
+  if (recordConditions.some((line) => line !== `    if: ${RUNNER_ISOLATION_CONDITION}`)) {
+    fail(source, "job 'record-release' must run only when 'verify-api' succeeded (no if: other than the runner isolation gate)");
   }
 
   requireNeeds(jobs, 'verify-api', ['deploy-api'], source);
@@ -296,7 +308,7 @@ export function verifyDeployProductionWorkflow(text, source = deployProductionPa
   }
 
   const deployFrontend = jobs['deploy-frontend'];
-  requireText(deployFrontend, "if: github.ref == 'refs/heads/main'", `${source} job 'deploy-frontend'`);
+  requireText(deployFrontend, `${DEPLOY_JOB_CONDITION}\n`, `${source} job 'deploy-frontend'`);
   requireText(deployFrontend, `environment: ${PRODUCTION_ENVIRONMENT}`, `${source} job 'deploy-frontend'`);
   requireNeeds(jobs, 'deploy-frontend', ['resolve', 'build', 'deploy-api', 'verify-api', 'record-release'], source);
   requirePermissions(jobs, 'deploy-frontend', { contents: 'read' }, source);

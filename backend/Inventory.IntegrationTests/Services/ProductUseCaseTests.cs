@@ -199,12 +199,21 @@ public class ProductUseCaseTests
         Assert.Single(adjustments);
 
         var updated = await useCases.Update.Handle(
-            product.Id, new ProductUpdateFields(null, null, 1, 12, "unit", null, true), CancellationToken.None);
+            product.Id,
+            new ProductUpdateFields("p1", null, null, 10m, 1, 12, "unit", null, null, true),
+            CancellationToken.None);
         Assert.Equal(UpdateProductOutcome.Success, updated.Outcome);
         Assert.Equal(12, (await db.Products.FindAsync(product.Id))!.RestockTo);
 
+        // The initial stock created a movement, which since issue #736 is history a delete is
+        // refused over. Removing it is what makes this a round-trip of the create/update/delete
+        // orchestration rather than a test of the deletion policy, which
+        // InventoryApi.Tests.Adapters.Persistence.EfProductDeletionTests owns.
+        db.StockAdjustments.RemoveRange(adjustments);
+        await db.SaveChangesAsync();
+
         var deleted = await useCases.Delete.Handle(product.Id, CancellationToken.None);
-        Assert.True(deleted);
+        Assert.Equal(ProductWriteOutcome.Succeeded, deleted.Outcome);
     }
 
     [Fact]
@@ -380,7 +389,9 @@ public class ProductUseCaseTests
         await db.SaveChangesAsync();
 
         var result = await CreateUseCases(db).Update.Handle(
-            1, new ProductUpdateFields(null, null, 10, 9, "unit", null, true), CancellationToken.None);
+            1,
+            new ProductUpdateFields("Coke", null, null, 0m, 10, 9, "unit", null, null, true),
+            CancellationToken.None);
 
         Assert.Equal(UpdateProductOutcome.Invalid, result.Outcome);
         Assert.Equal("Restock To must be greater than or equal to the Low Stock Threshold.", result.ValidationError);

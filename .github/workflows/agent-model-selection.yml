@@ -33,7 +33,8 @@ permissions: {}
 
 jobs:
   select:
-    runs-on: ubuntu-latest
+    if: vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:
       contents: read

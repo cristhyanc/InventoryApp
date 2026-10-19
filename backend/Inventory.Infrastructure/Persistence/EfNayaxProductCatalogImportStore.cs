@@ -3,6 +3,7 @@ using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace Inventory.Infrastructure.Persistence;
 
@@ -20,17 +21,23 @@ namespace Inventory.Infrastructure.Persistence;
 /// multi-step writes follow. Both reads are awaited one at a time, because they share the request's
 /// scoped context (docs/architecture.md § Concurrency inside one request).
 ///
-/// That shape gives no isolation against a *concurrent* request, and must not be read as if it did.
-/// The catalogue reads run outside the transaction <c>SaveChangesAsync</c> opens, and there is no
-/// lock, no expected-state comparison and no concurrency token, so two overlapping imports can both
-/// decide the same product is new (the later <c>SaveChanges</c> then fails on the filtered unique
-/// index over <c>(BusinessId, ExternalProductId)</c>, which since issue #735 is what refuses a
-/// duplicated identity in place of the primary key), and a local catalogue edit committed between
-/// this import's read and its write is simply overwritten by whichever writer commits last. Keeping
-/// the sequence in one adapter only keeps the
-/// new/existing decision and the write it feeds together within this one request; closing the
-/// cross-request window would need an explicit transaction or a concurrency token, which is a
-/// behaviour change outside issue #300.
+/// That shape gives no isolation of its own against a *concurrent* request, and must not be read as
+/// if it did. There is no lock, no expected-state comparison and no concurrency token, so two
+/// overlapping imports can both decide the same product is new (the later <c>SaveChanges</c> then
+/// fails on the filtered unique index over <c>(BusinessId, ExternalProductId)</c>, which since issue
+/// #735 is what refuses a duplicated identity in place of the primary key), and a local catalogue
+/// edit to a provider-linked row committed between this import's read and its write is simply
+/// overwritten by whichever writer commits last. Keeping the sequence in one adapter only keeps the
+/// new/existing decision and the write it feeds together within this one request; closing that
+/// cross-request window would need a concurrency token, which is a behaviour change outside issue
+/// #300.
+///
+/// <para>The one cross-request window issue #736 did close is the manual-catalogue guard, because
+/// there the stale answer is not a lost edit but a duplicated catalogue. <see cref="BeginTransactionAsync"/>
+/// gives the use case a transaction it opens after the remote reads and holds across
+/// <see cref="CountProductsWithNoProviderIdAsync"/> and <see cref="ApplyAsync"/>, so the count the
+/// import is allowed on is read in the same unit of work as the write it decides, and a product
+/// created while the Nayax reads were in flight refuses the import with nothing committed.</para>
 ///
 /// <para><strong>Identity comes from the external id columns, not from the local keys</strong>
 /// (issue #745, parent #329 decision A2b; issue #759 moved it from the link tables onto the rows). A
@@ -66,6 +73,17 @@ public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImpor
     {
         _db = db;
     }
+
+    /// <summary>
+    /// The transaction the use case holds across its authoritative manual-catalogue re-check and
+    /// <see cref="ApplyAsync"/> (issue #736). The EF InMemory provider some tests use is not
+    /// relational and has none, exactly as every other transactional adapter here handles it.
+    /// </summary>
+    public async Task<INayaxProductCatalogImportTransaction> BeginTransactionAsync(
+        CancellationToken cancellationToken) =>
+        new Transaction(_db.Database.IsRelational() && _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(cancellationToken)
+            : null);
 
     public async Task ApplyAsync(NayaxProductCatalogImport import, CancellationToken cancellationToken)
     {
@@ -154,6 +172,16 @@ public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImpor
     }
 
     /// <summary>
+    /// The business's products that carry no <c>ExternalProductId</c> - the manually maintained rows
+    /// this import cannot recognise (issue #736). Scoped to the caller's business by the central
+    /// query filters, like every other read here, and untracked because it is a count.
+    /// </summary>
+    public Task<int> CountProductsWithNoProviderIdAsync(CancellationToken cancellationToken) =>
+        _db.Products
+            .AsNoTracking()
+            .CountAsync(product => product.ExternalProductId == null, cancellationToken);
+
+    /// <summary>
     /// Refuses to run at all unless the current business's sales provider is Nayax (issue #759).
     ///
     /// <para>The external id columns this import reads and writes hold the id issued by
@@ -174,6 +202,19 @@ public sealed class EfNayaxProductCatalogImportStore : INayaxProductCatalogImpor
             "The Nayax product catalogue cannot be imported into a business whose sales provider is "
                 + "not Nayax. Store the business's Nayax credentials first, which is what records "
                 + "its sales provider. Nothing was imported.");
+    }
+
+    /// <summary>
+    /// The relational transaction behind <see cref="BeginTransactionAsync"/>, or a no-op when there
+    /// is none to hold - a non-relational provider, or a transaction an outer operation already
+    /// owns and must commit itself.
+    /// </summary>
+    private sealed class Transaction(IDbContextTransaction? transaction) : INayaxProductCatalogImportTransaction
+    {
+        public Task CommitAsync(CancellationToken cancellationToken) =>
+            transaction?.CommitAsync(cancellationToken) ?? Task.CompletedTask;
+
+        public ValueTask DisposeAsync() => transaction?.DisposeAsync() ?? ValueTask.CompletedTask;
     }
 
     /// <summary>

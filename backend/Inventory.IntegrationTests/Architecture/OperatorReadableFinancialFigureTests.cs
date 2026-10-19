@@ -215,11 +215,20 @@ public class OperatorReadableFinancialFigureTests
     private static readonly string[] UninspectableOperatorEndpoints =
     [
         // Status codes and ProblemDetails only.
+        //
+        // The two category writes joined this list with issue #736, which gave the categories
+        // resource a write surface: each answers a status code, or a refusal sentence saying what a
+        // provider manages or how many products use the category, and neither constructs a
+        // financial figure. The create actions of both resources are deliberately *not* here -
+        // POST api/Products and POST api/Categories declare their response payload, so the scan
+        // above inspects them like any other read.
+        "DELETE api/Categories/{id:long}",
         "DELETE api/Products/{id:long}",
         "DELETE api/Suppliers/{id:int}",
         "DELETE api/purchases/{id:int}",
         "POST api/SupplierOrders/{id:int}/cancel",
         "POST api/nayax-sales-sync",
+        "PUT api/Categories/{id:long}",
         "PUT api/Products/{id:long}",
         "PUT api/Products/{id:long}/gst-rule",
         "PUT api/Suppliers/{id:int}",

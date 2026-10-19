@@ -4,7 +4,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Nayax is an optional add-on: inventory, purchasing, expenses and the reports over sales already imported work without it, while the features that read live Nayax data are grouped together in the menu and shown locked until a provider is connected (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
@@ -64,6 +64,7 @@ Inventory App/
 ├── scripts/validate.ps1           Windows/PowerShell validation
 ├── scripts/validate.sh            Bash validation
 ├── scripts/run-agent-evals.mjs    Agent Evals runner
+├── scripts/validate-runner-placement.mjs  Every workflow job on the self-hosted runners
 ├── AGENTS.md                      Engineering and agent safeguards
 └── CLAUDE.md                      Claude Code entry point (points to AGENTS.md and docs)
 ```
@@ -968,6 +969,10 @@ Failure output (screenshots and traces) is written under `frontend/inventory-app
 - `npm run test` runs the Jest suite (`jest-preset-angular`, configured through `frontend/inventory-app/jest.config.js`/`tsconfig.spec.json`/`setup-jest.ts`) once and exits; it is not a watch-mode command. `*.spec.ts` files sit next to the code they test.
 - `npm audit` is reported but not enforced. The outstanding high/critical advisories are all in the Angular 19 build toolchain (`@angular-devkit/build-angular` → `vite`, `webpack-dev-server`, `tar`, …) and every published fix requires a major Angular upgrade, which is a separate, deliberate piece of work. Review the printed report; do not run `npm audit fix --force`.
 
+### GitHub Actions runners
+
+Every GitHub Actions job in this repository, Deploy Production included, runs on the self-hosted Linux x64 runners labelled `[self-hosted, linux, x64, inventory-agent]`. Nothing falls back to a GitHub-hosted runner, and `scripts/validate-runner-placement.mjs` fails validation if a workflow tries to. While no runner is online, jobs wait in the queue. To start them, bring the runner VM and its runner service back up and confirm the runner shows **Idle** under Repository Settings → Actions → Runners. The runner host must provide `git`, `curl`, `jq`, `tar`, `gzip`, `unzip`, `/usr/bin/gh`, the Azure CLI and a Docker daemon. Jobs install .NET and Node.js themselves. Run **Actions → Inventory agent runner diagnostic** to check a runner. Jobs that hold a credential stay disabled until a human provisions reset or ephemeral runners and sets the repository variable `INVENTORY_RUNNER_ISOLATION_VERIFIED` to `true`. That covers the Claude agents, the SonarCloud and Project sync reads, both production deploy jobs, and every job with a write-capable `GITHUB_TOKEN`: dispatchers, review publication, branch cleanup, the release record and the validation status jobs. Until then those runs fail with an error naming the variable. Pull requests do not receive the required `merge-validation` status, so they cannot merge without an administrator bypass, although the validation job itself still runs. Deploy Production also needs `INVENTORY_RUNNER_BASELINE_VERIFIED` set to `true` once the diagnostic has passed on every runner. See [docs/automation.md § Self-hosted runner placement](docs/automation.md#self-hosted-runner-placement-issue-645) for the isolation limits of a persistent runner and the cost boundaries.
+
 ## Important domain rules
 
 - Gross vending sales are not the same as a Nayax payout. Card and cash revenue remain distinct.
@@ -1030,6 +1035,56 @@ as plain amounts.
 
 GST classification is accounting data only. It never changes a purchase's unit cost, the weighted-average
 cost, costing quantity or inventory value.
+
+## Products and categories
+
+The catalogue is the business's own. A business with no sales provider connected creates and
+maintains every product and category itself, and a business with one keeps the fields its provider
+does not manage.
+
+- **Create a product** with `POST /api/products`, and a **category** with `POST /api/categories`.
+  Both answer the created record with its new id. A product needs a name and a selling price that
+  is not negative; a category needs a name, unique within the business (compared without case, so
+  "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
+  the initial restock movement it always did.
+- **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name, selling price and
+  category** as well as the SKU, description, unit, supplier, low-stock threshold, restock target
+  and active flag. **Edit a category** with `PUT /api/categories/{id}`.
+- **Which fields a provider manages.** For a product the provider's catalogue names, its **name and
+  category** come from the provider and are refused with a message naming the provider if you try to
+  change them — the next catalogue import would overwrite the local value. Its **price and every
+  other local field stay editable**. For a category the provider named, its **name** is managed the
+  same way and its description stays editable. Every product and category response says which of
+  its fields are managed, in `providerManagedFields`, so a screen can lock exactly those inputs.
+  (The screens themselves are the next change, issue #737.)
+- **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock
+  movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
+  the delete is refused with what is in the way and nothing is written — deleting it would erase
+  inventory and financial history. **Deactivate it instead**: a deactivated product keeps all of its
+  history and can be reactivated at any time. A product the provider manages is not deleted either,
+  because the next import would create it again.
+- **A deactivated product is out of the product lists.** `GET /api/products` answers the catalogue
+  you work from, so a deactivated product is not in it, is not offered in a product picker, and
+  stays out of the reorder alerts and the Pick List — it must not be purchased from, counted,
+  picked or refilled. Nothing about it is lost: it is still answered by
+  `GET /api/products/{id}`, every stock movement, purchase, sale and count that names it is
+  untouched, `GET /api/products?includeRetired=true` lists it with the rest of the catalogue, and
+  putting `isActive: true` back reactivates it.
+- **The screens have not caught up yet** (issue #737). They call `GET /api/products` without
+  `includeRetired=true`, so until that issue ships the Products page, the Admin costing-repair and
+  AVCO-transition tools and the stock-history product filter show active products only, and
+  reactivating a product is done through the API. #737 is where those four call sites and the "show
+  retired" control on the Products page belong.
+- **A category products use is not deleted.** The refusal says how many products use it; move them
+  to another category first, otherwise they would be left with no category at all.
+- **The Nayax catalogue import waits for the catalogue review.** While the business holds products
+  that Nayax does not manage, **Admin → Imports → Import Products** is refused with how many they
+  are, and nothing is imported: the import recognises a product only by Nayax's own product id, so
+  it would create a duplicate of each of yours. A business whose products all came from Nayax
+  imports exactly as before, and the check is made again at the moment the import is written, so a
+  product somebody creates while Nayax is being read refuses the import rather than slipping past
+  it — nothing is imported in that case either. Linking your own products to Nayax products
+  deliberately is the next step (issues #738 and #739).
 
 ## Product and supplier GST rules
 

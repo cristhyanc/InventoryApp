@@ -1,14 +1,28 @@
 namespace Inventory.Application.Products;
 
 /// <summary>
-/// The optional search/category/supplier narrowing a product listing request carries. A null member
-/// means "do not narrow on this", exactly as the former
-/// <c>InventoryApi.Services.ProductService.GetAll</c>/<c>LowStock</c> query building did.
+/// The optional search/category/supplier narrowing a product listing request carries, plus whether
+/// retired products belong in the answer. A null member means "do not narrow on this", exactly as
+/// the former <c>InventoryApi.Services.ProductService.GetAll</c>/<c>LowStock</c> query building did.
+///
+/// <para><paramref name="IncludeRetired"/> is deliberately not that kind of narrowing and has no
+/// "unset" value (issue #736): a product whose <c>IsActive</c> is false has been retired, which is
+/// what a product with history is given instead of a delete, and the catalogue a person works from
+/// does not hold it. Every caller therefore states which catalogue it is reading - the working one
+/// or every row the business owns - rather than inheriting whichever the adapter happens to
+/// return.</para>
 /// </summary>
-public sealed record ProductCatalogFilter(string? Search, long? CategoryId, int? SupplierId)
+public sealed record ProductCatalogFilter(
+    string? Search, long? CategoryId, int? SupplierId, bool IncludeRetired)
 {
-    /// <summary>The unnarrowed whole catalogue.</summary>
-    public static ProductCatalogFilter None { get; } = new(null, null, null);
+    /// <summary>
+    /// The unnarrowed catalogue, <strong>retired products included</strong>: every product the
+    /// business owns. It is what a caller that resolves activity itself needs - the home Dashboard
+    /// summary and <c>Inventory.Application.Machines.ListMachineProducts</c> both read the whole
+    /// catalogue and then apply their own Domain rule to it, and a machine slot or a refill alert
+    /// naming a retired product must still be able to describe it.
+    /// </summary>
+    public static ProductCatalogFilter None { get; } = new(null, null, null, IncludeRetired: true);
 }
 
 /// <summary>
@@ -31,6 +45,13 @@ public interface IProductCatalogStore
     Task<IReadOnlyList<ProductRecord>> ListUnorderedAsync(
         ProductCatalogFilter filter, CancellationToken cancellationToken);
 
-    /// <summary>The single product, or <c>null</c> when the caller's business owns no such product.</summary>
+    /// <summary>
+    /// The single product, or <c>null</c> when the caller's business owns no such product.
+    ///
+    /// <para>A retired product is answered like any other (issue #736). This is the read that keeps
+    /// a retired product's history and its reactivation reachable while the listings leave it out:
+    /// retirement decides what a listing offers to work with, never what the business may look
+    /// at.</para>
+    /// </summary>
     Task<ProductRecord?> FindAsync(long id, CancellationToken cancellationToken);
 }
