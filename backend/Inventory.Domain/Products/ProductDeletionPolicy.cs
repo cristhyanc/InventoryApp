@@ -41,6 +41,40 @@ public sealed record ProductDeletionReferences(
 }
 
 /// <summary>
+/// Whether a product may be deleted <em>as a read answers it</em>, and the refusal that says why not
+/// (issue #737, B2 of parent #329).
+///
+/// <para>It is the same answer <see cref="ProductDeletionPolicy.Refusal"/> gives the delete itself,
+/// decided by the same call over the same counts, so a screen can offer <strong>Delete</strong> only
+/// where the API allows it instead of attempting one that must fail. It is deliberately not a second
+/// rule: <see cref="Decide"/> is a projection of the policy, which is what stops what a client offers
+/// from drifting from what the server permits.</para>
+///
+/// <para><strong>It is advisory, and it never replaces the delete's own decision.</strong> It
+/// describes rows as they were when they were read; a product can gain a stock movement or a provider
+/// link immediately afterwards. The delete therefore counts again inside its own transaction
+/// (<c>Inventory.Infrastructure.Persistence.EfProductStore.DeleteAsync</c>) and refuses there, and a
+/// client still has to show that refusal. Offering one fewer impossible action is the point; being
+/// the authority is not.</para>
+/// </summary>
+/// <param name="Refusal">Why the product may not be deleted, or <c>null</c> when it may be.</param>
+public sealed record ProductDeletionEligibility(string? Refusal)
+{
+    /// <summary>Whether the delete would be allowed, as far as the read that produced this knows.</summary>
+    public bool Allowed => Refusal is null;
+
+    /// <summary>
+    /// The eligibility of a product with these references, from the one deletion rule.
+    /// </summary>
+    /// <param name="isProviderManaged">Whether the product carries the provider's own product id.</param>
+    /// <param name="provider">The business's sales provider, named in a provider refusal.</param>
+    /// <param name="references">What already refers to the product.</param>
+    public static ProductDeletionEligibility Decide(
+        bool isProviderManaged, ExternalProvider? provider, ProductDeletionReferences references) =>
+        new(ProductDeletionPolicy.Refusal(isProviderManaged, provider, references));
+}
+
+/// <summary>
 /// Whether a product may be deleted, and why not when it may not (issue #736, parent #329 decision
 /// P2).
 ///

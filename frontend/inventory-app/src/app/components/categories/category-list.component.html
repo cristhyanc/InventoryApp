@@ -3,9 +3,45 @@
     <h1 class="page-title">Categories</h1>
   </header>
 
-  <div class="card">
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">{{ editing ? 'Edit Category' : 'New Category' }}</h2>
+    </div>
+    <div class="card-body">
+      @if (error) {
+        <p class="field-error mb-4">{{ error }}</p>
+      }
+
+      @if (nameLocked) {
+        <div class="alert alert-info mb-4">
+          <p class="alert-title">This category's name is managed by Nayax and cannot be edited here.</p>
+        </div>
+      }
+
+      <form class="flex flex-col gap-4" (ngSubmit)="save()">
+        <div class="field">
+          <label class="field-label" for="categoryName">Name *</label>
+          <input id="categoryName" [(ngModel)]="form.name" name="name" required [readOnly]="nameLocked" placeholder="e.g. Drinks" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="categoryDescription">Description</label>
+          <textarea id="categoryDescription" [(ngModel)]="form.description" name="description" rows="2" placeholder="Optional"></textarea>
+        </div>
+        <div class="page-actions">
+          <button type="submit" class="btn btn-primary" [disabled]="sessionActive">{{ editing ? 'Update' : 'Create' }}</button>
+          @if (editing) {
+            <button type="button" class="btn btn-secondary" (click)="cancel()">Cancel</button>
+          }
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">All Categories</h2>
+    </div>
     <div class="card-body p-0">
-      <p class="p-4 text-md-body value-muted">Categories are managed from the product import and are read-only here.</p>
       @if (categories.length === 0) {
         <p class="p-4 text-md-body value-muted">No categories yet.</p>
       } @else {
@@ -15,6 +51,7 @@
               <tr>
                 <th scope="col" class="table-cell">Name</th>
                 <th scope="col" class="table-cell">Description</th>
+                <th scope="col" class="table-cell"></th>
               </tr>
             </thead>
             <tbody>
@@ -22,6 +59,17 @@
                 <tr class="table-row">
                   <td class="table-cell">{{ c.name }}</td>
                   <td class="table-cell">{{ c.description }}</td>
+                  <td class="table-cell">
+                    <div class="flex flex-wrap gap-2">
+                      <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(c)">Edit</button>
+                      <!-- Hidden rather than disabled while a support session is active (issue
+                           #737, extending #554): a session grants InventoryOperate, so this write
+                           would otherwise still render. -->
+                      @if (!sessionActive) {
+                        <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(c)">Delete</button>
+                      }
+                    </div>
+                  </td>
                 </tr>
               }
             </tbody>
@@ -29,5 +77,14 @@
         </div>
       }
     </div>
-  </div>
+  </section>
 </div>
+
+<app-confirmation-dialog
+  confirmLabel="Delete"
+  cancelLabel="Cancel"
+  *ngIf="confirmingCategory"
+  title="Confirm delete"
+  [message]="`Delete category '${confirmingCategory.name}'?`"
+  (confirmed)="deleteConfirmed()"
+  (canceled)="cancelDelete()"></app-confirmation-dialog>

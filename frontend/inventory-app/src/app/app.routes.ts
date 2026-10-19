@@ -134,6 +134,13 @@ export const routes: Routes = [
     loadComponent: () => import('./components/dashboard/dashboard.component').then((m) => m.DashboardComponent)
   },
   {
+    // The "New product" action (issue #737): the same routed edit page with no `:id`, so a
+    // business with no sales provider can start a catalogue instead of only ever importing one.
+    path: 'products/new',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
+    loadComponent: () => import('./components/products/product-form.component').then((m) => m.ProductFormComponent)
+  },
+  {
     path: 'products/:id/edit',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/products/product-form.component').then((m) => m.ProductFormComponent)

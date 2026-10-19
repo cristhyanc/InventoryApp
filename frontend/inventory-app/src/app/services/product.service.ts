@@ -6,6 +6,7 @@ import {
   GstClassification,
   InventoryValuationSummary,
   Product,
+  ProductCreateDto,
   ProductGstRule,
   ProductPriceComparison,
   ProductUpdateDto,
@@ -21,6 +22,14 @@ export interface ProductFilters {
   supplierId?: number;
   machineId?: number;
   lowStockOnly?: boolean;
+  /**
+   * Whether to include a deactivated product in the answer (issue #737): `GET /api/products`
+   * answers the working catalogue - active products only - unless this is set, because a
+   * deactivated product is retired out of the lists, the pickers and the reorder alerts while its
+   * history stays intact. The catalogue page passes this so Reactivate stays reachable after a
+   * product is deactivated.
+   */
+  includeRetired?: boolean;
 }
 
 /** `InventoryApi.Adapters.Mapping.ReorderListingMetadataHeaders.Mode`. */
@@ -63,6 +72,7 @@ export class ProductService {
     if (filters.supplierId !== undefined) params = params.set('supplierId', filters.supplierId);
     if (filters.machineId !== undefined) params = params.set('machineId', filters.machineId);
     if (filters.lowStockOnly) params = params.set('lowStockOnly', true);
+    if (filters.includeRetired) params = params.set('includeRetired', true);
     return this.http.get<Product[]>(this.baseUrl, { params });
   }
 
@@ -98,6 +108,11 @@ export class ProductService {
 
   update(id: number, payload: ProductUpdateDto): Observable<void> {
     return this.http.put<void>(`${this.baseUrl}/${id}`, payload);
+  }
+
+  /** Creates a product this business maintains itself (issue #737). */
+  create(payload: ProductCreateDto): Observable<Product> {
+    return this.http.post<Product>(this.baseUrl, payload);
   }
 
   /** The product's configured GST rule (issue #430); it is its own resource, not a catalogue field. */

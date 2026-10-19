@@ -6769,7 +6769,7 @@ Reconciliation applies the same separation as bookkeeping, and adds a third cate
 
 **The JSON field this value is imported from is confirmed (issue #363).** A human confirmed from a live `GET /v1/operators/{OperatorID}/products` response that the product selling price field is `ProductDefaultRetailPrice`, matching the Nayax developer portal, which documents that field on `GET /v1/operators/{OperatorID}/products` and `GET /v1/products/{NayaxProductID}` and documents no bare `RetailPrice` field on either endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` above correctly use. The operator-catalogue DTO `Inventory.Application.Nayax.NayaxProduct.ProductDefaultRetailPrice` binds that confirmed JSON name. Products already imported with `UnitPrice` of `0` under the previous, unconfirmed `RetailPrice` mapping are not backfilled by this change; whether to backfill them is a separate decision.
 
-The public property name `UnitPrice` is retained for API/contract compatibility. **Since issue #736 the business owns this value too** (parent #329 decision P2 and P3): `PUT /api/products/{id}` accepts it, `ProductUpdateFields` carries it, and the only bound on it is that it is not negative (`Inventory.Domain.Products.ProductCataloguePolicy`). It had to become editable, because a business with no sales provider has no import to set it. The product edit screen still presents it, the name and the category as read-only inputs; unlocking them is issue #737 (B2), and until then the screen sends the stored values back unchanged. The Nayax catalogue import still overwrites it for a product the provider names, and a local price edit of such a product is accepted rather than refused — the price is deliberately *not* one of the provider-managed fields that are locked, which are the product's name and category only (see [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)). Choosing per field whether to keep the local price or take the provider's is the catalogue review of issue #738, which also remembers the provider value a skipped price was decided about so it is not proposed again until the provider changes it (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)); #739 is the screen for it. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
+The public property name `UnitPrice` is retained for API/contract compatibility. **Since issue #736 the business owns this value too** (parent #329 decision P2 and P3): `PUT /api/products/{id}` accepts it, `ProductUpdateFields` carries it, and the only bound on it is that it is not negative (`Inventory.Domain.Products.ProductCataloguePolicy`). It had to become editable, because a business with no sales provider has no import to set it. **Since issue #737 (B2) the product edit screen presents it editable for every product**, and presents the name and the category as read-only inputs only for a product carrying an external id, naming the provider in a note beside them. The Nayax catalogue import still overwrites it for a product the provider names, and a local price edit of such a product is accepted rather than refused — the price is deliberately *not* one of the provider-managed fields that are locked, which are the product's name and category only (see [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)). Choosing per field whether to keep the local price or take the provider's is the catalogue review of issue #738, which also remembers the provider value a skipped price was decided about so it is not proposed again until the provider changes it (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)); #739 is the screen for it. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
 
 ### Purchase GST classification (issue #429)
 
@@ -10088,9 +10088,9 @@ not a change, so a client may send the whole row back, and the price, SKU, unit,
 settings and active flag stay editable for every product. Nothing here clears an external id; if a
 future provider switch (#761) does, the fields become editable again with no further change.
 
-`providerManagedFields` is the one key the catalogue response gained, appended last, and it is
-absent (`null`, omitted from the JSON) wherever a product or category is carried inside another
-resource — a purchase line's or a supplier order line's product snapshot, a machine slot's product,
+`providerManagedFields` is the key issue #736 appended to the catalogue response (issue #737 appended
+`canDelete`/`deletionRefusal` after it; see below), and it is absent (`null`, omitted from the JSON)
+wherever a product or category is carried inside another resource — a purchase line's or a supplier order line's product snapshot, a machine slot's product,
 and a product's nested `category`. Those payloads are pinned contracts and none of them is an
 editing surface, so they say nothing about locks rather than saying "none".
 
@@ -10106,7 +10106,48 @@ provider-managed product is refused for its own reason: the next import would cr
 `NayaxSales.ProductId` foreign key stays `Restrict`, never cascade and never set-null.
 `Inventory.Domain.Categories.CategoryCataloguePolicy` refuses a category products still use, with
 the count in the message, because `Product.CategoryId` is set to null when its category disappears.
-A refused delete answers `409` with that message; a validation refusal answers `400`.
+A refused delete answers `409` with that message; a validation refusal answers `400`. Since issue
+#737 the same product refusal is also readable *before* the attempt, on the catalogue reads - see
+"Whether a product may be deleted is published" below; the delete's own transactional decision is
+unchanged and remains the authority.
+
+**Whether a product may be deleted is published, by the rule that refuses the delete** (issue #737,
+B2). The criterion is that **Delete** is offered only where the API allows it, which a client cannot
+decide for itself: five of the six refusals are statements about stored rows. So the two reads a
+person maintains the catalogue from answer the question instead.
+`Inventory.Domain.Products.ProductDeletionEligibility.Decide` is a *projection* of
+`ProductDeletionPolicy.Refusal`, not a second rule - it calls it - and
+`EfProductCatalogStore.WithDeletionEligibilityAsync` hands it the same six counts over the same
+tables the delete counts, for `ListOrderedByNameAsync` and `FindAsync`. `GET api/products` and
+`GET api/products/{id}` publish the answer as two appended keys: `canDelete`, and `deletionRefusal`
+carrying the exact message the delete would answer `409` with. `ProductListComponent` renders
+**Delete** only on `canDelete: true` and otherwise shows that refusal followed by the control that
+retires the product ("Use the Status toggle to deactivate it.", or the reactivation wording for a
+product already retired); `confirmDelete` refuses to open the confirmation for the same rows, so the
+write is unavailable rather than merely invisible.
+
+Three things keep that honest:
+
+- **The advisory read never replaces the transactional one.** These counts are taken outside the
+  delete's transaction, so a product can gain a stock movement, a sale or a provider link
+  immediately afterwards. `EfProductStore.DeleteAsync` therefore counts again inside its own
+  transaction and refuses there - unchanged by this issue - and the screen still shows a `409` it
+  did not expect, with the row left in place. Concurrency is the reason the recheck exists, not a
+  reason to withhold the answer from the screen.
+- **An unanswered read is not permission.** `ProductRecord.DeletionEligibility` is `null`, and both
+  keys are absent from the JSON, on every path that did not resolve it: `ListUnorderedAsync` (the
+  reorder alerts, the home Dashboard summary and `ListMachineProducts` - none of them deletes a
+  product, and the answer costs six grouped reads), a machine slot's product, and the product
+  snapshots nested in a purchase or a supplier order. The screen offers **Delete** only on an
+  explicit `true`.
+- **It costs a fixed number of round trips.** Six grouped counts for the whole page rather than six
+  per product, each reading one table once for every listed product id; the seventh kind, the stock
+  movements, is counted from the rows the record's own include graph already loaded.
+
+A category has no such answer: `CategoryCataloguePolicy.DeletionRefusal` depends only on a product
+count, `Category` has no `IsActive` to retire one with, and nothing in #737's scope published a
+category count on the response - so the categories screen attempts every delete and explains the
+server's refusal, which names how many products use the category.
 
 **Where each rule is decided.** The deterministic ones — a name is required, a price is not
 negative, a category name is required — are Domain policies the use cases apply before anything is
@@ -10161,12 +10202,11 @@ stock are untouched throughout.
 
 **`GET api/products` hiding retired products is a deliberate read-contract change** (issue #736's
 criterion that a deactivated product is hidden from lists, pick lists and reorder while keeping its
-history and staying reactivatable). The Angular screens are issue #737 (B2) and still call the
-endpoint without the parameter, so until they pass `includeRetired=true` the four places that need a
-retired product show only active ones: the catalogue page (which is how a retired product is found
-again to reactivate), the Admin costing-repair and AVCO-transition tools, and the stock-history
-product filter. Those four call sites plus a "show retired" control on the catalogue page are the
-frontend scope this change hands to #737; nothing on the server depends on them.
+history and staying reactivatable). **The catalogue page passes `includeRetired=true` through its
+"Show retired" filter since issue #737 (B2)**, which is how a retired product is found again to
+reactivate; the Admin costing-repair and AVCO-transition tools and the stock-history product filter
+still call the endpoint without it and show active products only - picking those three up is
+unrelated follow-up work, not part of #737. Nothing on the server depends on any of them.
 
 **The provider import is refused for a manual catalogue, for now.**
 `Inventory.Domain.Providers.ManualCatalogueImportPolicy`: while the business holds products with no

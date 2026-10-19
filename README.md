@@ -1056,13 +1056,42 @@ does not manage.
   other local field stay editable**. For a category the provider named, its **name** is managed the
   same way and its description stays editable. Every product and category response says which of
   its fields are managed, in `providerManagedFields`, so a screen can lock exactly those inputs.
-  (The screens themselves are the next change, issue #737.)
+- **The Products and Categories screens use all of this** (issue #737). **Products →
+  New Product** and **Categories → New Category** create a record this business maintains itself.
+  Editing a product the provider manages shows its name and category read-only with a note naming
+  the provider ("Name and category are managed by Nayax and cannot be edited here."); its price and
+  every other local field stay editable in the same form. A provider-managed category's name is
+  locked the same way in **Categories**, which also gained its own inline create/rename form — the
+  "Categories are managed from the product import and are read-only here" notice is gone along with
+  the blanket lock the product form used to put on price. **Delete** is offered only where the API
+  says it is allowed: the catalogue listing answers `canDelete` for every product, with the
+  `deletionRefusal` the delete itself would give when it is `false`, so **Products** renders
+  **Delete** only for a product the server would actually delete. For every other product the row
+  shows that refusal — the provider's ("This product is managed by Nayax and cannot be deleted…") or
+  the history's ("…its history refers to it (2 stock movements, 1 sale)…") — followed by the control
+  that retires it instead: "Use the Status toggle to deactivate it.", or "It is deactivated; use the
+  Status toggle to reactivate it." for one already retired. That answer is **advisory**: it is as
+  fresh as the last fetch, the delete counts again inside its own transaction, and a refusal for a
+  product the screen had offered is still shown as the server worded it. A **category** has no such
+  answer published and no retirement flag at all, so **Categories** attempts every delete and shows
+  the server's refusal, which names how many products use the category. **Products** also gained a
+  **Show retired** filter
+  (`includeRetired=true`) so a product just deactivated stays on screen to **Reactivate** instead of
+  disappearing from the only list that can flip it back — the Admin costing-repair and
+  AVCO-transition tools and the stock-history product filter still call the endpoint without it and
+  are unaffected by this change.
 - **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock
   movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
   the delete is refused with what is in the way and nothing is written — deleting it would erase
   inventory and financial history. **Deactivate it instead**: a deactivated product keeps all of its
   history and can be reactivated at any time. A product the provider manages is not deleted either,
-  because the next import would create it again.
+  because the next import would create it again. **The catalogue read says so in advance**:
+  `GET /api/products` and `GET /api/products/{id}` answer `canDelete` for each product, and the
+  refusal in `deletionRefusal` when it is `false`, so a client offers a delete only where one is
+  possible. It is advisory — the delete decides again inside its own transaction, and a client still
+  has to show a `409` it did not expect. The reorder listing (`lowStockOnly=true`) and the product
+  snapshots nested in other resources answer neither key, and an absent `canDelete` is not
+  permission.
 - **A deactivated product is out of the product lists.** `GET /api/products` answers the catalogue
   you work from, so a deactivated product is not in it, is not offered in a product picker, and
   stays out of the reorder alerts and the Pick List — it must not be purchased from, counted,
@@ -1070,11 +1099,11 @@ does not manage.
   `GET /api/products/{id}`, every stock movement, purchase, sale and count that names it is
   untouched, `GET /api/products?includeRetired=true` lists it with the rest of the catalogue, and
   putting `isActive: true` back reactivates it.
-- **The screens have not caught up yet** (issue #737). They call `GET /api/products` without
-  `includeRetired=true`, so until that issue ships the Products page, the Admin costing-repair and
-  AVCO-transition tools and the stock-history product filter show active products only, and
-  reactivating a product is done through the API. #737 is where those four call sites and the "show
-  retired" control on the Products page belong.
+- **The Products page passes `includeRetired=true` through its Show retired filter** (issue #737),
+  so a deactivated product can be found again and reactivated from the screen. The Admin
+  costing-repair and AVCO-transition tools and the stock-history product filter still call the
+  endpoint without it and show active products only — picking up `includeRetired` there is unrelated
+  follow-up work, not part of this change.
 - **A category products use is not deleted.** The refusal says how many products use it; move them
   to another category first, otherwise they would be left with no category at all.
 - **The Nayax catalogue import waits for the catalogue review.** While the business holds products

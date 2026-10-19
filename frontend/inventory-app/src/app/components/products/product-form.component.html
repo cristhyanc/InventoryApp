@@ -1,6 +1,6 @@
 <div class="page">
   <header class="page-header">
-    <h1 class="page-title">Edit Product</h1>
+    <h1 class="page-title">{{ productId ? 'Edit Product' : 'New Product' }}</h1>
   </header>
 
   <div class="card w-full">
@@ -9,9 +9,11 @@
         <p class="field-error mb-4">{{ error }}</p>
       }
 
-      <div class="alert alert-info mb-4">
-        <p class="alert-title">Product name, category, and unit price are managed by Nayax and cannot be edited here.</p>
-      </div>
+      @if (providerManagedNote) {
+        <div class="alert alert-info mb-4">
+          <p class="alert-title">{{ providerManagedNote }}</p>
+        </div>
+      }
 
       <form class="space-y-4" (ngSubmit)="save()">
         <!--
@@ -23,7 +25,7 @@
         <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           <label class="field">
             <span class="field-label">Name *</span>
-            <input [(ngModel)]="form.name" name="name" readonly />
+            <input [(ngModel)]="form.name" name="name" [readOnly]="nameLocked" />
           </label>
 
           <label class="field">
@@ -38,7 +40,7 @@
 
           <label class="field">
             <span class="field-label">Category</span>
-            <select [(ngModel)]="form.categoryId" name="categoryId" disabled>
+            <select [(ngModel)]="form.categoryId" name="categoryId" [disabled]="categoryLocked">
               <option value="">None</option>
               @for (c of categories; track c.id) {
                 <option [ngValue]="c.id">{{ c.name }}</option>
@@ -64,8 +66,20 @@
 
           <label class="field">
             <span class="field-label">Unit Price ($) *</span>
-            <input [(ngModel)]="form.unitPrice" name="unitPrice" type="number" readonly />
+            <input [(ngModel)]="form.unitPrice" name="unitPrice" type="number" min="0" step="0.01" />
           </label>
+
+          @if (!productId) {
+            <label class="field">
+              <span class="field-label">Opening Stock</span>
+              <input [(ngModel)]="form.quantityInStock" name="quantityInStock" type="number" min="0" step="1" />
+            </label>
+
+            <label class="field">
+              <span class="field-label">Initial Unit Cost ($)</span>
+              <input [(ngModel)]="form.initialUnitCost" name="initialUnitCost" type="number" min="0" step="0.01" placeholder="Optional" />
+            </label>
+          }
 
           <label class="field">
             <span class="field-label">Low Stock Threshold *</span>
@@ -90,7 +104,7 @@
         </div>
 
         <div class="flex flex-wrap gap-3 pt-2">
-          <button type="submit" class="btn btn-primary" [disabled]="saving || form.restockTo < form.lowStockThreshold || sessionActive">Update Product</button>
+          <button type="submit" class="btn btn-primary" [disabled]="saving || form.restockTo < form.lowStockThreshold || sessionActive">{{ productId ? 'Update Product' : 'Create Product' }}</button>
           <a routerLink="/products" class="btn btn-secondary">Cancel</a>
         </div>
       </form>

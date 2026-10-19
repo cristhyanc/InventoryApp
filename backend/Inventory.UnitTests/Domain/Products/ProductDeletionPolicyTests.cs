@@ -85,4 +85,47 @@ public class ProductDeletionPolicyTests
         Assert.False(ProductDeletionReferences.None.Any);
         Assert.True(new ProductDeletionReferences(0, 0, 0, 0, 0, 1).Any);
     }
+
+    /// <summary>
+    /// The read's answer (issue #737) is the delete's answer: a product nothing refers to is
+    /// deletable and carries no reason to show.
+    /// </summary>
+    [Fact]
+    public void Eligibility_allows_the_delete_for_a_product_nothing_refers_to()
+    {
+        var eligibility = ProductDeletionEligibility.Decide(
+            isProviderManaged: false, provider: null, ProductDeletionReferences.None);
+
+        Assert.True(eligibility.Allowed);
+        Assert.Null(eligibility.Refusal);
+    }
+
+    /// <summary>
+    /// A history refusal is published as the very message the delete would answer with, so the
+    /// screen that offers no Delete explains it in the server's own words rather than inventing a
+    /// second wording that could drift from the refusal a stale decision still produces.
+    /// </summary>
+    [Fact]
+    public void Eligibility_refuses_a_product_with_history_in_the_deletes_own_words()
+    {
+        var references = new ProductDeletionReferences(1, 0, 0, 0, 0, 0);
+
+        var eligibility = ProductDeletionEligibility.Decide(
+            isProviderManaged: false, provider: null, references);
+
+        Assert.False(eligibility.Allowed);
+        Assert.Equal(
+            ProductDeletionPolicy.Refusal(isProviderManaged: false, provider: null, references),
+            eligibility.Refusal);
+    }
+
+    [Fact]
+    public void Eligibility_refuses_a_provider_managed_product_and_names_the_provider()
+    {
+        var eligibility = ProductDeletionEligibility.Decide(
+            isProviderManaged: true, ExternalProvider.Nayax, ProductDeletionReferences.None);
+
+        Assert.False(eligibility.Allowed);
+        Assert.Contains("managed by Nayax", eligibility.Refusal!, StringComparison.Ordinal);
+    }
 }

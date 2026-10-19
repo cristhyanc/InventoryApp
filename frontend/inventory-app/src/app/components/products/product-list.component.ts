@@ -21,6 +21,7 @@ import {
 } from '../shared/sortable-column';
 import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { apiErrorMessage } from '../shared/api-error-message';
 
 type ProductSortColumn = 'name' | 'category' | 'supplier' | 'price' | 'stock' | 'status';
 
@@ -39,6 +40,13 @@ export class ProductListComponent implements OnInit, OnDestroy {
   search = '';
   categoryId: number | '' = '';
   supplierId: number | '' = '';
+  /**
+   * Whether to list a deactivated product too (issue #737): off by default, because `GET
+   * /api/products` answers only the working catalogue unless asked otherwise. Checking it is what
+   * keeps a just-deactivated product reachable to Reactivate - the toggle flips `isActive` either
+   * way, but the row has to still be on screen to click it.
+   */
+  includeRetired = false;
   sortColumn: ProductSortColumn | null = null;
   sortDirection: SortDirection = 'asc';
 
@@ -91,7 +99,8 @@ export class ProductListComponent implements OnInit, OnDestroy {
     const filters = {
       search: this.search || undefined,
       categoryId: this.categoryId === '' ? undefined : this.categoryId,
-      supplierId: this.supplierId === '' ? undefined : this.supplierId
+      supplierId: this.supplierId === '' ? undefined : this.supplierId,
+      includeRetired: this.includeRetired
     };
 
     const token = this.loadState.start();
@@ -124,13 +133,43 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.search = '';
     this.categoryId = '';
     this.supplierId = '';
+    this.includeRetired = false;
     this.applyFilters();
+  }
+
+  /**
+   * Whether the API says this product may be deleted (issue #737). `canDelete` is the deletion
+   * rule's own answer, published by the catalogue listing from the same
+   * `Inventory.Domain.Products.ProductDeletionPolicy` that refuses the delete itself - a provider
+   * link, stock movements, purchase lines, supplier order lines, sales, machine stock counts and
+   * costing records all reach it. Delete is offered only on a plain `true`: an absent answer (a
+   * response that never resolved the question) is not permission, and the row then offers the
+   * retirement path, which is always available.
+   *
+   * The answer stays advisory - it is as fresh as the last fetch - and the server decides again
+   * inside the delete's own transaction, which `deleteConfirmed` still surfaces.
+   */
+  canDelete(product: Product): boolean {
+    return product.canDelete === true;
+  }
+
+  /**
+   * Why Delete is not offered, and which control retires the product instead: the server's own
+   * refusal (so the page never words the rule a second time), followed by the name of the control
+   * on this row that does what the refusal points at.
+   */
+  deleteRefusalNote(product: Product): string {
+    const retirement = product.isActive
+      ? 'Use the Status toggle to deactivate it.'
+      : 'It is deactivated; use the Status toggle to reactivate it.';
+    const refusal = product.deletionRefusal?.trim();
+    return refusal ? `${refusal} ${retirement}` : `This product cannot be deleted. ${retirement}`;
   }
 
   confirmDelete(product: Product): void {
     // Checked here as well as hidden in the template, so the write is actually unavailable rather
     // than merely invisible - the endpoint refuses it either way.
-    if (this.sessionActive) {
+    if (this.sessionActive || !this.canDelete(product)) {
       return;
     }
     this.confirmingProduct = product;
@@ -147,7 +186,16 @@ export class ProductListComponent implements OnInit, OnDestroy {
 
     const product = this.confirmingProduct;
     this.confirmingProduct = null;
-    this.productService.delete(product.id).subscribe(() => this.applyFilters());
+    this.productService.delete(product.id).subscribe({
+      next: () => this.applyFilters(),
+      // Delete is offered only where `canDelete` said the API allows it, but that answer was read
+      // before this click: a product can gain a stock movement, a sale or a provider link in
+      // between, and the server decides again inside the delete's own transaction. Its refusal is
+      // shown verbatim - it names what is in the way and points at the Active/Inactive toggle
+      // beside it (`ProductDeletionPolicy.Refusal`) - and the row stays as it was fetched, so the
+      // toggle it points at is still there to use.
+      error: (error) => this.toastService.error(apiErrorMessage(error, 'Failed to delete product.'))
+    });
   }
 
   /**

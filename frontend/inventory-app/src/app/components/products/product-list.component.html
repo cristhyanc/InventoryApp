@@ -16,6 +16,11 @@
       }
     </select>
 
+    <label class="flex items-center gap-2 self-center">
+      <input [(ngModel)]="includeRetired" (ngModelChange)="applyFilters()" name="includeRetired" type="checkbox" class="h-4 w-4 border-md-gray-300 text-md-dark" />
+      <span>Show retired</span>
+    </label>
+
     <button type="button" class="btn btn-secondary" (click)="resetFilters()">Reset</button>
   </div>
 </div>
@@ -93,7 +98,14 @@
                     <!-- Hidden rather than disabled while a support session is active (issue #554): a
                          session grants InventoryOperate, so this write would otherwise still render. -->
                     @if (!sessionActive) {
-                      <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(p)">Delete</button>
+                      @if (canDelete(p)) {
+                        <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(p)">Delete</button>
+                      } @else {
+                        <!-- Delete is offered only where the API says it is allowed (issue #737). For every
+                             other product the row carries the server's own refusal and names the
+                             Deactivate/Reactivate control instead of offering an action that must fail. -->
+                        <p class="text-xs value-muted">{{ deleteRefusalNote(p) }}</p>
+                      }
                     }
                   </div>
                 </td>

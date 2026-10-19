@@ -80,6 +80,13 @@ public static class ProductRecordResponseMapper
             // one Domain statement of that rule - the same one the update refuses a change with, so
             // a client cannot lock a different set from the one the server enforces.
             ProviderManagedFields = ProviderManagedCatalogueFields.ForProduct(record.IsProviderManaged),
+
+            // Whether the delete would be allowed, and the refusal it would give otherwise (issue
+            // #737), from the deletion rule itself rather than a second copy of it. Both keys are
+            // absent on a read that did not resolve the question - which is not the same as "yes",
+            // so neither is given a default here.
+            CanDelete = record.DeletionEligibility?.Allowed,
+            DeletionRefusal = record.DeletionEligibility?.Refusal,
         };
 
     /// <summary>
@@ -101,6 +108,12 @@ public static class ProductRecordResponseMapper
             // provider-managed declaration issue #736 added to the catalogue view is left unsaid
             // here rather than answered for a surface that cannot act on it.
             ProviderManagedFields = null,
+
+            // A machine slot is not where a product is deleted either, so issue #737's deletion
+            // answer is left unsaid here for the same reason, rather than carried onto a pinned
+            // payload whose reader cannot act on it.
+            CanDelete = null,
+            DeletionRefusal = null,
             MachineSlot = new MachineSlotOverlay(
                 record.MachinePrice,
                 record.CommissionValue,
