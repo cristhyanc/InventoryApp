@@ -21,6 +21,7 @@ import {
 } from '../shared/sortable-column';
 import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { apiErrorMessage } from '../shared/api-error-message';
 
 type ProductSortColumn = 'name' | 'category' | 'supplier' | 'price' | 'stock' | 'status';
 
@@ -39,6 +40,13 @@ export class ProductListComponent implements OnInit, OnDestroy {
   search = '';
   categoryId: number | '' = '';
   supplierId: number | '' = '';
+  /**
+   * Whether to list a deactivated product too (issue #737): off by default, because `GET
+   * /api/products` answers only the working catalogue unless asked otherwise. Checking it is what
+   * keeps a just-deactivated product reachable to Reactivate - the toggle flips `isActive` either
+   * way, but the row has to still be on screen to click it.
+   */
+  includeRetired = false;
   sortColumn: ProductSortColumn | null = null;
   sortDirection: SortDirection = 'asc';
 
@@ -91,7 +99,8 @@ export class ProductListComponent implements OnInit, OnDestroy {
     const filters = {
       search: this.search || undefined,
       categoryId: this.categoryId === '' ? undefined : this.categoryId,
-      supplierId: this.supplierId === '' ? undefined : this.supplierId
+      supplierId: this.supplierId === '' ? undefined : this.supplierId,
+      includeRetired: this.includeRetired
     };
 
     const token = this.loadState.start();
@@ -124,6 +133,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.search = '';
     this.categoryId = '';
     this.supplierId = '';
+    this.includeRetired = false;
     this.applyFilters();
   }
 
@@ -147,7 +157,14 @@ export class ProductListComponent implements OnInit, OnDestroy {
 
     const product = this.confirmingProduct;
     this.confirmingProduct = null;
-    this.productService.delete(product.id).subscribe(() => this.applyFilters());
+    this.productService.delete(product.id).subscribe({
+      next: () => this.applyFilters(),
+      // Delete is offered unconditionally (issue #737): the API is the only place that knows what
+      // refers to a product, so a refusal is explained here rather than predicted in advance. The
+      // message itself names what is in the way and points at the Active/Inactive toggle beside
+      // it (`ProductDeletionPolicy.Refusal`).
+      error: (error) => this.toastService.error(apiErrorMessage(error, 'Failed to delete product.'))
+    });
   }
 
   /**

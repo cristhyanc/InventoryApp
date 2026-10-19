@@ -35,6 +35,18 @@ export interface Category {
   id: number;
   name: string;
   description?: string | null;
+  /**
+   * The fields this business's sales provider manages on this category (issue #736/#737):
+   * `["name"]` for a category the provider named, an empty array (or absent, from an older
+   * response) for one the business maintains itself. A client locks exactly these inputs.
+   */
+  providerManagedFields?: string[] | null;
+}
+
+/** The category a client posts to `POST /api/categories` or puts to `PUT /api/categories/{id}` (issue #737). */
+export interface CategoryWriteDto {
+  name: string;
+  description?: string | null;
 }
 
 export interface Supplier {
@@ -85,6 +97,29 @@ export interface Product {
   isActive: boolean;
   isLowStock: boolean;
   isReorderAlert: boolean;
+  /**
+   * The fields this business's sales provider manages on this product (issue #736/#737):
+   * `["name", "categoryId"]` for a product the provider named, an empty array (or absent, from an
+   * older response) for one the business maintains itself. A client locks exactly these inputs -
+   * the price and every other field stay editable either way.
+   */
+  providerManagedFields?: string[] | null;
+}
+
+/** The product a client posts to `POST /api/products` (issue #737). */
+export interface ProductCreateDto {
+  name: string;
+  sku?: string | null;
+  description?: string | null;
+  unitPrice: number;
+  quantityInStock: number;
+  lowStockThreshold: number;
+  restockTo: number;
+  unit?: string | null;
+  categoryId?: number | null;
+  supplierId?: number | null;
+  isActive: boolean;
+  initialUnitCost?: number | null;
 }
 
 /**

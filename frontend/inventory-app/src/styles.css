@@ -1862,6 +1862,10 @@ video {
   align-self: flex-end;
 }
 
+.self-center {
+  align-self: center;
+}
+
 .overflow-auto {
   overflow: auto;
 }

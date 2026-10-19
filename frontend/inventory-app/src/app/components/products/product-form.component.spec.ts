@@ -1,6 +1,7 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, Router, convertToParamMap, provideRouter } from '@angular/router';
-import { Observable, of } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
 import { ProductFormComponent } from './product-form.component';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
@@ -36,6 +37,7 @@ function product(overrides: Partial<Product> = {}): Product {
     isActive: true,
     isLowStock: false,
     isReorderAlert: false,
+    providerManagedFields: [],
     ...overrides
   };
 }
@@ -51,8 +53,17 @@ const suppliers: Supplier[] = [
 ];
 
 /** The routed edit page, rendered the way entering `/products/7/edit` renders it. */
-async function render(overrides: { update?: jest.Mock; sessionActive?: Observable<boolean> } = {}) {
+async function render(
+  overrides: {
+    product?: Product;
+    update?: jest.Mock;
+    create?: jest.Mock;
+    sessionActive?: Observable<boolean>;
+    routeParams?: Record<string, string>;
+  } = {}
+) {
   const update = overrides.update ?? jest.fn(() => of(undefined));
+  const create = overrides.create ?? jest.fn(() => of(product()));
   const navigate = jest.fn();
 
   await TestBed.configureTestingModule({
@@ -61,8 +72,9 @@ async function render(overrides: { update?: jest.Mock; sessionActive?: Observabl
       {
         provide: ProductService,
         useValue: {
-          get: jest.fn(() => of(product())),
+          get: jest.fn(() => of(overrides.product ?? product())),
           update,
+          create,
           getGstRule: jest.fn(() => of({ productId: 7, gstRule: GstClassification.Unknown })),
           getPriceComparison: jest.fn(() => of({ productId: 7, entries: [] }))
         }
@@ -71,7 +83,7 @@ async function render(overrides: { update?: jest.Mock; sessionActive?: Observabl
       { provide: SupplierService, useValue: { getAll: jest.fn(() => of(suppliers)) } },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       provideRouter([]),
-      { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap({ id: '7' }) } } }
+      { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap(overrides.routeParams ?? { id: '7' }) } } }
     ]
   }).compileComponents();
 
@@ -79,7 +91,7 @@ async function render(overrides: { update?: jest.Mock; sessionActive?: Observabl
   jest.spyOn(TestBed.inject(Router), 'navigate').mockImplementation(navigate);
   fixture.detectChanges();
 
-  return { fixture, component: fixture.componentInstance, host: fixture.nativeElement as HTMLElement, update, navigate };
+  return { fixture, component: fixture.componentInstance, host: fixture.nativeElement as HTMLElement, update, create, navigate };
 }
 
 afterEach(() => TestBed.resetTestingModule());
@@ -103,8 +115,8 @@ describe('ProductFormComponent content width (issue #478)', () => {
   });
 });
 
-describe('ProductFormComponent editing (issue #478 regression cover)', () => {
-  it('shows every editable field with the loaded product values, and the Nayax-managed ones read-only', async () => {
+describe('ProductFormComponent editing a product this business maintains itself (issue #737)', () => {
+  it('shows every field editable, including name, price and category, and carries no provider-managed note', async () => {
     const { host } = await render();
 
     const value = (name: string) => (host.querySelector(`[name="${name}"]`) as HTMLInputElement | null)?.value;
@@ -119,9 +131,10 @@ describe('ProductFormComponent editing (issue #478 regression cover)', () => {
     expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).value).toContain('2');
     expect((host.querySelector('[name="supplierId"]') as HTMLSelectElement).value).toContain('3');
 
-    expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(true);
-    expect((host.querySelector('[name="unitPrice"]') as HTMLInputElement).readOnly).toBe(true);
-    expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).disabled).toBe(true);
+    expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(false);
+    expect((host.querySelector('[name="unitPrice"]') as HTMLInputElement).readOnly).toBe(false);
+    expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).disabled).toBe(false);
+    expect(host.querySelector('.alert-info')).toBeNull();
 
     expect(host.querySelectorAll('label.field, label.flex').length).toBeGreaterThanOrEqual(8);
   });
@@ -151,9 +164,34 @@ describe('ProductFormComponent editing (issue #478 regression cover)', () => {
     expect(component.error).toContain('Restock To must be greater than or equal to the Low Stock Threshold');
   });
 
-  it('saves the edited values against the routed product and returns to the list', async () => {
+  it('refuses to save an empty name', async () => {
     const { component, update, navigate } = await render();
 
+    component.form.name = '   ';
+    component.save();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(component.error).toBe('Product name is required.');
+  });
+
+  it('refuses to save a negative unit price', async () => {
+    const { component, update, navigate } = await render();
+
+    component.form.unitPrice = -1;
+    component.save();
+
+    expect(update).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(component.error).toBe('Unit price cannot be negative.');
+  });
+
+  it('saves the edited values, including the now-editable name, price and category, and returns to the list', async () => {
+    const { component, update, navigate } = await render();
+
+    component.form.name = 'E2E Chips (renamed)';
+    component.form.unitPrice = 4.25;
+    component.form.categoryId = 1;
     component.form.sku = 'SNK-002';
     component.form.lowStockThreshold = 6;
     component.form.restockTo = 24;
@@ -162,18 +200,29 @@ describe('ProductFormComponent editing (issue #478 regression cover)', () => {
     component.save();
 
     expect(update).toHaveBeenCalledWith(7, {
-      name: 'E2E Chips',
+      name: 'E2E Chips (renamed)',
       sku: 'SNK-002',
       description: 'Salted chips',
-      unitPrice: 3.5,
+      unitPrice: 4.25,
       lowStockThreshold: 6,
       restockTo: 24,
       unit: 'bag',
-      categoryId: 2,
+      categoryId: 1,
       supplierId: 4,
       isActive: false
     });
     expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('shows the server\'s refusal message and does not navigate when the update is refused', async () => {
+    const update = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 400, error: 'The selected category does not exist.' })));
+    const { component, navigate } = await render({ update });
+
+    component.save();
+
+    expect(component.error).toBe('The selected category does not exist.');
+    expect(component.saving).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('cancels back to the product list without saving', async () => {
@@ -182,6 +231,120 @@ describe('ProductFormComponent editing (issue #478 regression cover)', () => {
     const cancel = host.querySelector('a.btn-secondary') as HTMLAnchorElement;
     expect(cancel.getAttribute('href')).toBe('/products');
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('ProductFormComponent editing a provider-linked product (issue #737)', () => {
+  function providerManagedProduct(): Product {
+    return product({ providerManagedFields: ['name', 'categoryId'] });
+  }
+
+  it('locks name and category, names Nayax, and leaves price and other local fields editable', async () => {
+    const { host } = await render({ product: providerManagedProduct() });
+
+    expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(true);
+    expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).disabled).toBe(true);
+    expect((host.querySelector('[name="unitPrice"]') as HTMLInputElement).readOnly).toBe(false);
+    expect((host.querySelector('[name="unitPrice"]') as HTMLInputElement).disabled).toBe(false);
+
+    expect(host.querySelector('.alert-info .alert-title')?.textContent).toContain(
+      'Name and category are managed by Nayax and cannot be edited here.'
+    );
+  });
+
+  it('still saves the editable fields, including price, for a provider-linked product', async () => {
+    const { component, update, navigate } = await render({ product: providerManagedProduct() });
+
+    component.form.unitPrice = 5;
+    component.save();
+
+    expect(update).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ name: 'E2E Chips', categoryId: 2, unitPrice: 5 })
+    );
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+});
+
+describe('ProductFormComponent creating a product (issue #737)', () => {
+  it('renders an empty, fully editable form titled "New Product"', async () => {
+    const { host } = await render({ routeParams: {} });
+
+    expect(host.querySelector('h1')?.textContent).toContain('New Product');
+    expect((host.querySelector('[name="name"]') as HTMLInputElement).value).toBe('');
+    expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(false);
+    expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).disabled).toBe(false);
+    expect(host.querySelector('.alert-info')).toBeNull();
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).textContent).toContain('Create Product');
+    expect(host.querySelector('[name="quantityInStock"]')).not.toBeNull();
+    expect(host.querySelector('[name="initialUnitCost"]')).not.toBeNull();
+
+    // No GST rule/price history for a product that does not exist yet.
+    expect(host.querySelector('app-product-gst-rule')).toBeNull();
+    expect(host.querySelector('app-product-price-history')).toBeNull();
+  });
+
+  it('creates the product with the entered fields and returns to the list', async () => {
+    const { component, create, navigate } = await render({ routeParams: {} });
+
+    component.form.name = 'New Snack';
+    component.form.unitPrice = 2.5;
+    component.form.categoryId = 2;
+    component.form.supplierId = 3;
+    component.form.quantityInStock = 10;
+    component.form.initialUnitCost = 1.1;
+    component.form.lowStockThreshold = 2;
+    component.form.restockTo = 8;
+    component.save();
+
+    expect(create).toHaveBeenCalledWith({
+      name: 'New Snack',
+      sku: null,
+      description: null,
+      unitPrice: 2.5,
+      lowStockThreshold: 2,
+      restockTo: 8,
+      unit: 'unit',
+      categoryId: 2,
+      supplierId: 3,
+      isActive: true,
+      quantityInStock: 10,
+      initialUnitCost: 1.1
+    });
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('refuses to create a product with no name', async () => {
+    const { component, create } = await render({ routeParams: {} });
+
+    component.form.name = '';
+    component.save();
+
+    expect(create).not.toHaveBeenCalled();
+    expect(component.error).toBe('Product name is required.');
+  });
+
+  it('refuses a negative initial unit cost', async () => {
+    const { component, create } = await render({ routeParams: {} });
+
+    component.form.name = 'New Snack';
+    component.form.initialUnitCost = -1;
+    component.save();
+
+    expect(create).not.toHaveBeenCalled();
+    expect(component.error).toBe('Initial unit cost cannot be negative.');
+  });
+
+  it('shows the server\'s refusal message and does not navigate when the create is refused', async () => {
+    const create = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 400, error: 'Product name is required.' })));
+    const { component, navigate } = await render({ routeParams: {}, create });
+
+    component.form.name = 'New Snack';
+    component.save();
+
+    expect(component.error).toBe('Product name is required.');
+    expect(component.saving).toBe(false);
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
 

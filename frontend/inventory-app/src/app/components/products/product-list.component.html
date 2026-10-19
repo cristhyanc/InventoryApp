@@ -16,6 +16,11 @@
       }
     </select>
 
+    <label class="flex items-center gap-2 self-center">
+      <input [(ngModel)]="includeRetired" (ngModelChange)="applyFilters()" name="includeRetired" type="checkbox" class="h-4 w-4 border-md-gray-300 text-md-dark" />
+      <span>Show retired</span>
+    </label>
+
     <button type="button" class="btn btn-secondary" (click)="resetFilters()">Reset</button>
   </div>
 </div>
