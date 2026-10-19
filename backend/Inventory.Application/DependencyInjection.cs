@@ -1,6 +1,7 @@
 using Inventory.Application.Access;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
+using Inventory.Application.CatalogueReview;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
@@ -285,6 +286,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ApplyHistoricalGstClassification>();
         services.AddScoped<ApplyInventoryCount>();
         services.AddScoped<ImportNayaxProductCatalog>();
+        // The provider catalogue review (issue #738). The direct import above is unchanged and keeps
+        // its own path; these are the deliberate link-or-create alternative to it.
+        services.AddScoped<StartCatalogueReview>();
+        services.AddScoped<ApplyCatalogueReview>();
+        services.AddScoped<ResolveLinkedProviderSales>();
         services.AddScoped<ImportNayaxSales>();
         services.AddScoped<ImportPendingReimbursementXmlFiles>();
         services.AddScoped<GetStockHistory>();
