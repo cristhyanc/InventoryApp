@@ -402,15 +402,16 @@ describe('SidebarNavComponent during a role preview (issue #721)', () => {
     expect(component.navigation.map((entry) => entry.label)).toEqual([
       'Dashboard',
       'Pick List',
+      'Machines',
       'Inventory',
       'Purchases',
       'Needs Nayax',
-      'Machines',
       'Sites'
     ]);
     expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
       '/',
       '/pick-list',
+      '/machines',
       '/products',
       '/take-inventory',
       '/categories',
@@ -418,7 +419,6 @@ describe('SidebarNavComponent during a role preview (issue #721)', () => {
       '/purchases',
       '/purchases/orders',
       '/suppliers',
-      '/machines',
       '/sites'
     ]);
     expect(host.textContent).not.toContain('Super Admin');
@@ -1225,9 +1225,10 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
 
     expect(heading).toBeDefined();
     expect(heading?.tagName).toBe('H2');
-    expect(link(host, '/machines')).not.toBeNull();
     expect(link(host, '/sites')).not.toBeNull();
     expect(link(host, '/reports/site-commissions')).not.toBeNull();
+    // Machines is in the top section since issue #740 and is rendered whatever the provider says.
+    expect(link(host, '/machines')).not.toBeNull();
   });
 
   it('renames the Products group Inventory, leaving the Products page its own name and URL', async () => {
@@ -1254,19 +1255,25 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
   it('shows every live provider entry locked, and still linked, with no connection at all', async () => {
     const { host } = await render({ providerStatus: 'NotConfigured' });
 
-    for (const route of ['/machines', '/sites', '/reports/site-commissions']) {
+    for (const route of ['/sites', '/reports/site-commissions']) {
       const entry = link(host, route);
       expect(entry).not.toBeNull();
       expect(entry?.textContent).toContain('Locked');
       expect(entry?.hasAttribute('aria-disabled')).toBe(false);
       expect(entry?.getAttribute('title')).toContain('Nayax is not connected');
     }
+
+    // The machine list is never locked since issue #740: the page has the business's own machine
+    // records to show whatever the provider's state is.
+    expect(lockBadges(host, '/machines')).not.toContain('Locked');
+    expect(link(host, '/machines')?.getAttribute('title')).toBeNull();
   });
 
   it('locks them for credentials that are stored and known not to work', async () => {
     const { host } = await render({ providerStatus: 'NeedsAttention' });
 
-    expect(lockBadges(host, '/machines')).toContain('Locked');
+    expect(lockBadges(host, '/sites')).toContain('Locked');
+    expect(lockBadges(host, '/machines')).not.toContain('Locked');
   });
 
   /**
@@ -1277,10 +1284,10 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
   it('locks a refused feature as a Nayax permission, naming the destination', async () => {
     const { host } = await render({ providerStatus: 'PendingPermissions', providerChecks: PERMISSION_REFUSED });
 
-    const machines = link(host, '/machines');
-    expect(machines?.textContent).toContain('Locked');
-    expect(machines?.getAttribute('title')).toBe('Machines is waiting for a Nayax permission.');
-    expect(machines?.getAttribute('title')).not.toContain('not connected');
+    const sites = link(host, '/sites');
+    expect(sites?.textContent).toContain('Locked');
+    expect(sites?.getAttribute('title')).toBe('Sites is waiting for a Nayax permission.');
+    expect(sites?.getAttribute('title')).not.toContain('not connected');
   });
 
   it('leaves a destination whose read Nayax granted unlocked beside a refused one', async () => {
@@ -1292,15 +1299,15 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
       ]
     });
 
-    expect(lockBadges(host, '/machines')).not.toContain('Locked');
+    expect(lockBadges(host, '/sites')).not.toContain('Locked');
   });
 
   /** An unread status is not a refusal, so a failed probe locks nothing (issue #728's rule). */
   it('locks nothing when the connection status could not be read', async () => {
     const { host } = await render({ providerStatus: 'unreadable' });
 
-    expect(lockBadges(host, '/machines')).not.toContain('Locked');
-    expect(link(host, '/machines')?.getAttribute('title')).toBeNull();
+    expect(lockBadges(host, '/sites')).not.toContain('Locked');
+    expect(link(host, '/sites')?.getAttribute('title')).toBeNull();
   });
 
   /**
@@ -1351,7 +1358,7 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
     const operator = granted(['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate']);
     const { host } = await render({ access: of(operator), providerStatus: 'NotConfigured' });
 
-    expect(lockBadges(host, '/machines')).toContain('Locked');
+    expect(lockBadges(host, '/sites')).toContain('Locked');
     expect(link(host, '/reports/site-commissions')).toBeNull();
   });
 
@@ -1374,7 +1381,7 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
     fixture.detectChanges();
 
     expect(connections.status).toHaveBeenCalledTimes(1);
-    expect(link(fixture.nativeElement as HTMLElement, '/machines')?.textContent).toContain('Locked');
+    expect(link(fixture.nativeElement as HTMLElement, '/sites')?.textContent).toContain('Locked');
   });
 });
 
@@ -1428,13 +1435,13 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
     const { fixture, host } = await render({ providerStatus: 'NotConfigured' });
     groupToggle(host, 'Admin').click();
     fixture.detectChanges();
-    expect(lockText(host, '/machines')).toContain('Locked');
+    expect(lockText(host, '/sites')).toContain('Locked');
     expect(link(host, '/admin/imports')).toBeNull();
 
     availability().accept(connected('Ready'));
     fixture.detectChanges();
 
-    for (const route of ['/machines', '/sites', '/reports/site-commissions']) {
+    for (const route of ['/sites', '/reports/site-commissions']) {
       expect(lockText(host, route)).not.toContain('Locked');
       expect(link(host, route)?.getAttribute('title')).toBeNull();
     }
@@ -1446,14 +1453,14 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
     const { fixture, host } = await render({ providerStatus: 'Ready' });
     groupToggle(host, 'Admin').click();
     fixture.detectChanges();
-    expect(lockText(host, '/machines')).not.toContain('Locked');
+    expect(lockText(host, '/sites')).not.toContain('Locked');
     expect(link(host, '/admin/imports')).not.toBeNull();
 
     availability().accept(connected('NeedsAttention'));
     fixture.detectChanges();
 
-    expect(lockText(host, '/machines')).toContain('Locked');
-    expect(link(host, '/machines')?.getAttribute('title')).toBe('Machines is unavailable because Nayax is not connected.');
+    expect(lockText(host, '/sites')).toContain('Locked');
+    expect(link(host, '/sites')?.getAttribute('title')).toBe('Sites is unavailable because Nayax is not connected.');
     expect(link(host, '/admin/imports')).toBeNull();
     expect(link(host, '/admin/nayax-sale-timestamp-repair')).toBeNull();
   });
@@ -1467,13 +1474,13 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
     const { fixture, host } = await render({ providerStatus: 'PendingPermissions' });
     groupToggle(host, 'Admin').click();
     fixture.detectChanges();
-    expect(lockText(host, '/machines')).not.toContain('Locked');
+    expect(lockText(host, '/sites')).not.toContain('Locked');
 
     availability().noteRefusal(permissionRefused(), 'machineFleet');
     fixture.detectChanges();
 
-    expect(lockText(host, '/machines')).toContain('Locked');
-    expect(link(host, '/machines')?.getAttribute('title')).toBe('Machines is waiting for a Nayax permission.');
+    expect(lockText(host, '/sites')).toContain('Locked');
+    expect(link(host, '/sites')?.getAttribute('title')).toBe('Sites is waiting for a Nayax permission.');
     // The connection itself is unaffected, so the repair tools are still offered.
     expect(link(host, '/admin/imports')).not.toBeNull();
   });
@@ -1492,13 +1499,13 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
       provideRouter([{ path: '**', component: BlankPageComponent }]),
       { provide: NayaxConnectionService, useValue: connections }
     ]);
-    expect(lockText(host, '/machines')).not.toContain('Locked');
+    expect(lockText(host, '/sites')).not.toContain('Locked');
 
     availability().reset();
     fixture.detectChanges();
 
     expect(connections.status).toHaveBeenCalledTimes(2);
-    expect(lockText(host, '/machines')).toContain('Locked');
+    expect(lockText(host, '/sites')).toContain('Locked');
   });
 
   /**
@@ -1509,7 +1516,7 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
   it('agrees with the route guard about a destination before and after the connection changes', async () => {
     const { fixture, host } = await mount([
       provideRouter([
-        { path: 'machines', canActivate: [requireProvider('machineFleet')], component: BlankPageComponent },
+        { path: 'sites', canActivate: [requireProvider('machineFleet')], component: BlankPageComponent },
         { path: PROVIDER_LOCKED_PATH, component: BlankPageComponent },
         { path: '**', component: BlankPageComponent }
       ]),
@@ -1517,17 +1524,17 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
     ]);
     const router = TestBed.inject(Router);
 
-    await router.navigateByUrl('/machines');
+    await router.navigateByUrl('/sites');
     fixture.detectChanges();
-    expect(router.url).toBe(`/${PROVIDER_LOCKED_PATH}?from=%2Fmachines`);
-    expect(lockText(host, '/machines')).toContain('Locked');
+    expect(router.url).toBe(`/${PROVIDER_LOCKED_PATH}?from=%2Fsites`);
+    expect(lockText(host, '/sites')).toContain('Locked');
 
     availability().accept(connected('Ready'));
     fixture.detectChanges();
 
-    await router.navigateByUrl('/machines');
+    await router.navigateByUrl('/sites');
     fixture.detectChanges();
-    expect(router.url).toBe('/machines');
-    expect(lockText(host, '/machines')).not.toContain('Locked');
+    expect(router.url).toBe('/sites');
+    expect(lockText(host, '/sites')).not.toContain('Locked');
   });
 });

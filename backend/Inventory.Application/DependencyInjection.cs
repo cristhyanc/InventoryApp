@@ -220,6 +220,13 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetNayaxCatalogReconciliation>();
         services.AddScoped<GetSiteSummaries>();
         services.AddScoped<GetSiteProducts>();
+        // The business's own machine records (issue #740), which work with no provider at all. They
+        // are deliberately separate from the live-fleet use cases below.
+        services.AddScoped<ListLocalMachines>();
+        services.AddScoped<GetLocalMachine>();
+        services.AddScoped<CreateLocalMachine>();
+        services.AddScoped<RenameLocalMachine>();
+        services.AddScoped<SetLocalMachineActivation>();
         services.AddScoped<ListMachineDashboard>();
         services.AddScoped<GetMachineDashboard>();
         services.AddScoped<ListMachineProducts>();

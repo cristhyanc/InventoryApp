@@ -80,6 +80,13 @@ public class AppDbContext : DbContext
     public DbSet<Product> Products => Set<Product>();
 
     /// <summary>
+    /// The machines this business operates, as rows this application owns (issue #740). Ordinary
+    /// tenant-owned data; see <see cref="LocalMachine"/> for why a machine is persisted at all now
+    /// and why its provider id sits on the row.
+    /// </summary>
+    public DbSet<LocalMachine> Machines => Set<LocalMachine>();
+
+    /// <summary>
     /// Each provider's own identifier for a local product, and the same for a category (issue
     /// #732). Ordinary tenant-owned data; see <see cref="ProductExternalId"/> for why a provider id
     /// lives beside the local row instead of being its key.
@@ -220,6 +227,7 @@ public class AppDbContext : DbContext
         ConfigureSupportSessions(modelBuilder);
         ConfigureProviderLinks(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
+        ConfigureMachines(modelBuilder);
         ConfigureProviderDataCoverage(modelBuilder);
         ConfigureSaleProductAssociation(modelBuilder);
 
@@ -986,6 +994,44 @@ public class AppDbContext : DbContext
             .HasIndex(x => new { x.BusinessId, x.ExternalCategoryId })
             .IsUnique()
             .HasFilter(@"""ExternalCategoryId"" IS NOT NULL");
+    }
+
+    /// <summary>
+    /// Maps the machines a business operates (issue #740, parent #329 child G1).
+    ///
+    /// <para><strong>The table is <c>Machines</c>, and the entity is
+    /// <see cref="LocalMachine"/></strong>: the type name <c>Machine</c> is still occupied by the
+    /// retired response shape the machine wire-contract test compares against, and removing that
+    /// belongs to issue #153. The table name is declared explicitly so it does not depend on which
+    /// type happens to own it.</para>
+    ///
+    /// <para><strong>The provider id is the same column shape as a product's</strong>
+    /// (<see cref="ConfigureProviderIdentityColumns"/>, issue #759): opaque text bounded by
+    /// <see cref="ExternalId.MaxLength"/>, unique per business among the rows that have one, with the
+    /// index filtered on <c>IS NOT NULL</c> because "this machine has no provider id" is the normal
+    /// state of every machine of a business with no provider and a plain unique index would allow
+    /// exactly one of them. Scoped by business for the reason every constraint over an externally
+    /// supplied value is: two operators' fleets may legitimately both contain machine 7.</para>
+    ///
+    /// <para>A machine is ordinary tenant-owned data, so <see cref="ConfigureBusinessOwnership"/>
+    /// gives it its required business key, its <c>BusinessId</c> index and its global query filter;
+    /// what is declared here is everything specific to a machine.</para>
+    /// </summary>
+    private static void ConfigureMachines(ModelBuilder modelBuilder)
+    {
+        var machine = modelBuilder.Entity<LocalMachine>();
+
+        machine.ToTable("Machines");
+        machine.Property(x => x.Name).IsRequired();
+
+        // The machine lists are ordered by name, exactly as the category list is.
+        machine.HasIndex(x => x.Name);
+
+        machine.Property(x => x.ExternalMachineId).HasMaxLength(ExternalId.MaxLength);
+        machine
+            .HasIndex(x => new { x.BusinessId, x.ExternalMachineId })
+            .IsUnique()
+            .HasFilter(@"""ExternalMachineId"" IS NOT NULL");
     }
 
     /// <summary>

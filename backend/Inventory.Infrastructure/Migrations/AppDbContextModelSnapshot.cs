@@ -814,6 +814,39 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("InventoryCostTransitionPreviewDrafts");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.LocalMachine", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ExternalMachineId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("Name");
+
+                    b.HasIndex("BusinessId", "ExternalMachineId")
+                        .IsUnique()
+                        .HasFilter("\"ExternalMachineId\" IS NOT NULL");
+
+                    b.ToTable("Machines", (string)null);
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.MachineStockCount", b =>
                 {
                     b.Property<int>("Id")

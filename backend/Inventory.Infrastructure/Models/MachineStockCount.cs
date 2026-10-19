@@ -33,7 +33,11 @@ public class MachineStockCount : IBusinessOwned
 
     /// <summary>
     /// The Nayax machine the count was taken on. A remote identity, exactly as
-    /// <see cref="StockAdjustment.MachineId"/> is: machines are not persisted by this application.
+    /// <see cref="StockAdjustment.MachineId"/> is.
+    ///
+    /// <para>Since issue #740 a machine <em>is</em> persisted (<see cref="LocalMachine"/>), but this
+    /// column is deliberately unchanged and still holds the provider's own number: repointing the
+    /// stored machine references at <c>Machines.Id</c> is issue #741 (G2).</para>
     /// </summary>
     public long MachineId { get; set; }
 
