@@ -123,8 +123,10 @@ const SECRETS_CONTEXT = /\bsecrets\b/;
 /** True when the permissions value grants write, or is absent everywhere and so takes the repository default. */
 function grantsWrite(permissions) {
   if (permissions === undefined) return true;
-  const value = permissions.replace(/#.*$/gm, '');
-  return /\bwrite-all\b/.test(value) || /:\s*write\b/.test(value);
+  return permissions.split('\n').some((line) => {
+    const value = line.split('#')[0].trim();
+    return value === 'write-all' || value.split(':').at(-1).trim() === 'write';
+  });
 }
 
 function isCredentialed(job, workflowPermissions) {

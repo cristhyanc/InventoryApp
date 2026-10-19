@@ -1491,6 +1491,28 @@ function verifyArchitectureFinalizer(architectureWorkflow) {
   for (const forbidden of ['actions/checkout', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'contents: write', 'claude-code-action']) forbidText(finalize, forbidden, 'agent-architecture.yml finalize');
 }
 
+/**
+ * Issue #645 review: the context job resolves the status context but holds no write scope, so it
+ * still runs while runner isolation is unverified; the gated report-pending job publishes it.
+ */
+function verifyValidationStatusPublishers(validate, validationContext) {
+  requireText(validationContext, STATUS_CONTEXT_EXPRESSION, 'validate.yml context job');
+  requireText(validationContext, 'status_context: ${{ steps.context.outputs.status_context }}', 'validate.yml context job');
+  requireText(validationContext, 'echo "status_context=$STATUS_CONTEXT"', 'validate.yml context job');
+  for (const forbidden of ['statuses: write', 'statuses/$head_sha', ': write']) {
+    forbidText(validationContext, forbidden, 'validate.yml context job');
+  }
+  const pendingJob = section(validate, '  report-pending:\n', '  isolation-gate:\n', validatePath);
+  requireText(pendingJob, 'statuses: write', 'validate.yml pending status job');
+  requireText(pendingJob, 'statuses/$HEAD_SHA', 'validate.yml pending status job');
+  requireText(pendingJob, '-f state=pending', 'validate.yml pending status job');
+  requireText(pendingJob, 'target_url="$RUN_URL"', 'validate.yml pending status job');
+  requireText(pendingJob, 'STATUS_CONTEXT: ${{ needs.context.outputs.status_context }}', 'validate.yml pending status job');
+  requireText(pendingJob, '-f context="$STATUS_CONTEXT"', 'validate.yml pending status job');
+  requireText(pendingJob, 'agent-validation|merge-validation) ;;', 'validate.yml pending status job');
+  forbidText(pendingJob, 'actions/checkout', 'validate.yml pending status job');
+}
+
 /** Runs every agent workflow contract check with an overridable repository reader. */
 export function runContractChecks({ read = readRepositoryFile } = {}) {
   const appPushRetry = read(appPushRetryPath);
@@ -1534,23 +1556,7 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
   }
 
   const validationContext = section(validate, '  context:\n', '  report-pending:\n', validatePath);
-  // Issue #645 review: the context job resolves the status context but holds no write scope, so it
-  // still runs while runner isolation is unverified; the gated report-pending job publishes it.
-  requireText(validationContext, STATUS_CONTEXT_EXPRESSION, 'validate.yml context job');
-  requireText(validationContext, 'status_context: ${{ steps.context.outputs.status_context }}', 'validate.yml context job');
-  requireText(validationContext, 'echo "status_context=$STATUS_CONTEXT"', 'validate.yml context job');
-  for (const forbidden of ['statuses: write', 'statuses/$head_sha', ': write']) {
-    forbidText(validationContext, forbidden, 'validate.yml context job');
-  }
-  const pendingJob = section(validate, '  report-pending:\n', '  isolation-gate:\n', validatePath);
-  requireText(pendingJob, 'statuses: write', 'validate.yml pending status job');
-  requireText(pendingJob, 'statuses/$HEAD_SHA', 'validate.yml pending status job');
-  requireText(pendingJob, '-f state=pending', 'validate.yml pending status job');
-  requireText(pendingJob, 'target_url="$RUN_URL"', 'validate.yml pending status job');
-  requireText(pendingJob, 'STATUS_CONTEXT: ${{ needs.context.outputs.status_context }}', 'validate.yml pending status job');
-  requireText(pendingJob, '-f context="$STATUS_CONTEXT"', 'validate.yml pending status job');
-  requireText(pendingJob, 'agent-validation|merge-validation) ;;', 'validate.yml pending status job');
-  forbidText(pendingJob, 'actions/checkout', 'validate.yml pending status job');
+  verifyValidationStatusPublishers(validate, validationContext);
   forbidText(validationContext, 'actions/checkout', 'validate.yml context job');
   forbidText(validationContext, 'CLAUDE_CODE_OAUTH_TOKEN', 'validate.yml context job');
   verifyAgentPrGuards(normalizeGuardVariables(validationContext), 'validate.yml dispatched context');
