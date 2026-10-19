@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Inventory.Application.Products;
+using Inventory.Domain.Products;
 using InventoryApi.Adapters.Mapping;
 using InventoryApi.DTOs;
 using Inventory.Infrastructure.Models;
@@ -18,14 +19,16 @@ namespace InventoryApi.Tests.DTOs;
 /// here rather than in a client. The explicit key list is asserted as well, so a future change to
 /// <em>both</em> sides at once still has to be a conscious one.
 ///
-/// <para><strong>The contract has moved exactly once, in issue #736</strong>, whose acceptance
-/// criteria require the catalogue response to say which fields the business's sales provider
-/// manages so the UI can lock them. That is one appended key, <c>providerManagedFields</c>: the
-/// comparison below is still byte for byte against the entity, with that one key expected after the
-/// entity's last one, so every key a client already read keeps its name, type, value and position.
-/// Nothing else may move this reference without its own issue. The nested product snapshots on a
-/// purchase, a supplier order and a machine slot do not carry the key at all - it is <c>null</c>
-/// there and omitted - so their own contract tests are untouched.</para>
+/// <para><strong>The contract has moved exactly twice, and only by appending.</strong> Issue #736,
+/// whose acceptance criteria require the catalogue response to say which fields the business's sales
+/// provider manages so the UI can lock them, added <c>providerManagedFields</c>. Issue #737, whose
+/// criterion is that Delete is offered only where the API allows it, added <c>canDelete</c> and
+/// <c>deletionRefusal</c> after it - and only on a read that resolved the question, so they are
+/// absent from the byte-for-byte comparisons below, which still run against a record that did not.
+/// Every key a client already read keeps its name, type, value and position. Nothing else may move
+/// this reference without its own issue. The nested product snapshots on a purchase, a supplier
+/// order and a machine slot carry none of the three - they are <c>null</c> there and omitted - so
+/// their own contract tests are untouched.</para>
 /// </summary>
 public class ProductJsonContractTests
 {
@@ -236,7 +239,9 @@ public class ProductJsonContractTests
                 "createdAt", "updatedAt", "categoryId", "category", "supplierId", "supplier",
                 "stockAdjustments", "isLowStock", "isReorderAlert",
 
-                // Issue #736's one appended key, last so every key above keeps its position.
+                // Issue #736's one appended key, last so every key above keeps its position. Issue
+                // #737's canDelete/deletionRefusal follow it only on a read that resolved the
+                // deletion question, which this record did not.
                 "providerManagedFields",
             },
             document.RootElement.EnumerateObject().Select(property => property.Name));
@@ -282,6 +287,73 @@ public class ProductJsonContractTests
         Assert.Equal(17m, document.RootElement.GetProperty("needToOrder").GetDecimal());
         Assert.True(document.RootElement.GetProperty("isLowStock").GetBoolean());
         Assert.True(document.RootElement.GetProperty("isReorderAlert").GetBoolean());
+    }
+
+    /// <summary>
+    /// Issue #737's two appended keys, for a read that resolved the deletion question: whether the
+    /// delete would be allowed and, when it would not, the very message the delete answers
+    /// <c>409</c> with. They come after issue #736's key, so again every key a client already read
+    /// keeps its name, type, value and position.
+    /// </summary>
+    [Fact]
+    public void Response_publishes_the_refusal_a_delete_would_give()
+    {
+        var references = new ProductDeletionReferences(1, 0, 0, 0, 0, 0);
+        var record = FullyPopulatedRecord() with
+        {
+            DeletionEligibility = ProductDeletionEligibility.Decide(
+                isProviderManaged: false, provider: null, references),
+        };
+
+        var json = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(record, FinancialFigureVisibility.Visible), WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.False(document.RootElement.GetProperty("canDelete").GetBoolean());
+        Assert.Equal(
+            ProductDeletionPolicy.Refusal(isProviderManaged: false, provider: null, references),
+            document.RootElement.GetProperty("deletionRefusal").GetString());
+        Assert.Equal(
+            ["providerManagedFields", "canDelete", "deletionRefusal"],
+            document.RootElement.EnumerateObject().Select(property => property.Name).TakeLast(3));
+    }
+
+    /// <summary>
+    /// A deletable product says so and carries no reason: an empty refusal would read as a refusal
+    /// with nothing to show.
+    /// </summary>
+    [Fact]
+    public void Response_says_a_product_nothing_refers_to_may_be_deleted()
+    {
+        var record = FullyPopulatedRecord() with
+        {
+            DeletionEligibility = ProductDeletionEligibility.Decide(
+                isProviderManaged: false, provider: null, ProductDeletionReferences.None),
+        };
+
+        var json = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(record, FinancialFigureVisibility.Visible), WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.True(document.RootElement.GetProperty("canDelete").GetBoolean());
+        Assert.False(document.RootElement.TryGetProperty("deletionRefusal", out _));
+    }
+
+    /// <summary>
+    /// A read that did not resolve the question says nothing at all - both keys are absent, which is
+    /// what the byte-for-byte comparisons above are still asserting. An absent <c>canDelete</c> is
+    /// not permission, and a client that treats it as one offers a delete the server may refuse.
+    /// </summary>
+    [Fact]
+    public void Response_omits_the_deletion_answer_when_the_read_did_not_resolve_it()
+    {
+        var json = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(FullyPopulatedRecord(), FinancialFigureVisibility.Visible),
+            WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.False(document.RootElement.TryGetProperty("canDelete", out _));
+        Assert.False(document.RootElement.TryGetProperty("deletionRefusal", out _));
     }
 
     [Fact]

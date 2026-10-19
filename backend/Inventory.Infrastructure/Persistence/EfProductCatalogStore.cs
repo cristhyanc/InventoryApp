@@ -1,4 +1,7 @@
+using System.Linq.Expressions;
+
 using Inventory.Application.Products;
+using Inventory.Domain.Products;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -17,6 +20,11 @@ namespace Inventory.Infrastructure.Persistence;
 /// here (AGENTS.md § Tenant ownership and data isolation). The category/supplier/stock-adjustment
 /// detail is loaded with explicit <c>Include</c>s rather than lazily (issue #52), so a caller still
 /// sees it after this context is disposed.
+///
+/// <para>Since issue #737 the two reads a person maintains the catalogue from - the listing and the
+/// single product - also answer whether each product may be deleted, from the same
+/// <see cref="ProductDeletionPolicy"/> the delete is refused by; see
+/// <see cref="WithDeletionEligibilityAsync"/> for why that is advisory and what it costs.</para>
 /// </summary>
 public sealed class EfProductCatalogStore : IProductCatalogStore
 {
@@ -29,9 +37,11 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
 
     public async Task<IReadOnlyList<ProductRecord>> ListOrderedByNameAsync(
         ProductCatalogFilter filter, CancellationToken cancellationToken) =>
-        ToRecords(await Filtered(_db.Products, filter)
-            .OrderBy(product => product.Name)
-            .ToListAsync(cancellationToken));
+        await WithDeletionEligibilityAsync(
+            await Filtered(_db.Products, filter)
+                .OrderBy(product => product.Name)
+                .ToListAsync(cancellationToken),
+            cancellationToken);
 
     public async Task<IReadOnlyList<ProductRecord>> ListUnorderedAsync(
         ProductCatalogFilter filter, CancellationToken cancellationToken) =>
@@ -41,7 +51,10 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
     {
         var product = await WithDetail(_db.Products)
             .FirstOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
-        return product is null ? null : ToRecord(product);
+        if (product is null) return null;
+
+        var records = await WithDeletionEligibilityAsync([product], cancellationToken);
+        return records[0];
     }
 
     private static IQueryable<Product> Filtered(IQueryable<Product> products, ProductCatalogFilter filter)
@@ -76,6 +89,122 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
 
     private static IReadOnlyList<ProductRecord> ToRecords(IEnumerable<Product> products) =>
         products.Select(ToRecord).ToList();
+
+    /// <summary>
+    /// The same records, each carrying the deletion rule's own answer for it (issue #737): whether
+    /// <c>DELETE api/products/{id}</c> would allow the delete, and the refusal it would give
+    /// otherwise. The screens delete from these two reads, and a <strong>Delete</strong> that must
+    /// fail should not be offered at all.
+    ///
+    /// <para><strong>The rule is not restated here.</strong> The counts are handed to
+    /// <see cref="ProductDeletionEligibility.Decide"/>, which calls the one
+    /// <see cref="ProductDeletionPolicy"/> the delete itself is refused by, so what a client offers
+    /// and what the server permits cannot drift apart - the same reason
+    /// <c>ProviderManagedCatalogueFields</c> produces both the published lock list and the update's
+    /// refusal.</para>
+    ///
+    /// <para><strong>It is advisory, and the delete still decides.</strong> These counts are taken
+    /// outside the delete's transaction, so a product can gain a stock movement or a provider link
+    /// straight after this read; <see cref="EfProductStore.DeleteAsync"/> counts again inside its own
+    /// transaction and refuses there. That transactional recheck is what makes the delete safe - this
+    /// read only spares an operator an action that is already known to be impossible.</para>
+    ///
+    /// <para><strong>Cost.</strong> Six grouped counts for the whole page, not six per product: each
+    /// reads one table once for every listed product id, so a catalogue of any size costs the same
+    /// fixed number of round trips. The seventh kind, the stock movements, is counted from the rows
+    /// <see cref="WithDetail"/> already loaded onto each product for the record's own history rather
+    /// than read a second time.</para>
+    /// </summary>
+    private async Task<IReadOnlyList<ProductRecord>> WithDeletionEligibilityAsync(
+        IReadOnlyList<Product> products, CancellationToken cancellationToken)
+    {
+        if (products.Count == 0) return [];
+
+        var references = await CountReferencesAsync(products, cancellationToken);
+
+        // Read only to name the provider in its refusal, and only when a listed product carries one
+        // of its ids - a catalogue nobody but this business maintains asks nothing extra.
+        var provider = products.Any(product => product.ExternalProductId is not null)
+            ? await EfSalesProviderQueries.CurrentBusinessSalesProviderAsync(_db, cancellationToken)
+            : null;
+
+        return products
+            .Select(product => ToRecord(product) with
+            {
+                DeletionEligibility = ProductDeletionEligibility.Decide(
+                    product.ExternalProductId is not null, provider, references[product.Id]),
+            })
+            .ToList();
+    }
+
+    /// <summary>
+    /// What refers to each of these products, counted the way
+    /// <see cref="EfProductStore"/> counts it for one - the same six kinds, from the same tables, so
+    /// the advisory answer and the delete's own answer are about the same rows. Sales are counted
+    /// through the sale's own persisted <c>ProductId</c> (issue #758), never a provider id or a name.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<long, ProductDeletionReferences>> CountReferencesAsync(
+        IReadOnlyList<Product> products, CancellationToken cancellationToken)
+    {
+        var ids = products.Select(product => product.Id).ToList();
+
+        var purchaseLines = await CountByProductAsync(
+            _db.ReceiptItems.Where(item => ids.Contains(item.ProductId)),
+            item => item.ProductId,
+            cancellationToken);
+        var supplierOrderLines = await CountByProductAsync(
+            _db.SupplierOrderLines.Where(line => ids.Contains(line.ProductId)),
+            line => line.ProductId,
+            cancellationToken);
+        var machineCounts = await CountByProductAsync(
+            _db.MachineStockCounts.Where(count => ids.Contains(count.ProductId)),
+            count => count.ProductId,
+            cancellationToken);
+        var baselines = await CountByProductAsync(
+            _db.InventoryCostTransitionBaselines.Where(baseline => ids.Contains(baseline.ProductId)),
+            baseline => baseline.ProductId,
+            cancellationToken);
+        var repairs = await CountByProductAsync(
+            _db.InventoryCostRepairs.Where(repair => ids.Contains(repair.ProductId)),
+            repair => repair.ProductId,
+            cancellationToken);
+
+        // The sale's product column is nullable - an unresolved sale belongs to no product at all
+        // (issue #758) - so the null is excluded before the grouping rather than counted as a product.
+        var sales = (await _db.NayaxSales
+                .Where(sale => sale.ProductId != null && ids.Contains(sale.ProductId.Value))
+                .GroupBy(sale => sale.ProductId)
+                .Select(group => new { ProductId = group.Key, Count = group.Count() })
+                .ToListAsync(cancellationToken))
+            .ToDictionary(row => row.ProductId!.Value, row => row.Count);
+
+        return products.ToDictionary(
+            product => product.Id,
+            product => new ProductDeletionReferences(
+                // Already loaded by WithDetail for the record's own history; counting them in SQL
+                // again would read rows this adapter is holding.
+                StockAdjustments: product.StockAdjustments.Count,
+                PurchaseLines: CountFor(purchaseLines, product.Id),
+                SupplierOrderLines: CountFor(supplierOrderLines, product.Id),
+                Sales: CountFor(sales, product.Id),
+                MachineCounts: CountFor(machineCounts, product.Id),
+                CostingRecords: CountFor(baselines, product.Id) + CountFor(repairs, product.Id)));
+    }
+
+    /// <summary>
+    /// How many rows of one table each listed product has, in one grouped read. Rows of other
+    /// businesses are excluded by the central query filters, exactly as they are for the delete's own
+    /// counts.
+    /// </summary>
+    private static Task<Dictionary<long, int>> CountByProductAsync<TRow>(
+        IQueryable<TRow> rows, Expression<Func<TRow, long>> productId, CancellationToken cancellationToken) =>
+        rows.GroupBy(productId)
+            .Select(group => new { ProductId = group.Key, Count = group.Count() })
+            .ToDictionaryAsync(row => row.ProductId, row => row.Count, cancellationToken);
+
+    /// <summary>A product no row of that table refers to is absent from the grouping, not zero in it.</summary>
+    private static int CountFor(IReadOnlyDictionary<long, int> counts, long productId) =>
+        counts.TryGetValue(productId, out var count) ? count : 0;
 
     private static ProductRecord ToRecord(Product product) => new()
     {

@@ -138,33 +138,38 @@ export class ProductListComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Whether the business's sales provider names this product (issue #737). The catalogue response
-   * publishes the fields the provider manages on the row, and
-   * `Inventory.Domain.Products.ProductDeletionPolicy` refuses a delete for exactly that condition -
-   * the next catalogue import would create the product again - so a non-empty list is a deletion
-   * the API is known to refuse. Delete is therefore not offered for such a product and the
-   * retirement path is named instead, rather than offering an action that must fail.
+   * Whether the API says this product may be deleted (issue #737). `canDelete` is the deletion
+   * rule's own answer, published by the catalogue listing from the same
+   * `Inventory.Domain.Products.ProductDeletionPolicy` that refuses the delete itself - a provider
+   * link, stock movements, purchase lines, supplier order lines, sales, machine stock counts and
+   * costing records all reach it. Delete is offered only on a plain `true`: an absent answer (a
+   * response that never resolved the question) is not permission, and the row then offers the
+   * retirement path, which is always available.
    *
-   * It stays advisory: the list is as fresh as the last fetch, and the server's own refusal
-   * (checked in the same transaction as the delete) remains the authority, so a product that gains
-   * or loses its provider link after the page loaded is still answered correctly by the API.
+   * The answer stays advisory - it is as fresh as the last fetch - and the server decides again
+   * inside the delete's own transaction, which `deleteConfirmed` still surfaces.
    */
-  providerManaged(product: Product): boolean {
-    return (product.providerManagedFields ?? []).length > 0;
+  canDelete(product: Product): boolean {
+    return product.canDelete === true;
   }
 
-  /** Why Delete is not offered for a provider-managed product, and which control retires it. */
-  providerManagedDeleteNote(product: Product): string {
+  /**
+   * Why Delete is not offered, and which control retires the product instead: the server's own
+   * refusal (so the page never words the rule a second time), followed by the name of the control
+   * on this row that does what the refusal points at.
+   */
+  deleteRefusalNote(product: Product): string {
     const retirement = product.isActive
-      ? 'Deactivate it with the Status toggle instead.'
-      : 'It is deactivated; Reactivate it with the Status toggle.';
-    return `Managed by Nayax, so it cannot be deleted - the next catalogue import would create it again. ${retirement}`;
+      ? 'Use the Status toggle to deactivate it.'
+      : 'It is deactivated; use the Status toggle to reactivate it.';
+    const refusal = product.deletionRefusal?.trim();
+    return refusal ? `${refusal} ${retirement}` : `This product cannot be deleted. ${retirement}`;
   }
 
   confirmDelete(product: Product): void {
     // Checked here as well as hidden in the template, so the write is actually unavailable rather
     // than merely invisible - the endpoint refuses it either way.
-    if (this.sessionActive || this.providerManaged(product)) {
+    if (this.sessionActive || !this.canDelete(product)) {
       return;
     }
     this.confirmingProduct = product;
@@ -183,12 +188,12 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.confirmingProduct = null;
     this.productService.delete(product.id).subscribe({
       next: () => this.applyFilters(),
-      // A history-dependent refusal is explained here rather than predicted (issue #737): the API
-      // is the only place that knows what refers to a product, and it decides in the same
-      // transaction as the delete, so the answer cannot be held on this page without going stale.
-      // The message itself names what is in the way and points at the Active/Inactive toggle
-      // beside it (`ProductDeletionPolicy.Refusal`). The one refusal this page does know in
-      // advance - a provider-managed product - is not offered at all; see `providerManaged`.
+      // Delete is offered only where `canDelete` said the API allows it, but that answer was read
+      // before this click: a product can gain a stock movement, a sale or a provider link in
+      // between, and the server decides again inside the delete's own transaction. Its refusal is
+      // shown verbatim - it names what is in the way and points at the Active/Inactive toggle
+      // beside it (`ProductDeletionPolicy.Refusal`) - and the row stays as it was fetched, so the
+      // toggle it points at is still there to use.
       error: (error) => this.toastService.error(apiErrorMessage(error, 'Failed to delete product.'))
     });
   }

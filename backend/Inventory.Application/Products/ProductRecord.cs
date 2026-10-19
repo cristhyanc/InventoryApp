@@ -49,6 +49,24 @@ public sealed record ProductRecord
     public bool IsProviderManaged { get; init; }
 
     /// <summary>
+    /// Whether this product may be deleted and, when it may not, the refusal that says why
+    /// (issue #737): the deletion rule's own answer over the rows that refer to the product, resolved
+    /// on the reads a person deletes from so a screen can offer <strong>Delete</strong> only where the
+    /// API allows it.
+    ///
+    /// <para><see langword="null"/> means <em>not resolved on this read path</em> - not "deletable".
+    /// Only the catalogue listing and the single-product read resolve it
+    /// (<see cref="IProductCatalogStore"/>); the listings that exist to rank or enrich rows - the
+    /// reorder alerts, the home Dashboard summary and the machine product views - do not pay for six
+    /// reference counts to answer a question their callers never ask. A caller that is told nothing
+    /// must not read that as permission.</para>
+    ///
+    /// <para>Advisory in every case: the delete counts again inside its own transaction and decides
+    /// there (<see cref="Inventory.Domain.Products.ProductDeletionEligibility"/>).</para>
+    /// </summary>
+    public ProductDeletionEligibility? DeletionEligibility { get; init; }
+
+    /// <summary>
     /// Units the machines currently need refilled from storage. Zero unless a caller resolved the
     /// live machine fleet (<see cref="ListLowStockProducts"/>), exactly as the former
     /// <c>ProductService.GetAll</c>/<c>Get</c> left it unset.

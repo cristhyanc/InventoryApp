@@ -1063,18 +1063,18 @@ does not manage.
   locked the same way in **Categories**, which also gained its own inline create/rename form — the
   "Categories are managed from the product import and are read-only here" notice is gone along with
   the blanket lock the product form used to put on price. **Delete** is offered only where the API
-  can allow it. A product the provider manages is the one refusal the screen already holds the
-  server's own signal for — the product's `providerManagedFields` — so **Products** offers no
-  **Delete** for it and names the retirement path in its place ("Managed by Nayax, so it cannot be
-  deleted - the next catalogue import would create it again. Deactivate it with the Status toggle
-  instead.", and *Reactivate* when it is already retired). Every other refusal depends on a
-  product's history or a category's products and is decided inside the delete's own transaction, so
-  the screen cannot know it in advance: it attempts the delete and, on a `409`, shows the server's
-  own refusal message instead of silently failing or guessing. For a product that message names what
-  is in the way and points at **Deactivate** (the same Active/Inactive toggle beside it); for a
-  category it names how many products use it. The provider signal is advisory — it is as fresh as
-  the last fetch — so a product that became provider-managed after the page loaded is still refused
-  by the API, and that refusal is shown too. **Products** also gained a **Show retired** filter
+  says it is allowed: the catalogue listing answers `canDelete` for every product, with the
+  `deletionRefusal` the delete itself would give when it is `false`, so **Products** renders
+  **Delete** only for a product the server would actually delete. For every other product the row
+  shows that refusal — the provider's ("This product is managed by Nayax and cannot be deleted…") or
+  the history's ("…its history refers to it (2 stock movements, 1 sale)…") — followed by the control
+  that retires it instead: "Use the Status toggle to deactivate it.", or "It is deactivated; use the
+  Status toggle to reactivate it." for one already retired. That answer is **advisory**: it is as
+  fresh as the last fetch, the delete counts again inside its own transaction, and a refusal for a
+  product the screen had offered is still shown as the server worded it. A **category** has no such
+  answer published and no retirement flag at all, so **Categories** attempts every delete and shows
+  the server's refusal, which names how many products use the category. **Products** also gained a
+  **Show retired** filter
   (`includeRetired=true`) so a product just deactivated stays on screen to **Reactivate** instead of
   disappearing from the only list that can flip it back — the Admin costing-repair and
   AVCO-transition tools and the stock-history product filter still call the endpoint without it and
@@ -1084,7 +1084,13 @@ does not manage.
   the delete is refused with what is in the way and nothing is written — deleting it would erase
   inventory and financial history. **Deactivate it instead**: a deactivated product keeps all of its
   history and can be reactivated at any time. A product the provider manages is not deleted either,
-  because the next import would create it again.
+  because the next import would create it again. **The catalogue read says so in advance**:
+  `GET /api/products` and `GET /api/products/{id}` answer `canDelete` for each product, and the
+  refusal in `deletionRefusal` when it is `false`, so a client offers a delete only where one is
+  possible. It is advisory — the delete decides again inside its own transaction, and a client still
+  has to show a `409` it did not expect. The reorder listing (`lowStockOnly=true`) and the product
+  snapshots nested in other resources answer neither key, and an absent `canDelete` is not
+  permission.
 - **A deactivated product is out of the product lists.** `GET /api/products` answers the catalogue
   you work from, so a deactivated product is not in it, is not offered in a product picker, and
   stays out of the reorder alerts and the Pick List — it must not be purchased from, counted,

@@ -44,6 +44,11 @@ function product(overrides: Partial<Product> = {}): Product {
     isActive: true,
     isLowStock: false,
     isReorderAlert: false,
+    // What the catalogue listing answers for an ordinary product nothing refers to (issue #737):
+    // the delete is allowed and there is no refusal to show. The tests about an ineligible product
+    // override it below.
+    canDelete: true,
+    deletionRefusal: null,
     ...overrides
   };
 }
@@ -388,17 +393,17 @@ describe('ProductListComponent write controls during a support session (issue #5
 });
 
 /**
- * Delete is offered only where the API can allow it (issue #737).
+ * Delete is offered only where the API says it is allowed (issue #737).
  *
- * A product the business's sales provider names is a refusal this page already holds the server's
- * own signal for - `providerManagedFields`, produced by the same Domain statement
- * `ProductDeletionPolicy` refuses that delete with - so Delete is not rendered for it at all and
- * the Deactivate/Reactivate path is named instead. Every other refusal is history-dependent and
- * decided inside the delete's own transaction, so it cannot be predicted here: Delete is offered,
- * success removes the row, and a refusal explains why and leaves the row (and its Active/Inactive
- * toggle) in place instead of silently doing nothing. The provider signal is advisory for the same
- * reason - it is as fresh as the last fetch - so the server's refusal still has to reach the user
- * when it disagrees.
+ * The catalogue listing publishes `canDelete` and, when it is false, the refusal the delete itself
+ * would answer with - decided by the one `Inventory.Domain.Products.ProductDeletionPolicy`, over a
+ * provider link and over the six kinds of history that refer to a product. So the row renders
+ * Delete on `true` and, on anything else, the server's own reason plus the name of the control that
+ * retires the product instead. An absent `canDelete` is not permission either: a response that did
+ * not resolve the question gets the retirement path, which is always available.
+ *
+ * The answer is advisory - as fresh as the last fetch - so a delete the page offered can still be
+ * refused, and that refusal has to reach the operator with the row left in place.
  */
 describe('ProductListComponent delete vs deactivate (issue #737)', () => {
   afterEach(() => TestBed.resetTestingModule());
@@ -430,7 +435,9 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
 
   it('offers Delete for a product the API can allow it for, and removes it from the list on success', async () => {
     const deleteFn = jest.fn(() => of(undefined));
-    const { fixture, host } = await render(deleteFn, [product({ id: 1, name: 'Widget', providerManagedFields: [] })]);
+    const { fixture, host } = await render(deleteFn, [
+      product({ id: 1, name: 'Widget', canDelete: true, providerManagedFields: [] })
+    ]);
 
     expect(deleteButtonOf(host)).toBeDefined();
 
@@ -473,17 +480,24 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
     expect(host.textContent).toContain('Widget');
   });
 
-  it('does not offer Delete for a provider-linked product, and names Deactivate instead', async () => {
+  it('does not offer Delete for a product whose history blocks it, and explains why in the server’s words', async () => {
     const deleteFn = jest.fn(() => of(undefined));
     const { host } = await render(deleteFn, [
-      product({ id: 1, name: 'Coke', isActive: true, providerManagedFields: ['name', 'categoryId'] })
+      product({
+        id: 1,
+        name: 'Widget',
+        isActive: true,
+        canDelete: false,
+        deletionRefusal:
+          'This product cannot be deleted because its history refers to it (1 stock movement). ' +
+          'Deactivate it instead - a deactivated product keeps its history, stays out of the reorder ' +
+          'alerts and can be reactivated. Nothing was deleted.'
+      })
     ]);
 
     expect(deleteButtonOf(host)).toBeUndefined();
-    expect(host.textContent).toContain(
-      'Managed by Nayax, so it cannot be deleted - the next catalogue import would create it again. ' +
-        'Deactivate it with the Status toggle instead.'
-    );
+    expect(host.textContent).toContain('its history refers to it (1 stock movement)');
+    expect(host.textContent).toContain('Use the Status toggle to deactivate it.');
     // The retirement control the note points at is the row's own toggle, still offered and usable.
     const statusButton = Array.from(host.querySelectorAll('button')).find(
       (b) => b.textContent?.trim() === 'Active'
@@ -491,29 +505,79 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
     expect(statusButton.disabled).toBe(false);
   });
 
-  it('names Reactivate for a provider-linked product that is already retired', async () => {
+  it('does not offer Delete for a provider-linked product, and names Deactivate instead', async () => {
     const deleteFn = jest.fn(() => of(undefined));
     const { host } = await render(deleteFn, [
-      product({ id: 1, name: 'Coke', isActive: false, providerManagedFields: ['name', 'categoryId'] })
+      product({
+        id: 1,
+        name: 'Coke',
+        isActive: true,
+        providerManagedFields: ['name', 'categoryId'],
+        canDelete: false,
+        deletionRefusal:
+          'This product is managed by Nayax and cannot be deleted: the next catalogue import would ' +
+          'create it again. Deactivate it instead - a deactivated product keeps its history, stays ' +
+          'out of the reorder alerts and can be reactivated. Nothing was deleted.'
+      })
     ]);
 
     expect(deleteButtonOf(host)).toBeUndefined();
-    expect(host.textContent).toContain(
-      'Managed by Nayax, so it cannot be deleted - the next catalogue import would create it again. ' +
-        'It is deactivated; Reactivate it with the Status toggle.'
-    );
+    expect(host.textContent).toContain('managed by Nayax and cannot be deleted');
+    expect(host.textContent).toContain('Use the Status toggle to deactivate it.');
+    const statusButton = Array.from(host.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Active'
+    ) as HTMLButtonElement;
+    expect(statusButton.disabled).toBe(false);
+  });
+
+  it('names Reactivate for an undeletable product that is already retired', async () => {
+    const deleteFn = jest.fn(() => of(undefined));
+    const { host } = await render(deleteFn, [
+      product({
+        id: 1,
+        name: 'Coke',
+        isActive: false,
+        canDelete: false,
+        deletionRefusal: 'This product cannot be deleted because its history refers to it (2 sales).'
+      })
+    ]);
+
+    expect(deleteButtonOf(host)).toBeUndefined();
+    expect(host.textContent).toContain('It is deactivated; use the Status toggle to reactivate it.');
     expect(
       Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Inactive')
     ).toBeDefined();
   });
 
-  it('refuses to open the delete confirmation for a provider-linked product, so the write is unavailable rather than merely hidden', async () => {
+  /**
+   * A response that never resolved the question (a reorder listing, an older server) says nothing,
+   * and nothing is not permission: the row offers the retirement path rather than a delete whose
+   * outcome is unknown.
+   */
+  it('does not offer Delete when the response did not say whether the product may be deleted', async () => {
     const deleteFn = jest.fn(() => of(undefined));
-    const linked = product({ id: 1, name: 'Coke', providerManagedFields: ['name', 'categoryId'] });
-    const { fixture, host } = await render(deleteFn, [linked]);
+    const unanswered = product({ id: 1, name: 'Widget', canDelete: undefined, deletionRefusal: undefined });
+    const { fixture, host } = await render(deleteFn, [unanswered]);
+
+    expect(deleteButtonOf(host)).toBeUndefined();
+    expect(host.textContent).toContain('This product cannot be deleted. Use the Status toggle to deactivate it.');
+
+    fixture.componentInstance.confirmDelete(unanswered);
+    expect(deleteFn).not.toHaveBeenCalled();
+  });
+
+  it('refuses to open the delete confirmation for an undeletable product, so the write is unavailable rather than merely hidden', async () => {
+    const deleteFn = jest.fn(() => of(undefined));
+    const blocked = product({
+      id: 1,
+      name: 'Coke',
+      canDelete: false,
+      deletionRefusal: 'This product cannot be deleted because its history refers to it (1 sale).'
+    });
+    const { fixture, host } = await render(deleteFn, [blocked]);
     const component = fixture.componentInstance;
 
-    component.confirmDelete(linked);
+    component.confirmDelete(blocked);
     fixture.detectChanges();
 
     expect(component.confirmingProduct).toBeNull();
@@ -522,14 +586,15 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
   });
 
   it('still surfaces the server refusal when a product that looked deletable is refused, because the eligibility it rendered can be stale', async () => {
-    // The row was fetched before the provider's catalogue import named this product, so the page
-    // offered Delete; the server decides again inside the delete's transaction and refuses.
+    // The row was fetched while it was still deletable - `canDelete: true` - and then gained a sale
+    // (or the provider's catalogue import named it). The server counts again inside the delete's own
+    // transaction and refuses, which is why that recheck is kept and why its message must be shown.
     const refusal =
       'This product is managed by Nayax and cannot be deleted: the next catalogue import would ' +
       'create it again. Deactivate it instead - a deactivated product keeps its history, stays out ' +
       'of the reorder alerts and can be reactivated. Nothing was deleted.';
     const deleteFn = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 409, error: refusal })));
-    const stale = product({ id: 1, name: 'Widget', providerManagedFields: [] });
+    const stale = product({ id: 1, name: 'Widget', canDelete: true, providerManagedFields: [] });
     const { fixture, host, toastService } = await render(deleteFn, [stale]);
 
     expect(deleteButtonOf(host)).toBeDefined();

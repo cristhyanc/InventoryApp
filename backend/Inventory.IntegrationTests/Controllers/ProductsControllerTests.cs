@@ -409,6 +409,70 @@ public class ProductsControllerTests
     }
 
     /// <summary>
+    /// Issue #737's criterion at the API boundary: the catalogue listing says whether each product
+    /// may be deleted, so the screen offers <c>Delete</c> only where the server would allow it. A
+    /// product with history is refused with the very message the delete would answer <c>409</c>
+    /// with, and the single-product read answers the same way.
+    /// </summary>
+    [Fact]
+    public async Task GetAll_PublishesWhetherEachProductMayBeDeleted()
+    {
+        using var db = CreateDbContext();
+        db.Products.AddRange(
+            new Product { Id = 1, Name = "Deletable" },
+            new Product { Id = 2, Name = "Used" });
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 2,
+            QuantityChange = 4,
+            QuantityAfter = 4,
+            Reason = StockAdjustmentReason.Restock,
+        });
+        await db.SaveChangesAsync();
+        var controller = CreateController(db);
+
+        var products = Products(await controller.GetAll(null, null, null, null, null, CancellationToken.None))
+            .ToDictionary(product => product.Name);
+
+        Assert.True(products["Deletable"].CanDelete);
+        Assert.Null(products["Deletable"].DeletionRefusal);
+        Assert.False(products["Used"].CanDelete);
+        Assert.Contains(
+            "1 stock movement", products["Used"].DeletionRefusal!, StringComparison.Ordinal);
+
+        var one = Assert.IsType<ProductResponse>(
+            Assert.IsType<OkObjectResult>((await controller.Get(2)).Result).Value);
+        Assert.False(one.CanDelete);
+        Assert.Equal(products["Used"].DeletionRefusal, one.DeletionRefusal);
+    }
+
+    /// <summary>
+    /// The refusal the listing publishes is the one the delete gives, not a second wording of the
+    /// same rule: a client can show it verbatim, and the two cannot drift apart.
+    /// </summary>
+    [Fact]
+    public async Task GetAll_PublishesTheRefusalTheDeleteItselfAnswersWith()
+    {
+        using var db = CreateDbContext();
+        db.Products.Add(new Product { Id = 1, Name = "Used" });
+        db.StockAdjustments.Add(new StockAdjustment
+        {
+            ProductId = 1,
+            QuantityChange = 4,
+            QuantityAfter = 4,
+            Reason = StockAdjustmentReason.Restock,
+        });
+        await db.SaveChangesAsync();
+        var controller = CreateController(db);
+
+        var published = SingleProduct(
+            await controller.GetAll(null, null, null, null, null, CancellationToken.None)).DeletionRefusal;
+        var refused = Assert.IsType<ConflictObjectResult>(await controller.Delete(1, CancellationToken.None));
+
+        Assert.Equal(refused.Value, published);
+    }
+
+    /// <summary>
     /// Issue #736's retirement criterion at the API boundary: a deactivated product is hidden from
     /// the catalogue listing, which is the list every product dropdown is built from, and
     /// <c>includeRetired=true</c> is the one explicit way to ask for every product the business owns.

@@ -98,13 +98,13 @@
                     <!-- Hidden rather than disabled while a support session is active (issue #554): a
                          session grants InventoryOperate, so this write would otherwise still render. -->
                     @if (!sessionActive) {
-                      @if (providerManaged(p)) {
-                        <!-- Delete is offered only where the API can allow it (issue #737): a product the
-                             provider names is a refusal this page already knows, so it names the
-                             Deactivate/Reactivate path instead of offering an action that must fail. -->
-                        <p class="text-xs value-muted">{{ providerManagedDeleteNote(p) }}</p>
-                      } @else {
+                      @if (canDelete(p)) {
                         <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(p)">Delete</button>
+                      } @else {
+                        <!-- Delete is offered only where the API says it is allowed (issue #737). For every
+                             other product the row carries the server's own refusal and names the
+                             Deactivate/Reactivate control instead of offering an action that must fail. -->
+                        <p class="text-xs value-muted">{{ deleteRefusalNote(p) }}</p>
                       }
                     }
                   </div>

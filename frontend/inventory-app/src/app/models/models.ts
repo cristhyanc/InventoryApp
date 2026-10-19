@@ -104,6 +104,23 @@ export interface Product {
    * the price and every other field stay editable either way.
    */
   providerManagedFields?: string[] | null;
+  /**
+   * Whether `DELETE /api/products/{id}` would allow this product to be deleted (issue #737), from
+   * the catalogue listing and the single-product read. `false` means the server would refuse it and
+   * {@link deletionRefusal} says why; **absent** means the read never resolved the question (a
+   * reorder listing, a machine slot, a nested snapshot) and is not permission - a screen that
+   * offers Delete only on `true` never offers one that must fail.
+   *
+   * It is advisory: the delete counts again inside its own transaction, so a refusal can still come
+   * back for a product this said was deletable, and that refusal must still be shown.
+   */
+  canDelete?: boolean;
+  /**
+   * Why this product may not be deleted, in the server's own words - the message the delete would
+   * answer `409` with, naming what is in the way and pointing at deactivation. Absent when the
+   * product may be deleted, and when the read did not resolve the question.
+   */
+  deletionRefusal?: string | null;
 }
 
 /** The product a client posts to `POST /api/products` (issue #737). */
