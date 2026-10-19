@@ -47,6 +47,7 @@ scripts/agent-outcomes.mjs            The fixed per-SHA review and validation ou
 scripts/agent-branch-cleanup.sh       Deletes an issue's checkpoint/recovery branches once published or closed (with .test.mjs)
 scripts/agent-review-transport.mjs    Artifact packaging and verification of review results (agent-review.yml) and architecture findings (agent-architecture.yml) (with .test.mjs)
 scripts/validate-deployment-workflows.mjs  Production deployment workflow contract checks (with .test.mjs)
+scripts/validate-runner-placement.mjs  Every workflow job on [self-hosted, linux, x64, inventory-agent], no hosted fallback (with .test.mjs)
 scripts/deployment-migration-preflight.mjs Deploy Production migration preflight (with .test.mjs)
 scripts/validate-documentation-impact.mjs  Documentation-impact declaration parser for issues and PRs (with .test.mjs)
 scripts/run-agent-evals.mjs           InventoryApp Agent Evals runner (with .test.mjs)

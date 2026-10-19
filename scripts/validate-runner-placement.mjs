@@ -12,6 +12,10 @@ export const SELF_HOSTED_RUNS_ON = '[self-hosted, linux, x64, inventory-agent]';
 export const RETIRED_RUNNER_SWITCH = 'INVENTORY_AGENT_SELF_HOSTED_ALL';
 const HOSTED_LABEL = /\b(?:ubuntu|windows|macos)-(?:latest|\d[\w.-]*)\b/;
 const LOCAL_REUSABLE_WORKFLOW = /^\.\/\.github\/workflows\/[\w.-]+\.ya?ml$/;
+// A self-hosted runner has no GitHub-hosted image tools, so a job that runs `node` installs it
+// with the pinned actions/setup-node step before its first use instead of assuming one on PATH.
+export const SETUP_NODE_STEP = 'uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0';
+const NODE_INVOCATION = /(^|[\s;(|&"'`$])node\s+(--test\b|-e\b|"|\$|[\w./-]+\.m?js\b)/m;
 
 export function listWorkflowFiles(root = repositoryRoot) {
   return readdirSync(resolve(root, '.github/workflows'))
@@ -74,6 +78,11 @@ export function runnerPlacementViolations(workflowText, source) {
     if (HOSTED_LABEL.test(value)) violations.push(`${where}: selects a GitHub-hosted runner (${value}).`);
     else if (value.includes('${{')) violations.push(`${where}: selects its runner with an expression (${value}); a computed runner can fall back to a GitHub-hosted one.`);
     else if (value !== SELF_HOSTED_RUNS_ON) violations.push(`${where}: runs-on must be exactly ${SELF_HOSTED_RUNS_ON} (found ${value || 'a multi-line value'}).`);
+    const nodeAt = job.search(NODE_INVOCATION);
+    if (nodeAt >= 0) {
+      const setupAt = job.indexOf(SETUP_NODE_STEP);
+      if (setupAt < 0 || setupAt > nodeAt) violations.push(`${where}: runs node without first installing it with ${SETUP_NODE_STEP}.`);
+    }
   }
   return violations;
 }

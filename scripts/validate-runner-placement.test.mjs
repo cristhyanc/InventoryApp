@@ -7,6 +7,7 @@ import { describe, it } from 'node:test';
 
 import {
   SELF_HOSTED_RUNS_ON,
+  SETUP_NODE_STEP,
   listWorkflowFiles,
   runnerPlacementViolations,
   verifyRunnerPlacement,
@@ -71,6 +72,16 @@ describe('runner placement contract', () => {
   it('ignores step-level uses: and nested runs-on text', () => {
     const text = workflow(`  build:\n    runs-on: ${SELF_HOSTED_RUNS_ON}\n    steps:\n      - uses: actions/checkout@v4\n      - name: Mention\n        run: echo "runs-on: ubuntu-latest is not used"\n`);
     assert.deepEqual(runnerPlacementViolations(text, 'fixture'), []);
+  });
+
+  it('requires the pinned Node.js setup before a job runs node', () => {
+    const runs = (steps) => workflow(`  check:\n    runs-on: ${SELF_HOSTED_RUNS_ON}\n    steps:\n${steps}`);
+    const call = '      - run: node "$RUNNER_TEMP/agent-pr-guard.mjs" check 1\n';
+    const setup = `      - name: Set up Node.js\n        ${SETUP_NODE_STEP}\n        with:\n          node-version: 20\n`;
+    assert.match(runnerPlacementViolations(runs(call), 'fixture')[0], /runs node without first installing it/);
+    assert.match(runnerPlacementViolations(runs(call + setup), 'fixture')[0], /runs node without first installing it/);
+    assert.deepEqual(runnerPlacementViolations(runs(setup + call), 'fixture'), []);
+    assert.deepEqual(runnerPlacementViolations(runs('      - run: echo "node-version is set elsewhere"\n'), 'fixture'), []);
   });
 
   it('fails closed on a workflow it cannot read', () => {

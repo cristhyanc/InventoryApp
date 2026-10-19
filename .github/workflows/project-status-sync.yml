@@ -41,7 +41,7 @@ jobs:
       github.repository == 'cristhyanc/InventoryApp' &&
       (github.event_name == 'workflow_dispatch' || vars.PROJECT_SYNC_ENABLED == 'true') &&
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:
       contents: read

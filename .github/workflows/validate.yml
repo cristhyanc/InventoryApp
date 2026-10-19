@@ -37,7 +37,7 @@ concurrency:
 jobs:
   context:
     name: Resolve validation context
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       pull-requests: read
       statuses: write
@@ -56,6 +56,11 @@ jobs:
       pr_body_b64: ${{ steps.context.outputs.pr_body_b64 }}
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Resolve and verify pull request
         id: context
         env:
@@ -146,7 +151,7 @@ jobs:
   validate:
     name: Backend tests and frontend build
     needs: context
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -191,6 +196,11 @@ jobs:
           node --test scripts/validate-documentation-impact.test.mjs
           node --test scripts/sonar-new-issues.test.mjs
 
+      - name: Validate runner placement contract
+        run: |
+          node scripts/validate-runner-placement.mjs
+          node --test scripts/validate-runner-placement.test.mjs
+
       - name: Validate deployment workflow contracts
         run: |
           node scripts/validate-deployment-workflows.mjs
@@ -220,7 +230,7 @@ jobs:
     needs:
       - context
       - validate
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       statuses: write
 
@@ -272,7 +282,7 @@ jobs:
       - context
       - validate
       - report-status
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       actions: write
       pull-requests: read
@@ -280,6 +290,11 @@ jobs:
       contents: read
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Reverify current head and dispatch review
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

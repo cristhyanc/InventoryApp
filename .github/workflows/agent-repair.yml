@@ -35,7 +35,7 @@ jobs:
       startsWith(github.event.comment.body, '@claude repair') &&
       github.event.comment.user.login == github.repository_owner &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 120
     permissions:
       contents: read
@@ -54,6 +54,12 @@ jobs:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
     steps:
+      - name: Set up Node.js for trusted helper scripts
+        # The self-hosted runner has no preinstalled Node.js; the npm-cached setup below needs the checkout.
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Resolve and verify pull request head
         id: pr
         run: |
@@ -295,7 +301,7 @@ jobs:
     name: Dispatch exact-SHA validation
     needs: repair
     if: always() && needs.repair.outputs.dispatch_validation == 'true'
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       actions: write
       pull-requests: read
@@ -304,6 +310,11 @@ jobs:
       issues: read
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Verify repaired head and dispatch trusted validation
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

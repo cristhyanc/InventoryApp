@@ -1,9 +1,9 @@
 name: Inventory agent runner diagnostic
 
 # Manually dispatched only. Runs no repository or pull request code and uses no secrets.
-# This is a connectivity diagnostic for an isolated Ubuntu Hyper-V runner, not authorization
-# to run unreviewed PR code or credentialed coding agents on a persistent runner.
-# Repository visibility is private, but does not replace runner isolation.
+# Every repository job runs on this runner pool (issue #645); this checks that a runner is online
+# and has the host tools those jobs need. It does not make a persistent runner a sandbox: see
+# docs/automation.md § Self-hosted runner placement.
 on:
   workflow_dispatch:
 
@@ -30,12 +30,27 @@ jobs:
           free -h
           echo "Available disk space:"
           df -h .
-          echo "Tool availability:"
-          for tool in git curl dotnet node npm; do
+          # Every repository job runs on this runner (issue #645). Jobs install .NET and Node.js
+          # themselves with setup actions; these host tools must be provisioned by a human.
+          echo "Required host tools:"
+          missing=0
+          for tool in git curl jq tar gzip unzip az docker; do
             if command -v "$tool" >/dev/null 2>&1; then
               echo "$tool: installed"
             else
-              echo "$tool: not installed"
+              echo "::error::$tool: not installed"
+              missing=1
             fi
           done
+          # The trusted helper scripts call gh by absolute path, never through PATH.
+          if [ -x /usr/bin/gh ]; then echo "/usr/bin/gh: installed"; else echo "::error::/usr/bin/gh: not installed"; missing=1; fi
+          if docker info >/dev/null 2>&1; then echo "docker daemon: reachable"; else echo "::error::docker daemon: not reachable by the runner account"; missing=1; fi
+          echo "Optional (installed per job by setup actions):"
+          for tool in dotnet node npm; do
+            if command -v "$tool" >/dev/null 2>&1; then echo "$tool: on PATH"; else echo "$tool: not on PATH"; fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::The runner is missing required host tools; see docs/automation.md § Self-hosted runner placement."
+            exit 1
+          fi
           echo "Diagnostic completed. No repository code or secrets were used."
