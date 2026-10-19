@@ -1083,8 +1083,19 @@ does not manage.
   it would create a duplicate of each of yours. A business whose products all came from Nayax
   imports exactly as before, and the check is made again at the moment the import is written, so a
   product somebody creates while Nayax is being read refuses the import rather than slipping past
-  it — nothing is imported in that case either. Linking your own products to Nayax products
-  deliberately is the next step (issues #738 and #739).
+  it — nothing is imported in that case either.
+- **Linking your own products to Nayax products now has an API, and not yet a screen** (issue #738).
+  `POST /api/catalogue-review` previews the Nayax catalogue against your own: which Nayax products and
+  groups nothing of yours is linked to, which linked products Nayax has renamed, re-grouped or
+  repriced, and how many unresolved sales each link would explain. `POST /api/catalogue-review/apply`
+  then links or creates per entry, per your decisions. Once a product is linked, Nayax owns its name
+  and its category; its price is yours to keep or take, per product, and a price you keep is not
+  offered again until Nayax changes it. Nothing is ever linked by matching names, nothing changes a
+  sale you already have, and applying the same review twice changes nothing. Attributing older
+  unresolved sales to a product you have just linked is a separate, confirmed step
+  (`POST /api/catalogue-review/unresolved-sales/apply`, Owner only) because it replays that product's
+  cost history. The **Import Products** button still behaves exactly as described above; the screen
+  that will send you to the review instead is issue #739.
 
 ## Product and supplier GST rules
 

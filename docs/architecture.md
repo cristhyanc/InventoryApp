@@ -6769,7 +6769,7 @@ Reconciliation applies the same separation as bookkeeping, and adds a third cate
 
 **The JSON field this value is imported from is confirmed (issue #363).** A human confirmed from a live `GET /v1/operators/{OperatorID}/products` response that the product selling price field is `ProductDefaultRetailPrice`, matching the Nayax developer portal, which documents that field on `GET /v1/operators/{OperatorID}/products` and `GET /v1/products/{NayaxProductID}` and documents no bare `RetailPrice` field on either endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` above correctly use. The operator-catalogue DTO `Inventory.Application.Nayax.NayaxProduct.ProductDefaultRetailPrice` binds that confirmed JSON name. Products already imported with `UnitPrice` of `0` under the previous, unconfirmed `RetailPrice` mapping are not backfilled by this change; whether to backfill them is a separate decision.
 
-The public property name `UnitPrice` is retained for API/contract compatibility. **Since issue #736 the business owns this value too** (parent #329 decision P2 and P3): `PUT /api/products/{id}` accepts it, `ProductUpdateFields` carries it, and the only bound on it is that it is not negative (`Inventory.Domain.Products.ProductCataloguePolicy`). It had to become editable, because a business with no sales provider has no import to set it. The product edit screen still presents it, the name and the category as read-only inputs; unlocking them is issue #737 (B2), and until then the screen sends the stored values back unchanged. The Nayax catalogue import still overwrites it for a product the provider names, and a local price edit of such a product is accepted rather than refused — the price is deliberately *not* one of the provider-managed fields that are locked, which are the product's name and category only (see [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)); #739 is where the operator chooses per field whether to keep the local price or take the provider's. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
+The public property name `UnitPrice` is retained for API/contract compatibility. **Since issue #736 the business owns this value too** (parent #329 decision P2 and P3): `PUT /api/products/{id}` accepts it, `ProductUpdateFields` carries it, and the only bound on it is that it is not negative (`Inventory.Domain.Products.ProductCataloguePolicy`). It had to become editable, because a business with no sales provider has no import to set it. The product edit screen still presents it, the name and the category as read-only inputs; unlocking them is issue #737 (B2), and until then the screen sends the stored values back unchanged. The Nayax catalogue import still overwrites it for a product the provider names, and a local price edit of such a product is accepted rather than refused — the price is deliberately *not* one of the provider-managed fields that are locked, which are the product's name and category only (see [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)). Choosing per field whether to keep the local price or take the provider's is the catalogue review of issue #738, which also remembers the provider value a skipped price was decided about so it is not proposed again until the provider changes it (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)); #739 is the screen for it. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
 
 ### Purchase GST classification (issue #429)
 
@@ -10017,8 +10017,14 @@ neither reads nor writes any of them.
 
 #### Deciding a conflicting sale: `resolve-nayax-sale-products`
 
-The one way a conflicting — or otherwise unresolved — sale gets a product after the migration, and a
-human-invoked command rather than a screen, which parent #329 left out of scope here.
+How a conflicting sale gets a product after the migration, and a human-invoked command rather than a
+screen, which parent #329 left out of scope here. It was the only such path until issue #738, which
+added the one other: the catalogue review's sale resolution settles an unresolved sale whose stored
+provider id is the one a product was just linked to, which is a different question from a conflict
+between two recorded candidates and is deliberately never answered automatically either (see
+[Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)).
+Both only ever fill a null, through the same guarded statement, so neither can move a decided sale and
+running one after the other changes nothing twice.
 
 ```bash
 dotnet InventoryApi.dll resolve-nayax-sale-products --dry-run
@@ -10167,8 +10173,12 @@ frontend scope this change hands to #737; nothing on the server depends on them.
 external id, `POST api/imports/products` answers `409` with how many they are, before anything is
 written, because the import identifies a product only by the provider's own id and would create a
 duplicate of each of them. A business whose products all carry one imports exactly as before. The
-catalogue review (issue #738 for the API, #739 for the screen) is what replaces the refusal with a
-deliberate link-or-create per product.
+catalogue review is what replaces that refusal with a deliberate link-or-create per product: issue
+#738 built its API — see
+[Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)
+below — and #739 is the screen that will send the operator there instead of to this refusal. **This
+refusal itself is unchanged by #738**: the direct import endpoint still answers `409` for a manual
+catalogue, because switching the import over to the review flow is explicitly #739's work.
 
 **That count is asked twice, and the second answer is the one the import is decided on.** The first
 read runs before the two remote catalogue reads, so a business the import would duplicate spends no
@@ -10180,6 +10190,168 @@ and a person can commit a `POST api/products` while they are in flight, so
 are one operation, and a catalogue that became manual in between is refused with nothing committed
 rather than duplicated. The transaction is opened only after the remote reads, so no Nayax request
 is ever made while a database transaction is held open.
+
+### Provider catalogue review: link-or-create and change review (issue #738)
+
+The direct import of the section below writes straight through: it creates a product for every
+provider entry it does not recognise and overwrites four fields on every one it does. That is the
+right behaviour for a catalogue the provider has always owned, and the wrong behaviour for a business
+that kept its own — which is why issue #736 refuses it outright for a manual catalogue. Issue #738
+(parent #329 decision C1) adds the deliberate alternative: **a catalogue import that is previewed as
+a review, decided per entry, and then applied as one transaction.** The screen that will use it, and
+switching the import over to it, are #739 and explicitly out of scope here; the direct import keeps
+working exactly as it did.
+
+**Three endpoints, two capabilities.** `InventoryApi.Controllers.CatalogueReviewController`:
+
+| Endpoint | Capability | What it does |
+| --- | --- | --- |
+| `POST api/catalogue-review` | `Imports.Run` | Reads the provider's catalogue and reports it against this business's rows. Writes no product, category, price or sale. |
+| `POST api/catalogue-review/apply` | `Imports.Run` | Carries out the submitted decisions against a named review, as one transaction. |
+| `POST api/catalogue-review/unresolved-sales/apply` | `Data.Repair` | Attributes the still-unresolved sales carrying a linked product's provider id to that product and replays its costing. |
+
+The split is a security decision rather than a tidying one. A review *is* the catalogue import,
+decided row by row, so starting and applying it require what running the import requires. Attributing
+a historical sale consumes costed inventory, moves product-level revenue and recosts the sales after
+it, so it requires `Data.Repair` — an Owner alone, the same authority the costing repair and the sale
+timestamp repair are behind. All three are `POST`, including the one that previews: it reads the
+provider's live catalogue and records the review the apply is then authorised by, and a cached `GET`
+would hand a caller a review id for a catalogue it never read.
+
+**What the review reports.** `Inventory.Application.CatalogueReview.StartCatalogueReview` reads the
+operator's products and groups through the existing `INayaxLynxClient` port, as the same concurrent
+fan-out of two independent calls the direct import uses, and reconciles them against the business's
+rows **through the provider id columns alone**:
+
+- A provider group or product that no local row carries the `ExternalCategoryId`/`ExternalProductId`
+  of (issue #759) is reported **unlinked**, with the operator's two honest options: link it to a local
+  row they name, or create a new one. The review picks neither.
+- A linked row's differences are reported in two separate lists, because they are two different kinds
+  of fact. `automaticChanges` is what the apply will write **without asking** — the provider's name,
+  and the category its group resolves to. `choices` is what it will **ask about** — the negotiable
+  fields.
+- Each product entry carries `unresolvedSaleCount`: how many stored sales carry that provider product
+  id, are still unresolved and have known raw provenance. The review reports them and resolves none.
+
+**Nothing is linked automatically by name.** A local product called exactly what the provider calls
+its product stays unlinked, and a local key that happens to equal a provider id is a coincidence
+(issue #735). The only ways a link comes about are an operator naming a row and a row the review
+creates, which is what keeps a provider id from ever being inferred.
+
+**Name and category follow the provider; price is negotiated.**
+`Inventory.Domain.Providers.ProviderManagedCatalogueFields` already says which fields a provider owns
+on a row it names (issue #736), and this review is where that becomes a *transition*: linking a
+product replaces its name with the provider's and its category with the local category carrying the
+provider's group id — which the review links or creates first, in the same apply — and linking a
+category replaces its name with the provider's. From then on those fields are read-only locally and a
+later provider rename or group move is applied automatically and listed. A group no local category
+carries leaves the product uncategorised rather than pointing it at a category that merely shares a
+number, exactly as the direct import does.
+
+The negotiable fields are `Inventory.Domain.Providers.NegotiableCatalogueField`, and
+`CatalogueReviewPolicy` is the one rule about them:
+
+- **A value is proposed only when three things hold**: the provider has one, it differs from the local
+  value, and it differs from the provider value this field was **last decided about**. The third is
+  what makes a skip stick — an operator who kept their own $3.00 over the provider's $3.50 is not
+  asked again until the provider moves it somewhere new.
+- That last-decided value is the whole reason `ProviderCatalogueFieldDecisions` exists: one row per
+  product and field, holding the provider value and which way it went, replaced rather than appended
+  because "what did we last ask about?" has one current answer. Both answers are recorded — keeping
+  the local value is a decision about that provider value just as taking it is.
+- Values are compared as the opaque text `ProviderCatalogueFieldValue` renders, in the invariant
+  culture and with a price's trailing zeros fixed, so `3.5` and `3.50` are one answer rather than two
+  and the operator is not asked the same question on every review.
+- A field nobody answered is left exactly as it is and proposed again next time. A **created** row has
+  no local value to keep, so it takes the provider's.
+
+**The provider publishes no unit/volume label, so none is proposed.** `NegotiableCatalogueField`
+declares `UnitVolume` beside `UnitPrice`, and its provider value is always absent. The authoritative
+Lynx contract for `GET /v1/operators/{OperatorID}/products` declares no unit or volume *label*: its
+only volume-shaped fields are `ProductVolumeTypeID`, an `int32` whose vocabulary the documentation
+does not publish, and `ProductPackageQuantity`, which is units per package. `Product.Unit` is a
+free-text label ("can", "bottle"), so neither field is it, and mapping one onto it would be exactly
+the invented property AGENTS.md § Nayax contract verification forbids. The field, the column and the
+decision row stay in place so that the day a human decides which Lynx field means it, only the
+projection changes; `CatalogueReviewPolicy.UnitVolumeUnavailableNote` is the one sentence the review
+says about it, and the API returns it as `unitVolumeNote`.
+
+**The review is persisted, and the apply is authorised by it.** `ProviderCatalogueReviews` and
+`ProviderCatalogueReviewItems` hold the provider's side exactly as it was read. The apply request
+carries item keys, one of three actions (`Defer`, `LinkExisting`, `CreateNew`) and the two field
+answers — **nothing a caller submits reaches a catalogue field**: every provider name, price and group
+id comes from the stored items, and every local value from the rows read inside the transaction. A
+business has at most one *pending* review, enforced by a filtered unique index over `(BusinessId)`
+where `AppliedAtUtc IS NULL`: a review is a reading of the provider's catalogue at an instant, and an
+older reading is not a second opinion, so starting one replaces the unapplied one. An applied review
+is never rewritten — it is the record of what was decided, with the actor's `(tid, oid)` and the
+instant.
+
+**The apply is one transaction, and its read, its comparison and its write are one operation.**
+`EfCatalogueReviewStore.ApplyAsync` re-reads the review and every local row it is about to write
+inside the caller's transaction and decides each link there, because two of the refusals are
+statements about *stored* rows:
+
+- the chosen local row already carries a **different** provider id, or
+- **another** local row already carries this one.
+
+Recording the id a row already carries is deliberately **not** a refusal: it is the state the apply
+was asked to reach. A use-case read followed by a separate write would be a window in which a product
+takes the provider id this plan was about to record on a different row — the silent identity error the
+provider-id work exists to end — so the sequence stays in the adapter, on the precedent
+`EfProductCatalogueWrite` and the historical GST apply set, with `CatalogueReviewPolicy` supplying the
+rules.
+
+**Atomic, and idempotent.** One refused link refuses the whole apply: nothing is linked, created or
+renamed and no field decision is recorded, because a half-applied review is the one outcome an
+operator cannot reason about — the rows it did write are the ones the next review treats as settled.
+A second apply of an applied review writes nothing and answers `alreadyApplied: true` with the
+original instant, rather than failing or repeating itself.
+
+**Linking never touches a sale, and never recosts history.** No statement in the catalogue apply reads
+or writes `NayaxSales` beyond the unresolved *count* the review reports. A sale already attributed to
+a product keeps that product, its recorded `UnitCostAtSale` and its `CostOfGoodsSold` exactly (issue
+#758), and the product's costing position is untouched. The sales a link makes **resolvable** are left
+unresolved on purpose.
+
+**Resolving those sales is a separate, explicit, audited apply.** Linking a provider product id to a
+local product says what the id means; it does not say that the business's historical sales carrying
+that id belong to that product's inventory.
+`Inventory.Application.CatalogueReview.ResolveLinkedProviderSales` is where that second decision is
+taken, and the counts the review reports are its preview:
+
+- It requires explicit confirmation. Seeing a count is not consenting to recost history.
+- It matches on the **provider id**, never a name, and only while the sale's stored provider id has
+  known raw provenance (`NayaxSales.ProviderProductIdIsRaw`) — a provenance-unknown value may be
+  either a raw provider id or the local product id the old synchronization wrote, so it is read as an
+  identifier of nothing.
+- It **only ever fills a null**, through the same guarded `ExecuteUpdate` whose own predicate carries
+  the expected null that the `resolve-nayax-sale-products` command uses, with one
+  `NayaxSaleProductResolutions` audit row per sale recording the previous value, the new product, the
+  new `ProviderCatalogueLink` rule, the actor and the instant. A rerun writes nothing, and nothing
+  here can move a sale off the product it already carries.
+- It replays each affected product's costing from the **earliest completed** sale it resolved, through
+  the same baseline-cutoff gate the uploaded sales import and the latest-sales synchronization apply:
+  a sale at or before the product's transition baseline cutoff is covered by that baseline, and a
+  product with no baseline is replayed by no write path in the application, so this one does not
+  invent one either.
+- Failure is all-or-nothing. A product whose cost history cannot be replayed rolls the whole run back
+  — no sale keeps its new product, no audit row survives — and the message names the product to fix
+  first. Nothing fabricates an opening cost, and a failed replay is never reported as a successful
+  resolution.
+
+**Three additive tables, and nothing existing changes.** `AddProviderCatalogueReview` creates
+`ProviderCatalogueReviews`, `ProviderCatalogueReviewItems` and `ProviderCatalogueFieldDecisions` and
+alters no existing table, so it works with the code already in production (which applies migrations at
+startup) and a business that never starts a review sees no behaviour change at all. The review items'
+`LinkedProductId`/`LinkedCategoryId` and a field decision's `ProductId` are foreign keys on
+`(BusinessId, …)` against the `(BusinessId, Id)` business keys, for the reason `NayaxSales.ProductId`
+is — but they **cascade** rather than restrict, which is the one place they differ from a sale: a
+review is a draft about the catalogue and a field decision is a note about what was last asked, so
+neither is historical financial data and neither may be a reason a product cannot be deleted. Every
+table is tenant-owned in the ordinary way, so two businesses may review and link the same provider
+ids and neither can read, apply or resolve anything of the other's
+(`EfCatalogueReviewStoreTenancyTests`).
 
 ### Nayax product catalogue import (issue #300)
 
@@ -10238,7 +10410,9 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   snapshot that does not already carry one — on the row itself since issue #759 — and leaves an
   existing one untouched (see
   [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735)). It is
-  the only writer of a Nayax id besides those issues' migrations, and it refuses to run at all for a
+  one of two writers of a Nayax id besides those issues' migrations — the catalogue review's apply
+  (issue #738) is the other, and it writes one only on an operator's explicit decision — and it
+  refuses to run at all for a
   business whose `SalesProvider` is not Nayax. Since issue #735 (A4) it sets no `Id` at all: the row
   it creates is keyed by the database and records the remote id beside that key — see
   [The local key is the database's own](#the-local-key-is-the-databases-own-issue-735).
@@ -10264,7 +10438,10 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   external id, before either remote read: the import would create a duplicate of every one of them,
   because it identifies a product only by the provider's own id. See
   [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736);
-  the catalogue review (#738/#739) is what replaces the refusal.
+  the catalogue review is what replaces the refusal, and issue #738 built its API beside this import
+  rather than inside it — see
+  [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738).
+  Sending the operator there instead of to this refusal is #739.
 - `ImportsController.ImportProducts` calls the use case directly; the route, the constant `true`
   `200 OK` body and the status codes are unchanged, except for that refusal, which reaches the
   caller as the centrally mapped `409` of a `DomainConflictException`. The action now also binds the request's
