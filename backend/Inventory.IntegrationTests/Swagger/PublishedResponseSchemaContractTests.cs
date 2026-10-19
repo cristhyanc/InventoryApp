@@ -192,7 +192,7 @@ public class PublishedResponseSchemaContractTests
         Assert.Equal(Normalize(BaseSupplierResponseComponent), supplierResponse);
 
         var productResponse = document.Components.Schemas["ProductResponse"];
-        Assert.Equal(BaseProductPropertyNames, productResponse.Properties.Keys.ToArray());
+        Assert.Equal(PublishedProductResponsePropertyNames, productResponse.Properties.Keys.ToArray());
         Assert.Equal(
             new[]
             {
@@ -406,10 +406,15 @@ public class PublishedResponseSchemaContractTests
     private const string BaseSupplierResponseComponent = BaseSupplierComponent;
 
     /// <summary>
-    /// The property names, in document order, that both the legacy <c>Product</c> component and the
-    /// API-owned <c>ProductResponse</c> publish. The two schemas share this list and differ in
-    /// requiredness, <c>readOnly</c> flags and their own nested references - the difference the
-    /// nested purchase/supplier-order <c>product</c> reference would otherwise have handed clients.
+    /// The property names, in document order, that the legacy <c>Product</c> component publishes -
+    /// the component the pinned purchase and supplier-order schemas reference, which must not move
+    /// at all.
+    ///
+    /// <para>The API-owned <c>ProductResponse</c> shared this list exactly until issue #736 appended
+    /// one key to it (see <see cref="PublishedProductResponsePropertyNames"/>); the two still differ
+    /// in requiredness, <c>readOnly</c> flags and their own nested references - the difference the
+    /// nested purchase/supplier-order <c>product</c> reference would otherwise have handed
+    /// clients.</para>
     /// </summary>
     private static readonly string[] BaseProductPropertyNames =
     [
@@ -421,6 +426,18 @@ public class PublishedResponseSchemaContractTests
         "createdAt", "updatedAt", "categoryId", "category", "supplierId", "supplier",
         "stockAdjustments", "isLowStock", "isReorderAlert",
     ];
+
+    /// <summary>
+    /// What the API-owned <c>ProductResponse</c> publishes: the legacy component's list with
+    /// <c>providerManagedFields</c> appended, which issue #736's acceptance criteria require of the
+    /// catalogue response ("product and category responses say which fields are provider-managed, so
+    /// the UI can lock them"). Additive and last, so no published key is renamed, reordered, retyped
+    /// or dropped - and the legacy <c>Product</c> component the pinned purchase/supplier-order
+    /// schemas reference is deliberately not given the key, because those nested snapshots do not
+    /// carry it at runtime either.
+    /// </summary>
+    private static readonly string[] PublishedProductResponsePropertyNames =
+        [.. BaseProductPropertyNames, "providerManagedFields"];
 
     private static string Normalize(string json) =>
         JsonNode.Parse(json)!.ToJsonString(new JsonSerializerOptions { WriteIndented = true });

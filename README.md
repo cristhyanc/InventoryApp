@@ -4,7 +4,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
 - Nayax product and transaction imports with explicit payment/status handling.
@@ -1034,6 +1034,56 @@ as plain amounts.
 
 GST classification is accounting data only. It never changes a purchase's unit cost, the weighted-average
 cost, costing quantity or inventory value.
+
+## Products and categories
+
+The catalogue is the business's own. A business with no sales provider connected creates and
+maintains every product and category itself, and a business with one keeps the fields its provider
+does not manage.
+
+- **Create a product** with `POST /api/products`, and a **category** with `POST /api/categories`.
+  Both answer the created record with its new id. A product needs a name and a selling price that
+  is not negative; a category needs a name, unique within the business (compared without case, so
+  "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
+  the initial restock movement it always did.
+- **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name, selling price and
+  category** as well as the SKU, description, unit, supplier, low-stock threshold, restock target
+  and active flag. **Edit a category** with `PUT /api/categories/{id}`.
+- **Which fields a provider manages.** For a product the provider's catalogue names, its **name and
+  category** come from the provider and are refused with a message naming the provider if you try to
+  change them — the next catalogue import would overwrite the local value. Its **price and every
+  other local field stay editable**. For a category the provider named, its **name** is managed the
+  same way and its description stays editable. Every product and category response says which of
+  its fields are managed, in `providerManagedFields`, so a screen can lock exactly those inputs.
+  (The screens themselves are the next change, issue #737.)
+- **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock
+  movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
+  the delete is refused with what is in the way and nothing is written — deleting it would erase
+  inventory and financial history. **Deactivate it instead**: a deactivated product keeps all of its
+  history and can be reactivated at any time. A product the provider manages is not deleted either,
+  because the next import would create it again.
+- **A deactivated product is out of the product lists.** `GET /api/products` answers the catalogue
+  you work from, so a deactivated product is not in it, is not offered in a product picker, and
+  stays out of the reorder alerts and the Pick List — it must not be purchased from, counted,
+  picked or refilled. Nothing about it is lost: it is still answered by
+  `GET /api/products/{id}`, every stock movement, purchase, sale and count that names it is
+  untouched, `GET /api/products?includeRetired=true` lists it with the rest of the catalogue, and
+  putting `isActive: true` back reactivates it.
+- **The screens have not caught up yet** (issue #737). They call `GET /api/products` without
+  `includeRetired=true`, so until that issue ships the Products page, the Admin costing-repair and
+  AVCO-transition tools and the stock-history product filter show active products only, and
+  reactivating a product is done through the API. #737 is where those four call sites and the "show
+  retired" control on the Products page belong.
+- **A category products use is not deleted.** The refusal says how many products use it; move them
+  to another category first, otherwise they would be left with no category at all.
+- **The Nayax catalogue import waits for the catalogue review.** While the business holds products
+  that Nayax does not manage, **Admin → Imports → Import Products** is refused with how many they
+  are, and nothing is imported: the import recognises a product only by Nayax's own product id, so
+  it would create a duplicate of each of yours. A business whose products all came from Nayax
+  imports exactly as before, and the check is made again at the moment the import is written, so a
+  product somebody creates while Nayax is being read refuses the import rather than slipping past
+  it — nothing is imported in that case either. Linking your own products to Nayax products
+  deliberately is the next step (issues #738 and #739).
 
 ## Product and supplier GST rules
 

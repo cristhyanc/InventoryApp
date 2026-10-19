@@ -44,7 +44,8 @@ public class EfProductStoreTenancyTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private static ProductUpdateFields UpdateFields() => new("SKU-B", null, 5, 10, "unit", null, true);
+    private static ProductUpdateFields UpdateFields(long? categoryId = null) =>
+        new("B-Product", "SKU-B", null, 0m, 5, 10, "unit", categoryId, null, true);
 
     [Fact]
     public async Task ExistsAsync_IsFalse_ForAnotherBusinesssProduct()
@@ -76,16 +77,16 @@ public class EfProductStoreTenancyTests : IDisposable
             otherBusinessProductId = product.Id;
         }
 
-        bool updated;
+        ProductWriteAttempt attempt;
         using (var db = TestAppDbContext.For(_options, BusinessA))
         {
             var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
-            updated = await store.UpdateAsync(otherBusinessProductId, UpdateFields(), CancellationToken.None);
+            attempt = await store.UpdateAsync(otherBusinessProductId, UpdateFields(), CancellationToken.None);
         }
 
         // A cross-tenant target is reported as not updated, so the caller answers not-found rather
         // than a success that changed nothing.
-        Assert.False(updated);
+        Assert.Equal(ProductWriteOutcome.NotFound, attempt.Outcome);
 
         using var verify = TestAppDbContext.Unrestricted(_options);
         var untouched = await verify.Products.SingleAsync(product => product.Id == otherBusinessProductId);
@@ -93,7 +94,7 @@ public class EfProductStoreTenancyTests : IDisposable
     }
 
     [Fact]
-    public async Task DeleteAsync_ReturnsFalse_AndDoesNotDelete_AnotherBusinesssProduct()
+    public async Task DeleteAsync_ReportsNotFound_AndDoesNotDelete_AnotherBusinesssProduct()
     {
         long otherBusinessProductId;
         using (var seed = TestAppDbContext.Unrestricted(_options))
@@ -104,14 +105,14 @@ public class EfProductStoreTenancyTests : IDisposable
             otherBusinessProductId = product.Id;
         }
 
-        bool deleted;
+        ProductWriteAttempt attempt;
         using (var db = TestAppDbContext.For(_options, BusinessA))
         {
             var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
-            deleted = await store.DeleteAsync(otherBusinessProductId, CancellationToken.None);
+            attempt = await store.DeleteAsync(otherBusinessProductId, CancellationToken.None);
         }
 
-        Assert.False(deleted);
+        Assert.Equal(ProductWriteOutcome.NotFound, attempt.Outcome);
 
         using var verify = TestAppDbContext.Unrestricted(_options);
         Assert.True(await verify.Products.AnyAsync(product => product.Id == otherBusinessProductId));

@@ -39,7 +39,7 @@ public class PickListControllerTests
         storage.Setup(x => x.GetStorageProductsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyDictionary<long, PickListStorageProduct>)new Dictionary<long, PickListStorageProduct>
             {
-                [100] = new PickListStorageProduct(100, "Coke Zero", 50),
+                [100] = new PickListStorageProduct(100, "Coke Zero", 50, IsActive: true),
             });
         var controller = new PickListController(new GetPickList(
             nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()));

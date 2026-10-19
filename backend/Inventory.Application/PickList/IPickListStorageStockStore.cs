@@ -1,7 +1,13 @@
 namespace Inventory.Application.PickList;
 
-/// <summary>One product's name and physical storage quantity, as needed by the Pick List projection.</summary>
-public record PickListStorageProduct(long ProductId, string ProductName, int QuantityInStock);
+/// <summary>
+/// One product's name and physical storage quantity, as needed by the Pick List projection.
+/// <paramref name="IsActive"/> is the catalogue's retirement flag, carried as a fact so the rule
+/// that a retired product is not picked stays in the use case rather than in the query - the same
+/// shape <c>Inventory.Domain.Sites.SiteStockPolicy</c> and
+/// <c>Inventory.Domain.Machines.MachineRefillAlertPolicy</c> already use (issue #736).
+/// </summary>
+public record PickListStorageProduct(long ProductId, string ProductName, int QuantityInStock, bool IsActive);
 
 /// <summary>
 /// Narrow persistence port for the Pick List projection's storage-quantity lookup (issue #221),

@@ -74,7 +74,8 @@ public class EfProductCatalogStoreTenancyTests : IDisposable
         var store = new EfProductCatalogStore(db);
 
         var products = await store.ListUnorderedAsync(
-            new ProductCatalogFilter("SHARED-SKU", null, null), CancellationToken.None);
+            new ProductCatalogFilter("SHARED-SKU", null, null, IncludeRetired: false),
+            CancellationToken.None);
 
         Assert.Equal(["A-Product"], products.Select(product => product.Name));
     }

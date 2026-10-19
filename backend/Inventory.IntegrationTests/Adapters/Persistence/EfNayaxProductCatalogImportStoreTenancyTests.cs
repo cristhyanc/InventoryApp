@@ -180,6 +180,39 @@ public class EfNayaxProductCatalogImportStoreTenancyTests : IDisposable
     }
 
     /// <summary>
+    /// The count issue #736 refuses a manual-catalogue business's import over: the products of
+    /// <em>this</em> business that carry no provider id. Another business's manual products are not
+    /// this business's problem, which is the tenant filter's work again.
+    /// </summary>
+    [Fact]
+    public async Task Products_with_no_provider_id_are_counted_per_business()
+    {
+        await using (var seed = TestAppDbContext.Unrestricted(_options))
+        {
+            seed.Products.AddRange(
+                new Product { BusinessId = BusinessA, Name = "A manual" },
+                new Product { BusinessId = BusinessA, Name = "A also manual" },
+                new Product { BusinessId = BusinessA, Name = "A imported", ExternalProductId = "100" },
+                new Product { BusinessId = BusinessB, Name = "B manual" });
+            await seed.SaveChangesAsync();
+        }
+
+        await using (var a = TestAppDbContext.For(_options, BusinessA))
+        {
+            Assert.Equal(
+                2,
+                await new EfNayaxProductCatalogImportStore(a)
+                    .CountProductsWithNoProviderIdAsync(CancellationToken.None));
+        }
+
+        await using var b = TestAppDbContext.For(_options, BusinessB);
+        Assert.Equal(
+            1,
+            await new EfNayaxProductCatalogImportStore(b)
+                .CountProductsWithNoProviderIdAsync(CancellationToken.None));
+    }
+
+    /// <summary>
     /// One snapshot of the same Nayax product id and group id, named for the business importing it
     /// so each row's own catalogue fields are visible afterwards.
     /// </summary>

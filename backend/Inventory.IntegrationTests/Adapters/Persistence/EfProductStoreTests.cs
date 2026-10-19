@@ -37,7 +37,9 @@ public class EfProductStoreTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private static ProductUpdateFields UpdateFields() => new("SKU-UPDATED", null, 5, 10, "unit", null, true);
+    private static ProductUpdateFields UpdateFields(
+        string name = "Coke", decimal unitPrice = 0m, long? categoryId = null) =>
+        new(name, "SKU-UPDATED", null, unitPrice, 5, 10, "unit", categoryId, null, true);
 
     private async Task<long> SeedProductAsync()
     {
@@ -49,23 +51,27 @@ public class EfProductStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task UpdateAsync_ReturnsTrue_WhenTheProductWasUpdated()
+    public async Task UpdateAsync_Succeeds_WhenTheProductWasUpdated()
     {
         var productId = await SeedProductAsync();
 
         await using var db = TestAppDbContext.Unrestricted(_options);
         var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
 
-        Assert.True(await store.UpdateAsync(productId, UpdateFields(), CancellationToken.None));
+        var attempt = await store.UpdateAsync(productId, UpdateFields(), CancellationToken.None);
+
+        Assert.Equal(ProductWriteOutcome.Succeeded, attempt.Outcome);
     }
 
     [Fact]
-    public async Task UpdateAsync_ReturnsFalse_WhenNoSuchProductExists()
+    public async Task UpdateAsync_ReportsNotFound_WhenNoSuchProductExists()
     {
         await using var db = TestAppDbContext.Unrestricted(_options);
         var store = new EfProductStore(db, TestCostingUseCases.Rebuild(db));
 
-        Assert.False(await store.UpdateAsync(4242, UpdateFields(), CancellationToken.None));
+        var attempt = await store.UpdateAsync(4242, UpdateFields(), CancellationToken.None);
+
+        Assert.Equal(ProductWriteOutcome.NotFound, attempt.Outcome);
     }
 
     /// <summary>
@@ -115,7 +121,8 @@ public class EfProductStoreTests : IDisposable
             _onExistenceChecked = onExistenceChecked;
         }
 
-        public Task<long> CreateAsync(ProductCreateFields fields, CancellationToken cancellationToken) =>
+        public Task<ProductWriteAttempt> CreateAsync(
+            ProductCreateFields fields, CancellationToken cancellationToken) =>
             _inner.CreateAsync(fields, cancellationToken);
 
         public async Task<bool> ExistsAsync(long id, CancellationToken cancellationToken)
@@ -125,10 +132,11 @@ public class EfProductStoreTests : IDisposable
             return exists;
         }
 
-        public Task<bool> UpdateAsync(long id, ProductUpdateFields fields, CancellationToken cancellationToken) =>
+        public Task<ProductWriteAttempt> UpdateAsync(
+            long id, ProductUpdateFields fields, CancellationToken cancellationToken) =>
             _inner.UpdateAsync(id, fields, cancellationToken);
 
-        public Task<bool> DeleteAsync(long id, CancellationToken cancellationToken) =>
+        public Task<ProductWriteAttempt> DeleteAsync(long id, CancellationToken cancellationToken) =>
             _inner.DeleteAsync(id, cancellationToken);
 
         public Task<GstClassification?> FindGstRuleAsync(long id, CancellationToken cancellationToken) =>

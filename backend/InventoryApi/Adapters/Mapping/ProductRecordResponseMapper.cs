@@ -1,5 +1,6 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Products;
+using Inventory.Domain.Providers;
 using InventoryApi.DTOs;
 using Inventory.Infrastructure.Models;
 
@@ -74,6 +75,11 @@ public static class ProductRecordResponseMapper
             // do not resolve them, exactly as before. The derived values follow from these.
             MachineReplenishmentNeed = record.MachineReplenishmentNeed,
             OnOrderQuantity = record.OnOrderQuantity,
+
+            // Which fields the business's sales provider owns on this product (issue #736), from the
+            // one Domain statement of that rule - the same one the update refuses a change with, so
+            // a client cannot lock a different set from the one the server enforces.
+            ProviderManagedFields = ProviderManagedCatalogueFields.ForProduct(record.IsProviderManaged),
         };
 
     /// <summary>
@@ -89,6 +95,12 @@ public static class ProductRecordResponseMapper
         ToResponse(record.Product, visibility) with
         {
             QuantityInStock = record.QuantityInStock,
+
+            // A machine slot is not where a product is edited, and this response is a pinned
+            // contract of its own (InventoryApi.Tests.DTOs.MachineJsonContractTests), so the
+            // provider-managed declaration issue #736 added to the catalogue view is left unsaid
+            // here rather than answered for a surface that cannot act on it.
+            ProviderManagedFields = null,
             MachineSlot = new MachineSlotOverlay(
                 record.MachinePrice,
                 record.CommissionValue,
