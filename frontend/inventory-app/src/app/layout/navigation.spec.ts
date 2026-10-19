@@ -130,18 +130,22 @@ describe('primary navigation (issue #391)', () => {
   /**
    * The order is itself a decision (issue #729, decision P6): everything that works without a sales
    * provider first, then one section holding the destinations that read live provider data.
+   *
+   * Machines left that section in issue #740 (child G1): a business now has machine records of its
+   * own, which it creates, renames and deactivates with no provider at all, so the destination no
+   * longer depends on one.
    */
   it('declares the target navigation in order, provider-independent entries first', () => {
     expect(primaryNavigation.map((entry) => `${entry.kind}:${entry.label}`)).toEqual([
       'link:Dashboard',
       'link:Pick List',
+      'link:Machines',
       'group:Inventory',
       'group:Purchases',
       'link:Expenses',
       'group:Reports',
       'group:Admin',
       'section:Needs Nayax',
-      'link:Machines',
       'link:Sites',
       'link:Site Commissions'
     ]);
@@ -152,18 +156,32 @@ describe('primary navigation (issue #391)', () => {
     const locked = primaryNavigation.filter((entry) => entry.kind === 'link' && entry.lockedWithout !== undefined);
 
     expect(headingAt).toBeGreaterThan(0);
-    expect(locked.map((entry) => entry.label)).toEqual(['Machines', 'Sites', 'Site Commissions']);
+    expect(locked.map((entry) => entry.label)).toEqual(['Sites', 'Site Commissions']);
     for (const entry of locked) {
       expect(primaryNavigation.indexOf(entry)).toBeGreaterThan(headingAt);
     }
+  });
+
+  /**
+   * Machines is in the top section and declares no live Nayax read at all (issue #740): the page's
+   * local machine list, and its create/rename/deactivate actions, work with no provider.
+   */
+  it('keeps Machines in the top section, depending on no provider read', () => {
+    const machines = item('Machines') as NavLink;
+    const headingAt = primaryNavigation.indexOf(providerSectionHeading);
+
+    expect(primaryNavigation.indexOf(machines)).toBeLessThan(headingAt);
+    expect(machines.route).toBe('/machines');
+    expect(machines.lockedWithout).toBeUndefined();
+    expect(machines.hiddenWithoutProvider).toBeUndefined();
   });
 
   it('keeps Pick List, Machines, Sites, Site Commissions and Expenses as top-level direct links', () => {
     expect(primaryNavigation.filter((entry) => entry.kind === 'link').map((entry) => (entry as NavLink).route)).toEqual([
       '/',
       '/pick-list',
-      '/expenses',
       '/machines',
+      '/expenses',
       '/sites',
       '/reports/site-commissions'
     ]);
@@ -291,13 +309,13 @@ describe('navigationFor (issue #546)', () => {
     expect(primaryNavigation.map((entry) => entry.label)).toEqual([
       'Dashboard',
       'Pick List',
+      'Machines',
       'Inventory',
       'Purchases',
       'Expenses',
       'Reports',
       'Admin',
       'Needs Nayax',
-      'Machines',
       'Sites',
       'Site Commissions'
     ]);
@@ -372,15 +390,16 @@ describe('navigationFor capabilities (issue #528)', () => {
     expect(labels(operator)).toEqual([
       'Dashboard',
       'Pick List',
+      'Machines',
       'Inventory',
       'Purchases',
       'Needs Nayax',
-      'Machines',
       'Sites'
     ]);
     expect(navLinks(operator).map((entry) => entry.route)).toEqual([
       '/',
       '/pick-list',
+      '/machines',
       '/products',
       '/take-inventory',
       '/categories',
@@ -388,7 +407,6 @@ describe('navigationFor capabilities (issue #528)', () => {
       '/purchases',
       '/purchases/orders',
       '/suppliers',
-      '/machines',
       '/sites'
     ]);
   });
@@ -399,13 +417,13 @@ describe('navigationFor capabilities (issue #528)', () => {
     expect(labels(manager)).toEqual([
       'Dashboard',
       'Pick List',
+      'Machines',
       'Inventory',
       'Purchases',
       'Expenses',
       'Reports',
       'Admin',
       'Needs Nayax',
-      'Machines',
       'Sites',
       'Site Commissions'
     ]);
@@ -592,9 +610,9 @@ describe('navigationFor with the provider answer (issue #729)', () => {
   }
 
   /**
-   * By route, not by label: "Machines" names both the live machine list and the machine
-   * profitability report, which is the very distinction issue #729 draws - one is locked without a
-   * provider and the other never is.
+   * By route, not by label: "Machines" names both the machine list and the machine profitability
+   * report, and "Sites" is the live fleet destination issue #729's distinction is now drawn on -
+   * since issue #740 the machine list itself depends on no provider read.
    */
   function lockOf(route: string, provider: ProviderAvailability | undefined): string {
     const entry = navLinks(ownerNavigation()).find((candidate) => candidate.route === route);
@@ -605,13 +623,17 @@ describe('navigationFor with the provider answer (issue #729)', () => {
   it('locks every live provider destination for a business with no connection at all', () => {
     const noProvider = availability('NotConfigured');
 
-    expect(lockOf('/machines', noProvider)).toBe('connect');
     expect(lockOf('/sites', noProvider)).toBe('connect');
     expect(lockOf('/reports/site-commissions', noProvider)).toBe('connect');
   });
 
-  /** The machine profitability report shares its label and is never locked. */
-  it('leaves the machine profitability report open with no provider at all', () => {
+  /**
+   * The machine list and the machine profitability report are both never locked (issue #740): the
+   * list has the business's own machine records to show and its own create/rename/deactivate
+   * actions, and the report reads stored sales.
+   */
+  it('leaves the machine list and the machine profitability report open with no provider at all', () => {
+    expect(lockOf('/machines', availability('NotConfigured'))).toBe('open');
     expect(lockOf('/reports/machines', availability('NotConfigured'))).toBe('open');
   });
 
@@ -620,11 +642,11 @@ describe('navigationFor with the provider answer (issue #729)', () => {
    * locked - and locked as a connection, because reconnecting is what fixes it.
    */
   it('locks them for credentials that are stored and known not to work', () => {
-    expect(lockOf('/machines', availability('NeedsAttention'))).toBe('connect');
+    expect(lockOf('/sites', availability('NeedsAttention'))).toBe('connect');
   });
 
   it('leaves them open on a usable connection', () => {
-    expect(lockOf('/machines', availability('Ready'))).toBe('open');
+    expect(lockOf('/sites', availability('Ready'))).toBe('open');
     expect(lockOf('/reports/site-commissions', availability('Ready'))).toBe('open');
   });
 
@@ -634,9 +656,9 @@ describe('navigationFor with the provider answer (issue #729)', () => {
    * destinations that need it and **nothing else**.
    */
   it('locks only the destinations whose own read Nayax refused, as a permission', () => {
-    expect(lockOf('/machines', FLEET_REFUSED)).toBe('permission');
     expect(lockOf('/sites', FLEET_REFUSED)).toBe('permission');
     expect(lockOf('/reports/site-commissions', FLEET_REFUSED)).toBe('permission');
+    expect(lockOf('/machines', FLEET_REFUSED)).toBe('open');
     expect(lockOf('/reports/machines', FLEET_REFUSED)).toBe('open');
   });
 
@@ -650,13 +672,13 @@ describe('navigationFor with the provider answer (issue #729)', () => {
       )
     );
 
-    expect(lockOf('/machines', fleetGranted)).toBe('open');
+    expect(lockOf('/sites', fleetGranted)).toBe('open');
   });
 
   /** An unread status is not a refusal, so nothing locks before the answer settles. */
   it('locks nothing while the provider answer is not known, and nothing on an unreadable status', () => {
-    expect(lockOf('/machines', undefined)).toBe('open');
-    expect(lockOf('/machines', availability(null))).toBe('open');
+    expect(lockOf('/sites', undefined)).toBe('open');
+    expect(lockOf('/sites', availability(null))).toBe('open');
   });
 
   it('never locks a destination that declares no live provider read', () => {
@@ -735,7 +757,7 @@ describe('navigationFor with the provider answer (issue #729)', () => {
   it('hides a live provider destination the role may not see, rather than locking it', () => {
     const operator = navigationFor(OPERATOR, false, 'offered', availability('NotConfigured'));
 
-    expect(navLinks(operator).map((entry) => entry.route)).toContain('/machines');
+    expect(navLinks(operator).map((entry) => entry.route)).toContain('/sites');
     expect(navLinks(operator).map((entry) => entry.route)).not.toContain('/reports/site-commissions');
   });
 
@@ -751,9 +773,14 @@ describe('navigationFor with the provider answer (issue #729)', () => {
  */
 describe('activeNavLink (issue #729)', () => {
   it('names the destination a provider-locked URL belongs to, with its live read', () => {
-    expect(activeNavLink(primaryNavigation, '/machines')?.label).toBe('Machines');
-    expect(activeNavLink(primaryNavigation, '/machines')?.lockedWithout).toBe('machineFleet');
+    expect(activeNavLink(primaryNavigation, '/sites')?.label).toBe('Sites');
+    expect(activeNavLink(primaryNavigation, '/sites')?.lockedWithout).toBe('machineFleet');
     expect(activeNavLink(primaryNavigation, '/reports/site-commissions')?.label).toBe('Site Commissions');
+
+    // The machine list is no longer a provider-locked destination (issue #740), so the "needs a
+    // provider" page has nothing to explain about it.
+    expect(activeNavLink(primaryNavigation, '/machines')?.label).toBe('Machines');
+    expect(activeNavLink(primaryNavigation, '/machines')?.lockedWithout).toBeUndefined();
   });
 
   it('keeps a detail URL on its own list destination', () => {

@@ -332,8 +332,13 @@ describe('super-admin routing (issue #546)', () => {
  * explanation instead of a page of refusals.
  */
 describe('provider-locked routes (issue #729)', () => {
-  /** The live provider destinations: exactly the ones the menu shows in its own section. */
-  const lockedPaths = ['machines', 'machines/:id', 'sites', 'sites/:id/products', 'reports/site-commissions'];
+  /**
+   * The live provider destinations. `machines` left this list in issue #740: the machine list page
+   * now has the business's own machine records to show and its own create/rename/deactivate actions,
+   * so it carries no provider guard. The machine **details** page still does - every panel on it is
+   * a Nayax read - and giving it a local half belongs to the provider machine review (issue #742).
+   */
+  const lockedPaths = ['machines/:id', 'sites', 'sites/:id/products', 'reports/site-commissions'];
 
   /**
    * **Historical reports stay accessible** (decision P5). These read stored sales, so they carry no
@@ -374,6 +379,19 @@ describe('provider-locked routes (issue #729)', () => {
     for (const path of storedDataReportPaths) {
       expect(route(path).canActivate).toHaveLength(3);
     }
+  });
+
+  /**
+   * The machine list opens with no provider (issue #740): it carries authentication, the account
+   * state and the capability, and no provider guard, so a business that never connected Nayax
+   * reaches its own machine records rather than the "needs a provider" page.
+   */
+  it('leaves the machine list with no provider guard, keeping its capability guard', () => {
+    const guards = route('machines').canActivate ?? [];
+
+    expect(guards).toHaveLength(3);
+    expect(guards[0]).toBe(MsalGuard);
+    expect(guards[1]).toBe(accountStateGuard);
   });
 
   /**

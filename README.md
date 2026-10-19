@@ -1343,11 +1343,12 @@ before.
 Issue #729 puts the same answer in the navigation, so the menu says which features need a provider
 before a page has to.
 
-- **What works without a provider comes first.** Dashboard, Pick List, **Inventory** (the group that
+- **What works without a provider comes first.** Dashboard, Pick List, **Machines** (since issue
+  #740 — see [Machines](#machines) below), **Inventory** (the group that
   used to be called Products — the Products page inside it, its URL and its breadcrumb are
   unchanged), Purchases, Expenses, Reports and Admin.
 - **The live provider features sit in one section at the bottom, under a "Needs Nayax" heading**:
-  **Machines**, **Sites** and **Site Commissions**. Each of them exists only for what the live Nayax
+  **Sites** and **Site Commissions**. Each of them exists only for what the live Nayax
   fleet read returns, so without a usable connection it is shown **locked** — still visible, still
   clickable — and opening it, or typing its URL, reaches a "needs a provider" page with a **Connect**
   button for a member who may manage integrations. A member whose role may not see one of these
@@ -1384,6 +1385,49 @@ before a page has to.
   message that fits. The menu, the page and the URL always agree about the same destination.
 
 **A connected business sees no change in the menu either**, beyond the two renames and the new order.
+
+Since issue #740 the **Machines** entry is in the top section rather than this one, and is never
+locked: a business keeps its own machine records now (see the next section).
+
+## Machines
+
+The machines a business operates are its own records, and they work with or without a sales provider
+connected (issue #740). Before it, a machine was never stored at all — every machine list was a read
+of the live Nayax fleet — so a business with no provider had no machines.
+
+- **The Machines page is two lists.** *Your machines* is always there: it lists every machine this
+  business has recorded, active and inactive, and holds the Add, Rename, Deactivate and Reactivate
+  actions. *Live from Nayax* — the revenue and profit figures, and the links into each machine's
+  stock and Sync Restock workflow — appears below it only while the Nayax connection can serve the
+  fleet read. With no usable provider the live section is not shown at all, and the page is the local
+  machine list alone; if the fleet read fails for some other reason (an outage, a transport failure),
+  the page says so in place of that section instead of looking like a business with no machines.
+- **Create a machine** with `POST /api/local-machines`, which answers the created machine with its
+  new id. A machine needs a name and nothing else. Names are deliberately **not** unique within a
+  business: two machines in one corridor may legitimately both be called "Level 3", and nothing
+  resolves a machine by its name.
+- **Rename one** with `PUT /api/local-machines/{id}`. Unlike a product's or a category's name, a
+  machine's name is yours even when the provider named the machine: nothing synchronises a machine's
+  name, so no import can overwrite it.
+- **Deactivate and reactivate**, with `POST /api/local-machines/{id}/deactivate` and
+  `.../reactivate`. **There is no delete.** Recorded transactions, refills, machine counts and
+  expenses refer to a machine, so a machine that stops trading keeps all of its history and stays in
+  the list, marked *Inactive*, ready to be put back in service.
+- **A machine the provider named is marked "From Nayax".** Every machine this database already
+  referred to — through a sale, a refill, a machine count, an expense, a stock event, a sale
+  timestamp repair or an inventory-cost transition — was given a local record when this change was
+  released, carrying the provider's own machine id and the most recent name that had been stored for
+  it (or "Machine" and the number, where nothing had named it). That provider id is **not editable**
+  through the API and is never published: the machine list says only *whether* the provider names a
+  machine. Attaching one deliberately is the provider machine review (issue #742).
+- **Nothing else moved onto these records yet.** Sales, refills, counts and reports still refer to a
+  machine by the provider's own number, so no figure, report or export changes in this step; issue
+  #741 is where those references are repointed at the local machine.
+- **Sites still need Nayax.** A site is known only from the live fleet read, so the Sites page stays
+  in the "Needs Nayax" section with nothing local to fall back on. Manual sites are a separate
+  change.
+- **In a read-only support view** the machine list is readable and every one of its write controls is
+  hidden, like every other write surface in that view.
 
 ## Machine details: Sales and Products
 

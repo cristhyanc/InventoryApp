@@ -75,14 +75,14 @@ function connectLink(host: HTMLElement): HTMLAnchorElement | null {
  */
 describe('ProviderLockedComponent with no usable connection (issue #729)', () => {
   it('names the destination that was refused and says Nayax is not connected', async () => {
-    const { host } = await render({ from: '/machines', status: 'NotConfigured' });
+    const { host } = await render({ from: '/sites', status: 'NotConfigured' });
 
-    expect(host.querySelector('h1')?.textContent).toContain('Machines');
-    expect(host.textContent).toContain('Machines is unavailable because Nayax is not connected.');
+    expect(host.querySelector('h1')?.textContent).toContain('Sites');
+    expect(host.textContent).toContain('Sites is unavailable because Nayax is not connected.');
   });
 
   it('offers Connect to a member who may manage integrations', async () => {
-    const { host } = await render({ from: '/machines', status: 'NotConfigured' });
+    const { host } = await render({ from: '/sites', status: 'NotConfigured' });
 
     expect(connectLink(host)?.textContent).toContain('Connect Nayax');
   });
@@ -90,7 +90,7 @@ describe('ProviderLockedComponent with no usable connection (issue #729)', () =>
   /** A member who cannot reach the Integrations page is told who can, not offered a dead button. */
   it('offers no Connect button to a member who may not manage integrations', async () => {
     const { host } = await render({
-      from: '/machines',
+      from: '/sites',
       status: 'NotConfigured',
       capability: () => of(false)
     });
@@ -111,7 +111,7 @@ describe('ProviderLockedComponent with no usable connection (issue #729)', () =>
   });
 
   it('reports credentials that are stored and known not to work as a connection to fix', async () => {
-    const { host } = await render({ from: '/machines', status: 'NeedsAttention' });
+    const { host } = await render({ from: '/sites', status: 'NeedsAttention' });
 
     expect(host.textContent).toContain('Nayax is not connected');
     expect(connectLink(host)).not.toBeNull();
@@ -125,9 +125,23 @@ describe('ProviderLockedComponent with no usable connection (issue #729)', () =>
 
   /** A detail URL belongs to its list destination, so the page names that. */
   it('names the list destination a detail URL belongs to', async () => {
+    const { host } = await render({ from: '/sites/3/products', status: 'NotConfigured' });
+
+    expect(host.querySelector('h1')?.textContent).toContain('Sites');
+  });
+
+  /**
+   * The machine list left the provider section in issue #740, so the menu declares no live read for
+   * it and this page has nothing to say about one. The machine **details** route is still guarded,
+   * and a request for it therefore gets the page's own generic explanation rather than a sentence
+   * about a read the navigation no longer claims - naming the destination's live read again belongs
+   * to the provider machine review (issue #742).
+   */
+  it('names no live read for the machine list, which needs no provider since issue #740', async () => {
     const { host } = await render({ from: '/machines/7', status: 'NotConfigured' });
 
-    expect(host.querySelector('h1')?.textContent).toContain('Machines');
+    expect(host.querySelector('h1')?.textContent).toContain('needs Nayax');
+    expect(host.textContent).toContain('no Nayax connection was named');
   });
 });
 
@@ -137,9 +151,9 @@ describe('ProviderLockedComponent waiting for a Nayax permission (issue #729)', 
   ];
 
   it('says the destination is waiting for a Nayax permission, not that Nayax is disconnected', async () => {
-    const { host } = await render({ from: '/machines', status: 'PendingPermissions', checks: refused });
+    const { host } = await render({ from: '/sites', status: 'PendingPermissions', checks: refused });
 
-    expect(host.querySelector('h1')?.textContent).toContain('Machines is waiting for a Nayax permission');
+    expect(host.querySelector('h1')?.textContent).toContain('Sites is waiting for a Nayax permission');
     expect(host.textContent).toContain('The connection itself is working.');
     expect(host.textContent).not.toContain('Nayax is not connected');
   });
@@ -149,14 +163,14 @@ describe('ProviderLockedComponent waiting for a Nayax permission (issue #729)', 
    * ask for. The Nayax permission key behind that read has no published name, so none is printed.
    */
   it('names the refused Nayax read and the endpoint behind it', async () => {
-    const { host } = await render({ from: '/machines', status: 'PendingPermissions', checks: refused });
+    const { host } = await render({ from: '/sites', status: 'PendingPermissions', checks: refused });
 
     expect(host.textContent).toContain('Machine list (GET machines)');
   });
 
   /** Re-entering credentials that already work fixes nothing, so Connect is not offered. */
   it('offers no Connect button, because the credentials are not the problem', async () => {
-    const { host } = await render({ from: '/machines', status: 'PendingPermissions', checks: refused });
+    const { host } = await render({ from: '/sites', status: 'PendingPermissions', checks: refused });
 
     expect(connectLink(host)).toBeNull();
     expect(host.textContent).toContain('re-test the connection on the Integrations page');
@@ -170,10 +184,10 @@ describe('ProviderLockedComponent reached with nothing to explain (issue #729)',
    * is locked.
    */
   it('says the page is available when the provider can serve it after all', async () => {
-    const { host } = await render({ from: '/machines', status: 'Ready' });
+    const { host } = await render({ from: '/sites', status: 'Ready' });
 
     expect(host.textContent).toContain('Nayax can serve this page now');
-    expect(host.querySelector('a[href="/machines"]')?.textContent).toContain('Open Machines');
+    expect(host.querySelector('a[href="/sites"]')?.textContent).toContain('Open Sites');
     expect(connectLink(host)).toBeNull();
   });
 

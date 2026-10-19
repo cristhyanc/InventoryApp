@@ -330,6 +330,17 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/stock-history", "GET", Capability.InventoryOperate)]
     [InlineData("api/Machines", "GET", Capability.InventoryOperate)]
     [InlineData("api/Machines/{id:long}/sync-restock", "POST", Capability.InventoryOperate)]
+
+    // The business's own machine records (issue #740): recording the machines you refill is the same
+    // day-to-day inventory work as refilling them, so this surface declares the capability the fleet
+    // reads already declare rather than introducing one. Which also means a read-only support
+    // session is refused every write here by the central GET/HEAD rule of issue #551.
+    [InlineData("api/local-machines", "GET", Capability.InventoryOperate)]
+    [InlineData("api/local-machines", "POST", Capability.InventoryOperate)]
+    [InlineData("api/local-machines/{id:long}", "GET", Capability.InventoryOperate)]
+    [InlineData("api/local-machines/{id:long}", "PUT", Capability.InventoryOperate)]
+    [InlineData("api/local-machines/{id:long}/deactivate", "POST", Capability.InventoryOperate)]
+    [InlineData("api/local-machines/{id:long}/reactivate", "POST", Capability.InventoryOperate)]
     [InlineData("api/Sites", "GET", Capability.InventoryOperate)]
     [InlineData("api/purchases", "POST", Capability.PurchasingOperate)]
     [InlineData("api/purchases/{id:int}/file", "GET", Capability.PurchasingOperate)]

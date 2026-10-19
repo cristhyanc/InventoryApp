@@ -1621,7 +1621,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` **and** `Inventory.Operate` (issue #681) | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
-| Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
+| Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/local-machines` (the business's own machine records, issue #740: list, read, create, rename, deactivate, reactivate), `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Purchases, Supplier Orders, Suppliers | `api/purchases`, `api/supplierorders`, `api/suppliers` | `Purchasing.Operate` | ✔ | ✔ | ✔ |
 | Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
@@ -6001,13 +6001,21 @@ answer in the menu, so the application says which features need a sales provider
 has to. It is frontend only: no endpoint, no contract and no rule of its own, and every answer it
 renders comes from `ProviderAvailabilityService`.
 
-**The order is the statement.** `primaryNavigation` is now: `Dashboard`, `Pick List`, the
+**The order is the statement.** `primaryNavigation` is: `Dashboard`, `Pick List`, `Machines`, the
 `Inventory` group, `Purchases`, `Expenses`, `Reports`, `Admin` — everything that works with no
-provider at all — then one `NavSectionHeading` ("Needs Nayax") and the three live provider
-destinations under it: `Machines`, `Sites` and `Site Commissions`. A heading is a heading, not a
+provider at all — then one `NavSectionHeading` ("Needs Nayax") and the live provider destinations
+under it: `Sites` and `Site Commissions`. A heading is a heading, not a
 control: it toggles nothing, links nowhere, renders as an `<h2>` over the entries after it, and
 `navigationFor` drops it when every entry under it was left out, because a heading over nothing
 claims a section this member does not have.
+
+**`Machines` left that section in issue #740**, which is the only change to this design since. A
+business keeps [its own machine records](#local-machines-and-external-machine-ids-issue-740) now, so
+the destination always has something to show and its own create/rename/deactivate actions to offer:
+the entry declares no `lockedWithout`, is never locked, and `/machines` carries no `requireProvider`
+guard. The page withholds its own live stock, revenue and sync parts while the provider cannot serve
+them, which is a decision about one page's content rather than about whether a destination exists.
+The machine **details** route keeps its guard, because every panel on it is a Nayax read.
 
 **Two renames, and one name per destination.** The `Products` group is `Inventory` (decision P11),
 because it holds the whole of the business's own stock keeping, all of which works without a
@@ -9668,6 +9676,111 @@ replay → report with no reader ever comparing two numbers;
 `ImportedProductGeneratedIdAttributionTests` proves that end to end over a fixture where an unrelated
 local product carries both the provider's number and the name the sale reports, at a different unit
 cost.
+
+### Local machines and external machine ids (issue #740)
+
+Child G1 of issue #329, after [the local key is the database's
+own](#the-local-key-is-the-databases-own-issue-735) and reusing [#759's external-id column
+pattern](#provider-identity-on-the-local-row-issues-732-759-and-735). Until it, **a machine was never
+persisted at all**: every machine list was a read of the live Nayax fleet, and every stored machine
+reference — a sale's `MachineID`, a refill's `MachineId`, a machine count's, an expense's, a stock
+event's, a timestamp repair's, an inventory-cost transition's — was Nayax's own number. A business
+with no sales provider therefore had no machines, in an application whose whole purpose is the
+machines it refills.
+
+**The table.** `Machines`, mapped by `Inventory.Infrastructure.Models.LocalMachine`:
+
+| Column | What it is |
+| --- | --- |
+| `Id` | this application's own key, **assigned by the database** (#735's rule, decision A4). Nothing assigns it, and a local id equal to a Nayax machine id is a coincidence |
+| `BusinessId` | the owning business. Ordinary tenant-owned data: the central query filters and `BusinessOwnershipEnforcer` scope every read and stamp every write, and no adapter writes a `BusinessId` predicate of its own |
+| `Name` | required, and otherwise unconstrained. Deliberately **not** unique per business: two machines in one corridor may legitimately be called "Level 3", and nothing resolves a machine by its name |
+| `IsActive` | whether the machine is in service. There is no delete |
+| `ExternalMachineId` | the business's sales provider's own id for the machine, as **opaque text** bounded by `ExternalId.MaxLength`, or `null` when the provider names none. For Nayax it is written only through `Inventory.Domain.Providers.NayaxExternalId` |
+
+`(BusinessId, ExternalMachineId)` carries a **filtered** unique index, `WHERE "ExternalMachineId" IS
+NOT NULL`, for the two reasons the product and category columns do: "this machine has no provider id"
+is the normal state of every machine of a business with no provider, so a plain unique index would
+allow exactly one of them, and two operators' fleets may legitimately both contain machine 7. There
+is **no machine link table** — the id is a column on the row it belongs to.
+
+**The entity is called `LocalMachine` and the table is called `Machines`.** The type name `Machine`
+is still occupied by the retired live-fleet response shape the machine wire-contract test compares
+against, and removing that belongs to issue #153's legacy-structure removal. The table name is
+declared explicitly in `AppDbContext.ConfigureMachines`, so it does not depend on which type owns it.
+
+**The backfill.** `AddMachines` is additive — one table, its indexes, and an insert into it — and
+**nothing is repointed**: every stored machine reference still holds the provider's number, and issue
+#741 (G2) is what moves them onto `Machines.Id`. That is what makes the migration releasable on its
+own, which matters because Production applies migrations at startup and the code already running
+there reads no machine row at all.
+
+It creates one machine per distinct machine number each business refers to, across all seven columns
+that hold one, de-duplicated. A number of `0` is excluded: it is the absent value a non-nullable
+column records, not a machine. The name comes from the most recent stored data that carried one — a
+sale's `MachineName` at its authorization instant, or an inventory-cost transition's recorded machine
+name at its baseline's creation instant — and otherwise from
+`Inventory.Domain.Machines.MachineCataloguePolicy.DefaultName`, "Machine" and the provider's number.
+That shape is mirrored in SQL because a migration cannot call into the Domain, and
+`AddMachinesMigrationTests` compares the two so they cannot drift.
+
+**It asserts the provider rather than assuming it.** A business has one sales provider and it cannot
+change (#759, `BusinessSalesProviderEnforcer`), so a machine number stored against a business was
+issued by that business's provider. The migration therefore **refuses before it writes anything** if
+any business holds machine data while its `SalesProvider` is anything other than Nayax, including not
+set at all: copying such a number into a column every later lookup reads as "the provider's id for
+this machine" would record a claim nothing supports. It then verifies the result — exactly one
+machine per referenced number, and no other row — and aborts the whole upgrade rather than leaving it
+half applied. Both refusals are raised the way #759's copy raises its own, through a scratch table
+and a SQLite trigger, and the scratch table is dropped again.
+
+**The API.** `/api/local-machines` — `GET` (the list, active and inactive, ordered by name), `GET
+{id}`, `POST` (create), `PUT {id}` (rename), `POST {id}/deactivate`, `POST {id}/reactivate` — behind
+`Inventory.Operate`, the capability the fleet reads and the rest of day-to-day stock keeping already
+declare. It is a **separate resource from `/api/machines`**, which is the live Nayax fleet and needs
+working credentials for every one of its reads; nothing on this one touches the provider, so it works
+identically for a business that has never connected one.
+
+Three things it deliberately does not do. It **never writes `ExternalMachineId`**: no request field
+corresponds to it, a created machine has none, a rename leaves it alone, and only provider
+synchronization and the provider machine review (issue #742) may attach one. It **publishes no
+provider identifier** either — the response carries `isProviderNamed`, the fact and not the id. And
+it offers **no delete**: stored sales, refills, counts and expenses refer to a machine, so a machine
+that stops trading is deactivated and stays listed. Because the capability is `Inventory.Operate`,
+which a support session grants, every write here is refused in a read-only support session by the one
+central rule that allows it only `GET` and `HEAD` (issue #551) — there is no per-action check for it.
+
+A rename is allowed on a provider-named machine, unlike a product's or a category's name ([Manual
+catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)):
+nothing synchronises a machine's name, so no import can overwrite the operator's own label and there
+is no second name to defend.
+
+**The page, and why it left the provider-locked section.** The Machines menu entry moved out of
+"Needs Nayax" and into the top section, and `/machines` carries no `requireProvider` guard any more
+(see [Provider-locked navigation](#provider-locked-navigation-issue-729)): the page always has
+something to show, so it is never locked. It is two lists. `LocalMachineListComponent` — the
+dedicated feature component the [page composition
+boundary](#page-composition-boundary-issue-191) requires, holding the list, its load state, the add
+and rename drafts, the refusal message and every write — is always shown. The live Nayax fleet below
+it (revenue, profit, and the links into each machine's stock and Sync Restock workflow) is shown only
+while the shared availability signal says the fleet read can be served, through the one shared path
+`loadProviderList` (issue #728): an unavailable provider withholds that section entirely rather than
+rendering a screen of refusals, while an outage is reported as an error **in place of** it, because
+presenting a `502` as "this business has no machines" is a claim nobody made. The machine **details**
+page is still a live provider destination and keeps its guard — every panel on it is a Nayax read —
+so a direct request for `/machines/{id}` with no provider reaches the "needs a provider" page with
+its generic explanation rather than one naming a read the navigation no longer claims; giving that
+page a local half belongs to issue #742.
+
+Write controls are hidden while a support session is active, on the established rule of issues #554
+and #658: the session grants `Inventory.Operate`, which is what the page would otherwise gate them
+on, and the backend refuses the write by its read-only method rule rather than by withholding the
+capability.
+
+**What is deliberately out of scope**: repointing the stored machine references (#741), the provider
+machine review (#742), provider switching (#761), slots, planograms, par levels, and manual sites —
+a site is known only from the live fleet read's `CustomerID`, so the Sites destination stays in the
+provider section with nothing local to fall back on.
 
 ### Resolving a Nayax product id to a local product (issue #733)
 

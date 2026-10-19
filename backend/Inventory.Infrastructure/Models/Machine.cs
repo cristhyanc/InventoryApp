@@ -1,9 +1,11 @@
 namespace Inventory.Infrastructure.Models
 {
     /// <summary>
-    /// The retired machine response shape. A machine has never been persisted - it is a live Nayax
-    /// view with this business's own sales and costs resolved onto it - and since issue #302 no
-    /// production code names this type: <c>MachinesController</c> serialises the API-owned
+    /// The retired machine response shape: a live Nayax view of a machine with this business's own
+    /// sales and costs resolved onto it. It is <em>not</em> the persisted machine - that is
+    /// <see cref="LocalMachine"/>, which issue #740 added and which maps the <c>Machines</c> table -
+    /// and since issue #302 no production code names this type:
+    /// <c>MachinesController</c> serialises the API-owned
     /// <c>InventoryApi.DTOs.MachineResponse</c> instead. It is kept here, unreferenced by the
     /// application, as the reference value
     /// <c>InventoryApi.Tests.DTOs.MachineJsonContractTests</c> compares that response's serialised

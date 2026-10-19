@@ -25,6 +25,12 @@ import { ProviderLock, providerLockOf, providerToolsOffered } from '../provider/
  * issue #728 and is applied **after** the capability set, so an entry the role cannot see stays
  * hidden rather than becoming a locked advertisement for a page that role never had.
  *
+ * Issue #740 (child G1) moved `Machines` out of that section and into the top one: a business keeps
+ * its own machine records now, so the destination always has something to show and its own
+ * create/rename/deactivate actions to offer. The page withholds its live stock, revenue and sync
+ * parts itself while the provider cannot serve them, which is a decision about one page's content
+ * rather than about whether a destination exists.
+ *
  * The reports are deliberately not in that section: Bookkeeping, Daily, Transactions,
  * Reconciliation and machine profitability read **stored** data, so they open normally with no
  * provider and report their own availability states (issues #730 and #731), and previously imported
@@ -156,6 +162,17 @@ export const primaryNavigation: readonly NavItem[] = [
   { kind: 'link', label: 'Dashboard', route: '/', icon: 'home', capability: 'Dashboard.View' },
   { kind: 'link', label: 'Pick List', route: '/pick-list', icon: 'assignment', capability: 'PickList.View' },
   {
+    // In the top section since issue #740 (child G1 of issue #329): a business now keeps its own
+    // machine records, which it creates, renames, deactivates and reactivates with no provider at
+    // all, so the destination declares no `lockedWithout` and is never locked. The page hides its
+    // live stock, revenue and sync parts itself while the provider cannot serve them.
+    kind: 'link',
+    label: 'Machines',
+    route: '/machines',
+    icon: 'refresh',
+    capability: 'Inventory.Operate'
+  },
+  {
     // "Inventory" rather than "Products" since issue #729 (decision P11): the group holds the whole
     // of the business's own stock keeping, all of which works with no provider at all. The Products
     // page inside it, its URL and its breadcrumb keep their own name.
@@ -200,16 +217,9 @@ export const primaryNavigation: readonly NavItem[] = [
   adminNavGroup,
   providerSectionHeading,
   {
-    kind: 'link',
-    label: 'Machines',
-    route: '/machines',
-    icon: 'refresh',
-    capability: 'Inventory.Operate',
-    lockedWithout: 'machineFleet'
-  },
-  {
-    // A site is known only from the live fleet read's `CustomerID`, so the site list needs the same
-    // read the machine list does (AGENTS.md § Site commissions).
+    // A site is known only from the live fleet read's `CustomerID`, so the site list needs that
+    // read and has nothing local to fall back on (AGENTS.md § Site commissions). Manual sites are
+    // deliberately out of scope of issue #740.
     kind: 'link',
     label: 'Sites',
     route: '/sites',

@@ -301,6 +301,22 @@ export interface ProductPriceComparison {
 }
 
 /**
+ * One of the business's **own** machine records, as `/api/local-machines` publishes it (issue #740,
+ * parent #329 child G1). It exists with or without a sales provider and carries no live figure at
+ * all, which is what makes it a different thing from {@link Machine} - that one is the live Nayax
+ * fleet with this business's sales and costs resolved onto it.
+ *
+ * `isProviderNamed` is whether the business's sales provider names the machine - the fact, never the
+ * identifier, which is deliberately not on the wire. Nothing a client sends can change it.
+ */
+export interface LocalMachine {
+  id: number;
+  name: string;
+  isActive: boolean;
+  isProviderNamed: boolean;
+}
+
+/**
  * Every revenue, direct-profit and profitability-status figure is optional and nullable: a role
  * without `Dashboard.ViewFinancials` is not shown them at all, by the frontend-level check this
  * page and the Machines list/detail apply (issue #699), and the API itself is expected to start

@@ -207,6 +207,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<INayaxConnectionSaveTransactions, EfNayaxConnectionSaveTransactions>();
         services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
         services.AddScoped<ICategoryStore, EfCategoryStore>();
+        services.AddScoped<ILocalMachineStore, EfLocalMachineStore>();
         services.AddScoped<ISupplierStore, EfSupplierStore>();
         services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
         services.AddScoped<IProductStore, EfProductStore>();

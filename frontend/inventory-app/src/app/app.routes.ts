@@ -189,15 +189,20 @@ export const routes: Routes = [
     loadComponent: () => import('./components/suppliers/supplier-list.component').then((m) => m.SupplierListComponent)
   },
   {
-    // The machine and site pages are the live provider destinations of issue #729: they exist only
-    // for what the Nayax fleet read returns, so `requireProvider` shows the "needs a provider" page
-    // instead of a screen of refusals. It is declared last, after the capability guard, so a role
-    // that does not include the page is sent to its own explanation first.
+    // The machine list carries no `requireProvider` since issue #740 (child G1): a business keeps
+    // its own machine records, which it creates, renames and deactivates with no provider at all,
+    // so the page always has something to show. It hides its live stock, revenue and sync parts
+    // itself while the shared availability answer refuses the fleet read.
     path: 'machines',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate'), requireProvider('machineFleet')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/machines/machine-list.component').then((m) => m.MachineListComponent)
   },
   {
+    // The machine details page is still a live provider destination of issue #729: every panel on
+    // it - stock, revenue, latest sales, Sync Restock - is a Nayax read, so `requireProvider` shows
+    // the "needs a provider" page instead of a screen of refusals. It is declared last, after the
+    // capability guard, so a role that does not include the page is sent to its own explanation
+    // first. Giving it a local half belongs to the provider machine review (issue #742).
     path: 'machines/:id',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate'), requireProvider('machineFleet')],
     loadComponent: () => import('./components/machines/machine-detail.component').then((m) => m.MachineDetailComponent)
