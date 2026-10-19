@@ -98,4 +98,4 @@ public sealed class CatalogueReviewController : ControllerBase
 /// sales, the products and the replay windows are all derived on the server from the provider ids the
 /// catalogue review recorded.
 /// </summary>
-public sealed record ResolveLinkedProviderSalesRequest(bool Confirmed);
+public sealed record ResolveLinkedProviderSalesRequest(bool? Confirmed);

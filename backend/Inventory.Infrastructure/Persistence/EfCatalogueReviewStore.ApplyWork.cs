@@ -255,7 +255,7 @@ public sealed partial class EfCatalogueReviewStore
                 staged.LocalRowId,
                 staged.Field,
                 staged.PreviousValue,
-                staged.ProviderValue);
+                staged.NewValue);
 
         private string? CurrentCategoryName(Product product) =>
             product.Category?.Name
@@ -301,7 +301,7 @@ public sealed partial class EfCatalogueReviewStore
             Category? Category,
             string Field,
             string? PreviousValue,
-            string? ProviderValue)
+            string? NewValue)
         {
             public long LocalRowId => Product?.Id ?? Category?.Id ?? 0;
         }

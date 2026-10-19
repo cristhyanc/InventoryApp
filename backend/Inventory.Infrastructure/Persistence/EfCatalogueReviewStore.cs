@@ -282,46 +282,58 @@ public sealed partial class EfCatalogueReviewStore : ICatalogueReviewStore
             if (action == CatalogueReviewAction.Defer)
                 continue;
 
-            Product chosen;
-            if (action == CatalogueReviewAction.CreateNew)
-            {
-                chosen = new Product
-                {
-                    ExternalProductId = item.ExternalId,
-                    RestockTo = 0,
-                    CreatedAt = work.AppliedAtUtc,
-                };
-                _db.Products.Add(chosen);
-                work.Created(chosen, item);
-            }
-            else
-            {
-                var existing = work.LocalProduct(decision!.LocalRowId!.Value);
-                if (existing is null)
-                {
-                    work.Refuse(item, UnknownRowRefusal(ProviderCatalogueEntryKind.Product));
-                    continue;
-                }
-
-                if (CatalogueReviewPolicy.LinkRefusal(
-                        ProviderCatalogueEntryKind.Product,
-                        item.ExternalId,
-                        existing.ExternalProductId,
-                        anotherRowCarriesIt: false) is { } refusal)
-                {
-                    work.Refuse(item, refusal);
-                    continue;
-                }
-
-                existing.ExternalProductId = item.ExternalId;
-                chosen = existing;
-                work.Linked(chosen, item);
-            }
+            var chosen = ResolveOrCreateProduct(work, item, decision!, action);
+            if (chosen is null)
+                continue;
 
             var created = action == CatalogueReviewAction.CreateNew;
             work.ApplyProviderOwnedProductFields(chosen, item, created);
             work.ApplyNegotiableFields(chosen, item, decision, created);
         }
+    }
+
+    /// <summary>
+    /// The non-defer half of a product entry's decision: create the row the database will key, or
+    /// link the named existing one after both link refusals. Returns <c>null</c> once it has refused
+    /// or recorded the outcome itself, so the caller has nothing left to do for this item.
+    /// </summary>
+    private Product? ResolveOrCreateProduct(
+        ApplyWork work, ProviderCatalogueReviewItem item, CatalogueReviewApplyDecision decision,
+        CatalogueReviewAction action)
+    {
+        if (action == CatalogueReviewAction.CreateNew)
+        {
+            var created = new Product
+            {
+                ExternalProductId = item.ExternalId,
+                RestockTo = 0,
+                CreatedAt = work.AppliedAtUtc,
+            };
+            _db.Products.Add(created);
+            work.Created(created, item);
+            return created;
+        }
+
+        var existing = work.LocalProduct(decision.LocalRowId!.Value);
+        if (existing is null)
+        {
+            work.Refuse(item, UnknownRowRefusal(ProviderCatalogueEntryKind.Product));
+            return null;
+        }
+
+        if (CatalogueReviewPolicy.LinkRefusal(
+                ProviderCatalogueEntryKind.Product,
+                item.ExternalId,
+                existing.ExternalProductId,
+                anotherRowCarriesIt: false) is { } refusal)
+        {
+            work.Refuse(item, refusal);
+            return null;
+        }
+
+        existing.ExternalProductId = item.ExternalId;
+        work.Linked(existing, item);
+        return existing;
     }
 
     /// <summary>

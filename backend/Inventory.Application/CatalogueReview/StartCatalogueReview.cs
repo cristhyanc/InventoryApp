@@ -62,22 +62,53 @@ public sealed class StartCatalogueReview
         var lastDecided = local.LastDecided.ToDictionary(
             decided => (decided.ProductId, decided.Field), decided => decided.ProviderValue);
 
-        var entries = new List<CatalogueReviewEntry>();
         var categories = new List<CatalogueReviewCategoryDto>();
         var products = new List<CatalogueReviewProductDto>();
 
         // Groups first, so a product's group resolves against the same list the apply will link or
-        // create. A group with no identifier cannot be linked and a blank name cannot name a
-        // category - the same two guards the direct import applies.
+        // create.
+        var entries = new List<CatalogueReviewEntry>();
+        entries.AddRange(BuildCategoryEntries(remoteGroups, categoryByProviderId));
+        entries.AddRange(BuildProductEntries(remoteProducts, productByProviderId, local));
+
+        var review = await _store.ReplacePendingReviewAsync(entries, _clock.UtcNow, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        foreach (var item in review.Items)
+        {
+            if (item.Entry.Kind == ProviderCatalogueEntryKind.Category)
+                categories.Add(ToCategoryDto(item, categoryById));
+            else
+                products.Add(ToProductDto(item, local, categoryByProviderId, categoryById, lastDecided));
+        }
+
+        return new CatalogueReviewDto(
+            review.ReviewId,
+            review.StartedAtUtc,
+            categories,
+            products,
+            CatalogueReviewPolicy.UnitVolumeUnavailableNote);
+    }
+
+    /// <summary>
+    /// One entry per remote group, deduplicated by external id. A group with no identifier cannot be
+    /// linked and a blank name cannot name a category - the same two guards the direct import
+    /// applies.
+    /// </summary>
+    private static List<CatalogueReviewEntry> BuildCategoryEntries(
+        List<NayaxProductGroup> remoteGroups,
+        IReadOnlyDictionary<string, LocalCatalogueCategory> categoryByProviderId)
+    {
+        var entries = new List<CatalogueReviewEntry>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var group in remoteGroups)
         {
             if (group.ProductGroupID is not int groupId || string.IsNullOrWhiteSpace(group.ProductGroupName))
                 continue;
 
             var externalId = NayaxExternalId.From(groupId);
-            if (entries.Any(entry =>
-                    entry.Kind == ProviderCatalogueEntryKind.Category
-                    && string.Equals(entry.ExternalId, externalId, StringComparison.Ordinal)))
+            if (!seen.Add(externalId))
                 continue;
 
             categoryByProviderId.TryGetValue(externalId, out var linkedCategory);
@@ -93,18 +124,30 @@ public sealed class StartCatalogueReview
                 UnresolvedSaleCount: 0));
         }
 
+        return entries;
+    }
+
+    /// <summary>
+    /// One entry per remote product, deduplicated by external id. A blank provider name cannot name a
+    /// local row, and the provider owns a linked row's name: linking one would replace a real name
+    /// with nothing. Such an entry is left out of the review rather than offered as a decision nobody
+    /// can take safely.
+    /// </summary>
+    private static List<CatalogueReviewEntry> BuildProductEntries(
+        List<NayaxProduct> remoteProducts,
+        IReadOnlyDictionary<string, LocalCatalogueProduct> productByProviderId,
+        LocalCatalogueSnapshot local)
+    {
+        var entries = new List<CatalogueReviewEntry>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var product in remoteProducts)
         {
-            // A blank provider name cannot name a local row, and the provider owns a linked row's
-            // name: linking one would replace a real name with nothing. Such an entry is left out of
-            // the review rather than offered as a decision nobody can take safely.
             if (string.IsNullOrWhiteSpace(product.ProductName))
                 continue;
 
             var externalId = NayaxExternalId.From(product.NayaxProductId);
-            if (entries.Any(entry =>
-                    entry.Kind == ProviderCatalogueEntryKind.Product
-                    && string.Equals(entry.ExternalId, externalId, StringComparison.Ordinal)))
+            if (!seen.Add(externalId))
                 continue;
 
             productByProviderId.TryGetValue(externalId, out var linkedProduct);
@@ -125,23 +168,7 @@ public sealed class StartCatalogueReview
                     : 0));
         }
 
-        var review = await _store.ReplacePendingReviewAsync(entries, _clock.UtcNow, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-
-        foreach (var item in review.Items)
-        {
-            if (item.Entry.Kind == ProviderCatalogueEntryKind.Category)
-                categories.Add(ToCategoryDto(item, categoryById));
-            else
-                products.Add(ToProductDto(item, local, categoryByProviderId, categoryById, lastDecided));
-        }
-
-        return new CatalogueReviewDto(
-            review.ReviewId,
-            review.StartedAtUtc,
-            categories,
-            products,
-            CatalogueReviewPolicy.UnitVolumeUnavailableNote);
+        return entries;
     }
 
     /// <summary>

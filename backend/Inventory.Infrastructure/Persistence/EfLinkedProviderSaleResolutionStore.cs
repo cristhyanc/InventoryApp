@@ -203,7 +203,7 @@ public sealed class EfLinkedProviderSaleResolutionStore : ILinkedProviderSaleRes
                 && sale.ProviderProductIdIsRaw
                 && sale.Provider == ExternalProvider.Nayax
                 && sale.NayaxProductId != null
-                && numbers.Contains(sale.NayaxProductId!.Value));
+                && numbers.Contains(sale.NayaxProductId.Value));
     }
 
     /// <summary>
