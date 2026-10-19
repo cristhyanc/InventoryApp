@@ -1062,12 +1062,19 @@ does not manage.
   every other local field stay editable in the same form. A provider-managed category's name is
   locked the same way in **Categories**, which also gained its own inline create/rename form — the
   "Categories are managed from the product import and are read-only here" notice is gone along with
-  the blanket lock the product form used to put on price. **Delete** is still offered everywhere
-  deleting is possible in principle: the screen cannot know in advance whether a product's history or
-  a category's products will refuse it, so it attempts the delete and, on a `409`, shows the server's
+  the blanket lock the product form used to put on price. **Delete** is offered only where the API
+  can allow it. A product the provider manages is the one refusal the screen already holds the
+  server's own signal for — the product's `providerManagedFields` — so **Products** offers no
+  **Delete** for it and names the retirement path in its place ("Managed by Nayax, so it cannot be
+  deleted - the next catalogue import would create it again. Deactivate it with the Status toggle
+  instead.", and *Reactivate* when it is already retired). Every other refusal depends on a
+  product's history or a category's products and is decided inside the delete's own transaction, so
+  the screen cannot know it in advance: it attempts the delete and, on a `409`, shows the server's
   own refusal message instead of silently failing or guessing. For a product that message names what
   is in the way and points at **Deactivate** (the same Active/Inactive toggle beside it); for a
-  category it names how many products use it. **Products** also gained a **Show retired** filter
+  category it names how many products use it. The provider signal is advisory — it is as fresh as
+  the last fetch — so a product that became provider-managed after the page loaded is still refused
+  by the API, and that refusal is shown too. **Products** also gained a **Show retired** filter
   (`includeRetired=true`) so a product just deactivated stays on screen to **Reactivate** instead of
   disappearing from the only list that can flip it back — the Admin costing-repair and
   AVCO-transition tools and the stock-history product filter still call the endpoint without it and

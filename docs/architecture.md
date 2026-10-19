@@ -9788,6 +9788,22 @@ provider-managed product is refused for its own reason: the next import would cr
 the count in the message, because `Product.CategoryId` is set to null when its category disappears.
 A refused delete answers `409` with that message; a validation refusal answers `400`.
 
+**What the screens offer, and why they cannot predict the rest** (issue #737, B2). The provider
+refusal is the only one a client can decide for itself without a second copy of a server rule:
+`providerManagedFields` is published from the same `ProviderManagedCatalogueFields.ForProduct` call
+whose condition `ProductDeletionPolicy` refuses on, so a non-empty list *is* the server's answer
+that this delete is refused. The product list therefore renders no **Delete** for such a product and
+names the retirement path instead (`ProductListComponent.providerManaged`), rather than offering an
+action that must fail. The history refusal is not published: it is a count of six kinds of rows
+taken inside the delete's own transaction, which is what makes it reliable, and a flag read earlier
+would be a promise about stored rows that can change between the read and the delete. So for every
+other product the screen attempts the delete and shows the server's own refusal verbatim. That also
+covers the provider signal going stale - it is as fresh as the last catalogue fetch, the server
+decides again regardless, and a refusal the page did not expect still reaches the operator. A
+category has no provider-independent deletion signal of its own (its refusal is a product count and
+it has no retirement flag at all), so the categories screen attempts every delete and explains a
+refusal the same way.
+
 **Where each rule is decided.** The deterministic ones — a name is required, a price is not
 negative, a category name is required — are Domain policies the use cases apply before anything is
 read. The ones that are statements about *stored* rows are decided inside the EF adapter, in the

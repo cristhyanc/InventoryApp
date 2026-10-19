@@ -388,20 +388,34 @@ describe('ProductListComponent write controls during a support session (issue #5
 });
 
 /**
- * Delete is offered unconditionally (issue #737): the API is the only place that knows what still
- * refers to a product, so success removes the row and a refusal explains why and leaves the row
- * (and its Active/Inactive toggle) in place instead of silently doing nothing.
+ * Delete is offered only where the API can allow it (issue #737).
+ *
+ * A product the business's sales provider names is a refusal this page already holds the server's
+ * own signal for - `providerManagedFields`, produced by the same Domain statement
+ * `ProductDeletionPolicy` refuses that delete with - so Delete is not rendered for it at all and
+ * the Deactivate/Reactivate path is named instead. Every other refusal is history-dependent and
+ * decided inside the delete's own transaction, so it cannot be predicted here: Delete is offered,
+ * success removes the row, and a refusal explains why and leaves the row (and its Active/Inactive
+ * toggle) in place instead of silently doing nothing. The provider signal is advisory for the same
+ * reason - it is as fresh as the last fetch - so the server's refusal still has to reach the user
+ * when it disagrees.
  */
 describe('ProductListComponent delete vs deactivate (issue #737)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  async function render(deleteFn: jest.Mock) {
+  function deleteButtonOf(host: HTMLElement): HTMLButtonElement | undefined {
+    return Array.from(host.querySelectorAll('tbody button')).find((b) => b.textContent?.trim() === 'Delete') as
+      | HTMLButtonElement
+      | undefined;
+  }
+
+  async function render(deleteFn: jest.Mock, products: Product[] = [product({ id: 1, name: 'Widget' })]) {
     const toastService = { success: jest.fn(), error: jest.fn() };
     await TestBed.configureTestingModule({
       imports: [ProductListComponent],
       providers: [
         provideRouter([]),
-        { provide: ProductService, useValue: { getAll: () => of([product({ id: 1, name: 'Widget' })]), delete: deleteFn } },
+        { provide: ProductService, useValue: { getAll: () => of(products), delete: deleteFn } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: SupplierService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: toastService },
@@ -414,9 +428,11 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
     return { fixture, host: fixture.nativeElement as HTMLElement, toastService };
   }
 
-  it('deletes the product and removes it from the list on success', async () => {
+  it('offers Delete for a product the API can allow it for, and removes it from the list on success', async () => {
     const deleteFn = jest.fn(() => of(undefined));
-    const { fixture, host } = await render(deleteFn);
+    const { fixture, host } = await render(deleteFn, [product({ id: 1, name: 'Widget', providerManagedFields: [] })]);
+
+    expect(deleteButtonOf(host)).toBeDefined();
 
     const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete') as HTMLButtonElement;
     deleteButton.click();
@@ -454,6 +470,75 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
         'Deactivate it instead - a deactivated product keeps its history, stays out of the reorder ' +
         'alerts and can be reactivated. Nothing was deleted.'
     );
+    expect(host.textContent).toContain('Widget');
+  });
+
+  it('does not offer Delete for a provider-linked product, and names Deactivate instead', async () => {
+    const deleteFn = jest.fn(() => of(undefined));
+    const { host } = await render(deleteFn, [
+      product({ id: 1, name: 'Coke', isActive: true, providerManagedFields: ['name', 'categoryId'] })
+    ]);
+
+    expect(deleteButtonOf(host)).toBeUndefined();
+    expect(host.textContent).toContain(
+      'Managed by Nayax, so it cannot be deleted - the next catalogue import would create it again. ' +
+        'Deactivate it with the Status toggle instead.'
+    );
+    // The retirement control the note points at is the row's own toggle, still offered and usable.
+    const statusButton = Array.from(host.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Active'
+    ) as HTMLButtonElement;
+    expect(statusButton.disabled).toBe(false);
+  });
+
+  it('names Reactivate for a provider-linked product that is already retired', async () => {
+    const deleteFn = jest.fn(() => of(undefined));
+    const { host } = await render(deleteFn, [
+      product({ id: 1, name: 'Coke', isActive: false, providerManagedFields: ['name', 'categoryId'] })
+    ]);
+
+    expect(deleteButtonOf(host)).toBeUndefined();
+    expect(host.textContent).toContain(
+      'Managed by Nayax, so it cannot be deleted - the next catalogue import would create it again. ' +
+        'It is deactivated; Reactivate it with the Status toggle.'
+    );
+    expect(
+      Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Inactive')
+    ).toBeDefined();
+  });
+
+  it('refuses to open the delete confirmation for a provider-linked product, so the write is unavailable rather than merely hidden', async () => {
+    const deleteFn = jest.fn(() => of(undefined));
+    const linked = product({ id: 1, name: 'Coke', providerManagedFields: ['name', 'categoryId'] });
+    const { fixture, host } = await render(deleteFn, [linked]);
+    const component = fixture.componentInstance;
+
+    component.confirmDelete(linked);
+    fixture.detectChanges();
+
+    expect(component.confirmingProduct).toBeNull();
+    expect(host.textContent).not.toContain('Confirm delete');
+    expect(deleteFn).not.toHaveBeenCalled();
+  });
+
+  it('still surfaces the server refusal when a product that looked deletable is refused, because the eligibility it rendered can be stale', async () => {
+    // The row was fetched before the provider's catalogue import named this product, so the page
+    // offered Delete; the server decides again inside the delete's transaction and refuses.
+    const refusal =
+      'This product is managed by Nayax and cannot be deleted: the next catalogue import would ' +
+      'create it again. Deactivate it instead - a deactivated product keeps its history, stays out ' +
+      'of the reorder alerts and can be reactivated. Nothing was deleted.';
+    const deleteFn = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 409, error: refusal })));
+    const stale = product({ id: 1, name: 'Widget', providerManagedFields: [] });
+    const { fixture, host, toastService } = await render(deleteFn, [stale]);
+
+    expect(deleteButtonOf(host)).toBeDefined();
+    fixture.componentInstance.confirmDelete(stale);
+    fixture.componentInstance.deleteConfirmed();
+    fixture.detectChanges();
+
+    expect(deleteFn).toHaveBeenCalledWith(1);
+    expect(toastService.error).toHaveBeenCalledWith(refusal);
     expect(host.textContent).toContain('Widget');
   });
 });
