@@ -79,6 +79,13 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             ? commissions.Machines.GetValueOrDefault(machineId!.Value).IsComplete
             : commissions.IsComplete;
 
+        // Every stored sale in scope, whatever its status, counted from the same list the status
+        // diagnostics below use rather than with a second query. A period holding only cancelled
+        // rows has sales data and a gross total of zero, so this must not be derived from an
+        // amount (issue #730).
+        var coverage = await EfReportingSharedQueries.CoverageFactsAsync(
+            _db, from, endExclusive, statuses.Count > 0, imported.ContainsRows, cancellationToken);
+
         return new BookkeepingReportFacts(
             GrossSales: grossSales,
             CardSales: card?.Sales ?? 0m,
@@ -110,7 +117,12 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             RefundedTransactionCount: statuses.Count(x => NayaxTransactionStatusClassifier.Classify(x) == NayaxTransactionStatus.Refunded),
             DeclinedOrCancelledTransactionCount: statuses.Count(x => NayaxTransactionStatusClassifier.Classify(x) == NayaxTransactionStatus.CancelledOrDeclined),
             UnknownStatusTransactionCount: statuses.Count(x => x is not null && NayaxTransactionStatusClassifier.Classify(x) == NayaxTransactionStatus.Unknown),
-            MissingStatusTransactionCount: statuses.Count(x => x is null));
+            MissingStatusTransactionCount: statuses.Count(x => x is null))
+        {
+            SalesCoverage = coverage.SalesCoverage,
+            SettlementCoverage = coverage.SettlementCoverage,
+            ContainsSalesRows = coverage.ContainsSalesRows,
+        };
     }
 
     private async Task<(decimal Delivery, decimal Package)> ReceiptCostsAsync(DateTime from, DateTime endExclusive, CancellationToken cancellationToken)

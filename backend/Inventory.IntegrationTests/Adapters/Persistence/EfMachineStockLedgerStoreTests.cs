@@ -113,6 +113,7 @@ public class EfMachineStockLedgerStoreTests
                 TransactionID = 5002,
                 TransactionStatusId = 55,
                 MachineID = MachineId,
+                ProductId = ProductA,
                 NayaxProductId = ProductA,
                 ProductName = "Coke Zero",
                 MachineAuthorizationTime = OpeningAt.AddDays(1),
@@ -159,8 +160,8 @@ public class EfMachineStockLedgerStoreTests
         Assert.Equal("Business B Product", facts.ProductNames[ProductB]);
         Assert.DoesNotContain(ProductA, facts.ProductNames.Keys);
 
-        // Business B's own completed sale on the same machine number names business A's product id,
-        // which business B cannot see: unattributed, and never attributed to business A's product.
+        // Business B's own completed sale on the same machine number carries a raw provider id
+        // equal to business A's product key: unattributed, and never business A's product.
         Assert.Empty(facts.Sales);
         Assert.Equal(1, facts.UnattributedCompletedSaleCount);
     }
@@ -291,18 +292,20 @@ public class EfMachineStockLedgerStoreTests
                 TransactionID = 5001,
                 TransactionStatusId = NayaxTransactionStatusIds.Completed,
                 MachineID = MachineId,
+                ProductId = ProductA,
                 NayaxProductId = ProductA,
                 ProductName = "Coke Zero",
                 MachineAuthorizationTime = OpeningAt.AddDays(1),
             });
 
-            // A completed sale of a product this business does not have: reported as unattributed,
-            // never spread across the products that are in the machine.
+            // A completed sale no writer could attribute to a local product: reported as
+            // unattributed, never spread across the products that are in the machine.
             a.NayaxSales.Add(new NayaxSales
             {
                 TransactionID = 5003,
                 TransactionStatusId = NayaxTransactionStatusIds.Completed,
                 MachineID = MachineId,
+                ProductId = null,
                 NayaxProductId = 777,
                 ProductName = "Not in this catalogue",
                 MachineAuthorizationTime = OpeningAt.AddDays(1),
@@ -363,6 +366,10 @@ public class EfMachineStockLedgerStoreTests
                 TransactionID = 5001,
                 TransactionStatusId = NayaxTransactionStatusIds.Completed,
                 MachineID = MachineId,
+                // Unresolved, carrying a raw provider id that happens to equal business A's
+                // product key: it attributes to nothing, and the foreign key could not store that
+                // number as an association even if a reader wanted to.
+                ProductId = null,
                 NayaxProductId = ProductA,
                 ProductName = "Coke Zero",
                 MachineAuthorizationTime = OpeningAt.AddDays(1),

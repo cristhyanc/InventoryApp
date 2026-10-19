@@ -3,12 +3,13 @@ import { ActivatedRoute } from '@angular/router';
 import { ProductReportComponent } from './product-report.component';
 import { ProductRow, ReportingService } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
+import { providerAvailabilityDouble } from '../../provider/provider-availability.spec-helpers';
 
 function createComponent(): ProductReportComponent {
   const route = {} as unknown as ActivatedRoute;
   const reports = {} as unknown as ReportingService;
   const machines = { getAll: () => of([]) } as unknown as MachineService;
-  return new ProductReportComponent(route, reports, machines);
+  return new ProductReportComponent(route, reports, machines, providerAvailabilityDouble());
 }
 
 function row(overrides: Partial<ProductRow> = {}): ProductRow {

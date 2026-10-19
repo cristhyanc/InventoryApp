@@ -1,8 +1,9 @@
 import { TestBed } from '@angular/core/testing';
 import { NgModel } from '@angular/forms';
 import { By } from '@angular/platform-browser';
-import { Observable, Subject, of, throwError } from 'rxjs';
+import { Observable, Subject, firstValueFrom, of, throwError } from 'rxjs';
 import { AccessService } from '../../../access/access.service';
+import { ProviderAvailabilityService } from '../../../provider/provider-availability.service';
 import {
   NayaxConnectionRetestResult,
   NayaxConnectionService,
@@ -130,6 +131,84 @@ async function render(
 
   return { fixture, host, component, connections, toast, enterOperatorId, pasteToken, runTestWith };
 }
+
+/**
+ * The wizard is the one screen where the connection changes, so it is the one screen that has to
+ * refresh the application-wide availability signal (issue #728). Every other screen then reflects
+ * the new connection without probing for it, and without a stale answer from earlier in the session.
+ */
+describe('NayaxConnectionWizardComponent refreshes the shared provider signal (issue #728)', () => {
+  it('publishes the state a save established, without reading the status again', async () => {
+    const { component, fixture, connections, runTestWith } = await render({ status: () => of(state()) });
+    const provider = TestBed.inject(ProviderAvailabilityService);
+    const before = await firstValueFrom(provider.load());
+    expect(before.status).toBe('NotConfigured');
+    expect(before.connection).toBe('notConnected');
+
+    runTestWith();
+    component.goTo(6);
+    fixture.detectChanges();
+    component.saveConnection();
+
+    expect(connections.save).toHaveBeenCalledTimes(1);
+    const after = await firstValueFrom(provider.load());
+    expect(after.status).toBe('Ready');
+    expect(after.connection).toBe('usable');
+    // The stored pair is the pair that was tested, so its check lines are the session's evidence.
+    expect(after.features.machineFleet).toBe('available');
+    expect(connections.status).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes the state a re-test established', async () => {
+    const { component, connections } = await render({ status: () => of(state()) });
+    const provider = TestBed.inject(ProviderAvailabilityService);
+
+    component.retest();
+
+    expect(connections.retest).toHaveBeenCalledTimes(1);
+    const availability = await firstValueFrom(provider.load());
+    expect(availability.status).toBe('Ready');
+    expect(availability.connection).toBe('usable');
+    expect(connections.status).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes the per-feature permissions a re-test found, granted and refused alike', async () => {
+    const { component } = await render({
+      status: () => of(state()),
+      retest: () =>
+        of(
+          retestResult({
+            nothingFailed: false,
+            checks: [
+              { check: 'SignIn', status: 'Passed', failure: null },
+              { check: 'Machines', status: 'Passed', failure: null },
+              { check: 'MachineLastSales', status: 'Failed', failure: 'PermissionNotGranted' },
+              { check: 'MachineProducts', status: 'NotChecked', failure: null }
+            ]
+          })
+        )
+    });
+    const provider = TestBed.inject(ProviderAvailabilityService);
+
+    component.retest();
+
+    const availability = await firstValueFrom(provider.load());
+    expect(availability.connection).toBe('usable');
+    expect(availability.features.machineFleet).toBe('available');
+    expect(availability.features.machineSales).toBe('permissionNotGranted');
+    expect(availability.features.machineStock).toBe('unknown');
+  });
+
+  it('publishes nothing when the status read itself failed, leaving the answer unknown', async () => {
+    await render({ status: () => throwError(() => new Error('boom')) });
+    const provider = TestBed.inject(ProviderAvailabilityService);
+
+    const availability = await firstValueFrom(provider.load());
+    expect(availability.status).toBeNull();
+    expect(availability.connection).toBe('unknown');
+    expect(availability.features.machineFleet).toBe('unknown');
+  });
+});
 
 /**
  * The Owner-only Nayax connection wizard (issue #538) over the endpoints of issues #536 and #537.

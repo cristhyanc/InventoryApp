@@ -11,7 +11,16 @@ public sealed record MachineProfitabilityReportFacts(
     IReadOnlyList<MachineProfitabilityMachineFacts> Machines,
     int MissingFeeRateTransactionCount,
     bool CommissionIsComplete,
-    IReadOnlyList<string> CommissionWarnings);
+    IReadOnlyList<string> CommissionWarnings)
+{
+    /// <summary>
+    /// How well recorded provider coverage accounts for this period (issue #731, extending issue
+    /// #730's model to this report). Both families matter: each machine's sales, quantity, cost of
+    /// goods, gross profit and commission come from stored provider sales, while the actual part of
+    /// its Nayax processing fees comes from committed settlement imports.
+    /// </summary>
+    public ReportCoverageFacts Coverage { get; init; } = new();
+}
 
 /// <summary>One machine's already-aggregated sales/cost/commission/fee/expense facts.</summary>
 public sealed record MachineProfitabilityMachineFacts(

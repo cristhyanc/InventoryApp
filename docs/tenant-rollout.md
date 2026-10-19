@@ -642,7 +642,12 @@ deploy is the cutover: from it on, the client reads the business's record instea
 configuration, and **while that record is empty every Nayax operation fails closed** — sales sync,
 the machine and product catalogue, the dashboard's remote data and the scheduled syncs alike — with
 the stable "Nayax is not connected" error (HTTP `409`, code `nayax_not_connected`) rather than an
-upstream error. Running the command first makes that window zero. If #520 has already been deployed
+upstream error. Running the command first makes that window zero. (Since issue #726 two readers
+translate that same refusal into a per-feature availability answer instead of propagating it:
+`GET /api/dashboard/summary` answers with its local sections and the refill card marked unavailable,
+and `GET /api/products/alerts/low-stock` answers the storage-only reorder alerts. Every other Nayax
+operation, including the fleet and sales reads behind the rest of the dashboard, still fails closed
+with the `409`.) If #520 has already been deployed
 and Nayax is failing this way, this command is the fix: run the dry run, confirm it reports
 `CredentialsStored`, then apply. There is no fallback to the global settings during the window, by
 design, and none to another business's credential ever.

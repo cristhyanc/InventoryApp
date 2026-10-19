@@ -9,6 +9,9 @@ import { Machine, PickListMachineQuantity, PickListProduct, Product } from '../.
 import { ListLoadState } from '../shared/list-load-state';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../shared/multi-select-dropdown.component';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
+import { nayaxUnavailableMessage } from '../../provider/nayax-availability';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
+import { loadProviderList } from '../../provider/provider-list-load';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 import { SortDirection, compareSortValues, nextSortState, sortAriaState, sortColumnLabel } from '../shared/sortable-column';
 
@@ -20,6 +23,13 @@ type PickListSortColumn = 'name' | 'mdbCode';
  * filters and only takes effect on "Apply"; picked/unpicked completion tracking is entirely
  * frontend, in-memory state - nothing here is persisted, and no mutation endpoint is ever called,
  * so refreshing the page always returns to an empty plan.
+ *
+ * **The whole page is a live fleet read**, so without a usable provider there is nothing to plan
+ * (issue #728). The machine list goes through `loadProviderList`: a provider that cannot list
+ * machines leaves {@link machinesUnavailable} - one sentence in place of the dropdowns and the
+ * matrix, because "No machines selected yet" is a claim about this business's selection rather than
+ * about Nayax - and a machine read that *failed* leaves {@link machinesError}, which says so instead
+ * of presenting an empty dropdown as "this business has no machines".
  */
 @Component({
   selector: 'app-pick-list',
@@ -52,21 +62,43 @@ export class PickListComponent implements OnInit {
   lastRefreshedAt: Date | null = null;
   readonly loadState = new ListLoadState();
 
+  /** The one sentence for a provider that cannot list machines; `''` while it can. */
+  machinesUnavailable = '';
+
+  /** Set when the machine list could not be read for a reason that is not an availability answer. */
+  machinesError = '';
+
   constructor(
     private machineService: MachineService,
     private productService: ProductService,
     private pickListService: PickListService,
-    private toastService: ToastService
+    private toastService: ToastService,
+    private provider: ProviderAvailabilityService
   ) {}
 
   ngOnInit(): void {
-    this.machineService.getAll().subscribe((machines) => (this.allMachines = machines));
+    loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe((outcome) => {
+      this.allMachines = outcome.kind === 'listed' ? outcome.items : [];
+      this.machinesUnavailable =
+        outcome.kind === 'unavailable' ? nayaxUnavailableMessage(outcome.unavailability, 'The pick list') : '';
+      this.machinesError =
+        outcome.kind === 'failed' ? 'The machine list could not be loaded, so a pick list cannot be built.' : '';
+    });
     this.productService.getAll().subscribe((products) => {
       this.allProducts = products;
       const allProductIds = products.map((p) => p.id);
       this.stagedProductIds = allProductIds;
       this.appliedProductIds = allProductIds;
     });
+  }
+
+  /**
+   * Whether the machine selection and the matrix are offered at all. They are not when there is no
+   * machine list to plan against: the page then states why, once, instead of offering a selection
+   * that can never be made.
+   */
+  get machineSelectionShown(): boolean {
+    return this.machinesUnavailable === '' && this.machinesError === '';
   }
 
   machineOptions(): MultiSelectOption[] {

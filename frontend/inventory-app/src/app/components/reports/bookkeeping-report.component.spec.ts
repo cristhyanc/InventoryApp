@@ -7,6 +7,7 @@ import { BookkeepingReportComponent } from './bookkeeping-report.component';
 import { ReportingService } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
 import { BookkeepingReport } from '../../features/reports/bookkeeping/models/bookkeeping-report.model';
+import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 
 const REPORT: BookkeepingReport = {
   from: '2026-01-01',
@@ -37,7 +38,8 @@ async function render(overrides: Partial<BookkeepingReport> = {}) {
     providers: [
       { provide: ActivatedRoute, useValue: route },
       { provide: ReportingService, useValue: reports },
-      { provide: MachineService, useValue: machines }
+      { provide: MachineService, useValue: machines },
+      provideNayaxConnectionStatus()
     ]
   }).compileComponents();
 
@@ -187,7 +189,8 @@ describe('BookkeepingReportComponent stat-card icon tile position (issue #453)',
       providers: [
         { provide: ActivatedRoute, useValue: route },
         { provide: ReportingService, useValue: reports },
-        { provide: MachineService, useValue: machines }
+        { provide: MachineService, useValue: machines },
+        provideNayaxConnectionStatus()
       ]
     }).compileComponents();
 

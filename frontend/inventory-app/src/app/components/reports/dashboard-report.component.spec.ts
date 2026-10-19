@@ -5,12 +5,16 @@ import { DashboardReportComponent } from './dashboard-report.component';
 import { ReportingService } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
 import { DashboardReport } from '../../features/reports/dashboard/models/dashboard-report.model';
+import {
+  provideNayaxConnectionStatus,
+  providerAvailabilityDouble
+} from '../../provider/provider-availability.spec-helpers';
 
 function createComponent(): DashboardReportComponent {
   const route = {} as unknown as ActivatedRoute;
   const reports = {} as unknown as ReportingService;
   const machines = { getAll: () => of([]) } as unknown as MachineService;
-  return new DashboardReportComponent(route, reports, machines);
+  return new DashboardReportComponent(route, reports, machines, providerAvailabilityDouble());
 }
 
 const REPORT: DashboardReport = {
@@ -55,7 +59,8 @@ describe('DashboardReportComponent stat-card icon tile position (issue #453)', (
       providers: [
         { provide: ActivatedRoute, useValue: route },
         { provide: ReportingService, useValue: reports },
-        { provide: MachineService, useValue: machines }
+        { provide: MachineService, useValue: machines },
+        provideNayaxConnectionStatus()
       ]
     }).compileComponents();
 

@@ -1,11 +1,13 @@
 using System.Text;
 using Inventory.Application.Costing;
 using Inventory.Application.Imports;
+using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Nayax;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -27,6 +29,15 @@ public class ImportNayaxSalesTests
 {
     private const string SalesHeader =
         "TransactionID,TransactionStatusId,MachineID,NayaxProductId,SettlementValue,PaymentMethod,ProductName,MachineAuthorizationTime";
+
+    /// <summary>
+    /// The links issue #732's backfill recorded for data that already existed: every Nayax product
+    /// id names the local product with the same id, which is what the cases here were written
+    /// against. Since issue #745 the import resolves a row's remote id through that lookup instead
+    /// of comparing it with <c>Product.Id</c>, and <see cref="ImportNayaxSalesNayaxLinkTests"/> is
+    /// where the resolution itself is pinned, over the real link table with ids that differ.
+    /// </summary>
+    private static INayaxProductLinkStore IdentityLinks() => FakeNayaxProductLinkStore.EveryIdLinkedToItself();
 
     /// <summary>
     /// Moved from the removed <c>ImportServiceTests</c> with its assertions unchanged: re-importing
@@ -344,7 +355,8 @@ public class ImportNayaxSalesTests
                     reader.Object,
                     new EfNayaxSalesImportStore(db),
                     TestCostingUseCases.CostSale(db),
-                    Mock.Of<IRebuildProductCost>())
+                    Mock.Of<IRebuildProductCost>(),
+                    IdentityLinks())
                 .Handle(new NayaxSalesFileInput(fileName, () => new MemoryStream())));
 
         Assert.Equal("Only .xlsx, .xls, or .csv files are supported.", exception.Message);
@@ -365,7 +377,8 @@ public class ImportNayaxSalesTests
                 reader.Object,
                 new EfNayaxSalesImportStore(db),
                 TestCostingUseCases.CostSale(db),
-                Mock.Of<IRebuildProductCost>())
+                Mock.Of<IRebuildProductCost>(),
+                IdentityLinks())
             .Handle(new NayaxSalesFileInput(fileName, () => new MemoryStream()));
 
         Assert.Equal(new NayaxSalesImportResult(0, 0, 0), result);
@@ -384,7 +397,8 @@ public class ImportNayaxSalesTests
         reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>())).Returns([]);
 
         var result = await new ImportNayaxSales(
-                reader.Object, store.Object, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>())
+                reader.Object, store.Object, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>(),
+                IdentityLinks())
             .Handle(Csv("TransactionID,MachineID,MachineAuthorizationTime"));
 
         Assert.Equal(new NayaxSalesImportResult(0, 0, 0), result);
@@ -400,12 +414,14 @@ public class ImportNayaxSalesTests
         await using var db = CreateDb();
         var store = new Mock<INayaxSalesImportStore>();
         store.Setup(x => x.GetProductCandidatesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        store.Setup(x => x.GetConflictingTransactionIdsAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         var reader = new Mock<INayaxSalesWorkbookReader>();
         reader.Setup(x => x.Read(It.IsAny<Stream>(), It.IsAny<string>()))
             .Returns([new NayaxSalesImportRow(0, 0, null, null, null, null, 0m, null, null, null)]);
 
         var result = await new ImportNayaxSales(
-                reader.Object, store.Object, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>())
+                reader.Object, store.Object, Mock.Of<ICostSale>(), Mock.Of<IRebuildProductCost>(),
+                IdentityLinks())
             .Handle(Csv("ignored"));
 
         Assert.Equal(new NayaxSalesImportResult(0, 0, 1), result);
@@ -439,7 +455,8 @@ public class ImportNayaxSalesTests
             new ClosedXmlNayaxSalesWorkbookReader(),
             new EfNayaxSalesImportStore(db),
             TestCostingUseCases.CostSale(db, costRebuild),
-            costRebuild);
+            costRebuild,
+            IdentityLinks());
     }
 
     private static NayaxSalesFileInput Csv(string content) =>

@@ -60,21 +60,25 @@
     <Compile Include="..\Inventory.UnitTests\Application\Gst\FakeCurrentBusinessProvider.cs" Link="Application\Gst\FakeCurrentBusinessProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberInviteAudit.cs" Link="Application\Members\FakeMemberInviteAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberManagementAudit.cs" Link="Application\Members\FakeMemberManagementAudit.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Nayax\FakeNayaxProductLinkStore.cs" Link="Application\Nayax\FakeNayaxProductLinkStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" Link="Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeBusinessApplicationAudit.cs" Link="Application\Onboarding\FakeBusinessApplicationAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" Link="Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakePlatformBusinessDecisionAudit.cs" Link="Application\PlatformAdmin\FakePlatformBusinessDecisionAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakePlatformBusinessLifecycleAudit.cs" Link="Application\PlatformAdmin\FakePlatformBusinessLifecycleAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Products\FakeSiteFactsStore.cs" Link="Application\Products\FakeSiteFactsStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Providers\FakeProviderDataCoverageStore.cs" Link="Application\Providers\FakeProviderDataCoverageStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Bookkeeping\FakeBookkeepingReportFactsProvider.cs" Link="Application\Reporting\Bookkeeping\FakeBookkeepingReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Daily\FakeDailyReportFactsProvider.cs" Link="Application\Reporting\Daily\FakeDailyReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Dashboard\FakeDashboardReportFactsProvider.cs" Link="Application\Reporting\Dashboard\FakeDashboardReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\Export\EmptyReportExportComposition.cs" Link="Application\Reporting\Export\EmptyReportExportComposition.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Gst\FakeGstReportFactsProvider.cs" Link="Application\Reporting\Gst\FakeGstReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\MachineProfitability\FakeMachineProfitabilityReportFactsProvider.cs" Link="Application\Reporting\MachineProfitability\FakeMachineProfitabilityReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\ProductProfitability\FakeGetProductProfitabilityReport.cs" Link="Application\Reporting\ProductProfitability\FakeGetProductProfitabilityReport.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\ProductProfitability\FakeProductProfitabilityReportFactsProvider.cs" Link="Application\Reporting\ProductProfitability\FakeProductProfitabilityReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\ProductProfitability\FakeProductPurchaseCostFactsProvider.cs" Link="Application\Reporting\ProductProfitability\FakeProductPurchaseCostFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Reconciliation\FakeReconciliationReportFactsProvider.cs" Link="Application\Reporting\Reconciliation\FakeReconciliationReportFactsProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Reporting\Shared\TestReportCoverage.cs" Link="Application\Reporting\Shared\TestReportCoverage.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Transactions\FakeTransactionSalesReportFactsProvider.cs" Link="Application\Reporting\Transactions\FakeTransactionSalesReportFactsProvider.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Stock\FakeStockAdjustmentStore.cs" Link="Application\Stock\FakeStockAdjustmentStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Suppliers\FakeSupplierStore.cs" Link="Application\Suppliers\FakeSupplierStore.cs" />

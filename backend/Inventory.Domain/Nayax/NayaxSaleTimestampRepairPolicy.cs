@@ -60,9 +60,15 @@ public enum NayaxSaleTimestampUnresolvedReason
 }
 
 /// <summary>
-/// One stored Nayax sale, as the repair reads it. Everything here is a raw persisted fact; the
-/// product is carried as the remote identifier and the reported name, because matching it to a
-/// local product is the <c>ProductMatcher</c>'s decision and not this policy's.
+/// One stored Nayax sale, as the repair reads it. Everything here is a raw persisted fact,
+/// including which local product the sale belongs to: since issue #758 that is an association the
+/// writer recorded on the row, not something re-matched from the remote identifier and the reported
+/// name. The remote identifier and the name are still carried, because the preview shows an
+/// operator what the provider reported.
+///
+/// <para><c>ProductId</c> is the local product the sale is attributed to, or <c>null</c> when it is
+/// unresolved. An unresolved sale has no inventory to replay and is never rescued here by number or
+/// by name.</para>
 /// </summary>
 public sealed record StoredNayaxSale(
     long TransactionId,
@@ -72,7 +78,8 @@ public sealed record StoredNayaxSale(
     int? TransactionStatusId,
     DateTime StoredInstantUtc,
     long? NayaxProductId,
-    string? ProductName);
+    string? ProductName,
+    long? ProductId = null);
 
 /// <summary>
 /// One piece of authoritative source evidence about one transaction's authorization instant.

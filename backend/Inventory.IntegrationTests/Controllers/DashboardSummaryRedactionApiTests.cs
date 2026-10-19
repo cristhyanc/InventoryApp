@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -226,6 +227,9 @@ public sealed class DashboardSummaryRedactionApiTests : IClassFixture<DashboardS
                 Name = "Vending Co",
                 TimeZoneId = "Australia/Sydney",
                 Status = BusinessStatus.Active,
+                // Selling through Nayax (issue #759), which is what storing Nayax credentials
+                // records and what makes the id below a Nayax product id.
+                SalesProvider = ExternalProvider.Nayax,
                 CreatedAtUtc = CreatedAt,
             });
 
@@ -238,6 +242,10 @@ public sealed class DashboardSummaryRedactionApiTests : IClassFixture<DashboardS
             {
                 Id = ProductId,
                 BusinessId = BusinessId,
+                // The product's Nayax id (issue #732, on the row since #759), without which the
+                // machine selection resolves to no local product at all (issue #733). Every imported
+                // product has one in production.
+                ExternalProductId = NayaxExternalId.From(ProductId),
                 Name = "Coke",
                 QuantityInStock = 12,
                 LowStockThreshold = 5,

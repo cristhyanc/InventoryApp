@@ -92,4 +92,42 @@ describe('WelcomeComponent (issue #542)', () => {
     expect(fixture.componentInstance.inviteError).not.toBeNull();
     expect(router.url).not.toContain('/invite/');
   });
+
+  /**
+   * Issue #711, design § 12. Identity linking is deferred, so a member who normally signs in one
+   * way and then signs in another arrives *here*, with no membership and no inherited access. This
+   * page is the only place that can tell them why, and the design requires it to.
+   */
+  it('explains that signing in a different way is a separate account with no inherited access', async () => {
+    const { fixture } = await render(of(known(false)));
+    fixture.detectChanges();
+
+    const note = fixture.nativeElement.querySelector('[data-testid="welcome-separate-accounts"]') as HTMLElement;
+
+    expect(note).not.toBeNull();
+    expect(note.textContent).toContain('separate account');
+    expect(note.textContent).toContain('never joins you to a business you already belong to');
+  });
+
+  /**
+   * Issue #712. The local email/password journey lands the same person here for the same reason, so
+   * the explanation names it too rather than listing only the work account and Google.
+   */
+  it('names an email address among the separate ways of signing in', async () => {
+    const { fixture } = await render(of(known(false)));
+    fixture.detectChanges();
+
+    const note = fixture.nativeElement.querySelector('[data-testid="welcome-separate-accounts"]') as HTMLElement;
+
+    expect(note.textContent).toContain('email address');
+  });
+
+  it('shows that explanation whether or not self-service onboarding is offered', async () => {
+    for (const onboardingEnabled of [true, false]) {
+      TestBed.resetTestingModule();
+      const { fixture } = await render(of(known(onboardingEnabled)));
+
+      expect(fixture.nativeElement.querySelector('[data-testid="welcome-separate-accounts"]')).not.toBeNull();
+    }
+  });
 });

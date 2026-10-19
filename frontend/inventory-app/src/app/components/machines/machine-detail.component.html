@@ -40,23 +40,88 @@
       }
     </div>
 
+    <!-- Sync Restock stays a section of its own, outside the two tab panels (issue #768): it is a
+         write workflow rather than one of the page's two views of this machine. -->
     <app-machine-restock-sync
       [machineId]="machine?.machineID"
       (restockApplied)="refreshProducts()">
     </app-machine-restock-sync>
 
-    <section class="mt-8 card">
+    <!-- The owner's two tabs (issue #768): Sales first and selected on arrival at every machine,
+         Products second. The panels are hidden rather than destroyed, so switching back to Sales
+         shows the window already read instead of calling Nayax again. -->
+    <div class="mt-8">
+      <div role="tablist" aria-label="Machine details views" class="flex gap-1 border-b border-md-gray-200">
+        @for (tab of tabs; track tab; let index = $index) {
+          <button
+            #tabButton
+            type="button"
+            role="tab"
+            class="px-4 py-2 text-md-body"
+            [id]="'machine-tab-' + tab"
+            [attr.data-testid]="'machine-tab-' + tab"
+            [attr.aria-controls]="'machine-panel-' + tab"
+            [attr.aria-selected]="activeTab === tab"
+            [tabindex]="activeTab === tab ? 0 : -1"
+            [ngClass]="activeTab === tab
+              ? 'border-b-2 border-md-info font-semibold text-md-info-text'
+              : 'value-muted'"
+            (click)="openTab(tab)"
+            (keydown)="onTabKeydown($event, index)">
+            {{ tabLabel(tab) }}
+          </button>
+        }
+      </div>
+
+      <section
+        id="machine-panel-sales"
+        role="tabpanel"
+        tabindex="0"
+        aria-labelledby="machine-tab-sales"
+        data-testid="machine-panel-sales"
+        class="mt-4"
+        [hidden]="activeTab !== 'sales'">
+        <app-machine-latest-sales [machineId]="machine?.machineID"></app-machine-latest-sales>
+      </section>
+
+      <section
+        id="machine-panel-products"
+        role="tabpanel"
+        tabindex="0"
+        aria-labelledby="machine-tab-products"
+        data-testid="machine-panel-products"
+        class="mt-4 card"
+        [hidden]="activeTab !== 'products'">
       <div class="card-header">
         <h2 class="card-title">Products for this machine</h2>
-        <span class="text-md-body value-muted">{{ (products$ | async)?.length }} products found</span>
+        <!-- A count only once the rows behind it have actually been read: before that there is no
+             number to report, and `0` would read as "this machine has no products". -->
+        @if (productsState === 'loaded') {
+          <span class="text-md-body value-muted" data-testid="machine-products-count">{{ products.length }} products found</span>
+        }
       </div>
       <div class="card-body p-0">
-        <ng-container *ngIf="(products$ | async) as products">
-          <ng-container *ngIf="products.length === 0; else productsTable">
-            <p class="p-4 text-md-body value-muted">No products are currently associated with this machine.</p>
-          </ng-container>
+        <!-- Four states, kept apart (issue #768): the tab has not been opened, the read is in
+             flight, it succeeded - with rows or honestly with none - or it failed. The rows are
+             bound once, from this page's own single read, so the table and the count above can
+             neither disagree nor cost two machine-products calls. -->
+        @if (productsState === 'loading') {
+          <output class="alert alert-info block" data-testid="machine-products-loading" aria-live="polite">
+            Loading this machine's products…
+          </output>
+        }
 
-          <ng-template #productsTable>
+        @if (productsState === 'failed') {
+          <p class="p-4 text-md-body value-negative" data-testid="machine-products-error" role="alert">
+            Failed to load products for this machine. This does not mean the machine has no products
+            — reload the page to try again.
+          </p>
+        }
+
+        @if (productsState === 'loaded') {
+          @if (products.length === 0) {
+            <p class="p-4 text-md-body value-muted" data-testid="machine-products-empty">No products are currently associated with this machine.</p>
+          } @else {
             <div class="overflow-x-auto">
               <table class="table">
                 <thead class="table-head">
@@ -105,9 +170,10 @@
                 </tbody>
               </table>
             </div>
-          </ng-template>
-        </ng-container>
+          }
+        }
       </div>
-    </section>
+      </section>
+    </div>
   </ng-container>
 </div>

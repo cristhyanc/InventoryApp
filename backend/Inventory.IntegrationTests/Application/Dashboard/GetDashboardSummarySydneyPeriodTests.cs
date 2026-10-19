@@ -10,6 +10,7 @@ using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
@@ -102,7 +103,8 @@ public class GetDashboardSummarySydneyPeriodTests : IDisposable
                 TestAppDbContext.ScopeFor(BusinessId),
                 new EfDashboardSummarySalesFactsProvider(db),
                 new EfProductCatalogStore(db),
-                new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object))
+                new CalculateReorderNeeds(
+                    nayax.Object, outstandingOrders.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()))
             .Handle(CancellationToken.None);
 
         return Assert.IsType<DashboardSummaryDto>(summary);

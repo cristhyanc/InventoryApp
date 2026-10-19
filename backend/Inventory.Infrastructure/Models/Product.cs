@@ -19,6 +19,32 @@ public class Product : IBusinessOwned
     public Product Clone() => (Product)MemberwiseClone();
 
     public long Id { get; set; }
+
+    /// <summary>
+    /// This product's identifier in the business's sales provider, or <c>null</c> when the provider
+    /// does not name it (issue #759, parent #329 decision P1 as revised on 18 October 2026).
+    ///
+    /// <strong>Opaque text, issued by <c>Business.SalesProvider</c>.</strong> It is stored as written
+    /// and compared exactly; shared code never parses it and never assumes it is numeric, which is
+    /// what lets a provider that issues a code or a GUID need no schema change. For Nayax it holds
+    /// the <c>NayaxProductID</c> and is written only through
+    /// <c>Inventory.Domain.Providers.NayaxExternalId</c>, the one conversion between that numeric id
+    /// and this text.
+    ///
+    /// <strong>Not a local id, in either direction.</strong> <see cref="Id"/> is this application's
+    /// own key, assigned by the database on insert since issue #735 (A4) - including for a row the
+    /// catalogue import creates - and nothing reads this column as a local id or a local id as this
+    /// column. It is unique per business among the rows that have one (a filtered unique index), for
+    /// the reason every constraint over an externally supplied value is scoped by business: two
+    /// operators' catalogues may legitimately both contain product 100.
+    ///
+    /// Deliberately off the wire, like <see cref="GstRule"/>: this entity's serialisable surface is
+    /// a pinned legacy API contract, and a provider's identifier is integration state rather than
+    /// part of the catalogue payload.
+    /// </summary>
+    [JsonIgnore]
+    public string? ExternalProductId { get; set; }
+
     public string Name { get; set; } = string.Empty;
     public string? Sku { get; set; }
     public string? Description { get; set; }

@@ -7,6 +7,7 @@ import { SignedInIdentityDoubles, signedInIdentity } from '../access/identity-ca
 import { ConfigService } from '../services/config.service';
 import { BusinessService } from '../services/business.service';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
+import { ProviderAvailabilityService } from '../provider/provider-availability.service';
 import { ToastService } from '../services/toast.service';
 import {
   FakeBroadcastChannel,
@@ -51,6 +52,7 @@ interface Harness {
   post: jest.Mock;
   get: jest.Mock;
   businessReset: jest.Mock;
+  providerAvailabilityReset: jest.Mock;
   accessRefresh: jest.Mock;
   navigate: jest.Mock;
   isGranted: jest.Mock;
@@ -77,6 +79,7 @@ function harness(
   const post = options.post ?? jest.fn(() => of(STARTED_RESPONSE));
   const get = options.get ?? jest.fn(() => of(options.activeOnServer ?? null));
   const businessReset = jest.fn();
+  const providerAvailabilityReset = jest.fn();
   const accessRefresh = jest.fn(() => of({ status: 'unread' } as MemberAccessState));
   // The real `Router.navigate` answers a promise, and the transition releases the withheld page
   // when it settles (issue #670), so the double has to answer one too.
@@ -89,6 +92,7 @@ function harness(
     { post, get } as unknown as HttpClient,
     { apiBaseUrl: '/api' } as unknown as ConfigService,
     { reset: businessReset } as unknown as BusinessService,
+    { reset: providerAvailabilityReset } as unknown as ProviderAvailabilityService,
     { refresh: accessRefresh } as unknown as AccessService,
     { isGranted } as unknown as PlatformDiagnosticsAccessService,
     { navigate } as unknown as Router,
@@ -102,6 +106,7 @@ function harness(
     post,
     get,
     businessReset,
+    providerAvailabilityReset,
     accessRefresh,
     navigate,
     isGranted,
@@ -154,6 +159,14 @@ describe('SupportSessionService (issue #553)', () => {
       expect(businessReset).toHaveBeenCalledTimes(1);
       expect(accessRefresh).toHaveBeenCalledTimes(1);
       expect(navigate).toHaveBeenCalledWith(['/'], DASHBOARD_NAVIGATION);
+    });
+
+    it('forgets the shared provider-availability answer too, which is about one business (issue #728)', async () => {
+      const { service, providerAvailabilityReset } = harness();
+
+      await firstValueFrom(service.start(9, 'Investigating a reported bug'));
+
+      expect(providerAvailabilityReset).toHaveBeenCalledTimes(1);
     });
 
     it('never writes the session id to localStorage, sessionStorage or the URL', async () => {

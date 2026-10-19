@@ -1,4 +1,6 @@
 using Inventory.Application.Reporting.ProductProfitability;
+using Inventory.Application.Reporting.Shared;
+using InventoryApi.Tests.Application.Reporting.Shared;
 
 namespace InventoryApi.Tests.Application.Reporting.ProductProfitability;
 
@@ -20,15 +22,23 @@ public sealed class FakeProductProfitabilityReportFactsProvider : IProductProfit
         return Task.FromResult(_facts);
     }
 
-    public static ProductProfitabilityReportFacts Empty() =>
-        new(Array.Empty<ProductProfitabilitySaleGroupFacts>(), Array.Empty<ProductProfitabilityCatalogueEntry>());
+    public static ProductProfitabilityReportFacts Empty(ReportCoverageFacts? coverage = null) =>
+        new(Array.Empty<ProductProfitabilitySaleGroupFacts>(), Array.Empty<ProductProfitabilityCatalogueEntry>())
+        {
+            Coverage = coverage ?? TestReportCoverage.Complete()
+        };
 
     public static ProductProfitabilityReportFacts SingleMappedProduct(
         long productId = 1, string productName = "Water", decimal sales = 30m, decimal cost = 10m,
-        bool isCogsComplete = true) => new(
+        bool isCogsComplete = true, ReportCoverageFacts? coverage = null) => new(
         [
-            new ProductProfitabilitySaleGroupFacts(productId, productName, sales, 3m, cost, isCogsComplete,
+            new ProductProfitabilitySaleGroupFacts(productId, null, null, sales, 3m, cost, isCogsComplete,
                 isCogsComplete ? 0 : 1, isCogsComplete ? 0m : sales, 3, sales, 0m)
         ],
-        [new ProductProfitabilityCatalogueEntry(productId, productName, "Drinks")]);
+        [new ProductProfitabilityCatalogueEntry(productId, productName, "Drinks")])
+        {
+            // Fully accounted for unless a test replaces it, so a test about something else is
+            // never incidentally about provider coverage (issue #731).
+            Coverage = coverage ?? TestReportCoverage.Complete()
+        };
 }

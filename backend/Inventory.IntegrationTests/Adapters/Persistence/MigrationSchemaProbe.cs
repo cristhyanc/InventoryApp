@@ -17,6 +17,25 @@ internal static class MigrationSchemaProbe
     public static Task<List<string>> ColumnNamesAsync(SqliteConnection connection, string table) =>
         QueryNamesAsync(connection, $"SELECT name FROM pragma_table_info('{table}');");
 
+    /// <summary>
+    /// The <c>CREATE TABLE</c> statement SQLite holds for <paramref name="table"/>, exactly as the
+    /// schema declares it.
+    ///
+    /// Asked when the question is about a declaration no pragma reports - whether a key is
+    /// <c>INTEGER PRIMARY KEY AUTOINCREMENT</c>, and therefore assigned by the database (issue
+    /// #735), is one of those: <c>pragma_table_info</c> says the column is the primary key but not
+    /// that SQLite fills it in.
+    /// </summary>
+    public static async Task<string> CreateTableSqlAsync(SqliteConnection connection, string table)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            $"SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '{table}';";
+        return await command.ExecuteScalarAsync() is string sql
+            ? sql
+            : throw new InvalidOperationException($"The database holds no table named {table}.");
+    }
+
     /// <summary>Every table in the database, ordered by name.</summary>
     public static Task<List<string>> TableNamesAsync(SqliteConnection connection) =>
         QueryNamesAsync(connection, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;");

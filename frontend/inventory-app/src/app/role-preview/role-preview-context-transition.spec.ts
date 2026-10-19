@@ -113,7 +113,7 @@ function summary(figures: Figures): DashboardSummary {
       machinesEvaluated: 1,
       selectionsEvaluated: 1
     },
-    needsOrdering: { productsNeedingOrdering: 0, productsEvaluated: 1 },
+    needsOrdering: { productsNeedingOrdering: 0, productsEvaluated: 1, mode: 'MachineAware' },
     inventory: {
       inventoryValueAtCost: figures.salesThisWeek,
       isInventoryValueComplete: true,
@@ -273,11 +273,14 @@ function answerDashboard(rendered: Rendered, figures: Figures, expectedRole: str
     }
   };
 
+  // The summary first: since issue #727 the Dashboard asks it whether the business has a usable
+  // provider and only then synchronizes sales and loads Sites and Machines, so those three
+  // requests do not exist until this one is answered.
+  answer(LOW_STOCK, []);
+  answer(SUMMARY, summary(figures));
   answer(SYNC, null);
   answer(MACHINES, [machine(figures)]);
   answer(SITES, [site(figures)]);
-  answer(LOW_STOCK, []);
-  answer(SUMMARY, summary(figures));
   rendered.fixture.detectChanges();
 
   expect(answered.length).toBeGreaterThan(0);

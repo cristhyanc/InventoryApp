@@ -1,3 +1,5 @@
+using Inventory.Application.Reporting.Shared;
+
 namespace Inventory.Application.Reporting.Reconciliation;
 
 /// <summary>
@@ -58,4 +60,13 @@ public sealed record ReconciliationReportFacts(
     int DeclinedOrCancelledTransactionCount,
     int UnknownStatusTransactionCount,
     int NullStatusTransactionCount,
-    bool IsMachineFiltered);
+    bool IsMachineFiltered)
+{
+    /// <summary>
+    /// How well recorded provider coverage accounts for the requested range (issue #731, extending
+    /// issue #730's model to this report). Both families matter here: the recorded card sales come
+    /// from stored provider sales, and the Nayax-reported gross, its transaction count, the fees and
+    /// the actual net reimbursement all come from committed settlement imports.
+    /// </summary>
+    public ReportCoverageFacts Coverage { get; init; } = new();
+}

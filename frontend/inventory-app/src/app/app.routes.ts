@@ -15,6 +15,8 @@ import {
 } from './access/invite-address-bar.guard';
 import { InviteLinkReopenComponent } from './access/invite-link-reopen.component';
 import { AuthCallbackComponent } from './auth/auth-callback.component';
+import { SIGN_IN_ROUTE } from './auth/intended-destination';
+import { SignInComponent } from './auth/sign-in.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
 
 /**
@@ -39,6 +41,13 @@ import { designSystemRoutes } from './design-system/design-system.routes';
 export const routes: Routes = [
   // Public: the Entra redirect callback must be reachable without authentication.
   { path: 'auth', component: AuthCallbackComponent },
+  {
+    // Public: the sign-in page where a signed-out visitor chooses which trusted authority to sign
+    // in against (issue #711). It is what `SignInAuthorityGuard` sends them to instead of starting
+    // a redirect, so it cannot itself be behind a guard, and it starts no redirect of its own.
+    path: SIGN_IN_ROUTE,
+    component: SignInComponent
+  },
   {
     // Reached by a guard above, so it declares no capability of its own: a member sent here
     // because their role does not allow a page must not be sent away from the explanation too.

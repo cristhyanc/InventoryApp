@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
+using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Reporting.Transactions;
+using InventoryApi.Tests.Application.Reporting.Shared;
 using EffectiveFeeRate = Inventory.Domain.FinancialConfiguration.EffectiveNayaxFeeRate;
 
 namespace InventoryApi.Tests.Application.Reporting.Transactions;
@@ -30,8 +32,14 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         IReadOnlyList<TransactionSalesCatalogueEntry>? productCatalogue = null,
         IReadOnlyList<EffectiveFeeRate>? feeRates = null,
         IReadOnlyList<EffectiveCommissionAgreement>? commissionAgreements = null,
-        bool siteMappingUnavailable = false) => new(
-        Stream(rows), productCatalogue ?? [], feeRates ?? [], commissionAgreements ?? [], siteMappingUnavailable);
+        bool siteMappingUnavailable = false,
+        ReportCoverageFacts? coverage = null) => new(
+        Stream(rows), productCatalogue ?? [], feeRates ?? [], commissionAgreements ?? [], siteMappingUnavailable)
+        {
+            // Fully accounted for unless a test replaces it, so a test about something else is
+            // never incidentally about provider coverage (issue #731).
+            Coverage = coverage ?? TestReportCoverage.Complete()
+        };
 
     public static async IAsyncEnumerable<TransactionSalesReportFactsRow> Stream(
         IEnumerable<TransactionSalesReportFactsRow> rows, [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -44,7 +52,8 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         }
     }
 
-    public static TransactionSalesReportFacts Empty() => Facts([]);
+    public static TransactionSalesReportFacts Empty(ReportCoverageFacts? coverage = null) =>
+        Facts([], coverage: coverage);
 
     public static TransactionSalesReportFactsRow CompletedCardRow(
         long transactionId = 1,
@@ -52,6 +61,7 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         string machineName = "Machine A",
         long? siteId = null,
         string? siteName = null,
+        long? productId = 1,
         long? nayaxProductId = 1,
         string rawProductName = "Water",
         decimal sale = 10m,
@@ -59,7 +69,7 @@ public sealed class FakeTransactionSalesReportFactsProvider : ITransactionSalesR
         bool hasPersistedCost = true,
         DateTime? transactionDate = null) => new(
         transactionId, transactionDate ?? new DateTime(2025, 8, 1), machineId, machineName,
-        siteId, siteName, nayaxProductId, rawProductName,
+        siteId, siteName, productId, nayaxProductId, rawProductName,
         Inventory.Domain.FinancialConfiguration.NayaxPaymentType.Card, "Credit Card", sale,
         null, costOfGoodsSold, costOfGoodsSold,
         "Costed", "Inventory Ledger", hasPersistedCost,

@@ -3,6 +3,7 @@ import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
 import {
   Machine,
+  MachineLatestSales,
   NayaxDuplicateResolutionChoice,
   NayaxMachineStockApplyResponse,
   NayaxMachineStockSyncPreview,
@@ -31,6 +32,15 @@ export class MachineService {
 
   getProducts(id: number): Observable<Product[]> {
     return this.http.get<Product[]>(`${this.baseUrl}/${id}/products`);
+  }
+
+  /**
+   * The machine's latest Nayax sales (issue #768): the provider's own rolling latest-sales window,
+   * newest first. A pure read - it imports nothing and persists nothing - and an unconfigured or
+   * unusable provider answers `200` with `isAvailable: false` rather than an error status.
+   */
+  getLatestSales(id: number): Observable<MachineLatestSales> {
+    return this.http.get<MachineLatestSales>(`${this.baseUrl}/${id}/latest-sales`);
   }
 
   /**

@@ -2,6 +2,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Reorder;
 using InventoryApi.Adapters.Mapping;
+using InventoryApi.Tests.Application.Nayax;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -64,7 +65,7 @@ public class ProductUseCaseTests
 
         var products = await useCases.List.Handle(ProductCatalogFilter.None, null, CancellationToken.None);
 
-        var product = Assert.Single(products);
+        var product = Assert.Single(products.Products);
         Assert.Single(product.StockAdjustments);
     }
 
@@ -178,7 +179,9 @@ public class ProductUseCaseTests
     {
         using var db = CreateDbContext("prod_test");
         var calculateReorderNeeds = new CalculateReorderNeeds(
-            new Mock<INayaxLynxClient>().Object, new EfOutstandingSupplierOrderQuantityStore(db));
+            new Mock<INayaxLynxClient>().Object,
+            new EfOutstandingSupplierOrderQuantityStore(db),
+            FakeNayaxProductLinkStore.EveryIdLinkedToItself());
         var useCases = CreateUseCases(db, calculateReorderNeeds);
 
         var created = await useCases.Create.Handle(
@@ -196,12 +199,21 @@ public class ProductUseCaseTests
         Assert.Single(adjustments);
 
         var updated = await useCases.Update.Handle(
-            product.Id, new ProductUpdateFields(null, null, 1, 12, "unit", null, true), CancellationToken.None);
+            product.Id,
+            new ProductUpdateFields("p1", null, null, 10m, 1, 12, "unit", null, null, true),
+            CancellationToken.None);
         Assert.Equal(UpdateProductOutcome.Success, updated.Outcome);
         Assert.Equal(12, (await db.Products.FindAsync(product.Id))!.RestockTo);
 
+        // The initial stock created a movement, which since issue #736 is history a delete is
+        // refused over. Removing it is what makes this a round-trip of the create/update/delete
+        // orchestration rather than a test of the deletion policy, which
+        // InventoryApi.Tests.Adapters.Persistence.EfProductDeletionTests owns.
+        db.StockAdjustments.RemoveRange(adjustments);
+        await db.SaveChangesAsync();
+
         var deleted = await useCases.Delete.Handle(product.Id, CancellationToken.None);
-        Assert.True(deleted);
+        Assert.Equal(ProductWriteOutcome.Succeeded, deleted.Outcome);
     }
 
     [Fact]
@@ -333,12 +345,15 @@ public class ProductUseCaseTests
             });
         nayaxMock.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 1, MissingStockByMDB = 4 } });
-        var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
+        var calculateReorderNeeds = new CalculateReorderNeeds(
+            nayaxMock.Object,
+            new EfOutstandingSupplierOrderQuantityStore(db),
+            FakeNayaxProductLinkStore.EveryIdLinkedToItself());
         var useCases = CreateUseCases(db, calculateReorderNeeds);
 
         var alerts = await useCases.LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
 
-        var coke = Assert.Single(alerts);
+        var coke = Assert.Single(alerts.Products);
         Assert.Equal("Coke", coke.Name);
         Assert.Equal(7, coke.MachineReplenishmentNeed);
     }
@@ -374,7 +389,9 @@ public class ProductUseCaseTests
         await db.SaveChangesAsync();
 
         var result = await CreateUseCases(db).Update.Handle(
-            1, new ProductUpdateFields(null, null, 10, 9, "unit", null, true), CancellationToken.None);
+            1,
+            new ProductUpdateFields("Coke", null, null, 0m, 10, 9, "unit", null, null, true),
+            CancellationToken.None);
 
         Assert.Equal(UpdateProductOutcome.Invalid, result.Outcome);
         Assert.Equal("Restock To must be greater than or equal to the Low Stock Threshold.", result.ValidationError);
@@ -445,15 +462,18 @@ public class ProductUseCaseTests
         Assert.Equal(16m, product.NeedToOrder);
     }
 
-    private static Task<IReadOnlyList<ProductRecord>> LowStock(AppDbContext db) =>
-        CreateUseCases(db).LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None);
+    private static async Task<IReadOnlyList<ProductRecord>> LowStock(AppDbContext db) =>
+        (await CreateUseCases(db).LowStock.Handle(ProductCatalogFilter.None, CancellationToken.None)).Products;
 
     private static ProductUseCases CreateUseCases(AppDbContext db)
     {
         var nayaxMock = new Mock<INayaxLynxClient>();
         nayaxMock.Setup(client => client.GetMachinesAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
-        var calculateReorderNeeds = new CalculateReorderNeeds(nayaxMock.Object, new EfOutstandingSupplierOrderQuantityStore(db));
+        var calculateReorderNeeds = new CalculateReorderNeeds(
+            nayaxMock.Object,
+            new EfOutstandingSupplierOrderQuantityStore(db),
+            FakeNayaxProductLinkStore.EveryIdLinkedToItself());
         return CreateUseCases(db, calculateReorderNeeds);
     }
 

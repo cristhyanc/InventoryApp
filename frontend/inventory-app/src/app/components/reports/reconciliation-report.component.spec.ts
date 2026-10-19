@@ -4,12 +4,16 @@ import { of } from 'rxjs';
 import { ReconciliationReportComponent } from './reconciliation-report.component';
 import { ReconciliationPeriod, ReconciliationReport, ReportingService } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
+import {
+  provideNayaxConnectionStatus,
+  providerAvailabilityDouble
+} from '../../provider/provider-availability.spec-helpers';
 
 function createComponent(): ReconciliationReportComponent {
   const route = {} as unknown as ActivatedRoute;
   const reports = {} as unknown as ReportingService;
   const machines = { getAll: () => of([]) } as unknown as MachineService;
-  return new ReconciliationReportComponent(route, reports, machines);
+  return new ReconciliationReportComponent(route, reports, machines, providerAvailabilityDouble());
 }
 
 describe('ReconciliationReportComponent statusClass (issue #419 Material restyle)', () => {
@@ -80,7 +84,8 @@ async function render(periodRows: ReconciliationPeriod[] = [period()], overrides
     providers: [
       { provide: ActivatedRoute, useValue: {} },
       { provide: ReportingService, useValue: { reconciliation: jest.fn(() => of(report(periodRows, overrides))) } },
-      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } }
+      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
+      provideNayaxConnectionStatus()
     ]
   }).compileComponents();
 

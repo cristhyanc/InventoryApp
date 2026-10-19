@@ -3,8 +3,25 @@ import { ActivatedRoute } from '@angular/router';
 import { Observable } from 'rxjs';
 import { Machine } from '../../models/models';
 import { MachineService } from '../../services/machine.service';
+import { ReportAvailability, ReportProviderAvailability } from '../../features/reports/shared/models/reporting.models';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
+import { loadProviderList } from '../../provider/provider-list-load';
 import { ReportingFilter, ReportingService } from '../../services/reporting.service';
-import { money, moneyOrUnavailable, percentOrUnavailable } from './report-formatting';
+import { availabilityBadge, countOrState, money, moneyOrState, moneyOrUnavailable, percentOrState, percentOrUnavailable } from './report-formatting';
+
+/**
+ * What a report response may say about its provider data (issues #730 and #731): the two-family
+ * block, for a report that shows settlement-sourced figures, or the single sales state, for one that
+ * shows none. Both are optional, because an older response carries neither.
+ */
+interface ReportedAvailability {
+  providerAvailability?: ReportProviderAvailability;
+  salesAvailability?: ReportAvailability;
+}
+
+/** The one sentence every report page shows when its machine filter could not be read. */
+export const REPORT_MACHINE_FILTER_ERROR =
+  'The machine list could not be loaded, so this report cannot be narrowed to one machine.';
 
 @Directive()
 export abstract class ReportPageBase<T> implements OnInit {
@@ -14,16 +31,29 @@ export abstract class ReportPageBase<T> implements OnInit {
   to = this.isoDate(new Date());
   machineId: number | null = null;
   machines: Machine[] = [];
+
+  /**
+   * Set when the machine list could not be read for a reason that is not an availability answer
+   * (issue #728). The filter is replaced by this sentence rather than silently reporting on the
+   * whole business, which a machine filter nobody could populate would otherwise do.
+   */
+  machinesError = '';
+
   period = 'thisMonth';
   report: T | null = null;
 
   protected constructor(
     protected route: ActivatedRoute,
     protected reports: ReportingService,
-    protected machineService: MachineService) {}
+    protected machineService: MachineService,
+    /** The shared provider-availability signal (issue #728). */
+    protected provider: ProviderAvailabilityService) {}
 
   ngOnInit(): void {
-    this.machineService.getAll().subscribe({ next: machines => this.machines = machines ?? [], error: () => this.machines = [] });
+    loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe(outcome => {
+      this.machines = outcome.kind === 'listed' ? outcome.items : [];
+      this.machinesError = outcome.kind === 'failed' ? REPORT_MACHINE_FILTER_ERROR : '';
+    });
     this.load();
   }
 
@@ -85,8 +115,90 @@ export abstract class ReportPageBase<T> implements OnInit {
     return percentOrUnavailable(value, suffix);
   }
 
+  /** The short "not complete" label for a provider figure family (issue #730); '' when complete. */
+  availabilityBadge(availability?: ReportAvailability | null): string {
+    return availabilityBadge(availability);
+  }
+
+  /** A provider amount, or its availability state in place of a zero that was never measured. */
+  moneyOrState(
+    value: number | null | undefined,
+    availability?: ReportAvailability | null,
+    unavailableLabel?: string
+  ): string {
+    return moneyOrState(value, availability, unavailableLabel);
+  }
+
+  /** A provider count or quantity, or its availability state in place of a zero nobody measured. */
+  countOrState(
+    value: number | null | undefined,
+    availability?: ReportAvailability | null,
+    unavailableLabel?: string
+  ): string {
+    return countOrState(value, availability, unavailableLabel);
+  }
+
+  /** A provider percentage, or its availability state in place of a margin nobody measured. */
+  percentOrState(
+    value: number | null | undefined,
+    availability?: ReportAvailability | null,
+    unavailableLabel?: string
+  ): string {
+    return percentOrState(value, availability, unavailableLabel);
+  }
+
   quality(): string[] {
     return (this.report as any)?.dataQuality?.notes ?? [];
+  }
+
+  /**
+   * The state the API decided for every figure derived from stored provider sales (issue #730 for
+   * the GST and bookkeeping reports, issue #731 for the rest).
+   *
+   * It reads both contract shapes on purpose: a report that shows settlement-sourced figures too
+   * reports the two families together as `providerAvailability`, while one that shows none - the
+   * product profitability and transaction sales reports - reports the single `salesAvailability`,
+   * because labelling a figure with evidence that does not feed it is the thing this model exists to
+   * prevent. Undefined when the API reported no state at all, which an older response may not.
+   */
+  salesState(): ReportAvailability | undefined {
+    const reported = this.reportedAvailability;
+    return reported.providerAvailability?.sales ?? reported.salesAvailability;
+  }
+
+  /** The same, for every figure derived from imported settlement data. */
+  feeState(): ReportAvailability | undefined {
+    return this.reportedAvailability.providerAvailability?.fees;
+  }
+
+  /**
+   * The state for a figure that depends on both families. The API decides it with the Domain
+   * least-complete rule, so this never combines two states here (AGENTS.md § Architecture rules).
+   * Falling back to the sales state keeps a response that reported only the two families from
+   * reading as complete.
+   */
+  combinedState(): ReportAvailability | undefined {
+    return this.reportedAvailability.providerAvailability?.combined ?? this.salesState();
+  }
+
+  /**
+   * The two availability shapes a report may carry, read off whichever one it actually has. The
+   * cast is the whole point of this accessor: the generic `T` is one of seven report contracts and
+   * these optional fields are what they have in common, so narrowing happens once here instead of
+   * in each helper above.
+   */
+  private get reportedAvailability(): ReportedAvailability {
+    return (this.report ?? {}) as ReportedAvailability;
+  }
+
+  /**
+   * Whether any family the API reported is not complete, which is what decides whether the page
+   * shows its "this is not a measured zero" banner. A report carrying no state at all is not called
+   * incomplete: there is nothing to tell the reader.
+   */
+  providerIncomplete(): boolean {
+    return [this.salesState(), this.feeState()]
+      .some(availability => !!availability && availability.state !== 'Complete');
   }
 
   protected isoDate(date: Date): string {

@@ -7,6 +7,7 @@ using Inventory.Application.Reorder;
 using InventoryApi.Controllers;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
 using Moq;
@@ -58,7 +59,8 @@ public class DashboardControllerTests
             TestAppDbContext.ScopeFor(businessId: 1),
             salesFacts.Object,
             catalog.Object,
-            new CalculateReorderNeeds(nayax.Object, outstandingOrders.Object)));
+            new CalculateReorderNeeds(
+                nayax.Object, outstandingOrders.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself())));
     }
 
     private static ProductRecord Product(long id, string name, int quantityInStock, decimal? inventoryValue) => new()
@@ -88,9 +90,12 @@ public class DashboardControllerTests
         Assert.Equal(300m, summary.SalesThisWeek.Sales);
         Assert.Equal(240m, summary.SalesThisWeek.ComparisonSales);
         Assert.Equal(25m, summary.SalesThisWeek.ChangePercent);
-        Assert.Equal(0, summary.NeedsRefill.MachinesEvaluated);
+        Assert.Equal(
+            0, Assert.IsType<DashboardRefillSummaryDto>(summary.NeedsRefill).MachinesEvaluated);
         Assert.Equal(0, summary.NeedsOrdering.ProductsNeedingOrdering);
         Assert.Equal(1, summary.NeedsOrdering.ProductsEvaluated);
+        // The fleet read was made, so the count accounted for it (issue #726).
+        Assert.Equal("MachineAware", summary.NeedsOrdering.Mode);
         Assert.Equal(30m, summary.Inventory.InventoryValueAtCost);
         Assert.Equal(12, summary.Inventory.UnitsInStorage);
     }

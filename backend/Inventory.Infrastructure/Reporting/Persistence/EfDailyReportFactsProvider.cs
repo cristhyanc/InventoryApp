@@ -108,13 +108,25 @@ public sealed class EfDailyReportFactsProvider : IDailyReportFactsProvider
             UnknownStatusTransactionCount: statusSales.Count(x => NayaxTransactionStatusClassifier.Classify(x.TransactionStatusId) == NayaxTransactionStatus.Unknown),
             NullStatusTransactionCount: statusSales.Count(x => x.TransactionStatusId is null));
 
+        // Compared with the same business-day-midnight instants the sales above were selected
+        // between, never with the plain calendar range (issue #731): coverage may only be measured
+        // against the window the figures were measured over. "Contains sales rows" is the
+        // before-the-completed-sale-filter row count, so a period holding only cancelled rows is
+        // unverified rather than a measured zero.
+        var coverage = await EfReportingSharedQueries.CoverageFactsAsync(
+            _db, salesStartUtc, salesEndExclusiveUtc, statusSales.Count > 0, importedPeriod.ContainsRows,
+            cancellationToken);
+
         return new DailyReportFacts(
             Days: days,
             Totals: totals,
             ImportedContainsRows: importedPeriod.ContainsRows,
             ImportedContainsGstClassification: importedPeriod.ContainsGstClassification,
             ImportedFeesMachineFilterLimited: importedPeriod.FeesMachineFilterLimited,
-            HasAnyPeriodOnlyImportedData: importedByDate.Values.Any(x => x.HasPeriodOnlyData));
+            HasAnyPeriodOnlyImportedData: importedByDate.Values.Any(x => x.HasPeriodOnlyData))
+        {
+            Coverage = coverage
+        };
     }
 
     /// <summary>

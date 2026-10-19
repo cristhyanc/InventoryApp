@@ -14,6 +14,10 @@ import {
   StockHistoryPage
 } from '../../models/models';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
+import {
+  provideNayaxConnectionStatus,
+  providerAvailabilityDouble
+} from '../../provider/provider-availability.spec-helpers';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
 function product(overrides: Partial<Product> = {}): Product {
@@ -83,7 +87,8 @@ function createHarness(options: {
     routeStub(options.queryParams, options.params),
     { historyPage } as unknown as StockService,
     { getAll: getAllProducts } as unknown as ProductService,
-    { getAll: jest.fn(() => of(options.machines ?? [machine(9, 'Lobby')])) } as unknown as MachineService
+    { getAll: jest.fn(() => of(options.machines ?? [machine(9, 'Lobby')])) } as unknown as MachineService,
+    providerAvailabilityDouble()
   );
 
   if (options.init !== false) component.ngOnInit();
@@ -340,7 +345,8 @@ describe('StockHistoryPageComponent rendering', () => {
         { provide: StockService, useValue: { historyPage } },
         { provide: ProductService, useValue: { getAll: jest.fn(() => of([product()])) } },
         { provide: MachineService, useValue: { getAll: jest.fn(() => of([machine(9, 'Lobby')])) } },
-        { provide: SupportSessionService, useValue: { active$: of(false) } }
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        provideNayaxConnectionStatus()
       ]
     }).compileComponents();
 

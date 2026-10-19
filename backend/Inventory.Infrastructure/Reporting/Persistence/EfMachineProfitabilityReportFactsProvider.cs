@@ -81,7 +81,20 @@ public sealed class EfMachineProfitabilityReportFactsProvider : IMachineProfitab
                 operatingExpensesByMachine.GetValueOrDefault(group.MachineID), fees));
         }
 
-        return new MachineProfitabilityReportFacts(machines, missingFeeRateTransactions, commissions.IsComplete, commissions.Warnings);
+        // Every stored sale in scope, over every status and before the completed-sale filter, and
+        // any imported settlement row overlapping the period (issue #731). A machine with only
+        // cancelled rows produces no row at all, which is unverified rather than a measured zero.
+        var containsSalesRows = await EfReportingSharedQueries
+            .AllSalesQuery(_db, from, endExclusive, machineId).AnyAsync(cancellationToken);
+        var imported = await EfReportingSharedQueries.ImportedSummaryAsync(
+            _db, from, endExclusive, machineId, cancellationToken);
+        var coverage = await EfReportingSharedQueries.CoverageFactsAsync(
+            _db, from, endExclusive, containsSalesRows, imported.ContainsRows, cancellationToken);
+
+        return new MachineProfitabilityReportFacts(machines, missingFeeRateTransactions, commissions.IsComplete, commissions.Warnings)
+        {
+            Coverage = coverage
+        };
     }
 
     private async Task<Dictionary<long, decimal>> OperatingExpensesByMachineAsync(DateTime from, DateTime endExclusive, CancellationToken cancellationToken) =>

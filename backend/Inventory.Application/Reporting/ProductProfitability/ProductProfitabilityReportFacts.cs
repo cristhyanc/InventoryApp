@@ -1,3 +1,5 @@
+using Inventory.Application.Reporting.Shared;
+
 namespace Inventory.Application.Reporting.ProductProfitability;
 
 /// <summary>
@@ -8,14 +10,30 @@ namespace Inventory.Application.Reporting.ProductProfitability;
 /// </summary>
 public sealed record ProductProfitabilityReportFacts(
     IReadOnlyList<ProductProfitabilitySaleGroupFacts> SaleGroups,
-    IReadOnlyList<ProductProfitabilityCatalogueEntry> Catalogue);
+    IReadOnlyList<ProductProfitabilityCatalogueEntry> Catalogue)
+{
+    /// <summary>
+    /// How well recorded provider coverage accounts for this period's stored sales (issue #731,
+    /// extending issue #730's model to this report). Only the sales family is relevant: every figure
+    /// in this report - sales, quantity, cost of goods, gross profit and the margin - is derived
+    /// from stored provider sales, and no settlement import feeds any of them.
+    /// </summary>
+    public ReportCoverageFacts Coverage { get; init; } = new();
+}
 
 /// <summary>
-/// One raw Nayax product identifier/name group's already-aggregated sales facts, before matching
-/// against the product catalogue. Multiple sale groups can resolve to the same catalogue product
-/// (or the same unmapped identity) and must then be merged by the use case.
+/// One group of already-aggregated sales facts. Since issue #758 the group's identity is the local
+/// product the sales are attributed to; a group with no product holds sales nothing could resolve
+/// and is reported as unresolved, keyed by the identity the provider reported so two different
+/// unresolved identities stay apart.
+///
+/// <para><c>ProductId</c> is the local product, or <c>null</c> for an unresolved group.
+/// <c>NayaxProductId</c> and <c>ProductName</c> carry the provider's reported identity for an
+/// unresolved group only, and are <c>null</c> for a resolved one, whose identity is the product and
+/// whose display name comes from the catalogue.</para>
 /// </summary>
 public sealed record ProductProfitabilitySaleGroupFacts(
+    long? ProductId,
     long? NayaxProductId,
     string? ProductName,
     decimal Sales,

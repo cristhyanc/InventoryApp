@@ -205,7 +205,8 @@ public sealed class EfNayaxSaleTimestampRepairStore : INayaxSaleTimestampRepairS
             sale.TransactionStatusId,
             sale.MachineAuthorizationTime,
             sale.NayaxProductId,
-            sale.ProductName);
+            sale.ProductName,
+            sale.ProductId);
 
     private static NayaxSaleTimestampRepairRecord Project(NayaxSaleTimestampRepair repair) =>
         new(

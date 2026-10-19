@@ -37,7 +37,10 @@ public sealed class EfDashboardReportFactsProvider : IDashboardReportFactsProvid
             {
                 Transactions = g.Count(),
                 Machines = g.Select(x => x.MachineID).Distinct().Count(),
-                Products = g.Select(x => x.NayaxProductId).Where(x => x.HasValue).Distinct().Count()
+                // Distinct *local* products the period's sales are attributed to (issue #758).
+                // A sale with no association counts toward no product, as an unmatched one already
+                // did; it stays visible in the reports that list sales.
+                Products = g.Select(x => x.ProductId).Where(x => x.HasValue).Distinct().Count()
             })
             .SingleOrDefaultAsync(cancellationToken);
 

@@ -22,6 +22,7 @@ using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.Products;
+using Inventory.Application.Providers;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
 using Inventory.Application.Reporting.Bookkeeping;
@@ -230,6 +231,9 @@ public static class InfrastructureServiceCollectionExtensions
         // What the machine itself reports it is holding (issue #56). Scoped because reading it spends
         // the current business's own Nayax credentials, which are resolved per request.
         services.AddScoped<IMachineStockObservationSource, NayaxMachineStockObservationSource>();
+        // How a Nayax product id becomes a local product id (issue #733): Product.ExternalProductId
+        // (issue #759), read by every feature that matches live Nayax machine data to the catalogue.
+        services.AddScoped<INayaxProductLinkStore, EfNayaxProductLinkStore>();
         services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
         services.AddScoped<IPickListStorageStockStore, EfPickListStorageStockStore>();
         services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
@@ -237,6 +241,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
         services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
         services.AddScoped<INayaxSalesImportStore, EfNayaxSalesImportStore>();
+        services.AddScoped<IProviderDataCoverageStore, EfProviderDataCoverageStore>();
         services.AddScoped<IDashboardSummarySalesFactsProvider, EfDashboardSummarySalesFactsProvider>();
 
         return services;

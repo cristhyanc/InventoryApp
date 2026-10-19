@@ -1,6 +1,7 @@
 using Inventory.Application.Nayax;
 using Inventory.Application.PickList;
 using Inventory.Application.Reorder;
+using InventoryApi.Tests.Application.Nayax;
 using Moq;
 using Xunit;
 
@@ -15,10 +16,19 @@ namespace InventoryApi.Tests.Application.PickList;
 /// </summary>
 public class GetPickListTests
 {
-    private static Mock<IPickListStorageStockStore> StorageWith(params (long ProductId, string Name, int QuantityInStock)[] products)
+    private static Mock<IPickListStorageStockStore> StorageWith(params (long ProductId, string Name, int QuantityInStock)[] products) =>
+        StorageOf(products.Select(p => (p.ProductId, p.Name, p.QuantityInStock, true)).ToArray());
+
+    /// <summary>
+    /// The same double, with each product's retirement flag stated (issue #736). Every other test
+    /// here uses <see cref="StorageWith"/>, whose products are all active, because that is the state
+    /// those tests are about.
+    /// </summary>
+    private static Mock<IPickListStorageStockStore> StorageOf(
+        params (long ProductId, string Name, int QuantityInStock, bool IsActive)[] products)
     {
         var dictionary = products.ToDictionary(
-            p => p.ProductId, p => new PickListStorageProduct(p.ProductId, p.Name, p.QuantityInStock));
+            p => p.ProductId, p => new PickListStorageProduct(p.ProductId, p.Name, p.QuantityInStock, p.IsActive));
         var store = new Mock<IPickListStorageStockStore>();
         store.Setup(x => x.GetStorageProductsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyDictionary<long, PickListStorageProduct>)dictionary);
@@ -31,7 +41,7 @@ public class GetPickListTests
         var nayax = new Mock<INayaxLynxClient>(MockBehavior.Strict);
         var storage = new Mock<IPickListStorageStockStore>(MockBehavior.Strict);
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle(Array.Empty<long>(), CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle(Array.Empty<long>(), CancellationToken.None);
 
         Assert.Empty(result.Products);
     }
@@ -47,7 +57,7 @@ public class GetPickListTests
             });
         var storage = StorageWith((100, "Coke Zero", 50));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
 
         var product = Assert.Single(result.Products);
         Assert.Equal(100, product.ProductId);
@@ -57,6 +67,32 @@ public class GetPickListTests
         Assert.Equal(6, cell.CurrentQuantity);
         Assert.Equal(10, cell.TargetQuantity);
         Assert.Equal(4, cell.QuantityToPick);
+        Assert.Equal(4, product.TotalQuantityToPick);
+    }
+
+    /// <summary>
+    /// A retired product is not picked (issue #736). <c>IsActive</c> is how a product with history
+    /// is taken out of use, so a machine slot that still holds one is left off the pick list -
+    /// the active product on the same machine is unaffected, which is what proves the exclusion is
+    /// this rule rather than the whole machine dropping out.
+    /// </summary>
+    [Fact]
+    public async Task Handle_ExcludesARetiredProduct_AndKeepsTheActiveOneOnTheSameMachine()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 4 },
+                new() { NayaxProductID = 101, MDBCode = 13, PAR = 10, MissingStockByMDB = 6 },
+            });
+        var storage = StorageOf((100, "Coke Zero", 50, true), (101, "Discontinued bar", 50, false));
+
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself())
+            .Handle([1], CancellationToken.None);
+
+        var product = Assert.Single(result.Products);
+        Assert.Equal(100, product.ProductId);
         Assert.Equal(4, product.TotalQuantityToPick);
     }
 
@@ -71,7 +107,7 @@ public class GetPickListTests
             });
         var storage = StorageWith((100, "Coke Zero", 50));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
 
         var product = Assert.Single(result.Products);
         Assert.Equal(12, product.MdbCode);
@@ -89,7 +125,7 @@ public class GetPickListTests
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 45, PAR = 8, MissingStockByMDB = 5 } });
         var storage = StorageWith((100, "Coke Zero", 100));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1, 2], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1, 2], CancellationToken.None);
 
         var product = Assert.Single(result.Products);
         // Two genuinely distinct MDB slots on two different machines for the same product: neither
@@ -113,7 +149,7 @@ public class GetPickListTests
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 5 } });
         var storage = StorageWith((100, "Coke Zero", 100));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1, 2], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1, 2], CancellationToken.None);
 
         var product = Assert.Single(result.Products);
         Assert.Equal(12, product.MdbCode);
@@ -133,7 +169,7 @@ public class GetPickListTests
             });
         var storage = StorageWith((100, "Zucchini Chips", 10), (200, "Apple Juice", 10));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
 
         // Numeric 2 sorts before 10, even though "10" sorts before "2" lexically; a sort purely on
         // ProductName would also put Apple Juice (200) first, so this proves the MDB code drives
@@ -153,7 +189,7 @@ public class GetPickListTests
             });
         var storage = StorageWith((100, "Coke", 10), (200, "Chips", 10));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
 
         Assert.Equal([200, 100], result.Products.Select(p => p.ProductId));
         Assert.Null(result.Products.First().MdbCode);
@@ -171,7 +207,7 @@ public class GetPickListTests
             });
         var storage = StorageWith((100, "Zebra Snack", 10), (200, "Apple Juice", 10));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
 
         Assert.Equal([200, 100], result.Products.Select(p => p.ProductId));
     }
@@ -186,7 +222,7 @@ public class GetPickListTests
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 8, MissingStockByMDB = 5 } });
         var storage = StorageWith((100, "Coke Zero", 100));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1, 2], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1, 2], CancellationToken.None);
 
         var product = Assert.Single(result.Products);
         Assert.Equal(8, product.TotalQuantityToPick);
@@ -205,7 +241,7 @@ public class GetPickListTests
             });
         var storage = StorageWith((100, "Coke Zero", 50));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
 
         var product = Assert.Single(result.Products);
         var cell = Assert.Single(product.MachineQuantities);
@@ -221,7 +257,7 @@ public class GetPickListTests
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 0 } });
         var storage = StorageWith((100, "Coke Zero", 50));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
 
         var product = Assert.Single(result.Products);
         Assert.Equal(0, product.TotalQuantityToPick);
@@ -239,7 +275,7 @@ public class GetPickListTests
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 7 } });
         var storage = StorageWith((100, "Coke Zero", 10));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1, 2], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1, 2], CancellationToken.None);
 
         var product = Assert.Single(result.Products);
         Assert.Equal(15, product.TotalQuantityToPick);
@@ -255,7 +291,7 @@ public class GetPickListTests
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 3 } });
         var storage = StorageWith((100, "Coke Zero", 10));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
 
         var product = Assert.Single(result.Products);
         Assert.Equal(0, product.StorageShortageQuantity);
@@ -273,7 +309,7 @@ public class GetPickListTests
             });
         var storage = StorageWith((100, "Coke Zero", 10));
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
 
         var product = Assert.Single(result.Products);
         Assert.Equal(100, product.ProductId);
@@ -290,7 +326,7 @@ public class GetPickListTests
             });
         var storage = new Mock<IPickListStorageStockStore>(MockBehavior.Strict);
 
-        var result = await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
 
         Assert.Empty(result.Products);
     }
@@ -303,7 +339,7 @@ public class GetPickListTests
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 3 } });
         var storage = StorageWith((100, "Coke Zero", 10));
 
-        await new GetPickList(nayax.Object, storage.Object).Handle([1], CancellationToken.None);
+        await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
 
         nayax.Verify(x => x.CreateMachineProductsAsync(
             It.IsAny<long>(), It.IsAny<List<NayaxMachineProduct>>(), It.IsAny<CancellationToken>()), Times.Never);
@@ -324,7 +360,7 @@ public class GetPickListTests
         var storage = new Mock<IPickListStorageStockStore>(MockBehavior.Strict);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => new GetPickList(nayax.Object, storage.Object).Handle([1], cts.Token));
+            () => new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], cts.Token));
     }
 
     /// <summary>
@@ -346,7 +382,8 @@ public class GetPickListTests
         storage.Setup(x => x.GetStorageProductsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((IReadOnlyDictionary<long, PickListStorageProduct>)new Dictionary<long, PickListStorageProduct>());
 
-        var useCase = new GetPickList(nayax.Object, storage.Object, expectedMaxConcurrency);
+        var useCase = new GetPickList(
+            nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself(), expectedMaxConcurrency);
         await useCase.Handle(machineIds, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Equal(expectedMaxConcurrency, tracker.MaxObservedConcurrency);

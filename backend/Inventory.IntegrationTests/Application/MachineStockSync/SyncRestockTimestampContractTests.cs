@@ -75,7 +75,8 @@ public class SyncRestockTimestampContractTests
 
         await using var db = Context(connection);
         var store = new EfMachineStockEventStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db));
-        var useCase = new SyncMachineStockFromNayax(NoNewAlertsClient().Object, store);
+        var useCase = new SyncMachineStockFromNayax(
+            NoNewAlertsClient().Object, store, new EfNayaxProductLinkStore(db));
 
         var preview = await useCase.Handle(MachineId, CancellationToken.None);
         var evt = Assert.Single(preview.Events);

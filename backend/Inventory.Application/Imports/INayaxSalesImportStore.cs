@@ -8,12 +8,19 @@ namespace Inventory.Application.Imports;
 /// store never has to re-decide whether a row is importable (issue #301). Every field is a raw
 /// imported fact; the historical cost and its provenance are decided separately by
 /// <see cref="ICostSale"/> and written through <see cref="INayaxSalesImportStore.StageCost"/>.
+///
+/// <para>The one derived field is <c>ProductId</c>: the local product the import resolved the row
+/// to, or <c>null</c> when it resolved none (issue #758). It is persisted as the sale's one
+/// association and no reader re-derives it afterwards. <c>NayaxProductId</c> keeps the provider's
+/// own product identifier exactly as the export carried it - a remote identity, never a local
+/// key.</para>
 /// </summary>
 public sealed record ImportedNayaxSale(
     long TransactionId,
     long MachineId,
     DateTime MachineAuthorizationTime,
     int? TransactionStatusId,
+    long? ProductId,
     long? NayaxProductId,
     string? MachineName,
     decimal SettlementValue,
@@ -37,6 +44,14 @@ public interface INayaxSalesImportStore
 {
     /// <summary>The caller's product catalogue, as the Domain <see cref="ProductMatcher"/> consumes it.</summary>
     Task<IReadOnlyList<ProductMatchCandidate>> GetProductCandidatesAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The remote transaction identifiers of the caller's sales that issue #758's migration marked
+    /// conflicting: their two candidate products disagreed, so only an audited decision may name
+    /// one. The import leaves such a sale's product exactly as it is while updating every other
+    /// imported fact. Expected to be empty.
+    /// </summary>
+    Task<IReadOnlyCollection<long>> GetConflictingTransactionIdsAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// The caller's stored sale carrying this remote transaction identifier, or <c>null</c> when

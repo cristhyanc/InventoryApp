@@ -37,10 +37,9 @@ concurrency:
 jobs:
   context:
     name: Resolve validation context
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       pull-requests: read
-      statuses: write
       contents: read
       issues: read
     outputs:
@@ -56,6 +55,11 @@ jobs:
       pr_body_b64: ${{ steps.context.outputs.pr_body_b64 }}
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Resolve and verify pull request
         id: context
         env:
@@ -73,7 +77,6 @@ jobs:
           EVENT_PR_BODY: ${{ github.event.pull_request.body }}
           INPUT_PR_NUMBER: ${{ inputs.pr_number }}
           INPUT_HEAD_SHA: ${{ inputs.head_sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -121,16 +124,6 @@ jobs:
             [[ "$checkout_ref" =~ ^[0-9a-f]{40}$ ]] || fail "The pull_request event did not contain a full checkout SHA."
           fi
 
-          if [ "$publish_status" = "true" ]; then
-            gh api \
-              --method POST \
-              "repos/$GITHUB_REPOSITORY/statuses/$head_sha" \
-              -f state=pending \
-              -f context="$STATUS_CONTEXT" \
-              -f description="Validation is running" \
-              -f target_url="$RUN_URL" >/dev/null
-          fi
-
           pr_body_b64="$(printf '%s' "$pr_body" | base64 -w0)"
 
           {
@@ -143,10 +136,57 @@ jobs:
             echo "pr_body_b64=$pr_body_b64"
           } >> "$GITHUB_OUTPUT"
 
+  # Commit statuses need a write-capable token, so they are published by their own jobs, which run
+  # only once a human has verified runner isolation (issue #645 review). The context and validate
+  # jobs hold no write authority and keep running, so the validation result stays visible.
+  report-pending:
+    name: Report validation in progress
+    if: needs.context.outputs.publish_status == 'true' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
+    needs: context
+    runs-on: [self-hosted, linux, x64, inventory-agent]
+    permissions:
+      statuses: write
+
+    steps:
+      - name: Publish pending exact-SHA status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ needs.context.outputs.head_sha }}
+          STATUS_CONTEXT: ${{ needs.context.outputs.status_context }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          case "$STATUS_CONTEXT" in
+            agent-validation|merge-validation) ;;
+            *) echo "::error::Refusing to publish an unknown validation status context '$STATUS_CONTEXT'."; exit 1 ;;
+          esac
+          gh api \
+            --method POST \
+            "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            -f state=pending \
+            -f context="$STATUS_CONTEXT" \
+            -f description="Validation is running" \
+            -f target_url="$RUN_URL" >/dev/null
+
+  isolation-gate:
+    name: Refuse validation status until runner isolation is verified
+    # Without the variable no merge-validation or agent-validation status is published, so a pull
+    # request cannot pass the required check. This job makes that refusal a visible failure.
+    if: needs.context.outputs.publish_status == 'true' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED != 'true'
+    needs: context
+    runs-on: [self-hosted, linux, x64, inventory-agent]
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require verified runner isolation for credentialed jobs
+        run: |
+          echo "::error::Validation statuses are disabled until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. The validation job still runs; see its result. See docs/automation.md § Self-hosted runner placement."
+          exit 1
+
   validate:
     name: Backend tests and frontend build
     needs: context
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 30
     permissions:
       contents: read
@@ -191,6 +231,11 @@ jobs:
           node --test scripts/validate-documentation-impact.test.mjs
           node --test scripts/sonar-new-issues.test.mjs
 
+      - name: Validate runner placement contract
+        run: |
+          node scripts/validate-runner-placement.mjs
+          node --test scripts/validate-runner-placement.test.mjs
+
       - name: Validate deployment workflow contracts
         run: |
           node scripts/validate-deployment-workflows.mjs
@@ -216,11 +261,12 @@ jobs:
 
   report-status:
     name: Report validation status
-    if: always() && needs.context.result == 'success' && needs.context.outputs.publish_status == 'true'
+    if: always() && needs.context.result == 'success' && needs.context.outputs.publish_status == 'true' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     needs:
       - context
+      - report-pending
       - validate
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       statuses: write
 
@@ -267,12 +313,12 @@ jobs:
 
   dispatch-review:
     name: Dispatch review after successful validation
-    if: github.event_name == 'workflow_dispatch' && inputs.dispatch_review == true && needs.validate.result == 'success' && needs.report-status.result == 'success'
+    if: github.event_name == 'workflow_dispatch' && inputs.dispatch_review == true && needs.validate.result == 'success' && needs.report-status.result == 'success' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     needs:
       - context
       - validate
       - report-status
-    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       actions: write
       pull-requests: read
@@ -280,6 +326,11 @@ jobs:
       contents: read
 
     steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
       - name: Reverify current head and dispatch review
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

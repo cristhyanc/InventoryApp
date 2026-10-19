@@ -4,7 +4,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date).
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
 - Nayax product and transaction imports with explicit payment/status handling.
@@ -63,6 +63,7 @@ Inventory App/
 ├── scripts/validate.ps1           Windows/PowerShell validation
 ├── scripts/validate.sh            Bash validation
 ├── scripts/run-agent-evals.mjs    Agent Evals runner
+├── scripts/validate-runner-placement.mjs  Every workflow job on the self-hosted runners
 ├── AGENTS.md                      Engineering and agent safeguards
 └── CLAUDE.md                      Claude Code entry point (points to AGENTS.md and docs)
 ```
@@ -196,6 +197,43 @@ whose credential was already in global configuration before that wizard did.
 is the canonical procedure, including the cutover window around issue #520, how to verify Nayax
 afterwards and when the global settings may be removed.
 
+#### Deciding which product an unresolved sale belongs to
+
+Since issue #758 every stored sale records the local product it belongs to in its own column, and
+the release's migration fills that column from the identifiers each sale already carries. It
+deliberately refuses to guess in two cases: a sale whose stored number names one product directly
+and a *different* one through a recorded provider id, and a sale no unambiguous product name covers.
+A human names the product instead:
+
+```bash
+dotnet run --project backend/InventoryApi -- resolve-nayax-sale-products --dry-run
+dotnet run --project backend/InventoryApi -- resolve-nayax-sale-products \
+    --decide 4821=5001 --decided-by "A. Operator" --apply
+```
+
+On a deployed application use `dotnet InventoryApi.dll resolve-nayax-sale-products --dry-run` /
+`--apply` instead. `--apply` must be typed explicitly; neither flag is a dry run, both together are
+refused, and `--decided-by` is required with a decision because who decided is part of the audit
+row.
+
+The dry run writes nothing and lists, per business, every unresolved sale with its own key, its
+transaction, its machine, its reported product name, both recorded candidate products where there
+are any, whether it carries a historical cost today, and whether exactly one product's name
+attributes it today. Those last two counts matter: **the application refuses to start while any sale
+that is costed today has no product**, because such a sale would otherwise be dropped from every
+future cost replay while still carrying COGS, and **while any sale a product's name attributes today
+has no product**, costed or not, because every reader gave it that product until this release. The
+command applies no migration, so it is runnable exactly when startup is refusing for either reason.
+
+A decision names the sale by the key the dry run prints — there is no business flag, and the
+business is the one the stored sale belongs to. Each applied decision fills only a product that is
+still absent and appends an audit row with the candidates, the chosen product, who decided and when,
+so re-running one writes nothing and can never move a sale off a product it already carries.
+
+**Do not run this against production from this description.** See
+[docs/architecture.md § The sale's own product](docs/architecture.md#the-sales-own-product-issue-758)
+for the model, the migration steps and what the failure gate guarantees.
+
 ### 2. How the frontend finds the API
 
 Nothing to configure locally. `ConfigService` resolves the API base URL to `/api` whenever the application is served from `localhost` or `127.0.0.1`, and the development proxy forwards `/api` to <http://localhost:5000>. Any other origin is a deployed one and uses `apiBaseUrl` from `frontend/inventory-app/src/assets/config.json`, which holds the deployed Azure API URL. Do not edit that tracked file to switch between local development and deployment, and do not commit a personal endpoint.
@@ -215,6 +253,8 @@ Open <http://localhost:4200>. The `start` script builds the Tailwind stylesheet 
 
 The application requires a Microsoft Entra sign-in. Click **Sign in** in the header; it redirects to Microsoft, and after sign-in redirects back to `/auth` (`AuthCallbackComponent`) before continuing to the requested page. `/auth` itself is intentionally public (not behind `MsalGuard`) so the redirect can complete; every other route requires an authenticated session with the delegated `access_as_user` scope, enforced again by the API (`401` with no token, `403` without the scope).
 
+A deployment that has a customer identity tenant configured offers a choice first, on the public `/sign-in` page: **Continue with Google or an email address** or **Sign in with a Microsoft work account** — see [Signing in with Google](#signing-in-with-google-issue-711) and [Signing in with an email address and password](#signing-in-with-an-email-address-and-password-issue-712) below. With no such tenant configured, which is the state in source control, nothing changes: **Sign in** redirects straight to the workforce authority with no extra page and no extra click.
+
 ## Authentication configuration
 
 Authentication uses Microsoft Entra ID (Azure AD): ASP.NET Core / `Microsoft.Identity.Web` validates bearer tokens on the API, and the Angular SPA signs users in with MSAL (`@azure/msal-angular`, `@azure/msal-browser`). See [docs/architecture.md](docs/architecture.md#authentication-and-authorization) for the full boundary description.
@@ -222,12 +262,59 @@ Authentication uses Microsoft Entra ID (Azure AD): ASP.NET Core / `Microsoft.Ide
 Non-secret configuration already committed to the repository:
 
 - **API** (`backend/InventoryApi/appsettings.json`, `AzureAd` section): `Instance`, `TenantId` (`common`, multi-tenant), `ClientId` (the API app registration's public application ID), and `Scopes` (`access_as_user`). These identify the API for token validation; no client secret is used or required.
-- **SPA** (`frontend/inventory-app/src/app/auth-config.ts`): the SPA app registration's client ID, the API's `api://<api-client-id>/access_as_user` scope, and the redirect URI (`<origin>/auth`).
+- **SPA** (`frontend/inventory-app/src/app/auth-config.ts`): the SPA app registration's client ID, the API's `api://<api-client-id>/access_as_user` scope, and the redirect URI (`<origin>/auth`). The same file holds `externalIdSettings`, the second authority's four identifiers, **empty** in source control — see [Signing in with Google](#signing-in-with-google-issue-711).
 
 Human-controlled Entra portal setup this configuration depends on (not part of this repository, and not something an agent may change):
 
 - App registrations for the API and the SPA, with the API exposing the `access_as_user` scope and the SPA's platform configured for the redirect URIs it actually uses (`http://localhost:4200/auth` for local development, and the deployed Static Web App origin's `/auth` for production).
 - The SPA registration's API permissions granting delegated `access_as_user` access to the API app registration.
+
+### Customer identity: a second trusted issuer (issue #710)
+
+The API can also validate bearer tokens from **one** Microsoft Entra External ID tenant beside the workforce sign-in above, which is the token-validation half of the approved design in [docs/identity-provider-decision.md](docs/identity-provider-decision.md) (issue #709, under #708). Everything is in `backend/InventoryApi/Auth/ExternalIdentity/`, and [docs/architecture.md § Trusted issuers and the two bearer schemes](docs/architecture.md#trusted-issuers-and-the-two-bearer-schemes-issue-710) describes the boundary in full.
+
+**What has shipped, and what has not.** The API accepts tokens from a configured External ID tenant and resolves the same validated `(tid, oid)` actor it always has; a customer identity that holds no membership gets `403` and no business data. Since issue #711 the Angular application offers the Google journey against that tenant too, and since issue #712 the local email-and-password journey through the same hosted flow — see [Signing in with Google](#signing-in-with-google-issue-711) and [Signing in with an email address and password](#signing-in-with-an-email-address-and-password-issue-712) below. Identity linking is **deferred** (#713), so the same person signing in a different way is a different actor with no membership and no inherited access. Issue #714 has completed the automated half of the consolidated validation — the provider × account-state × role matrix, identity separation, the threat-model rows and the rollback rehearsal — and recorded every hosted-provider check as **not verified**: see [Rollout verification, staging smoke tests and rollback](#rollout-verification-staging-smoke-tests-and-rollback-issue-714) below. **Enabling the new sign-in in production is still gated on those human staging checks and a recorded go/no-go decision.**
+
+**Configuration, all of it non-secret, none of it committed.** The `ExternalId` section in `appsettings.json` ships with three **empty** identifiers, which is both the fail-closed state and the rollback lever: with them empty the second bearer scheme is not registered at all, every External ID token is rejected, and workforce sign-in is untouched. A half-filled or malformed section means the same thing and is logged as a startup error. Supply the values per environment with `dotnet user-secrets` locally or application settings in Azure:
+
+- `ExternalId__Instance` — the tenant's authority host, `https://<tenant-subdomain>.ciamlogin.com/`
+- `ExternalId__TenantId` — the External ID tenant's GUID
+- `ExternalId__ClientId` — the GUID application ID of the API app registration **in that tenant**, which is a different registration from `AzureAd:ClientId` because an app registration belongs to one tenant and each scheme validates only its own audience
+
+None of these is a credential: the API validates tokens with the authority's published signing keys and the SPA is a public client using authorization code with PKCE, so neither holds a client secret and no Key Vault reference is needed — the same classification the `PlatformAdmin` pair already has. Reverting to workforce-only sign-in is clearing these settings: no deployment, schema change or data step is involved, and memberships created through the new issuer are retained and work again if the settings are restored.
+
+Human-controlled portal setup this depends on (no agent may perform any of it, and the API deliberately does not check that it was done):
+
+- Create the External ID tenant, register the API application in it with an `access_as_user` delegated scope, and register the SPA as a PKCE public client with exactly the redirect and post-logout URIs in use.
+- Configure the Google identity provider in the tenant — its OAuth client secret lives in the provider, never in this repository — and the local email/password sign-up with its verification and password reset.
+- Create the sign-up/sign-in **user flow**, enable the intended providers inside it, and associate the SPA application with it. None of those three steps is implied by the registrations above, and the journeys simply do not appear without them.
+- Decide each registration's accepted access-token version; the API pins both audience spellings (`<client-id>` and `api://<client-id>`), so either one validates.
+- Keep the administration of that tenant separate from the `PlatformAdmin` pair, which stays a workforce identity: the same object ID presented from the customer identity tenant is a different actor and reaches no platform-admin endpoint.
+
+### Signing in with Google (issue #711)
+
+Google sign-in is the **hosted** customer identity journey: the SPA redirects to the configured External ID tenant's own sign-up/sign-in user flow, where a human has enabled Google as a built-in identity provider, and the API receives a token that *tenant* issued. The application never talks to Google, never exchanges a Google ID token, sends no provider hint or query parameter of its own, and reads nothing from the upstream Google subject — the actor is the validated `(tid, oid)` pair exactly as for every other sign-in. Design: [docs/identity-provider-decision.md](docs/identity-provider-decision.md) § 4 journey C and § 9; boundary: [docs/architecture.md § The sign-in choice and the Google journey](docs/architecture.md#the-sign-in-choice-and-the-google-journey-issue-711).
+
+**What a person sees.** With a customer identity tenant configured, a signed-out visitor reaches the public `/sign-in` page instead of being redirected automatically — the authority has to be chosen explicitly, once, before any redirect — and it offers the customer identity action, **Continue with Google or an email address** since issue #712 added the local journey to the same hosted flow, beside **Sign in with a Microsoft work account**. The choice is remembered in `localStorage`, so a reload, a new tab and a token refresh go back to the authority that issued the session; signing out forgets it, so the next person chooses again. Each tab pins its own snapshot of that choice for as long as it is open, so a second tab changing it cannot alter the authority this tab is already signing in against. A cancelled or failed hosted sign-in returns to `/sign-in` with the reason and the same two choices and starts no further redirect by itself. The page the visitor originally asked for is carried across in the tab's `sessionStorage` and handed to MSAL as the redirect start page; it comes from the router state, never from a URL parameter, and an absolute, protocol-relative, `/auth` or `/sign-in` destination is refused. **It survives a cancelled or failed attempt**, so pressing an action again returns the person to the page they were going to — an invite acceptance page included — rather than to the dashboard; it is released when a sign-in completes, and trying again never extends its 15-minute window.
+
+**Google sign-in grants nothing by itself.** A Google identity that nobody invited lands on the existing welcome page with `NoMembership`, and that page now says plainly that each way of signing in is a separate account: a member who normally uses their work account and then signs in with Google gets a *new* actor with no membership, no role and no inherited access. Nothing is linked by a matching email address — an address is display-only data here and decides nothing — and Google sign-in on its own never redeems an invite. Joining a business is still the existing invite or onboarding journey.
+
+**Configuration, non-secret, and empty in source control.** The four SPA identifiers live in `externalIdSettings` in `frontend/inventory-app/src/app/auth-config.ts`, empty for the same reason the API's `ExternalId` section is: empty is the fail-closed shipped state and the rollback lever. While any of them is empty or the instance is not an `https` authority, the second authority does not exist — no Google action is rendered, no second MSAL instance can be built, and the application signs in exactly as it did before. Fill them in per deployment (they are build-time values, so changing them is a build):
+
+- `instance` — the tenant's authority host, `https://<tenant-subdomain>.ciamlogin.com/`
+- `tenantId` — the External ID tenant's GUID
+- `clientId` — the **SPA** app registration in that tenant, which is a different registration from the workforce SPA client id above
+- `apiClientId` — the **API** app registration in that tenant, whose `access_as_user` scope the SPA asks for
+
+MSAL partitions its token cache by client id and authority, so those distinct client ids are what keep the two authorities' caches apart; the token request names `openid` and `profile` explicitly, because External ID issues `oid` and `tid` only when `profile` is asked for and they are the whole identity the API reads. None of these values is a credential: the SPA is a PKCE public client and holds no client secret, and the Google OAuth client secret exists only inside the External ID tenant's provider configuration — never in this repository, a pipeline or an application setting.
+
+Human-controlled setup this depends on, in addition to the External ID portal work listed above (no agent may perform any of it):
+
+- Create the Google OAuth client in Google Cloud and register its client id and secret **in the External ID tenant**.
+- Enable Google inside the tenant's sign-up/sign-in **user flow** — enabling a provider at tenant level is not the same as offering it in a flow — and associate the SPA application with that flow.
+- Register `http://localhost:4200/auth` and the deployed Static Web App origin's `/auth` as redirect URIs, and the origins as post-logout URIs, on that tenant's SPA registration.
+
+**Staging verification before production activation (human, not automated).** Configuring a provider is not the same as a person being able to use it, so a human confirms in staging, with a test identity they created, that: `/sign-in` offers the customer identity action; the hosted page actually offers Google and a new Google user can complete the journey end to end; the SPA returns to `/auth` and acquires an API access token for `access_as_user`; the decoded token carries a GUID `oid` and the External ID `tid`; the API accepts it and the identity resolves **no** membership, so every business endpoint answers `403` and the application shows the welcome page; cancelling on the hosted page returns to `/sign-in` with the cancellation explained and no loop; an invite link opened before signing in still lands on `/invite` afterwards and is redeemable within its window, **including when the first attempt was cancelled and the second one completed**; and existing workforce sign-in is unchanged on the same build. A journey that is configured but not offered, or offered but not completable, is a failed phase. Record the result with the design's § 13 checklist; the consolidated run across both issuers is [docs/identity-rollout-verification.md § 3](docs/identity-rollout-verification.md#3-the-staging-smoke-tests-a-human-runs), which is the checklist to work from.
 
 MSAL's protected-resource map (`buildProtectedResourceMap` in `auth-config.ts`) is built from `ConfigService.apiBaseUrl`, the same value every HTTP call uses (see [above](#2-how-the-frontend-finds-the-api)), so the bearer token attaches correctly to `/api/*` locally and to the deployed absolute API URL in production, without any code or configuration change between environments. `ConfigService` loads `assets/config.json` on the raw `HttpBackend` rather than the intercepted `HttpClient`, so the MSAL interceptor cannot be constructed — and cannot capture a stale API base URL — before that load has finished.
 
@@ -235,9 +322,45 @@ Protected business documents (purchase documents and operating-expense supportin
 
 Azure Static Web Apps direct navigation (including the `/auth` redirect landing) is handled by `frontend/inventory-app/src/staticwebapp.config.json`, which rewrites unmatched paths to `/index.html` so the Angular router — not a platform 404 — handles them.
 
+### Signing in with an email address and password (issue #712)
+
+A customer can register and sign in with **any deliverable email address**, a custom company domain included, without holding a Microsoft or Google account. It is the *same* hosted journey as Google sign-in above — the same External ID tenant, the same user flow, the same SPA and API registrations — so there is no extra identifier, flag or setting to fill in, and the one customer identity action on `/sign-in` names both: **Continue with Google or an email address**. Design: [docs/identity-provider-decision.md](docs/identity-provider-decision.md) § 4 journey D and § 16; boundary: [docs/architecture.md § The local email and password journey](docs/architecture.md#the-local-email-and-password-journey-issue-712).
+
+**No credential ever reaches this application.** There is no password field, registration form, verification page or recovery link anywhere in it, and no password, password hash, verification code, reset code or recovery token is received, stored, logged or put in a URL. Creating the account, verifying the mailbox with the one-time code Microsoft emails, signing in, and resetting a forgotten password all happen on the provider's hosted pages; the sign-in page says so, says Inventory Manager never sees a password and cannot reset one, and tells a person whose verification or reset code has expired to start again from `/sign-in`, where the hosted page issues a new one. A refused sign-in shows one generic application-authored sentence and never the provider's own error text, so it does not disclose whether an address has an account here.
+
+**Signing in grants nothing by itself.** A newly verified customer who nobody invited lands on the existing welcome page with `NoMembership` and `403` from every business endpoint, exactly like a Google or workforce stranger; joining a business is still the invite or onboarding journey. Nothing is linked by a matching mailbox: registering an address an existing member already uses creates a separate actor with no membership, no role and no inherited access, a duplicate registration of one address is a second actor again, and an email change or password reset at the provider changes no `(tid, oid)` and therefore cannot move or widen a membership.
+
+#### Provider controls, and what a human must configure
+
+Recorded from the design's § 13 verification (checked against Microsoft's published External ID documentation on 18 October 2026, not against a provisioned tenant). These are the controls to set while configuring the user flow, and the gaps to accept or cover deliberately:
+
+| Control | What the provider offers | Human action |
+| --- | --- | --- |
+| Mailbox verification | A one-time email code during sign-up, **before the account exists**, so an unfinished registration produces no account and no token. "Email with password" is the default local option | Enable email with password in the user flow and confirm the verification step is on |
+| Password handling | Stored and checked entirely by the provider; this application never receives one. **Password policy configurability is unconfirmed** | Check the policy the tenant actually applies and record it |
+| Account recovery | Self-service password reset sends a code to the mailbox; SMS reset is available as a paid add-on | Enable self-service password reset in the flow and verify the entry point on the hosted page |
+| MFA | Email one-time code (no extra charge), SMS (paid add-on, billed per message by country), and passkeys for local accounts | Decide which methods are enabled, and record the decision with the staging result |
+| Lockout / throttling | Smart lockout and basic HTTP protections are on by default. **There is no built-in per-IP throttling setting** | Accept the defaults, or put a WAF in front; raise per-IP limiting as its own issue if the data warrants it |
+| Bot / sign-up fraud | **Not built in.** It needs a third party (Arkose Labs, HUMAN Security) or a WAF (Cloudflare, Akamai, Azure WAF) | Decide explicitly before enabling self-service onboarding, which stays `false` (`SelfServiceOnboarding:Enabled`) until then |
+| Cost | Free for the first 50,000 monthly active users; add-ons (SMS included) have no free tier | None at the current single-business scale |
+
+**Residual limitations, stated rather than worked around.** Bot and sign-up fraud protection and per-IP throttling are not provided and are not implemented here, so a free identity remains cheap to create — which is why `SelfServiceOnboarding:Enabled` stays off and the per-identity application rate limit is not relied on as an anti-abuse control (design § 11, T6). The password policy in force is whatever the tenant is set to and has not been confirmed. Nothing above is verified against a real tenant by this change: it is the documented capability set a human configures and then confirms in staging.
+
+**Staging verification before production activation (human, not automated).** With a test identity they created, a human confirms in staging that: the hosted page offers the email-with-password option; a new customer can register, receive the verification code and complete sign-up end to end; the SPA returns to `/auth`, acquires an API access token for `access_as_user`, and the decoded token carries a GUID `oid` and the External ID `tid`; the API accepts it and resolves **no** membership, so every business endpoint answers `403` and the application shows the welcome page; signing in again with the same address and password works, and a wrong password shows the provider's own message on its own page and never reveals anything here; **forgot password** reaches the hosted reset journey, a reset code arrives, and an **expired or already-used** code is refused on that page — after which starting again from `/sign-in` issues a new one; cancelling the hosted journey returns to `/sign-in` with the cancellation explained and no loop; an invite link opened before signing up still lands on `/invite` afterwards and is redeemable inside its 15-minute window, which the longer registration round trip makes the case worth timing (extending that window would be its own reviewed decision); the same mailbox used through Google or a workforce Microsoft account produces a *separate* account with no membership and no inherited role; and existing workforce sign-in is unchanged on the same build. A journey that is configured but not offered, or offered but not completable, is a failed phase. Record the result with the design's § 13 checklist; the consolidated run across both issuers is [docs/identity-rollout-verification.md § 3](docs/identity-rollout-verification.md#3-the-staging-smoke-tests-a-human-runs), which is the checklist to work from.
+
 **Authentication identifies a person; business ownership decides what they may see.** Accepting sign-ins from multiple Microsoft Entra tenants (`TenantId: "common"`) only authenticates a user. Data isolation is a separate boundary, established by issue #64: the validated `(tid, oid)` claim pair is mapped to an application-owned **Business** through explicit `BusinessMembership` rows, and every tenant-owned read and write is scoped to that business centrally in `AppDbContext`. A signed-in account with no usable membership receives `403` and no business data — it fails closed rather than falling back to "see everything". The business ID is never accepted from route, query, form, or JSON input. There are exactly three endpoints such an account may still reach, all on a reviewed allowlist the build enforces, and none names an existing business or reads business data. `GET /api/me/account-state` (issue #523) answers only with the state that account is in — `Member`, `NoMembership`, `ApplicationPending`, `ApplicationRejected`, `MembershipRevoked`, `BusinessDeactivated` or `MembershipAmbiguous` — so the application can show the right screen instead of a bare error. `POST /api/invites/redeem` (issue #532) takes an invite token an Owner created and nothing else, and creates that account's **own** membership in the business the invite belongs to, with the role the invite grants; it returns only that role, and an unusable token and an account that already belongs somewhere are both refused with one fixed sentence. `POST /api/onboarding/business-applications` (issue #541) is the self-service application described [below](#starting-a-business-self-service-onboarding), behind a flag that is off by default. The `403` every other endpoint returns is unchanged, for all three of those callers.
 
 **The Angular application reads that state before any business call and shows the screen it calls for** (issue #529). `Member` reaches the page asked for. `NoMembership` goes to a welcome page offering **I have an invite link** — paste the link or the code from it, or open the link directly — and, when `onboardingEnabled` is true, **Start a new business**, which opens the business application form at `/apply` (issue #543): business name, contact email (starting as the signed-in account's own address), optional ABN, a stated yes or no for GST registration, and a time zone chosen from the browser's IANA list. The form checks each field with the API's own rules and sentences before sending anything, shows any refusal the API returns (an account that already belongs to a business, a different application already waiting, the rate limit, or onboarding switched off), and after a recorded application re-reads the account state and lands on the pending-approval page. `ApplicationPending` goes to a pending-approval page with a **Check again** button that re-reads the account state; once approved, it refreshes the capability cache too and loads the app as Owner. `ApplicationRejected` goes to a rejected page that shows the Super Admin's own recorded reason when there is one, and offers the same invite-link option plus **Apply again**, which opens the same form, when `onboardingEnabled` is true. `BusinessDeactivated`, `MembershipAmbiguous` and `MembershipRevoked` go to one "access unavailable" page that names no business — it says to contact the business Owner for the first and third, and support for the second. Because a revoked or released person is the one case `GET /api/me/account-state`'s `onboardingEnabled` flag can make eligible, that page also offers **I have an invite link** always and **Start a new business** only when `onboardingEnabled` is true, matching the API's own eligibility rule. A `403` from any other member endpoint shows "you don't have access to this" through the application's toast, except on one of those destination routes or `/invite/:token`, which already explain the situation themselves. None of this is a boundary: `BusinessScopeMiddleware` refuses every business call the same way regardless of what the router shows.
+
+### Rollout verification, staging smoke tests and rollback (issue #714)
+
+Everything above describes what the application does with a customer identity tenant. **Whether this deployment may switch one on in production is a separate question, and it is answered in [docs/identity-rollout-verification.md](docs/identity-rollout-verification.md)** — the consolidated verification matrix, the staging smoke tests a human runs, the phased enablement, the observability signals, the incident and rollback procedure, and the production go/no-go checklist.
+
+**Three kinds of evidence, never pooled.** Synthetic API/JWT tests say what the API accepts, refuses and resolves. Synthetic browser journeys say what the SPA decides, stores and asks MSAL for. Only a human running a hosted journey in staging can say that a tenant exists, that Google or an email address is actually offered in its user flow, and that a real token carries the claims the design assumes. Each row of that matrix declares its kind and is `passed`, `failed` or **`not verified`**, and no agent may record a human row.
+
+**Where it stands (18 October 2026).** Every synthetic row is `passed` and runs inside `scripts/validate.sh`: the provider × account-state × role matrix across both issuers (invitation redemption, applicant pending and rejected, member access, business deactivation, membership revocation, role capabilities and the Super Admin boundary), identity separation in place of the deferred linking feature (identical mailboxes across providers, one object id in two tenants, the upstream Google subject, duplicate registration, the already-a-member conflict), the threat-model rows T1, T2, T3, T6, T8, T9 and T10, the browser journeys (provider switching and cache separation, external return URLs, an interrupted invite journey, a cancellation, a disabled or misconfigured route), and the design's § 15 rollback rehearsal — which retains memberships and live invites, restores access unchanged, keeps the legacy Super Admin recovery route working while the new sign-in is off, and leaves no bearer token, invitation token or mailbox in the logs. Every hosted-provider row is **`not verified`**, because no External ID tenant is provisioned for these deployments and no agent may create one.
+
+**Rollback, in one sentence.** Clear `ExternalId__Instance`, `ExternalId__TenantId` and `ExternalId__ClientId` and restart — a settings edit on the build already deployed, no deployment of its own — and the second bearer scheme is not registered, every External ID token is refused, workforce sign-in is untouched, and the memberships, roles and outstanding invites created through the new issuer are retained and work again the moment the settings are restored. Removing the customer identity action from the browser is the SPA's four identifiers, which are build-time values and therefore a build and a deployment **of the current commit**; it is cosmetic by comparison, because the API half is what stops access. If the code itself must change, that is a focused forward fix against the current base, not a redeployment of an earlier build: this design's lack of a migration says nothing about whether an earlier whole-application build matches today's database, and [docs/identity-rollout-verification.md § 6.2](docs/identity-rollout-verification.md) states what a human must check first. Rollback cannot recover a customer identity user's access — there is no linking, so the answer for somebody who must keep working is an invitation redeemed by a workforce identity they control.
 
 ### Starting a business: self-service onboarding
 
@@ -359,6 +482,9 @@ NayaxTokenProtection__ActiveKeyId
 NayaxTokenProtection__Keys__<key-id>
 PlatformAdmin__DirectoryTenantId
 PlatformAdmin__ObjectId
+ExternalId__Instance
+ExternalId__TenantId
+ExternalId__ClientId
 SelfServiceOnboarding__Enabled
 APPLICATIONINSIGHTS_CONNECTION_STRING
 ```
@@ -372,6 +498,8 @@ A still-configured `NayaxLynx__OperatorId`, `NayaxLynx__AccessToken` or legacy `
 `APPLICATIONINSIGHTS_CONNECTION_STRING` is the Application Insights connection string, a secret that is never committed — see [Observability and error diagnostics](#observability-and-error-diagnostics). Unlike the Nayax base URL it is optional: with the variable absent or blank no telemetry is registered at all and the API starts and runs normally, which is what local development and the automated tests do.
 
 `PlatformAdmin__DirectoryTenantId` and `PlatformAdmin__ObjectId` name the platform super-administrator for the two platform-admin APIs below — [diagnostics](#platform-diagnostics-api) and [businesses](#super-admin-businesses-api). Neither is a secret — an Entra object id is an identifier that grants nothing without a validated token carrying it — so they are ordinary application settings and need no Key Vault reference, but they are a real person's identifiers and are therefore **empty in `appsettings.json` and must never be committed**. Set them with `dotnet user-secrets` locally or application settings in Azure.
+
+`ExternalId__Instance`, `ExternalId__TenantId` and `ExternalId__ClientId` name the one Microsoft Entra External ID tenant whose tokens the API also trusts (issue #710) — see [Customer identity: a second trusted issuer](#customer-identity-a-second-trusted-issuer-issue-710). None of the three is a secret, for the same reason the `PlatformAdmin` pair is not, so they are ordinary application settings with no Key Vault reference; they are nevertheless **empty in `appsettings.json` and must never be committed**. All three empty is the shipped, fail-closed state: the second bearer scheme is not registered, every token from that authority is rejected, and workforce sign-in is unaffected. A section that is half-filled or holds a value that is not what the setting means behaves identically and logs a startup error naming the setting. The values are read once at startup, so filling them in takes effect on the next restart.
 
 `SelfServiceOnboarding__Enabled` switches [self-service business onboarding](#starting-a-business-self-service-onboarding) on (issue #541). It is not a secret, and it is **`false` in `appsettings.json`, which is the shipped state and the only one source control carries**: with it off `POST /api/onboarding/business-applications` answers `404` and `GET /api/me/account-state` reports `onboardingEnabled: false`, so nobody can create a business in a deployment that has not deliberately opened the door. An absent, blank or unparseable value is read as off, and the value is read once at startup, so changing it takes effect on the next restart. Switching it on in production is a human decision with a verified release gate in front of it — [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541).
 
@@ -840,6 +968,10 @@ Failure output (screenshots and traces) is written under `frontend/inventory-app
 - `npm run test` runs the Jest suite (`jest-preset-angular`, configured through `frontend/inventory-app/jest.config.js`/`tsconfig.spec.json`/`setup-jest.ts`) once and exits; it is not a watch-mode command. `*.spec.ts` files sit next to the code they test.
 - `npm audit` is reported but not enforced. The outstanding high/critical advisories are all in the Angular 19 build toolchain (`@angular-devkit/build-angular` → `vite`, `webpack-dev-server`, `tar`, …) and every published fix requires a major Angular upgrade, which is a separate, deliberate piece of work. Review the printed report; do not run `npm audit fix --force`.
 
+### GitHub Actions runners
+
+Every GitHub Actions job in this repository, Deploy Production included, runs on the self-hosted Linux x64 runners labelled `[self-hosted, linux, x64, inventory-agent]`. Nothing falls back to a GitHub-hosted runner, and `scripts/validate-runner-placement.mjs` fails validation if a workflow tries to. While no runner is online, jobs wait in the queue. To start them, bring the runner VM and its runner service back up and confirm the runner shows **Idle** under Repository Settings → Actions → Runners. The runner host must provide `git`, `curl`, `jq`, `tar`, `gzip`, `unzip`, `/usr/bin/gh`, the Azure CLI and a Docker daemon. Jobs install .NET and Node.js themselves. Run **Actions → Inventory agent runner diagnostic** to check a runner. Jobs that hold a credential stay disabled until a human provisions reset or ephemeral runners and sets the repository variable `INVENTORY_RUNNER_ISOLATION_VERIFIED` to `true`. That covers the Claude agents, the SonarCloud and Project sync reads, both production deploy jobs, and every job with a write-capable `GITHUB_TOKEN`: dispatchers, review publication, branch cleanup, the release record and the validation status jobs. Until then those runs fail with an error naming the variable. Pull requests do not receive the required `merge-validation` status, so they cannot merge without an administrator bypass, although the validation job itself still runs. Deploy Production also needs `INVENTORY_RUNNER_BASELINE_VERIFIED` set to `true` once the diagnostic has passed on every runner. See [docs/automation.md § Self-hosted runner placement](docs/automation.md#self-hosted-runner-placement-issue-645) for the isolation limits of a persistent runner and the cost boundaries.
+
 ## Important domain rules
 
 - Gross vending sales are not the same as a Nayax payout. Card and cash revenue remain distinct.
@@ -902,6 +1034,56 @@ as plain amounts.
 
 GST classification is accounting data only. It never changes a purchase's unit cost, the weighted-average
 cost, costing quantity or inventory value.
+
+## Products and categories
+
+The catalogue is the business's own. A business with no sales provider connected creates and
+maintains every product and category itself, and a business with one keeps the fields its provider
+does not manage.
+
+- **Create a product** with `POST /api/products`, and a **category** with `POST /api/categories`.
+  Both answer the created record with its new id. A product needs a name and a selling price that
+  is not negative; a category needs a name, unique within the business (compared without case, so
+  "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
+  the initial restock movement it always did.
+- **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name, selling price and
+  category** as well as the SKU, description, unit, supplier, low-stock threshold, restock target
+  and active flag. **Edit a category** with `PUT /api/categories/{id}`.
+- **Which fields a provider manages.** For a product the provider's catalogue names, its **name and
+  category** come from the provider and are refused with a message naming the provider if you try to
+  change them — the next catalogue import would overwrite the local value. Its **price and every
+  other local field stay editable**. For a category the provider named, its **name** is managed the
+  same way and its description stays editable. Every product and category response says which of
+  its fields are managed, in `providerManagedFields`, so a screen can lock exactly those inputs.
+  (The screens themselves are the next change, issue #737.)
+- **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock
+  movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
+  the delete is refused with what is in the way and nothing is written — deleting it would erase
+  inventory and financial history. **Deactivate it instead**: a deactivated product keeps all of its
+  history and can be reactivated at any time. A product the provider manages is not deleted either,
+  because the next import would create it again.
+- **A deactivated product is out of the product lists.** `GET /api/products` answers the catalogue
+  you work from, so a deactivated product is not in it, is not offered in a product picker, and
+  stays out of the reorder alerts and the Pick List — it must not be purchased from, counted,
+  picked or refilled. Nothing about it is lost: it is still answered by
+  `GET /api/products/{id}`, every stock movement, purchase, sale and count that names it is
+  untouched, `GET /api/products?includeRetired=true` lists it with the rest of the catalogue, and
+  putting `isActive: true` back reactivates it.
+- **The screens have not caught up yet** (issue #737). They call `GET /api/products` without
+  `includeRetired=true`, so until that issue ships the Products page, the Admin costing-repair and
+  AVCO-transition tools and the stock-history product filter show active products only, and
+  reactivating a product is done through the API. #737 is where those four call sites and the "show
+  retired" control on the Products page belong.
+- **A category products use is not deleted.** The refusal says how many products use it; move them
+  to another category first, otherwise they would be left with no category at all.
+- **The Nayax catalogue import waits for the catalogue review.** While the business holds products
+  that Nayax does not manage, **Admin → Imports → Import Products** is refused with how many they
+  are, and nothing is imported: the import recognises a product only by Nayax's own product id, so
+  it would create a duplicate of each of yours. A business whose products all came from Nayax
+  imports exactly as before, and the check is made again at the moment the import is written, so a
+  product somebody creates while Nayax is being read refuses the import rather than slipping past
+  it — nothing is imported in that case either. Linking your own products to Nayax products
+  deliberately is the next step (issues #738 and #739).
 
 ## Product and supplier GST rules
 
@@ -1050,6 +1232,158 @@ again, so the status always describes the token actually stored.
 
 Tests and re-tests share one allowance for the whole business (five runs per ten minutes); past it
 the page asks you to wait a few minutes, and no call reaches Nayax.
+
+### Reorder alerts without Nayax
+
+Nayax is an optional add-on. A business with no connected Nayax account — or one whose connection
+needs attention, or whose Nayax account has not granted the machine permissions — still gets its
+reorder alerts and its ordering figures, calculated from the data this application owns (issue
+#726):
+
+- **Needs ordering and the reorder-alert list** are answered in **storage-only** mode: storage
+  stock, each product's low-stock threshold and restock target, and the quantity already on an
+  outstanding supplier order, with the machines' current need counted as **zero**. The formula is
+  unchanged — it is the same calculation with one input missing. Both the dashboard's Needs ordering
+  card and the reorder-alert list state the mode they were produced in (`StorageOnly` or
+  `MachineAware`), and in storage-only mode the reason the machines are missing, so a figure that did
+  not account for the machines is never read as one that did.
+- **Needs refill** is reported as unavailable with the reason (`NayaxNotConnected` when the
+  connection is unusable, `PermissionNotGranted` when Nayax has not granted the machine reads),
+  because every figure on that card is a figure about machines. It is never shown as "no machine
+  needs refilling", which would be a false statement about a fleet nobody read.
+- **Everything else on the dashboard is unaffected**: the week's sales, the inventory valuation and
+  the product and storage counts are the business's own data and are reported as usual.
+- **A real Nayax outage is still an error.** Only "no usable connection" and "this permission was
+  not granted" produce storage-only figures; a Nayax request that fails in transport, or a fleet
+  only half read, surfaces as an error rather than as a business whose machines need nothing.
+
+#### The dashboard without a usable provider
+
+The dashboard presents those states (issue #727). Without a usable Nayax connection it is a
+storage-management dashboard, and it says what the business has rather than what it is missing:
+
+- **"Sales this week" and "Needs refill" are not shown, and neither are the Sites and Machines
+  sections.** Every figure on them comes from Nayax, so they are hidden rather than shown empty or
+  "Unavailable" — an empty Sites section would say the business has no sites, which is a different
+  claim. **"Needs ordering" and "Inventory" are shown as usual**, and the reorder alerts are then
+  the page's main section.
+- **The storage-only figures say so.** The "Needs ordering" card and the reorder-alert list each
+  carry a label — "Storage stock only: these figures do not include the machines' current
+  replenishment need, because Nayax is not connected" — and the list drops its "Machine need" and
+  "Stock after machine need" columns, whose values would otherwise be a column of zeroes stating
+  that the machines need nothing. The label is shown for an **empty** list too, because "nothing
+  needs ordering" means something different when the machines were never read.
+- **No sales synchronization is attempted, and no sync warning is shown.** `POST
+  /api/nayax-sales-sync` is a Nayax call that could only be refused, so the page does not make it;
+  a call that was never attempted neither failed nor succeeded, so there is nothing to warn about.
+  The dashboard reads its summary first and asks it whether the business has a usable provider,
+  which is what makes that possible.
+- **A permission Nayax has not granted is reported per feature.** With a usable connection whose
+  Nayax account has not granted a particular read (`PendingPermissions`), everything else keeps
+  working and only the affected card or section says so — "Machine refill status is unavailable
+  because Nayax has not granted this application permission to read it" — instead of a message
+  about the connection as a whole.
+- **A failed request is an error, never an empty result.** A Sites, Machines or reorder-alert
+  request that fails says so ("The Sites section could not be loaded. Reload the page to try
+  again."). It is never shown as "No sites available yet" or "No reorder alerts. Everything looks
+  good!", which are statements about data the page was never given. A genuinely empty answer still
+  shows those messages.
+
+**Products → Needs Ordering** works the same way in storage-only mode: the full page, with its
+filters, sorting and "Mark as ordered", over the storage-only alerts, labelled with the mode and
+with the "Machine need" column hidden.
+
+**A connected business sees no change, and neither does a support session.** With a usable
+connection and the fleet reads granted, every card, section and column is exactly as before. In a
+read-only support session the dashboard keeps its existing behaviour (issues #552 and #661): all
+four cards and all three sections, with "Nayax is not available in support view" on the two withheld
+cards and in place of the sync notice.
+
+#### Machine and site filters without a usable provider
+
+Issue #728 does the same for every other screen that lists machines or sites, from **one** answer the
+whole application shares: the Nayax connection status is read once per sign-in, refreshed when an
+Owner saves or re-tests the connection, and used by the "Nayax isn't fully connected" banners and by
+the filters and fields below.
+
+- **A filter over a list that cannot exist is not shown.** Without a usable connection, the machine
+  filter disappears from Stock History and the report pages, the Site filter disappears from Site
+  Commissions, the machine selection and matrix disappear from the Pick List (which says "The pick
+  list is unavailable because Nayax is not connected"), and the optional machine field disappears from
+  the stock adjustment form and the Expenses form. No request is sent that could only be refused.
+- **A request that *failed* says so where its filter was.** "The machine list could not be loaded, so
+  this report cannot be narrowed to one machine", for example. It is never shown as "All machines"
+  narrowing nothing, and a business that genuinely has no machines is never reported as an error.
+- **Expenses stops mentioning Nayax it does not have.** Without a connection, "Nayax monthly fee" is
+  not offered for a **new** expense and the page subtitle drops its Nayax sentence. An expense already
+  recorded under that category keeps it — in the table, in the Category filter and on its own edit
+  form — because a recorded expense is a fact about the past.
+- **Stock History keeps the two questions apart.** The "Nayax Sync Restock" source filter is about
+  movements that are already recorded locally, so it is offered whenever Nayax is part of the business
+  at all — including while a stored connection needs attention — and the table keeps labelling such a
+  movement either way. The machine filter needs a machine list, so it stays hidden until there are
+  machines to filter by.
+- **A connection that needs attention is still a connection.** A business whose stored token stopped
+  working keeps its Nayax expense category and its Nayax source filter; what it loses is the live
+  fleet reads, with the banner asking an Owner to reconnect.
+- **One permission Nayax has not granted does not take the rest of the application with it.** When
+  Nayax refuses one read for lack of permission, that one feature says so where its control was and
+  is not asked for again until the connection is saved or re-tested; everything else the Nayax account
+  does allow keeps working. A business whose connection is usable is never assumed to have been
+  granted every permission, so nothing is hidden on a guess either: a feature nobody has been refused
+  is offered, and its own request reports its own outcome.
+
+**A connected business sees no change here either.** Every filter, field and category is exactly as
+before.
+
+## Machine details: Sales and Products
+
+Opening a machine (**Machines → a machine**) shows its most recent Nayax sales first, with the
+machine's product table in a second tab (issue #768).
+
+- **Two tabs, Sales then Products, and Sales is selected on arrival at every machine.** They are a
+  proper tab list: the arrow keys move between them, `Home` and `End` jump to the ends, and each tab
+  names its own panel for a screen reader. Switching tabs makes no new Nayax call — the panel you
+  came from keeps what it already read.
+- **Sales is Nayax's rolling latest-sales window, not this machine's sales history.** It is whatever
+  Nayax currently reports as the machine's most recent transactions, newest first: the endpoint
+  behind it guarantees no date range, no row count and no paging, so the page promises none of
+  those. For a complete period use the reports, which are built from the sales this application has
+  imported.
+- **Each sale shows its date and time, the product name Nayax reported, the payment method and the
+  amount**, labelled with the currency code Nayax reported — `9.50 AUD`, or `9.50 EUR` for a euro
+  sale. **No currency symbol is invented**: the documented Nayax read declares the currency as
+  optional and carries no symbol, so a sale Nayax reported without one reads `9.50 (currency not
+  reported)` rather than being shown as dollars. Times are shown in your business's own time zone. A
+  value Nayax did not report reads **Not reported** rather than being filled in with a zero or a
+  guessed date, and **no transaction status is shown**: the documented Nayax endpoint for this read
+  declares none, so the page does not invent one. No cost or profit is derived here.
+- **Refresh re-reads Nayax, and changes nothing.** It is disabled while a request is in flight. A
+  refresh imports no sale, moves no stock, recosts no inventory and applies no stock event — reading
+  this tab a hundred times leaves every report, cost and quantity exactly as it was. Importing sales
+  is still the separate sales sync.
+- **Five different answers, never one that reads as "no sales".** A window Nayax reported as empty
+  says so; a business with **no sales provider connected** is told exactly that, as information
+  rather than a fault, because inventory and purchasing work fully without one; a connection that
+  **needs reconnecting** and a **permission Nayax has not granted** each say what to do about it; and
+  a request that **failed** offers Refresh and says plainly that it does not mean the machine has no
+  sales.
+- **The amount is a financial figure.** A role without `Dashboard.ViewFinancials` — today an
+  Operator — still sees every sale's date and time, reported product name and payment method, and
+  reads **Not available for your role** where the amount would be. The API withholds the amount and
+  its currency, as `null` and never `0`, so this is not a client-side hide; Products stays fully
+  usable. A platform administrator in a [support session](#super-admin-support-sessions) sees no
+  Nayax data at all here, because a session resolves no Nayax credentials.
+- **Products is the same product table as before**, with the same fields, the same financial
+  redaction and the same per-product Restock control. It is read the first time you open that tab for
+  a machine — once, not once per thing on screen that reads it — so opening a machine does not fetch
+  it and switching back to Products does not fetch it again, and **Sync Restock stays its own section
+  above the tabs**. While that read is outstanding the tab says it is loading, and a read that
+  **failed** says so and offers a page reload: only a tab that has actually been answered reports a
+  product count or tells you the machine has no products.
+
+See [docs/architecture.md § Machine latest sales](docs/architecture.md#machine-latest-sales-issue-768)
+for the read boundary, the verified Nayax contract and the authorization rule.
 
 ## Business settings (Admin page)
 

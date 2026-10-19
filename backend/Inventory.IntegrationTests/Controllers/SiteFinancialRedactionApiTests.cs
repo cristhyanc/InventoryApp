@@ -6,6 +6,7 @@ using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -297,6 +298,9 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
                 Name = "Vending Co",
                 TimeZoneId = FixedSydneyTime.SydneyTimeZoneId,
                 Status = BusinessStatus.Active,
+                // Selling through Nayax (issue #759), which is what makes the product's recorded
+                // external id a Nayax product id.
+                SalesProvider = ExternalProvider.Nayax,
                 CreatedAtUtc = CreatedAt,
             });
 
@@ -309,6 +313,10 @@ public sealed class SiteFinancialRedactionApiTests : IClassFixture<SiteFinancial
             {
                 Id = ProductId,
                 BusinessId = BusinessId,
+                // The product's Nayax id (issue #732, on the row since #759), without which the
+                // machine selection resolves to no local product at all (issue #733). Every imported
+                // product has one in production.
+                ExternalProductId = NayaxExternalId.From(ProductId),
                 Name = "Coke",
                 QuantityInStock = 12,
                 LowStockThreshold = 5,

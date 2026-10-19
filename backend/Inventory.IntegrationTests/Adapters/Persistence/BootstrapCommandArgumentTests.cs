@@ -4,9 +4,9 @@ using Xunit;
 namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
-/// Both operator commands rewrite production state - one the schema, one ownership of every
-/// financial record - so an argument list whose meaning is not obvious must be refused rather
-/// than resolved by precedence (issue #64).
+/// These operator commands rewrite production state - the schema, ownership of every financial
+/// record, and which product a stored sale belongs to (issue #758) - so an argument list whose
+/// meaning is not obvious must be refused rather than resolved by precedence (issue #64).
 ///
 /// The case that matters most is <c>--apply --dry-run</c>. A reader of that command cannot tell
 /// which the author intended, and letting <c>--apply</c> quietly win would turn a typo made while
@@ -152,6 +152,101 @@ public class BootstrapCommandArgumentTests
         Assert.True(DatabaseMigrationArguments.Matches(["migrate-database"]));
         Assert.False(DatabaseMigrationArguments.Matches(["bootstrap-business"]));
         Assert.False(DatabaseMigrationArguments.Matches([]));
+    }
+
+    #endregion
+
+    #region resolve-nayax-sale-products
+
+    private const string Resolve = "resolve-nayax-sale-products";
+
+    [Fact]
+    public void Sale_product_resolution_with_no_flags_is_a_dry_run_with_no_decision()
+    {
+        Assert.True(NayaxSaleProductResolutionArguments.TryParse(
+            [Resolve], out var apply, out var decisions, out var decidedBy, out var error));
+
+        Assert.False(apply);
+        Assert.Empty(decisions);
+        Assert.Empty(decidedBy);
+        Assert.Empty(error);
+    }
+
+    [Fact]
+    public void Sale_product_resolution_reads_each_decision_pair_in_order()
+    {
+        Assert.True(NayaxSaleProductResolutionArguments.TryParse(
+            [Resolve, "--decide", "11=5001", "--decide", "12=777", "--decided-by", "A. Operator", "--apply"],
+            out var apply, out var decisions, out var decidedBy, out _));
+
+        Assert.True(apply);
+        Assert.Equal([(11L, 5001L), (12L, 777L)], decisions.Select(d => (d.SaleId, d.ProductId)));
+        Assert.Equal("A. Operator", decidedBy);
+    }
+
+    [Theory]
+    [InlineData("--apply", "--dry-run")]
+    [InlineData("--dry-run", "--apply")]
+    public void Sale_product_resolution_with_both_flags_is_refused_and_does_not_apply(string first, string second)
+    {
+        Assert.False(NayaxSaleProductResolutionArguments.TryParse(
+            [Resolve, first, second], out var apply, out _, out _, out var error));
+
+        Assert.False(apply);
+        Assert.Contains("mutually exclusive", error, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Who decided is part of the audit row, so an apply cannot write one without it.
+    /// </summary>
+    [Fact]
+    public void Sale_product_resolution_applying_a_decision_without_a_decider_is_refused()
+    {
+        Assert.False(NayaxSaleProductResolutionArguments.TryParse(
+            [Resolve, "--decide", "11=5001", "--apply"], out _, out _, out _, out var error));
+
+        Assert.Contains("--decided-by is required", error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("11")]
+    [InlineData("11=")]
+    [InlineData("=5001")]
+    [InlineData("11=-5001")]
+    [InlineData("0=5001")]
+    [InlineData("eleven=5001")]
+    public void Sale_product_resolution_refuses_a_decision_that_is_not_two_positive_numbers(string pair)
+    {
+        Assert.False(NayaxSaleProductResolutionArguments.TryParse(
+            [Resolve, "--decide", pair], out _, out _, out _, out var error));
+
+        Assert.Contains("positive whole", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Sale_product_resolution_refuses_two_decisions_about_one_sale()
+    {
+        Assert.False(NayaxSaleProductResolutionArguments.TryParse(
+            [Resolve, "--decide", "11=5001", "--decide", "11=777"], out _, out _, out _, out var error));
+
+        Assert.Contains("decided more than once", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Sale_product_resolution_refuses_an_unrecognised_argument()
+    {
+        Assert.False(NayaxSaleProductResolutionArguments.TryParse(
+            [Resolve, "--business-id", "1"], out _, out _, out _, out var error));
+
+        Assert.Contains("Unrecognised argument", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Sale_product_resolution_matches_only_its_own_command_name()
+    {
+        Assert.True(NayaxSaleProductResolutionArguments.Matches([Resolve]));
+        Assert.False(NayaxSaleProductResolutionArguments.Matches(["migrate-database"]));
+        Assert.False(NayaxSaleProductResolutionArguments.Matches([]));
     }
 
     #endregion

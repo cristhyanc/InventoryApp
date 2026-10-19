@@ -1,6 +1,7 @@
 using System.Globalization;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting;
+using Inventory.Domain.Reporting.Availability;
 using Inventory.Domain.Reporting.Bookkeeping;
 
 namespace Inventory.Application.Reporting.Bookkeeping;
@@ -65,6 +66,17 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             qualityNotes.Add($"Commission configuration is incomplete; {(isMachineFiltered ? "direct profit" : "net profit")} is unavailable.");
         qualityNotes.AddRange(facts.CommissionWarnings);
 
+        // How well recorded provider coverage accounts for this period (issue #730). The two
+        // families are decided separately, from the sources that actually feed them: sale instants
+        // for the sales figures, imported reimbursement periods for the fee figures. A settlement
+        // file arriving never makes the sales figures complete, and vice versa.
+        var salesAvailability = ReportAvailabilityPolicy.Decide(
+            range.From, range.EndExclusive, facts.SalesCoverage, facts.ContainsSalesRows);
+        var feesAvailability = ReportAvailabilityPolicy.Decide(
+            range.From, range.EndExclusive, facts.SettlementCoverage, facts.ImportedContainsRows);
+        ReportAvailabilityNotes.Add(qualityNotes, salesAvailability, SalesFigures, ReportAvailabilityNotes.NoSalesData);
+        ReportAvailabilityNotes.Add(qualityNotes, feesAvailability, FeeFigures, ReportAvailabilityNotes.NoSettlementData);
+
         // Conditional, scope-derived diagnostics (issue #476): every note above comes from a fact in
         // the requested business, date range and machine scope, and the calculation methodology this
         // report used lives in its "How this report is calculated" help instead. An empty note list
@@ -100,7 +112,18 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             OperatingExpensesByCategory = facts.OperatingExpensesByCategory,
             DirectProfit = profit.DirectProfit,
             DirectMarginPercent = profit.DirectMarginPercent,
-            NayaxProcessingFees = facts.ProcessingFees
+            NayaxProcessingFees = facts.ProcessingFees,
+            ProviderAvailability = ReportProviderAvailabilityDto.From(salesAvailability, feesAvailability)
         };
     }
+
+    /// <summary>
+    /// The sales-sourced figures this report shows, as <see cref="ReportAvailabilityNotes"/> names
+    /// them. Public because the dashboard report republishes this report's decided states beside the
+    /// same figures and must name them the same way rather than inventing a second wording.
+    /// </summary>
+    public const string SalesFigures = "Sales, the card/cash split, cost of goods and profit";
+
+    /// <summary>The settlement-sourced figures it shows, for the same reason.</summary>
+    public const string FeeFigures = "Nayax processing fees and the GST on them";
 }

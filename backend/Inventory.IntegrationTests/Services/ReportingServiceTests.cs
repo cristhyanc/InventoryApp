@@ -17,7 +17,9 @@ using Inventory.Application.Reporting.Reconciliation;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Gst;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Reporting;
+using Inventory.Domain.Reporting.Availability;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Reporting;
@@ -48,6 +50,27 @@ public class ReportingRegressionTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options;
         return TestAppDbContext.Unrestricted(options);
+    }
+
+    /// <summary>
+    /// Records provider coverage spanning the requested dates end to end, so a test about a
+    /// financial formula or about export parity is not also a test about provider coverage
+    /// (issue #731). Without it these reports are correctly <c>Unverified</c>, and an export
+    /// replaces an unmeasured zero with that state - which is the behaviour the availability tests
+    /// assert and this one would otherwise trip over.
+    /// </summary>
+    private static async Task RecordFullCoverageAsync(AppDbContext db, DateTime from, DateTime to)
+    {
+        foreach (var source in new[] { ProviderDataSource.SalesSync, ProviderDataSource.SettlementImport })
+            db.ProviderDataCoverages.Add(new ProviderDataCoverage
+            {
+                Provider = ExternalProvider.Nayax,
+                Source = source,
+                FromUtc = from.Date.AddDays(-1),
+                ToUtc = to.Date.AddDays(2),
+                RecordedAtUtc = to.Date.AddDays(2),
+            });
+        await db.SaveChangesAsync();
     }
 
     private static ReportingHarness Reporting(AppDbContext db, INayaxLynxClient? nayaxLynxClient = null,
@@ -146,10 +169,10 @@ public class ReportingRegressionTests
             Basis = CommissionBasis.CardSales
         });
         db.NayaxSales.AddRange(
-            new NayaxSales { TransactionID = 1, MachineID = 10, MachineName = "Alpha One", NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 10m, NayaxProductCostPrice = 4.10m, UnitCostAtSale = 4m, CostOfGoodsSold = 4m, CostingStatus = SaleCostingStatus.Costed, CostSource = SaleCostSource.InventoryLedger, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
-            new NayaxSales { TransactionID = 2, MachineID = 10, MachineName = "Alpha One", NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Cash", SettlementValue = 5m, UnitCostAtSale = 2m, CostOfGoodsSold = 2m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
-            new NayaxSales { TransactionID = 3, MachineID = 10, MachineName = "Alpha One", NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 2m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
-            new NayaxSales { TransactionID = 4, MachineID = 10, NayaxProductId = 1, PaymentMethod = "Credit Card", SettlementValue = 9m, TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+            new NayaxSales { TransactionID = 1, MachineID = 10, MachineName = "Alpha One", ProductId = 1, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 10m, NayaxProductCostPrice = 4.10m, UnitCostAtSale = 4m, CostOfGoodsSold = 4m, CostingStatus = SaleCostingStatus.Costed, CostSource = SaleCostSource.InventoryLedger, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 2, MachineID = 10, MachineName = "Alpha One", ProductId = 1, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Cash", SettlementValue = 5m, UnitCostAtSale = 2m, CostOfGoodsSold = 2m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 3, MachineID = 10, MachineName = "Alpha One", ProductId = 1, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 2m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 4, MachineID = 10, ProductId = 1, NayaxProductId = 1, PaymentMethod = "Credit Card", SettlementValue = 9m, TransactionStatusId = NayaxTransactionStatusIds.PendingSettlementNotFinal, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
         await db.SaveChangesAsync();
 
         var service = Reporting(db, new TransactionTestNayaxClient());
@@ -199,8 +222,8 @@ public class ReportingRegressionTests
             Basis = CommissionBasis.CardSales
         });
         db.NayaxSales.AddRange(
-            new NayaxSales { TransactionID = 1, MachineID = 10, MachineName = "Alpha One", NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 10m, NayaxProductCostPrice = 4.10m, UnitCostAtSale = 4m, CostOfGoodsSold = 4m, CostingStatus = SaleCostingStatus.Costed, CostSource = SaleCostSource.InventoryLedger, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
-            new NayaxSales { TransactionID = 2, MachineID = 10, MachineName = "Alpha One", NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Cash", SettlementValue = 5m, UnitCostAtSale = 2m, CostOfGoodsSold = 2m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
+            new NayaxSales { TransactionID = 1, MachineID = 10, MachineName = "Alpha One", ProductId = 1, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 10m, NayaxProductCostPrice = 4.10m, UnitCostAtSale = 4m, CostOfGoodsSold = 4m, CostingStatus = SaleCostingStatus.Costed, CostSource = SaleCostSource.InventoryLedger, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
+            new NayaxSales { TransactionID = 2, MachineID = 10, MachineName = "Alpha One", ProductId = 1, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Cash", SettlementValue = 5m, UnitCostAtSale = 2m, CostOfGoodsSold = 2m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
         await db.SaveChangesAsync();
 
         var service = Reporting(db, new TransactionTestNayaxClient());
@@ -454,6 +477,7 @@ public class ReportingRegressionTests
         {
             TransactionID = 1,
             MachineID = 10,
+            ProductId = 1,
             NayaxProductId = 1,
             SettlementValue = 10m,
             MachineAuthorizationTime = new DateTime(2025, 8, 1)
@@ -467,6 +491,7 @@ public class ReportingRegressionTests
         {
             TransactionID = 2,
             MachineID = 10,
+            ProductId = null,
             NayaxProductId = 99,
             SettlementValue = 0m,
             ProductName = "Unknown",
@@ -488,8 +513,13 @@ public class ReportingRegressionTests
         Assert.True(report.DataQuality.ContainsUnmappedProducts);
     }
 
+    /// <summary>
+    /// Issue #758: an unresolved sale is never rescued by a name that matches exactly one catalogue
+    /// product. It is reported as unresolved, under the normalized name the provider gave it - the
+    /// part before the first parenthesis - so an operator can still recognise it.
+    /// </summary>
     [Fact]
-    public async Task Product_profitability_maps_unmapped_nayax_product_by_name_before_parenthesis()
+    public async Task Product_profitability_never_rescues_an_unresolved_sale_by_the_name_it_reported()
     {
         using var db = CreateDbContext();
         db.Products.Add(new Product { Id = 29, Name = "Maltese King Share 60g", UnitPrice = 4.80m });
@@ -497,6 +527,7 @@ public class ReportingRegressionTests
         {
             TransactionID = 29,
             MachineID = 10,
+            ProductId = null,
             NayaxProductId = 999,
             ProductName = "Maltese King Share 60g(29, 29 = 4.80)",
             SettlementValue = 4.80m,
@@ -512,11 +543,13 @@ public class ReportingRegressionTests
 
         var row = Assert.Single(report.Rows);
         Assert.Equal("Maltese King Share 60g", row.ProductName);
-        Assert.False(row.IsUnmapped);
+        Assert.True(row.IsUnmapped);
+        Assert.Equal(4.80m, row.Sales);
+        Assert.True(report.DataQuality.ContainsUnmappedProducts);
     }
 
     [Fact]
-    public async Task Product_profitability_merges_sales_that_map_to_the_same_catalogue_product()
+    public async Task Product_profitability_merges_sales_attributed_to_the_same_catalogue_product()
     {
         using var db = CreateDbContext();
         db.Products.Add(new Product { Id = 1, Name = "Nu Pure Spring Water 600mL", UnitPrice = 3m });
@@ -525,6 +558,7 @@ public class ReportingRegressionTests
             {
                 TransactionID = 1,
                 MachineID = 10,
+                ProductId = 1,
                 NayaxProductId = 1,
                 ProductName = "Nu Pure Spring Water 600mL",
                 SettlementValue = 3m,
@@ -537,6 +571,9 @@ public class ReportingRegressionTests
             {
                 TransactionID = 2,
                 MachineID = 10,
+                // The same product, reached through a different provider id - the association the
+                // writer recorded is what merges them (issue #758).
+                ProductId = 1,
                 NayaxProductId = 999,
                 ProductName = "Nu Pure Spring Water 600mL (999)",
                 SettlementValue = 3m,
@@ -830,14 +867,29 @@ public class ReportingRegressionTests
         var values = lines[1].Trim('"').Split("\",\"");
         var row = header.Zip(values, (h, v) => (h, v)).ToDictionary(x => x.h, x => x.v);
 
+        // Every measured figure is the API's own value, never re-derived by the export.
         Assert.Equal(report.Sales.ToString(CultureInfo.InvariantCulture), row["GrossSales"]);
         Assert.Equal(report.NetProfit!.Value.ToString(CultureInfo.InvariantCulture), row["NetProfit"]);
         Assert.Equal(report.GstOnSales.ToString(CultureInfo.InvariantCulture), row["GstOnSales"]);
-        Assert.Equal(report.GstOnFees.ToString(CultureInfo.InvariantCulture), row["GstOnFees"]);
+        // The business's own receipt costs carry no provider state and stay exact.
         Assert.Equal(report.DeliveryCosts.ToString(CultureInfo.InvariantCulture), row["DeliveryCosts"]);
         Assert.Equal(report.PackageCosts.ToString(CultureInfo.InvariantCulture), row["PackageCosts"]);
-        Assert.Equal(report.NetSettlement.ToString(CultureInfo.InvariantCulture), row["NetSettlement"]);
-        Assert.Equal(report.SiteCommission.ToString(CultureInfo.InvariantCulture), row["SiteCommission"]);
+
+        // No coverage was ever recorded for this period, so the provider figures that come out at
+        // zero carry their state in the export exactly as the API and the UI show it (issue #730):
+        // an exported zero must never be readable as a measured zero. Parity is with the API's
+        // availability-aware answer, not with a bare number the API no longer claims.
+        Assert.Equal(nameof(ReportAvailabilityState.Unverified), report.ProviderAvailability.Sales.State);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Fees.State);
+        Assert.Equal(0m, report.GstOnFees);
+        Assert.Equal(0m, report.NetSettlement);
+        Assert.Equal(0m, report.SiteCommission);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), row["GstOnFees"]);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), row["NetSettlement"]);
+        Assert.Equal(nameof(ReportAvailabilityState.Unverified), row["SiteCommission"]);
+        Assert.Equal(nameof(ReportAvailabilityState.Unverified), row["SalesDataAvailability"]);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), row["FeeDataAvailability"]);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), row["CombinedDataAvailability"]);
     }
 
     [Fact]
@@ -959,6 +1011,7 @@ public class ReportingRegressionTests
             new NayaxSales { TransactionID = 400, MachineID = 10, MachineName = "Alpha", SettlementValue = 60m, PaymentMethod = "Credit Card", CostOfGoodsSold = 20m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
             new NayaxSales { TransactionID = 401, MachineID = 11, MachineName = "Beta", SettlementValue = 40m, PaymentMethod = "Cash", CostOfGoodsSold = null, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
         await db.SaveChangesAsync();
+        await RecordFullCoverageAsync(db, new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
 
         var service = Reporting(db);
         var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
@@ -992,6 +1045,7 @@ public class ReportingRegressionTests
             new NayaxSales { TransactionID = 402, MachineID = 10, NayaxProductId = 1, ProductName = "Water", SettlementValue = 30m, CostOfGoodsSold = 10m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
             new NayaxSales { TransactionID = 403, MachineID = 10, NayaxProductId = 999, ProductName = "Unmapped Thing", SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
         await db.SaveChangesAsync();
+        await RecordFullCoverageAsync(db, new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));
 
         var service = Reporting(db);
         var filter = new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1));

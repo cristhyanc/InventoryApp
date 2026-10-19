@@ -288,17 +288,16 @@ export function buildRunContext(workflowText, event) {
  */
 export function simulateValidationRun(workflowText, event) {
   const context = buildRunContext(workflowText, event);
-  const contextJob = section(workflowText, '  context:\n', '  validate:\n', 'validate.yml');
+  const contextJob = section(workflowText, '  context:\n', '  report-pending:\n', 'validate.yml');
+  const pendingJob = section(workflowText, '  report-pending:\n', '  isolation-gate:\n', 'validate.yml');
   const statusJob = section(workflowText, '  report-status:\n', '  dispatch-review:\n', 'validate.yml');
   const statusContext = renderTemplate(extractEnvValue(contextJob, 'STATUS_CONTEXT'), context);
-  const reportStatusContext = renderTemplate(extractEnvValue(statusJob, 'STATUS_CONTEXT'), {
-    ...context,
-    needs: { context: { outputs: { status_context: statusContext } } },
-  });
+  const resolved = { ...context, needs: { context: { outputs: { status_context: statusContext } } } };
   return {
     concurrencyGroup: renderTemplate(extractConcurrencyGroup(workflowText), context),
     statusContext,
-    reportStatusContext,
+    reportPendingContext: renderTemplate(extractEnvValue(pendingJob, 'STATUS_CONTEXT'), resolved),
+    reportStatusContext: renderTemplate(extractEnvValue(statusJob, 'STATUS_CONTEXT'), resolved),
   };
 }
 
@@ -331,10 +330,10 @@ export function verifyValidationModeIsolation(workflowText, source) {
     );
   }
   for (const run of [pullRequestRun, dispatchRun]) {
-    if (run.reportStatusContext !== run.statusContext) {
-      throw new Error(
-        `${source}: report-status publishes '${run.reportStatusContext}' but the context job resolved '${run.statusContext}'.`,
-      );
+    for (const [job, published] of [['report-pending', run.reportPendingContext], ['report-status', run.reportStatusContext]]) {
+      if (published !== run.statusContext) {
+        throw new Error(`${source}: ${job} publishes '${published}' but the context job resolved '${run.statusContext}'.`);
+      }
     }
   }
 
@@ -557,7 +556,7 @@ export const PREFLIGHT_JOB_CONTRACT = Object.freeze({
 
 export const IMPLEMENT_JOB_DOCUMENTATION_CONTRACT = Object.freeze({
   needs: '    needs: [preflight, model]\n',
-  condition: "if: needs.preflight.result == 'success' && needs.model.result == 'success' && (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null",
+  condition: "if: needs.preflight.result == 'success' && needs.model.result == 'success' && (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'",
   prompt: [
     'Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details.',
     "Follow the issue's Documentation impact decision exactly.",
@@ -697,7 +696,7 @@ export function verifyDocumentationImpactGate(read = readRepositoryFile) {
   const validate = read(validatePath);
   const validateContract = VALIDATE_WORKFLOW_DOCUMENTATION_CONTRACT;
   requireText(validate, validateContract.pullRequestTypes, validatePath);
-  const validationContext = section(validate, '  context:\n', '  validate:\n', validatePath);
+  const validationContext = section(validate, '  context:\n', '  report-pending:\n', validatePath);
   for (const required of validateContract.contextJob) {
     requireText(validationContext, required, 'validate.yml context job');
   }
@@ -787,7 +786,7 @@ export const REVIEW_JOB_CONTRACT = Object.freeze({
 
 export const REVIEW_PUBLISH_CONTRACT = Object.freeze({
   required: [
-    "if: always() && needs.context.result == 'success'",
+    "if: always() && needs.context.result == 'success' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n",
     '      - context\n      - review\n',
     'pull-requests: write',
     'statuses: write',
@@ -1386,7 +1385,7 @@ function verifyArchitectureClaudeCheck(architectureWorkflow) {
   // Every Claude route: a separate read-only Claude invocation, labelled a same-provider check.
   const source = 'agent-architecture.yml same-provider Claude check';
   const claudeCheck = section(architectureWorkflow, '  claude-check:\n', '  sonar:\n', source);
-  requireText(claudeCheck, "    if: needs.context.outputs.checker == 'claude'\n", source);
+  requireText(claudeCheck, "    if: needs.context.outputs.checker == 'claude' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n", source);
   verifyReadOnlyClaudeCheck(claudeCheck, source);
   for (const required of [
     'This is a same-provider check, not an independent one', 'claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
@@ -1415,7 +1414,7 @@ function verifyArchitectureFixJob(architectureWorkflow) {
   requireText(architectureJob, '      - context\n      - claude-check\n      - sonar\n', 'agent-architecture.yml architecture job');
   requireText(
     architectureJob,
-    "if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) }}",
+    "if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' }}",
     'agent-architecture.yml architecture job',
   );
   requireText(architectureJob, 'node "$transport" fetch-findings .git/architecture-findings.md', 'agent-architecture.yml architecture job');
@@ -1466,7 +1465,7 @@ function verifyArchitectureFinalizer(architectureWorkflow) {
   verifyAgentPrGuards(finalize, 'agent-architecture.yml finalize', { sha: '$FINAL_SHA', issue: true });
   requireOrder(finalize, 'node "$guard" check', 'gh workflow run validate.yml', 'agent-architecture.yml finalize', 'the final head must be re-verified before validation is dispatched.');
   for (const required of [
-    "    if: always()\n", '      - context\n      - claude-check\n      - sonar\n      - architecture\n',
+    "    if: always() && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n", '      - context\n      - claude-check\n      - sonar\n      - architecture\n',
     'SONAR_COUNT: ${{ needs.sonar.outputs.count }}', '[[ "$sonar_count" =~ ^[0-9]+$ ]] || sonar_count=0', 'actions: write', 'pull-requests: write', 'issues: write', 'statuses: read',
     'ISSUE_NUMBER: ${{ inputs.issue_number }}', 'CONTEXT_JOB_RESULT: ${{ needs.context.result }}',
     '[ "$CONTEXT_JOB_RESULT" = "success" ]', 'trap block_undispatched EXIT', 'dispatched=true',
@@ -1490,6 +1489,28 @@ function verifyArchitectureFinalizer(architectureWorkflow) {
   requireOrder(finalize, 'labelled_by_this_run=true', 'gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --add-label agent-review', 'agent-architecture.yml finalize');
   requireOrder(finalize, 'gh workflow run validate.yml', 'dispatched=true', 'agent-architecture.yml finalize');
   for (const forbidden of ['actions/checkout', 'CLAUDE_CODE_OAUTH_TOKEN', 'AGENT_AUTOMATION_APP_PRIVATE_KEY', 'contents: write', 'claude-code-action']) forbidText(finalize, forbidden, 'agent-architecture.yml finalize');
+}
+
+/**
+ * Issue #645 review: the context job resolves the status context but holds no write scope, so it
+ * still runs while runner isolation is unverified; the gated report-pending job publishes it.
+ */
+function verifyValidationStatusPublishers(validate, validationContext) {
+  requireText(validationContext, STATUS_CONTEXT_EXPRESSION, 'validate.yml context job');
+  requireText(validationContext, 'status_context: ${{ steps.context.outputs.status_context }}', 'validate.yml context job');
+  requireText(validationContext, 'echo "status_context=$STATUS_CONTEXT"', 'validate.yml context job');
+  for (const forbidden of ['statuses: write', 'statuses/$head_sha', ': write']) {
+    forbidText(validationContext, forbidden, 'validate.yml context job');
+  }
+  const pendingJob = section(validate, '  report-pending:\n', '  isolation-gate:\n', validatePath);
+  requireText(pendingJob, 'statuses: write', 'validate.yml pending status job');
+  requireText(pendingJob, 'statuses/$HEAD_SHA', 'validate.yml pending status job');
+  requireText(pendingJob, '-f state=pending', 'validate.yml pending status job');
+  requireText(pendingJob, 'target_url="$RUN_URL"', 'validate.yml pending status job');
+  requireText(pendingJob, 'STATUS_CONTEXT: ${{ needs.context.outputs.status_context }}', 'validate.yml pending status job');
+  requireText(pendingJob, '-f context="$STATUS_CONTEXT"', 'validate.yml pending status job');
+  requireText(pendingJob, 'agent-validation|merge-validation) ;;', 'validate.yml pending status job');
+  forbidText(pendingJob, 'actions/checkout', 'validate.yml pending status job');
 }
 
 /** Runs every agent workflow contract check with an overridable repository reader. */
@@ -1534,14 +1555,8 @@ export function runContractChecks({ read = readRepositoryFile } = {}) {
     forbidText(validate, forbidden, validatePath);
   }
 
-  const validationContext = section(validate, '  context:\n', '  validate:\n', validatePath);
-  requireText(validationContext, 'statuses: write', 'validate.yml context job');
-  requireText(validationContext, 'statuses/$head_sha', 'validate.yml context job');
-  requireText(validationContext, 'target_url="$RUN_URL"', 'validate.yml context job');
-  requireText(validationContext, STATUS_CONTEXT_EXPRESSION, 'validate.yml context job');
-  requireText(validationContext, '-f context="$STATUS_CONTEXT"', 'validate.yml context job');
-  requireText(validationContext, 'status_context: ${{ steps.context.outputs.status_context }}', 'validate.yml context job');
-  requireText(validationContext, 'echo "status_context=$STATUS_CONTEXT"', 'validate.yml context job');
+  const validationContext = section(validate, '  context:\n', '  report-pending:\n', validatePath);
+  verifyValidationStatusPublishers(validate, validationContext);
   forbidText(validationContext, 'actions/checkout', 'validate.yml context job');
   forbidText(validationContext, 'CLAUDE_CODE_OAUTH_TOKEN', 'validate.yml context job');
   verifyAgentPrGuards(normalizeGuardVariables(validationContext), 'validate.yml dispatched context');

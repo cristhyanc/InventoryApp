@@ -343,6 +343,7 @@ public class InventoryCostRepairUseCaseTests
             TransactionID = transactionId,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = ProductId,
             NayaxProductId = ProductId,
             MachineAuthorizationTime = at
         };

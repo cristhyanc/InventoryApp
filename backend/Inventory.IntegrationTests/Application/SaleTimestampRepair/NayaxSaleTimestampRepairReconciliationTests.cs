@@ -430,7 +430,8 @@ public class NayaxSaleTimestampRepairReconciliationTests : IDisposable
                 new ClosedXmlNayaxSalesWorkbookReader(),
                 new EfNayaxSalesImportStore(db),
                 TestCostingUseCases.CostSale(db, rebuild),
-                rebuild)
+                rebuild,
+                new EfNayaxProductLinkStore(db))
             .Handle(ExportCovering(_cohorts.Where(cohort => cohort.StoredUtc is null)));
 
         Assert.Equal(new NayaxSalesImportResult(38, 0, 0), result);

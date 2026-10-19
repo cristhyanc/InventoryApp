@@ -96,6 +96,7 @@ public class InventoryCostTransitionTests
             TransactionID = 1,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = 10,
             NayaxProductId = 10,
             MachineAuthorizationTime = DateTime.UtcNow.AddDays(-5),
             NayaxProductCostPrice = 1.10m,
@@ -143,6 +144,7 @@ public class InventoryCostTransitionTests
             TransactionID = 2,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = 10,
             NayaxProductId = 10,
             MachineAuthorizationTime = preview.CutoffAt.AddMinutes(2)
         };
@@ -192,6 +194,7 @@ public class InventoryCostTransitionTests
             TransactionID = 3,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = 10,
             NayaxProductId = 10,
             MachineAuthorizationTime = cutoff.AddDays(-1),
             NayaxProductCostPrice = 1.10m
@@ -258,7 +261,8 @@ public class InventoryCostTransitionTests
         var sale = await db.NayaxSales.SingleAsync();
         Assert.Equal(9, product.CostingQuantity);
         Assert.Equal(18m, product.InventoryValue);
-        Assert.Equal(10, sale.NayaxProductId);
+        Assert.Equal(10, sale.ProductId);
+        Assert.Null(sale.NayaxProductId);
         Assert.Equal(NayaxTransactionStatusIds.Completed, sale.TransactionStatusId);
         Assert.Equal(2m, sale.CostOfGoodsSold);
         Assert.Equal(SaleCostSource.InventoryLedger, sale.CostSource);
@@ -356,7 +360,16 @@ public class InventoryCostTransitionTests
     {
         var rebuild = TestCostingUseCases.Rebuild(db);
         return TestSalesSync.UseCase(
-            nayax, new EfLatestNayaxSalesStore(db, TestCostingUseCases.CostSale(db, rebuild), rebuild));
+            nayax,
+            new EfLatestNayaxSalesStore(
+                db,
+                TestCostingUseCases.CostSale(db, rebuild),
+                rebuild,
+                // The links issue #732's backfill recorded for data that already existed - every
+                // Nayax id names the local product with the same id - so these costing cases keep
+                // asserting the same matches while the store resolves them through the link lookup
+                // (issue #745) instead of comparing the remote id with Product.Id.
+                InventoryApi.Tests.Application.Nayax.FakeNayaxProductLinkStore.EveryIdLinkedToItself()));
     }
 
     private static async Task<NayaxSales> SaleAsync(AppDbContext db, long transactionId) =>

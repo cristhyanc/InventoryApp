@@ -6,6 +6,7 @@ using System.Text.Json;
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -435,6 +436,9 @@ public sealed class MachineAndProductFinancialRedactionApiTests
                 Name = "Vending Co",
                 TimeZoneId = "Australia/Sydney",
                 Status = BusinessStatus.Active,
+                // Selling through Nayax (issue #759), which is what makes the product's recorded
+                // external id a Nayax product id.
+                SalesProvider = ExternalProvider.Nayax,
                 CreatedAtUtc = CreatedAt,
             });
 
@@ -447,6 +451,10 @@ public sealed class MachineAndProductFinancialRedactionApiTests
             {
                 Id = ProductId,
                 BusinessId = BusinessId,
+                // The product's Nayax id (issue #732, on the row since #759), without which the
+                // machine slot resolves to no local product at all (issue #733). Every imported
+                // product has one in production.
+                ExternalProductId = NayaxExternalId.From(ProductId),
                 Name = "Coke",
                 UnitPrice = UnitPrice,
                 AverageUnitCost = AverageUnitCost,

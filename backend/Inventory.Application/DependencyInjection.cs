@@ -201,6 +201,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<RecordSiteCommissionPayment>();
         services.AddScoped<ListCategories>();
         services.AddScoped<GetCategory>();
+        services.AddScoped<CreateCategory>();
+        services.AddScoped<UpdateCategory>();
+        services.AddScoped<DeleteCategory>();
         services.AddScoped<ListSuppliers>();
         services.AddScoped<GetSupplier>();
         services.AddScoped<CreateSupplier>();
@@ -220,6 +223,7 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ListMachineDashboard>();
         services.AddScoped<GetMachineDashboard>();
         services.AddScoped<ListMachineProducts>();
+        services.AddScoped<GetMachineLatestSales>();
         services.AddScoped<SyncMachineStockFromNayax>();
         services.AddScoped<ApplyMachineStockSync>();
         services.AddScoped<ResolveMachineStockDuplicate>();

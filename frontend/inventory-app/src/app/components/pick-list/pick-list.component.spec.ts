@@ -10,6 +10,7 @@ import { Machine, PickListProduct, PickListResult, Product } from '../../models/
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
+import { providerAvailabilityDouble } from '../../provider/provider-availability.spec-helpers';
 
 function machine(overrides: Partial<Machine>): Machine {
   return {
@@ -162,7 +163,13 @@ function createHarness(
   const pickListService = { get: pickList } as unknown as PickListService;
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
 
-  const component = new PickListComponent(machineService, productService, pickListService, toast as unknown as ToastService);
+  const component = new PickListComponent(
+    machineService,
+    productService,
+    pickListService,
+    toast as unknown as ToastService,
+    providerAvailabilityDouble()
+  );
   component.ngOnInit();
 
   return {

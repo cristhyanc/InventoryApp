@@ -4,6 +4,7 @@ import { of } from 'rxjs';
 import { GstReportComponent } from './gst-report.component';
 import { GstReport, ReportingService } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
+import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 
 function report(overrides: Partial<GstReport> = {}): GstReport {
   return {
@@ -26,7 +27,8 @@ async function render(value: GstReport) {
     providers: [
       { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: new Map() } } },
       { provide: ReportingService, useValue: { gst: jest.fn(() => of(value)) } },
-      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } }
+      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
+      provideNayaxConnectionStatus()
     ]
   }).compileComponents();
 
@@ -71,8 +73,9 @@ describe('GstReportComponent purchase input GST (issue #432)', () => {
   it('displays the net GST the API calculated and never recalculates it in the browser', async () => {
     const { component } = await render(report({ netGst: -1.23, inventoryPurchaseGst: 11.23 }));
 
-    const netGstCard = component.cards(component.report!).find(card => card[0].startsWith('Estimated GST payable'));
-    expect(netGstCard![1]).toBe(-1.23);
+    const netGstCard = component.cards(component.report!).find(card => card.key === 'net-gst');
+    expect(netGstCard!.label).toBe('Estimated GST payable');
+    expect(netGstCard!.value).toBe(-1.23);
   });
 
   it('renders the data-quality notes the API supplied', async () => {

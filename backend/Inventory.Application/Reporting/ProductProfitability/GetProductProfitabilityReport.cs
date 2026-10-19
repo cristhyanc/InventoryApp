@@ -9,9 +9,9 @@ namespace Inventory.Application.Reporting.ProductProfitability;
 /// <summary>
 /// The product profitability report use case: resolves the requested date range/machine scope,
 /// retrieves report facts through the narrow <see cref="IProductProfitabilityReportFactsProvider"/>
-/// port, matches each raw Nayax product identifier/name group to the catalogue through the
-/// deterministic <c>Inventory.Domain.Reporting.ProductMatching.ProductMatcher</c>, merges groups
-/// that resolve to the same product (or the same unmapped identity), applies the shared Domain
+/// port, reads the local product each group of sales is persisted against (issue #758, parent #329
+/// decision A2c) rather than matching one, merges groups
+/// that resolve to the same product (or the same unresolved identity), applies the shared Domain
 /// profit/margin/completeness policy, and builds the authoritative
 /// <see cref="ProductProfitabilityReportDto"/> consumed by both the API response and the
 /// CSV/XLSX export.
@@ -42,15 +42,17 @@ public sealed class GetProductProfitabilityReport : IGetProductProfitabilityRepo
 
         var facts = await _facts.GetFactsAsync(range.From, range.ToDate, machineId, cancellationToken);
         var catalogueById = facts.Catalogue.ToDictionary(x => x.Id);
-        var candidates = facts.Catalogue.Select(x => new ProductMatchCandidate(x.Id, x.Name)).ToArray();
 
+        // The product each group of sales is attributed to is the association persisted on those
+        // sales (issue #758), read here rather than matched again. A group with none is unresolved
+        // and keeps the identity the provider reported, so it stays visible under a name an
+        // operator can recognise instead of disappearing into another product's row.
         var matched = facts.SaleGroups.Select(group =>
         {
-            var matchedProductId = ProductMatcher.Match(candidates, group.NayaxProductId, group.ProductName);
             var unmappedName = string.IsNullOrWhiteSpace(group.ProductName)
                 ? "Unmapped product"
                 : ProductMatcher.NormalizeName(group.ProductName);
-            return (Group: group, MatchedProductId: matchedProductId, UnmappedName: unmappedName);
+            return (Group: group, MatchedProductId: group.ProductId, UnmappedName: unmappedName);
         }).ToList();
 
         var matchedProductIds = matched
@@ -113,6 +115,12 @@ public sealed class GetProductProfitabilityReport : IGetProductProfitabilityRepo
         if (rows.Any(x => !x.IsCogsComplete))
             qualityNotes.Add("One or more completed sales have no persisted COGS; profit is incomplete.");
 
+        // How well recorded provider coverage accounts for this period's stored sales (issue #731,
+        // under issue #730's model), decided by the one Domain policy. Only the sales family: no
+        // figure here comes from a settlement import.
+        var salesAvailability = facts.Coverage.SalesAvailability();
+        ReportAvailabilityNotes.Add(qualityNotes, salesAvailability, SalesFigures, ReportAvailabilityNotes.NoSalesData);
+
         var quality = ReportingQuality.Quality(
             missingStatus: true,
             historicalCostUnavailable: rows.Any(x => !x.IsCogsComplete),
@@ -121,6 +129,16 @@ public sealed class GetProductProfitabilityReport : IGetProductProfitabilityRepo
             containsUnmappedProducts: rows.Any(x => x.IsUnmapped),
             notes: qualityNotes);
 
-        return new ProductProfitabilityReportDto(range.From, range.ToDate, rows, quality);
+        return new ProductProfitabilityReportDto(range.From, range.ToDate, rows, quality)
+        {
+            SalesAvailability = salesAvailability
+        };
     }
+
+    /// <summary>
+    /// The figures this report shows, named for its own columns. The product list itself is named
+    /// too: an empty table is the figure a reader is most likely to misread as "nothing sold".
+    /// </summary>
+    public const string SalesFigures =
+        "Each product's sales, quantity, cost of goods and gross profit, and the list of products itself";
 }

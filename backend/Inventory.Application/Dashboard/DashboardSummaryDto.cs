@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using Inventory.Application.Reorder;
+
 namespace Inventory.Application.Dashboard;
 
 /// <summary>
@@ -38,6 +41,25 @@ public sealed record DashboardSalesThisWeekDto(
     string? ComparisonNote);
 
 /// <summary>
+/// The "Needs refill" section of the summary, which is either the card's real figures
+/// (<see cref="DashboardRefillSummaryDto"/>) or the withheld shape
+/// (<see cref="UnavailableDashboardSectionDto"/>) with the reason the live fleet behind it was not
+/// read (issues #552 and #726).
+///
+/// <para>A union rather than a card with nullable counts, for the reason
+/// <see cref="UnavailableDashboardSectionDto"/> gives: a <c>0</c> or a <c>null</c>
+/// <c>machinesNeedingRefill</c> reads as a fact about the business's machines. The two
+/// <see cref="JsonDerivedTypeAttribute"/> declarations carry no type discriminator, so the JSON is
+/// the member's own object and nothing else - a client branches on the stated <c>available</c> flag,
+/// which is what <c>isDashboardSectionUnavailable</c> in the frontend's models already does.</para>
+/// </summary>
+[JsonDerivedType(typeof(DashboardRefillSummaryDto))]
+[JsonDerivedType(typeof(UnavailableDashboardSectionDto))]
+public interface IDashboardRefillSectionDto
+{
+}
+
+/// <summary>
 /// The "Needs refill" card, counted over the live Nayax machine fleet. Read
 /// <see cref="Inventory.Domain.Machines.MachineRefillAlertSummary"/> for the overlap semantics: the
 /// selection counts are disjoint, the two machine counts are not, and
@@ -46,6 +68,11 @@ public sealed record DashboardSalesThisWeekDto(
 /// <see cref="MachinesEvaluated"/> and <see cref="SelectionsEvaluated"/> are what make a zero
 /// honest: zero of zero means the fleet reported nothing to evaluate, while zero of many means every
 /// evaluated selection is adequately stocked.
+///
+/// <para>It is published only when the fleet really was read. A business whose Nayax connection is
+/// unusable, or whose Nayax account has not granted the fleet reads, is given
+/// <see cref="UnavailableDashboardSectionDto"/> instead (issue #726): this card has no honest
+/// storage-only form, because every figure on it is a figure about machines.</para>
 /// </summary>
 public sealed record DashboardRefillSummaryDto(
     int MachinesNeedingRefill,
@@ -54,7 +81,7 @@ public sealed record DashboardRefillSummaryDto(
     int EmptySelectionCount,
     int LowSelectionCount,
     int MachinesEvaluated,
-    int SelectionsEvaluated);
+    int SelectionsEvaluated) : IDashboardRefillSectionDto;
 
 /// <summary>
 /// The "Needs ordering" card: the distinct catalogue products the authoritative reorder policy says
@@ -62,10 +89,20 @@ public sealed record DashboardRefillSummaryDto(
 /// unnarrowed catalogue - same storage stock, same outstanding supplier-order quantity, same live
 /// machine replenishment need, same thresholds. <see cref="ProductsEvaluated"/> is the whole
 /// business-owned catalogue this count was taken over.
+///
+/// <para><see cref="Mode"/> is which facts the count accounted for (issue #726):
+/// <see cref="ReorderModes.MachineAware"/> when the live fleet was read, and
+/// <see cref="ReorderModes.StorageOnly"/> for a business with no usable Nayax connection or no
+/// permission for the fleet reads - storage stock, thresholds, restock targets and outstanding
+/// supplier orders, with the machines' need taken as 0. This card always carries a real count,
+/// because reordering is about storage: the mode says what went into it, and in storage-only mode
+/// <c>needsRefill</c> beside it carries the reason the fleet is missing. A stable code a client
+/// branches on, never a sentence to display.</para>
 /// </summary>
 public sealed record DashboardOrderingSummaryDto(
     int ProductsNeedingOrdering,
-    int ProductsEvaluated);
+    int ProductsEvaluated,
+    string Mode);
 
 /// <summary>
 /// A summary section the server deliberately did not compute for this request, published as
@@ -78,11 +115,12 @@ public sealed record DashboardOrderingSummaryDto(
 /// combination of properties that could describe an available section unavailably.</para>
 ///
 /// <para>The <see cref="Reason"/> is a stable code a client maps to its own wording, never a
-/// sentence to display. Issue #552 publishes exactly one, <see cref="SupportView"/>; issue #329
-/// adds <c>NayaxNotConnected</c> for a business whose connection is unusable, which is the same
-/// shape and deliberately not a second one.</para>
+/// sentence to display. Issue #552 published exactly one, <see cref="SupportView"/>; issue #726
+/// adds the two availability answers of a business whose Nayax fleet reads cannot be made -
+/// <see cref="NayaxNotConnected"/> and <see cref="PermissionNotGranted"/> - in the same shape and
+/// deliberately not in a second one.</para>
 /// </summary>
-public sealed record UnavailableDashboardSectionDto(string Reason)
+public sealed record UnavailableDashboardSectionDto(string Reason) : IDashboardRefillSectionDto
 {
     /// <summary>
     /// The reason code for a section withheld because the request is a support session's
@@ -92,6 +130,28 @@ public sealed record UnavailableDashboardSectionDto(string Reason)
     public const string SupportViewReason = "SupportView";
 
     /// <summary>
+    /// The reason code for a business that has no Nayax credentials an ordinary operation may use -
+    /// nothing stored, or a connection the status gate refuses (issue #726). An operator connects or
+    /// reconnects Nayax; nothing about the business's own storage data is affected.
+    ///
+    /// <para>Taken from <see cref="MachineNeedUnavailableReasons"/>, the one published vocabulary for
+    /// these two answers, so this section and the reorder-alert listing's response metadata cannot
+    /// drift into two spellings of one reason.</para>
+    /// </summary>
+    public const string NayaxNotConnectedReason = MachineNeedUnavailableReasons.NayaxNotConnected;
+
+    /// <summary>
+    /// The reason code for a business whose Nayax account has not granted this feature's reads
+    /// (issue #726): the credentials are usable and Nayax refused the fleet read with <c>403</c>.
+    /// Availability is per feature (issue #329, decision P9), so it is this section that is
+    /// unavailable and not the connection that is broken.
+    ///
+    /// <para>Taken from <see cref="MachineNeedUnavailableReasons"/>, as
+    /// <see cref="NayaxNotConnectedReason"/> is.</para>
+    /// </summary>
+    public const string PermissionNotGrantedReason = MachineNeedUnavailableReasons.PermissionNotGranted;
+
+    /// <summary>
     /// Always <see langword="false"/>. The property is published so a client branches on a stated
     /// flag rather than on the absence of the figures it expected.
     /// </summary>
@@ -99,6 +159,29 @@ public sealed record UnavailableDashboardSectionDto(string Reason)
 
     /// <summary>The section as a support view publishes it.</summary>
     public static UnavailableDashboardSectionDto SupportView { get; } = new(SupportViewReason);
+
+    /// <summary>The section for a business with no usable Nayax connection.</summary>
+    public static UnavailableDashboardSectionDto NayaxNotConnected { get; } = new(NayaxNotConnectedReason);
+
+    /// <summary>The section for a feature this business's Nayax account has not granted.</summary>
+    public static UnavailableDashboardSectionDto PermissionNotGranted { get; } = new(PermissionNotGrantedReason);
+
+    /// <summary>
+    /// The section for the reason a reorder calculation reported (issue #726). One mapping from the
+    /// Application's reason to the published code, so the dashboard cannot publish a code the
+    /// reorder use case does not produce, or invent one for a reason added later.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// A reason this vocabulary has never heard of - a value cast from an integer, which an enum
+    /// cannot prevent. Refused rather than published as available or under a guessed code.
+    /// </exception>
+    public static UnavailableDashboardSectionDto For(MachineNeedUnavailableReason reason) => reason switch
+    {
+        MachineNeedUnavailableReason.NayaxNotConnected => NayaxNotConnected,
+        MachineNeedUnavailableReason.PermissionNotGranted => PermissionNotGranted,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(reason), reason, "Unknown machine-need unavailability reason."),
+    };
 }
 
 /// <summary>
@@ -175,6 +258,11 @@ public interface IDashboardSummaryDto
 /// a Manager or an Owner - receives, unchanged. A caller whose role does not is answered
 /// <see cref="RedactedDashboardSummaryDto"/> instead.
 ///
+/// <see cref="NeedsRefill"/> is the union of issue #726: the card's figures when the live fleet was
+/// read, and the withheld shape with its reason for a business whose Nayax connection is unusable or
+/// whose Nayax account has not granted the fleet reads. <see cref="NeedsOrdering"/> is always a real
+/// count and states the mode it was counted in, because reordering is about storage stock.
+///
 /// <see cref="AsOfUtc"/> is the single instant every metric was resolved against, and
 /// <see cref="BusinessDate"/> the business date it falls on, so a caller can
 /// label the figures rather than infer freshness from its own clock. The business timezone itself is
@@ -187,7 +275,7 @@ public sealed record DashboardSummaryDto(
     DateTime AsOfUtc,
     DateTime BusinessDate,
     DashboardSalesThisWeekDto SalesThisWeek,
-    DashboardRefillSummaryDto NeedsRefill,
+    IDashboardRefillSectionDto NeedsRefill,
     DashboardOrderingSummaryDto NeedsOrdering,
     DashboardInventorySummaryDto Inventory) : IDashboardSummaryDto;
 
@@ -203,7 +291,7 @@ public sealed record DashboardSummaryDto(
 public sealed record RedactedDashboardSummaryDto(
     DateTime AsOfUtc,
     DateTime BusinessDate,
-    DashboardRefillSummaryDto NeedsRefill,
+    IDashboardRefillSectionDto NeedsRefill,
     DashboardOrderingSummaryDto NeedsOrdering,
     RedactedDashboardInventorySummaryDto Inventory) : IDashboardSummaryDto;
 

@@ -1,14 +1,18 @@
 import { Injectable } from '@angular/core';
-import { HttpClient, HttpParams } from '@angular/common/http';
+import { HttpClient, HttpParams, HttpResponse } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
 import {
   GstClassification,
   InventoryValuationSummary,
   Product,
   ProductGstRule,
   ProductPriceComparison,
-  ProductUpdateDto
+  ProductUpdateDto,
+  ReorderAlertListing,
+  ReorderMode
 } from '../models/models';
+import { nayaxUnavailabilityOfReason } from '../provider/nayax-availability';
 import { ConfigService } from './config.service';
 
 export interface ProductFilters {
@@ -17,6 +21,31 @@ export interface ProductFilters {
   supplierId?: number;
   machineId?: number;
   lowStockOnly?: boolean;
+}
+
+/** `InventoryApi.Adapters.Mapping.ReorderListingMetadataHeaders.Mode`. */
+const REORDER_MODE_HEADER = 'X-Reorder-Mode';
+
+/** `ReorderListingMetadataHeaders.MachineNeedUnavailableReason`. */
+const MACHINE_NEED_UNAVAILABLE_REASON_HEADER = 'X-Reorder-Machine-Need-Unavailable-Reason';
+
+/** The published mode code, or `null` for an absent or unrecognised one - never a guess. */
+function reorderMode(header: string | null): ReorderMode | null {
+  return header === 'StorageOnly' || header === 'MachineAware' ? header : null;
+}
+
+function reorderAlertListing(response: HttpResponse<Product[]>): ReorderAlertListing {
+  const mode = reorderMode(response.headers.get(REORDER_MODE_HEADER));
+  return {
+    products: response.body ?? [],
+    mode,
+    // Only a storage-only listing has machines missing from it, so a reason beside any other mode
+    // is ignored rather than reported as something this listing left out.
+    machineNeedUnavailableReason:
+      mode === 'StorageOnly'
+        ? nayaxUnavailabilityOfReason(response.headers.get(MACHINE_NEED_UNAVAILABLE_REASON_HEADER))
+        : null
+  };
 }
 
 @Injectable({ providedIn: 'root' })
@@ -41,12 +70,22 @@ export class ProductService {
     return this.http.get<Product>(`${this.baseUrl}/${id}`);
   }
 
-  getLowStock(filters: ProductFilters = {}): Observable<Product[]> {
+  /**
+   * The reorder alerts, with the mode they were calculated in (issue #727). The body is the same
+   * JSON array it has always been; the mode and, in storage-only mode, the reason the machines were
+   * not read, are additive response headers (issue #726), so the full response is observed rather
+   * than the body alone. A header this build does not recognise, or a response that carries none at
+   * all, leaves the metadata `null` rather than guessing a mode - a screen then shows the rows
+   * without labelling them.
+   */
+  getLowStock(filters: ProductFilters = {}): Observable<ReorderAlertListing> {
     let params = new HttpParams();
     if (filters.search) params = params.set('search', filters.search);
     if (filters.categoryId !== undefined) params = params.set('categoryId', filters.categoryId);
     if (filters.supplierId !== undefined) params = params.set('supplierId', filters.supplierId);
-    return this.http.get<Product[]>(`${this.baseUrl}/alerts/low-stock`, { params });
+    return this.http
+      .get<Product[]>(`${this.baseUrl}/alerts/low-stock`, { params, observe: 'response' })
+      .pipe(map((response) => reorderAlertListing(response)));
   }
 
   getInventoryValuationSummary(): Observable<InventoryValuationSummary> {

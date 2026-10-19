@@ -5,6 +5,8 @@ import { Subscription } from 'rxjs';
 import { Site } from '../../models/models';
 import { ReportingService, SiteCommissionReport, SiteCommissionRow } from '../../services/reporting.service';
 import { SiteService } from '../../services/site.service';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
+import { loadProviderList } from '../../provider/provider-list-load';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
 @Component({
@@ -17,13 +19,24 @@ import { SupportSessionService } from '../../support-session/support-session.ser
   <div class="card">
     <div class="card-body flex flex-wrap items-center gap-2">
       @for (option of periods; track option[0]) { <button type="button" class="btn btn-sm" [class.btn-primary]="period === option[0]" [class.btn-secondary]="period !== option[0]" (click)="selectPeriod(option[0])">{{ option[1] }}</button> }
-      <label class="ml-auto mr-2 text-md-body text-md-gray-600">Site <select class="ml-2 inline-block w-auto" [(ngModel)]="siteId"><option [ngValue]="null">All Sites</option>@for (site of sites; track site.siteId) { <option [ngValue]="site.siteId">{{ site.siteName }}</option> }</select></label>
-      <button type="button" class="btn btn-primary" (click)="load()">Apply</button>
+      @if (sitesError) {
+        <p data-testid="site-filter-error" class="ml-auto mr-2 text-md-body text-md-danger-text">{{ sitesError }}</p>
+      } @else if (sites.length > 0) {
+        <label class="ml-auto mr-2 text-md-body text-md-gray-600">Site <select class="ml-2 inline-block w-auto" [(ngModel)]="siteId"><option [ngValue]="null">All Sites</option>@for (site of sites; track site.siteId) { <option [ngValue]="site.siteId">{{ site.siteName }}</option> }</select></label>
+      }
+      <button type="button" class="btn btn-primary ml-auto" (click)="load()">Apply</button>
     </div>
     @if (period === 'custom') { <div class="card-footer flex flex-wrap items-center gap-3"><label class="text-md-body text-md-gray-600">From <input class="ml-1 inline-block w-auto" type="date" [(ngModel)]="from" /></label><label class="text-md-body text-md-gray-600">To <input class="ml-1 inline-block w-auto" type="date" [(ngModel)]="to" /></label></div> }
   </div>
   @if (loading) { <div class="card"><div class="card-body text-center"><span class="value-muted">Loading report...</span></div></div> }
   @else if (error) { <div class="alert alert-danger">{{ error }}</div> }
+  @else if (report && unavailable) {
+    <div class="alert alert-warning" role="status" data-testid="commission-unavailable">
+      <p class="alert-title">Site commission is unavailable for this business right now.</p>
+      <p>{{ unavailableDetail }}</p>
+      <p>Nothing has changed about the commission agreements or the payments already recorded; they are read back as soon as the provider is usable again.</p>
+    </div>
+  }
   @else if (report) {
     <div class="card overflow-x-auto"><table class="table"><thead class="table-head"><tr><th scope="col" class="table-cell">Site</th><th scope="col" class="table-cell">Frequency</th><th scope="col" class="table-cell">Basis</th><th scope="col" class="table-cell">Eligible Sales</th><th scope="col" class="table-cell">Rate</th><th scope="col" class="table-cell">Due</th><th scope="col" class="table-cell">Paid</th><th scope="col" class="table-cell">Outstanding</th><th scope="col" class="table-cell">Status</th><th scope="col" class="table-cell">Details</th></tr></thead><tbody>@for (row of report.rows; track row.siteId) { <tr class="table-row"><td class="table-cell">{{ row.siteName }}</td><td class="table-cell">{{ row.frequency }}</td><td class="table-cell">{{ row.basis }}</td><td class="table-cell">{{ money(row.eligibleSales) }}</td><td class="table-cell">{{ row.commissionRate * 100 | number:'1.2-2' }}%</td><td class="table-cell">{{ money(row.commissionDue) }}</td><td class="table-cell">{{ money(row.paid) }}</td><td class="table-cell">{{ money(row.outstanding) }}</td><td class="table-cell">{{ row.status }}</td><td class="table-cell"><button type="button" class="btn btn-link" (click)="selected = row">Details</button></td></tr> }</tbody></table></div>
     @if (selected) {
@@ -44,7 +57,7 @@ import { SupportSessionService } from '../../support-session/support-session.ser
       </section>
     }
   }
-  @if (selected) {
+  @if (selected && !unavailable) {
     <div><button type="button" class="btn btn-sm btn-secondary" (click)="printDetails()">Print details</button></div>
     <details class="card card-body">
       <summary class="card-title cursor-pointer">Products sold</summary>
@@ -58,6 +71,13 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 ` })
 export class SiteCommissionsReportComponent implements OnInit, OnDestroy {
   sites: Site[] = []; report: SiteCommissionReport | null = null; selected: SiteCommissionRow | null = null;
+  /**
+   * Set when the site list could not be read for a reason that is not an availability answer
+   * (issue #728). Sites come from the live Nayax fleet, so a business with no provider has no site
+   * filter at all - which is not the same thing as a site read that failed, and must not look like
+   * "All Sites" either way.
+   */
+  sitesError = '';
   siteId: number | null = null; loading = false; error = ''; period = 'thisMonth';
   paymentDate = this.date(new Date()); paymentAmount = 0; paymentNotes = '';
   from = this.date(new Date(new Date().getFullYear(), new Date().getMonth(), 1)); to = this.date(new Date());
@@ -72,12 +92,45 @@ export class SiteCommissionsReportComponent implements OnInit, OnDestroy {
    */
   sessionActive = false;
 
+  /**
+   * Whether the API answered that commission could not be calculated at all (issue #731). A site is
+   * known only from the live Nayax machine fleet, so when the provider is not usable the response
+   * carries no rows - and an empty table here would read as "no site is owed anything", which is
+   * the opposite of what happened. The page shows the reason instead of a table.
+   *
+   * <para>Only an explicit `false` withholds the table: a response that carries no flag at all is
+   * an older API, which only ever returned an available report.</para>
+   */
+  get unavailable(): boolean {
+    return this.report?.isAvailable === false;
+  }
+
+  /** The sentence the API gave for an unavailable report, with a safe fallback. */
+  get unavailableDetail(): string {
+    return this.report?.unavailableDetail
+      ?? 'Nayax is not usable for this business right now, so no machine can be matched to a site. The amounts are '
+      + 'not a measured zero.';
+  }
+
   private readonly sessionActiveSubscription: Subscription;
 
-  constructor(private readonly reports: ReportingService, private readonly siteService: SiteService, supportSession: SupportSessionService) {
+  constructor(
+    private readonly reports: ReportingService,
+    private readonly siteService: SiteService,
+    private readonly provider: ProviderAvailabilityService,
+    supportSession: SupportSessionService
+  ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
   }
-  ngOnInit(): void { this.siteService.getAll().subscribe({ next: sites => this.sites = sites, error: () => this.sites = [] }); this.load(); }
+  ngOnInit(): void {
+    loadProviderList(this.provider, 'machineFleet', () => this.siteService.getAll()).subscribe(outcome => {
+      this.sites = outcome.kind === 'listed' ? outcome.items : [];
+      this.sitesError = outcome.kind === 'failed'
+        ? 'The site list could not be loaded, so this report cannot be narrowed to one site.'
+        : '';
+    });
+    this.load();
+  }
   ngOnDestroy(): void { this.sessionActiveSubscription.unsubscribe(); }
   load(): void { this.loading = true; this.error = ''; this.selected = null; this.reports.siteCommissions({ from: this.from, to: this.to }, this.siteId).subscribe({ next: report => { this.report = report; this.loading = false; }, error: () => { this.error = 'Unable to load site commissions.'; this.loading = false; } }); }
   selectPeriod(period: string): void { this.period = period; const now = new Date(); const month = now.getMonth(); const year = now.getFullYear(); if (period === 'thisMonth') { this.from = this.date(new Date(year, month, 1)); this.to = this.date(now); } else if (period === 'lastMonth') { this.from = this.date(new Date(year, month - 1, 1)); this.to = this.date(new Date(year, month, 0)); } else if (period.includes('Quarter')) { const quarter = Math.floor(month / 3) + (period === 'lastQuarter' ? -1 : 0); this.from = this.date(new Date(year, quarter * 3, 1)); this.to = this.date(period === 'thisQuarter' ? now : new Date(year, quarter * 3 + 3, 0)); } else if (period === 'currentFy' || period === 'previousFy') { const startYear = year - (month < 6 ? 1 : 0) - (period === 'previousFy' ? 1 : 0); this.from = this.date(new Date(startYear, 6, 1)); this.to = this.date(period === 'currentFy' ? now : new Date(startYear + 1, 5, 30)); } }

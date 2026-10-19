@@ -11,6 +11,14 @@ namespace Inventory.Application.Products;
 /// ordering; the authoritative not-found answer is <see cref="IProductStore.UpdateAsync"/>'s own
 /// outcome, so a product deleted by another request between the read and the write reports
 /// not-found rather than a success that changed nothing.
+///
+/// <para>Since issue #736 the submitted fields also carry the product's name, selling price and
+/// category. The two deterministic invariants over them live in
+/// <see cref="ProductCataloguePolicy"/> and are checked here, before anything is written; the two
+/// refusals that depend on the stored row - a provider-managed name or category being changed, and a
+/// category this business does not own - are decided by the store, inside the same operation as the
+/// write (see <see cref="IProductStore.UpdateAsync"/>). Both reach the caller as this use case's
+/// <see cref="UpdateProductOutcome.Invalid"/> outcome with the refusal's own message.</para>
 /// </summary>
 public sealed class UpdateProduct
 {
@@ -23,14 +31,21 @@ public sealed class UpdateProduct
 
     public async Task<UpdateProductResult> Handle(long id, ProductUpdateFields fields, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(fields);
+
         if (!await _store.ExistsAsync(id, cancellationToken))
             return UpdateProductResult.NotFound();
 
-        var error = ProductRestockPolicy.Validate(fields.LowStockThreshold, fields.RestockTo);
+        var error = ProductRestockPolicy.Validate(fields.LowStockThreshold, fields.RestockTo)
+            ?? ProductCataloguePolicy.Validate(fields.Name, fields.UnitPrice);
         if (error is not null) return UpdateProductResult.Invalid(error);
 
-        return await _store.UpdateAsync(id, fields, cancellationToken)
-            ? UpdateProductResult.Success()
-            : UpdateProductResult.NotFound();
+        var attempt = await _store.UpdateAsync(id, fields, cancellationToken);
+        return attempt.Outcome switch
+        {
+            ProductWriteOutcome.Succeeded => UpdateProductResult.Success(),
+            ProductWriteOutcome.Refused => UpdateProductResult.Invalid(attempt.Refusal!),
+            _ => UpdateProductResult.NotFound(),
+        };
     }
 }

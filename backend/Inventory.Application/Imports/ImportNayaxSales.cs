@@ -1,4 +1,5 @@
 using Inventory.Application.Costing;
+using Inventory.Application.Nayax;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.Reporting.ProductMatching;
 
@@ -42,6 +43,20 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 ///   <see cref="NayaxTransactionStatusClassifier"/> and products matched by the Domain
 ///   <see cref="ProductMatcher"/>; neither status identifiers nor matching rules are reimplemented
 ///   here.</item>
+///   <item>An imported row's remote <c>NayaxProductID</c> names a local product only through the
+///   provider id this business recorded on that product, read once per import through
+///   <see cref="INayaxProductLinkStore"/> (issue #745). An id recorded on no product is an unknown
+///   product, handled exactly as an unmatched id already was: the sale is still imported and stays
+///   visibly uncosted, and no product's inventory cost is replayed for it. Nothing changes for data
+///   that predates it, because issue #732's backfill recorded every product's Nayax id as the one it
+///   was keyed by and issue #759's migration copied that onto the product row.</item>
+///   <item><b>That answer is persisted, not re-derived</b> (issue #758, parent #329 decision A2c).
+///   The product this import resolves is stored in <c>NayaxSales.ProductId</c> and is the one
+///   association costing, the cost replay, the timestamp repair, the reports and the machine-stock
+///   ledger read; <c>NayaxSales.NayaxProductId</c> keeps only the export's own raw product id, with
+///   its provenance recorded. A row this import resolves to nothing is stored unresolved and stays
+///   visible as such - no later reader rescues it by number or by name, so a product renamed or
+///   duplicated after the import cannot move the sale.</item>
 ///   <item>The sales are saved first, the affected products' costs are replayed next, and the
 ///   replayed costs are saved last. A fatal data-quality failure in that replay therefore
 ///   propagates with the rebuilt costs unsaved, exactly as the legacy import behaved. The
@@ -49,6 +64,18 @@ public sealed record NayaxSalesImportResult(int Imported, int Updated, int Skipp
 ///   is deliberately *not* applied here: that sync can never reconsider a sale it has already
 ///   stored, whereas re-uploading the export runs this import again, so failing loudly and
 ///   staging nothing is still the right answer. Whole-import atomicity is a separate change.</item>
+///   <item><b>This import records no provider data coverage</b> (issue #730, parent #329 decision
+///   P9). Importing every row of a workbook successfully says what was stored; it does not say that
+///   the workbook held every transaction of the span those rows cover. The upload is a file a person
+///   exported from Nayax Core, and it carries no statement of its own range or scope: it may have
+///   been filtered to one machine, one payment type, one site or any other criterion, and the
+///   authoritative <c>lastSales</c> contract carries no requested-period or scope metadata either
+///   (verified against the Nayax developer portal: <c>GET /v1/machines/{MachineID}/lastSales</c>
+///   takes only a machine id and returns no window boundary). Deriving a covered interval from the
+///   earliest and latest instants it happens to contain would therefore claim completeness for time
+///   nothing accounted for - precisely the false zero this coverage record exists to prevent. The
+///   imported sales are reported in full and their period stays <c>Unverified</c> until a fully
+///   successful synchronization covers it.</item>
 /// </list>
 /// </summary>
 public sealed class ImportNayaxSales
@@ -57,17 +84,20 @@ public sealed class ImportNayaxSales
     private readonly INayaxSalesImportStore _store;
     private readonly ICostSale _saleCosting;
     private readonly IRebuildProductCost _inventoryCostRebuild;
+    private readonly INayaxProductLinkStore _productLinks;
 
     public ImportNayaxSales(
         INayaxSalesWorkbookReader workbook,
         INayaxSalesImportStore store,
         ICostSale saleCosting,
-        IRebuildProductCost inventoryCostRebuild)
+        IRebuildProductCost inventoryCostRebuild,
+        INayaxProductLinkStore productLinks)
     {
         _workbook = workbook;
         _store = store;
         _saleCosting = saleCosting;
         _inventoryCostRebuild = inventoryCostRebuild;
+        _productLinks = productLinks;
     }
 
     /// <summary>
@@ -103,6 +133,27 @@ public sealed class ImportNayaxSales
             return new NayaxSalesImportResult(0, 0, 0);
 
         var candidates = await _store.GetProductCandidatesAsync(cancellationToken);
+
+        // Sales whose two candidate products disagreed when issue #758 resolved the existing
+        // history. Only an audited decision names one, so a re-import updates every other fact of
+        // such a sale and leaves its product exactly as it is. Expected to be empty.
+        var conflictingTransactionIds =
+            (await _store.GetConflictingTransactionIdsAsync(cancellationToken)).ToHashSet();
+
+        // The export's Nayax product ids are resolved to local product ids once, through the one
+        // lookup over the recorded provider ids (issue #745, parent #329 decision A2b),
+        // instead of being compared with Product.Id - which only ever worked because the local key
+        // *is* the Nayax id. Awaited in sequence with the catalogue read above and the per-row reads
+        // below: they all land on the request's own scoped context
+        // (docs/architecture.md § Concurrency inside one request).
+        var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
+            rows
+                .Where(row => row.NayaxProductId.HasValue)
+                .Select(row => row.NayaxProductId!.Value)
+                .Distinct()
+                .ToList(),
+            cancellationToken);
+
         var imported = 0;
         var updated = 0;
         var skipped = 0;
@@ -128,11 +179,17 @@ public sealed class ImportNayaxSales
                 continue;
             }
 
+            // The local product this row belongs to, decided here and persisted on the sale (issue
+            // #758). The rule is the one this import has always applied - the recorded provider id
+            // first (issue #745), then the unambiguous name - but its answer is now stored instead
+            // of re-derived by every later reader.
             var facts = new ImportedNayaxSale(
                 row.TransactionId,
                 row.MachineId,
                 instant.Value,
                 row.TransactionStatusId,
+                ProductMatcher.MatchLinked(
+                    candidates, LocalProductId(row.NayaxProductId, localProductIdByNayaxId), row.ProductName),
                 row.NayaxProductId,
                 row.MachineName,
                 row.SettlementValue,
@@ -151,7 +208,7 @@ public sealed class ImportNayaxSales
                 // The stored row's own product and instant are tracked before it is overwritten, so
                 // an update that moves a completed sale to another product or an earlier time
                 // replays both the product it left and the product it joined.
-                TrackAffectedProduct(candidates, stored, affected);
+                TrackStoredProduct(stored, affected);
                 sale = _store.Update(
                     stored,
                     facts with
@@ -159,6 +216,12 @@ public sealed class ImportNayaxSales
                         // Never erase a transaction cost price the business already holds with a
                         // row that simply does not carry the column.
                         NayaxProductCostPrice = facts.NayaxProductCostPrice ?? stored.NayaxProductCostPrice,
+
+                        // A conflicting sale keeps the product it has - none - until a human names
+                        // one through the audited operation (issue #758).
+                        ProductId = conflictingTransactionIds.Contains(row.TransactionId)
+                            ? stored.ProductId
+                            : facts.ProductId,
                     });
                 updated++;
             }
@@ -166,7 +229,7 @@ public sealed class ImportNayaxSales
             var cost = await _saleCosting.Handle(sale, cancellationToken: cancellationToken);
             if (cost is not null)
                 _store.StageCost(sale, cost);
-            TrackAffectedProduct(candidates, sale, affected);
+            TrackImportedProduct(sale, affected);
         }
 
         if (imported > 0 || updated > 0)
@@ -211,24 +274,58 @@ public sealed class ImportNayaxSales
     }
 
     /// <summary>
+    /// Records the product the row just imported affected: the association the import resolved and
+    /// persisted onto the sale (issue #758). An unresolved row affected no product's inventory and
+    /// stays visible through its own row and its costing provenance instead.
+    /// </summary>
+    private static void TrackImportedProduct(CostableSale sale, IDictionary<long, DateTime> affected)
+    {
+        if (!NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
+            return;
+
+        RecordAffectedProduct(sale.ProductId, sale, affected);
+    }
+
+    /// <summary>
+    /// Records the product a <em>stored</em> sale affected before this import overwrites it, read
+    /// from the association persisted on that row (issue #758) rather than re-derived from the
+    /// provider's product id or the reported name. That is what makes a re-import that moves a
+    /// transaction to another product replay both the product it left and the product it joined,
+    /// in one pass, from facts the previous writer decided.
+    /// </summary>
+    private static void TrackStoredProduct(CostableSale stored, IDictionary<long, DateTime> affected)
+    {
+        if (!NayaxTransactionStatusClassifier.IsCompletedSale(stored.TransactionStatusId))
+            return;
+
+        RecordAffectedProduct(stored.ProductId, stored, affected);
+    }
+
+    /// <summary>
     /// Records the product a completed sale affected, keeping the earliest such sale's instant.
     /// A sale that is not a completed sale changed no costed inventory, and an unmatched product
     /// has no inventory to replay - both stay visible through the sale's own status and costing
     /// provenance instead.
     /// </summary>
-    private static void TrackAffectedProduct(
-        IReadOnlyList<ProductMatchCandidate> candidates,
+    private static void RecordAffectedProduct(
+        long? productId,
         CostableSale sale,
         IDictionary<long, DateTime> affected)
     {
-        if (!NayaxTransactionStatusClassifier.IsCompletedSale(sale.TransactionStatusId))
-            return;
-
-        var productId = ProductMatcher.Match(candidates, sale.NayaxProductId, sale.ProductName);
         if (productId is not null &&
             (!affected.TryGetValue(productId.Value, out var existing) || sale.AuthorizationTime < existing))
             affected[productId.Value] = sale.AuthorizationTime;
     }
+
+    /// <summary>
+    /// The local product an imported row's <c>NayaxProductID</c> names, or <see langword="null"/>
+    /// when this business has recorded that Nayax id on no product.
+    /// </summary>
+    private static long? LocalProductId(
+        long? nayaxProductId, IReadOnlyDictionary<long, long> localProductIdByNayaxId) =>
+        nayaxProductId is long id && localProductIdByNayaxId.TryGetValue(id, out var localProductId)
+            ? localProductId
+            : null;
 
     /// <summary>
     /// Replays the inventory cost of every affected product whose transition baseline cutoff the

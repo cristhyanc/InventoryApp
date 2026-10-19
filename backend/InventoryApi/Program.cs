@@ -12,6 +12,7 @@ using Inventory.Infrastructure.Imports;
 using Inventory.Infrastructure.Nayax;
 using Inventory.Application.Businesses;
 using InventoryApi.Adapters.Businesses;
+using InventoryApi.Adapters.Mapping;
 using InventoryApi.Adapters.Members;
 using InventoryApi.Adapters.Nayax;
 using InventoryApi.Adapters.Onboarding;
@@ -22,6 +23,7 @@ using Inventory.Application.SupportSessions;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
 using InventoryApi.Auth.E2ETesting;
+using InventoryApi.Auth.ExternalIdentity;
 using InventoryApi.Auth.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
 using Inventory.Infrastructure.PlatformDiagnostics;
@@ -64,6 +66,15 @@ if (DocumentMigrationCommand.Matches(args))
 if (NayaxConnectionMigrationCommand.Matches(args))
 {
     return await NayaxConnectionMigrationCommand.RunAsync(args, CancellationToken.None);
+}
+
+// Deciding which local product a stored sale belongs to is the fifth human-invoked command (issue
+// #758). It is how an operator settles a sale the release's migration refused to guess at - a
+// conflicting one, or one no unambiguous name covered - and it applies no migration, so it can be
+// run while startup is refusing to come up over exactly those sales.
+if (NayaxSaleProductResolutionCommand.Matches(args))
+{
+    return await NayaxSaleProductResolutionCommand.RunAsync(args, CancellationToken.None);
 }
 
 // Taking a verified snapshot is likewise a deliberate, human- or scheduler-invoked command, not
@@ -279,7 +290,12 @@ builder.Services.AddCors(options =>
     {
         policy.WithOrigins("http://localhost:4200", "https://red-island-0c128c000.7.azurestaticapps.net")
               .AllowAnyHeader()
-              .AllowAnyMethod();
+              .AllowAnyMethod()
+              // A browser client can read only the response headers a CORS policy exposes, so the
+              // reorder-alert listing's additive metadata (issue #726) is listed here. These are the
+              // same already-allowed origins and the same already-allowed methods: nothing new may
+              // call the API, and the only thing exposed is the mode a response was produced in.
+              .WithExposedHeaders(ReorderListingMetadataHeaders.All);
     });
 });
 
@@ -373,6 +389,16 @@ builder.Services.AddScoped<IBusinessTimeZoneProvider>(sp => sp.GetRequiredServic
 // connection string a host that calls AddInfrastructureServices() must still make.
 
 var app = builder.Build();
+
+// One line of startup evidence about which issuers this deployment trusts (issue #710). It is
+// logged rather than enforced here because the decision itself was made in the composition root,
+// from configuration, before any request existed: a complete ExternalId section registers the
+// pinned customer identity scheme beside the workforce one, and an empty or unusable section
+// registers only the workforce scheme - which is why an unusable one is an error in the log rather
+// than a silently missing sign-in path. It carries identifiers only; this configuration holds no
+// secret, and no token or claim reaches it.
+app.Services.GetRequiredService<ExternalIdAuthenticationDecision>()
+    .LogTo(app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("InventoryApi.Auth.ExternalIdentity"));
 
 // Schema handling at startup (issue #64, revised by issue #201). Development, Testing, and
 // Production apply pending migrations automatically; any other environment applies nothing and

@@ -1,5 +1,4 @@
 using Inventory.Domain.FinancialConfiguration;
-using Inventory.Domain.Reporting.ProductMatching;
 
 namespace Inventory.Application.Costing;
 
@@ -19,10 +18,16 @@ public interface ICostSale
 /// completed (status ID 12) is left uncosted and pending. A completed sale already costed or
 /// legacy-estimated with both costs present is kept unless forced. Otherwise the precedence is:
 /// the internal inventory-ledger (AVCO) cost immediately before the sale, unless the product is
-/// unmatched or the sale is at or before its transition-baseline cutoff; otherwise the
+/// unresolved or the sale is at or before its transition-baseline cutoff; otherwise the
 /// transaction-level Nayax <c>Product Cost Price</c>; otherwise uncosted - an error when the
-/// product is unmatched or the Nayax cost is negative, pending when no cost is known yet. A
+/// product is unresolved or the Nayax cost is negative, pending when no cost is known yet. A
 /// negative cost is never applied and no cost is inferred from the product's current price.
+///
+/// <para>Which product a sale belongs to is the persisted <c>NayaxSales.ProductId</c> association
+/// (issue #758, parent #329 decision A2c), not a match made here: this use case reads
+/// <see cref="CostableSale.ProductId"/> and never falls back to the provider's product id or to the
+/// reported product name. A sale with no association is unresolved and is costed exactly as an
+/// unmatched sale already was.</para>
 /// </summary>
 public sealed class CostSale : ICostSale
 {
@@ -50,10 +55,18 @@ public sealed class CostSale : ICostSale
             sale.UnitCostAtSale.HasValue && sale.CostOfGoodsSold.HasValue)
             return null;
 
-        var productId = ProductMatcher.Match(
-            await _store.GetProductCandidatesAsync(cancellationToken),
-            sale.NayaxProductId,
-            sale.ProductName);
+        // The product the sale is persisted against (issue #758). Deliberately not re-derived from
+        // the provider's product id or the reported name: that association was decided once by the
+        // writer that stored the sale, and re-deciding it here would let a product rename or a
+        // duplicate name move historical COGS.
+        //
+        // An unresolved sale reads no ledger cost and consumes no inventory. It does still take the
+        // transaction-level Nayax cost below when the sale carries one, which is precedence step 2
+        // of AGENTS.md § Inventory and historical costing invariants and exactly what an unmatched
+        // sale has always done - not a new outcome this change introduced. Issue #758 asks for an
+        // unresolved sale not to be costed at all, which that established precedence contradicts,
+        // so the difference is raised on PR #766 for a human decision rather than settled here.
+        var productId = sale.ProductId;
 
         var baselineCutoff = productId is null
             ? null

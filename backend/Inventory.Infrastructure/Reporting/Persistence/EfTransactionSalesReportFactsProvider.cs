@@ -84,9 +84,21 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
             .GroupBy(x => x.CustomerID!.Value)
             .ToDictionary(x => x.Key, x => x.ToList());
 
+        // Whether the period holds any stored sale at all, over every status and before the report's
+        // own status filter, because that is what separates "no sales data" from "an unexplained
+        // zero" (issue #731). It is a separate Any() rather than a count taken while the rows stream
+        // past: the state is reported beside the totals, and a state decided from the rows the
+        // filter happened to keep would make a payment-type or status filter change it.
+        var containsSalesRows = await salesQuery.AnyAsync(cancellationToken);
+        var coverage = await EfReportingSharedQueries.CoverageFactsAsync(
+            _db, from, endExclusive, containsSalesRows, containsSettlementRows: false, cancellationToken);
+
         var rows = StreamRows(salesQuery, machineById, machinesBySite, cancellationToken);
 
-        return new TransactionSalesReportFacts(rows, catalogue, feeRates, agreementRows, siteMappingUnavailable);
+        return new TransactionSalesReportFacts(rows, catalogue, feeRates, agreementRows, siteMappingUnavailable)
+        {
+            Coverage = coverage
+        };
     }
 
     // Consumes the date/machine-filtered EF query as an asynchronous stream instead of completing it
@@ -109,7 +121,7 @@ public sealed class EfTransactionSalesReportFactsProvider : ITransactionSalesRep
 
             yield return new TransactionSalesReportFactsRow(
                 sale.TransactionID, sale.MachineAuthorizationTime, sale.MachineID, sale.MachineName,
-                siteId, siteName, sale.NayaxProductId, sale.ProductName,
+                siteId, siteName, sale.ProductId, sale.NayaxProductId, sale.ProductName,
                 PaymentMethodClassifier.Classify(sale.PaymentMethod), sale.PaymentMethod, sale.SettlementValue,
                 sale.NayaxProductCostPrice, sale.UnitCostAtSale, sale.CostOfGoodsSold,
                 sale.CostingStatus.ToString(), CostSourceLabel(sale), hasPersistedCost,

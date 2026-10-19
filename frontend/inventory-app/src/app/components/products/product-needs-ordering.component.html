@@ -30,6 +30,14 @@
 
 <div class="card">
   <div class="card-body p-0">
+    <!--
+      A storage-only list says so, and says why (issue #727): these figures are a complete answer
+      about storage, not a partial one about the machines, and an empty one needs the label most.
+      Shown with the list it describes, so a failed or outstanding load carries no label.
+    -->
+    @if (loadState.loaded && storageOnlyNote) {
+      <p class="border-b border-md-gray-200 p-4 text-md-body value-muted">{{ storageOnlyNote }}</p>
+    }
     @if (loadState.loadFailed) {
       <p class="p-4 text-md-body value-negative">Failed to load products needing ordering. Change a filter or reload the page to try again.</p>
     } @else if (loadState.loaded && products.length === 0) {
@@ -55,9 +63,11 @@
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('stock')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('stock')">{{ sortLabel('Stock', 'stock') }}</button>
               </th>
-              <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('machineNeed')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('machineNeed')">{{ sortLabel('Machine need', 'machineNeed') }}</button>
-              </th>
+              @if (isMachineNeedShown) {
+                <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('machineNeed')">
+                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('machineNeed')">{{ sortLabel('Machine need', 'machineNeed') }}</button>
+                </th>
+              }
               <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('lowStockThreshold')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lowStockThreshold')">{{ sortLabel('Low Stock Threshold', 'lowStockThreshold') }}</button>
               </th>
@@ -94,7 +104,9 @@
                     {{ p.quantityInStock }} {{ p.unit }}
                   </span>
                 </td>
-                <td class="table-cell table-num">{{ p.machineReplenishmentNeed }}</td>
+                @if (isMachineNeedShown) {
+                  <td class="table-cell table-num">{{ p.machineReplenishmentNeed }}</td>
+                }
                 <td class="table-cell table-num">{{ p.lowStockThreshold }}</td>
                 <td class="table-cell table-num">{{ p.restockTo }}</td>
                 <td class="table-cell table-num">{{ p.onOrderQuantity }}</td>

@@ -10,9 +10,8 @@ namespace Inventory.Application.Reporting.Transactions;
 /// <summary>
 /// The transaction sales report use case: resolves the requested date range/machine scope, then
 /// streams per-transaction facts plus effective fee-rate/commission-agreement data through the
-/// narrow <see cref="ITransactionSalesReportFactsProvider"/> port, matching each raw Nayax product
-/// identifier/name to the catalogue through the deterministic
-/// <c>Inventory.Domain.Reporting.ProductMatching.ProductMatcher</c>, invoking the Domain per-row
+/// narrow <see cref="ITransactionSalesReportFactsProvider"/> port, reading the local product each
+/// sale is persisted against (issue #758) rather than matching one, invoking the Domain per-row
 /// fee/commission/profit policy, applying status/payment/COGS/search filtering, and accumulating
 /// totals, filter options, and quality facts in one pass over the stream (use-case/presentation
 /// concerns, not vending-business rules). Totals and filter options always cover the complete
@@ -40,7 +39,6 @@ public sealed class GetTransactionSalesReport
         if (range.ToDate < range.From) range = new DateRange(range.ToDate, range.From);
 
         var facts = await _facts.GetFactsAsync(range.From, range.ToDate, filter.MachineId, cancellationToken);
-        var candidates = facts.ProductCatalogue.Select(x => new ProductMatchCandidate(x.Id, x.Name)).ToArray();
         var catalogueByName = facts.ProductCatalogue.ToDictionary(x => x.Id, x => x.Name);
 
         var status = FilterValue(filter.Status);
@@ -90,9 +88,13 @@ public sealed class GetTransactionSalesReport
 
         await foreach (var detail in facts.Transactions.WithCancellation(cancellationToken))
         {
-            var matchedProductId = ProductMatcher.Match(candidates, detail.NayaxProductId, detail.RawProductName);
-            var productName = matchedProductId.HasValue
-                ? catalogueByName[matchedProductId.Value]
+            // The association persisted on the sale (issue #758), not a match re-made per row: a
+            // transaction is reported under the same product costing and the ledgers use, and an
+            // unresolved one is reported under the name the provider gave it rather than being
+            // attached to whichever catalogue row happens to share that name today.
+            var matchedProductId = detail.ProductId;
+            var productName = matchedProductId.HasValue && catalogueByName.TryGetValue(matchedProductId.Value, out var catalogueName)
+                ? catalogueName
                 : string.IsNullOrWhiteSpace(detail.RawProductName) ? "Unmapped product" : ProductMatcher.NormalizeName(detail.RawProductName);
 
             var result = TransactionRowPolicy.Calculate(
@@ -158,6 +160,13 @@ public sealed class GetTransactionSalesReport
             notes.Add("Transaction fees are configured estimates. Imported Nayax fees are period/device-level and are not allocated to transactions.");
         if (nayaxCostedCount > 0)
             notes.Add($"Historical COGS includes {nayaxCostedCount} transaction(s) costed from the Nayax transaction export.");
+
+        // How well recorded provider coverage accounts for this period's stored sales (issue #731,
+        // under issue #730's model), decided by the one Domain policy. Only the sales family: this
+        // report shows no imported settlement figure.
+        var salesAvailability = facts.Coverage.SalesAvailability();
+        ReportAvailabilityNotes.Add(notes, salesAvailability, SalesFigures, ReportAvailabilityNotes.NoSalesData);
+
         var quality = new ReportingDataQualityDto(
             MissingStatus: missingStatusCount > 0,
             HistoricalCostUnavailable: totals.UncostedCompletedTransactionCount > 0,
@@ -172,8 +181,15 @@ public sealed class GetTransactionSalesReport
         else
             resultRows = SortRows(unboundedFiltered!, filter.SortBy, filter.SortDescending).Select(ToRowDto).ToList();
 
-        return new TransactionSalesReportDto(range.From, range.ToDate, resultRows, totals, quality, page, pageSize, filteredCount, options);
+        return new TransactionSalesReportDto(range.From, range.ToDate, resultRows, totals, quality, page, pageSize, filteredCount, options)
+        {
+            SalesAvailability = salesAvailability
+        };
     }
+
+    /// <summary>The figures this report's totals show, named for its own columns.</summary>
+    public const string SalesFigures =
+        "The transaction totals - sales, the card/cash split, cost of goods, profit, fees and commission";
 
     private static TransactionSalesRowDto ToRowDto(RowBuild build)
     {

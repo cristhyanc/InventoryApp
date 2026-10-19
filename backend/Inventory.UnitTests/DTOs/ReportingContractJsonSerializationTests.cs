@@ -54,6 +54,7 @@ public class ReportingContractJsonSerializationTests
                 "partialCostOfGoods", "isCogsComplete", "uncostedTransactionCount",
                 "uncostedSalesAmount", "structuredOperatingExpenses", "operatingExpenseGst",
                 "operatingExpensesByCategory", "directProfit", "directMarginPercent", "nayaxProcessingFees",
+                "providerAvailability",
             },
             PropertyNames(json));
 
@@ -61,6 +62,15 @@ public class ReportingContractJsonSerializationTests
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("costOfGoods").ValueKind);
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("grossProfit").ValueKind);
         Assert.Equal(1000m, document.RootElement.GetProperty("sales").GetDecimal());
+
+        // The availability block (issue #730) is a nested object with a named state per figure
+        // family, and the state travels as its name rather than an enum number so a renumbered
+        // enum cannot silently change what a stored response meant.
+        var availability = document.RootElement.GetProperty("providerAvailability");
+        Assert.Equal(["sales", "fees", "combined"], availability.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(["state", "asOfUtc", "isComplete"],
+            availability.GetProperty("sales").EnumerateObject().Select(p => p.Name));
+        Assert.Equal(JsonValueKind.String, availability.GetProperty("sales").GetProperty("state").ValueKind);
     }
 
     [Fact]
@@ -80,6 +90,7 @@ public class ReportingContractJsonSerializationTests
                 "dataQuality", "gstFreeSales", "inventoryPurchaseGst", "operatingExpenseGst",
                 "purchaseLineGst", "purchaseChargeGst", "purchaseUnresolvedComponentCount",
                 "purchaseUnresolvedAmount", "purchaseGstIncomplete",
+                "providerAvailability", "netGstAvailability",
             },
             PropertyNames(json));
 
@@ -113,6 +124,9 @@ public class ReportingContractJsonSerializationTests
                 "actualReimbursement", "reimbursementDifference", "isReconciled", "reconciliationStatus",
                 "reconciliationTolerance", "adjustmentsSupported", "directProfit", "directMarginPercent",
                 "nayaxProcessingFees",
+                // Issue #731: the states the bookkeeping report decided, republished beside the
+                // figures they govern.
+                "providerAvailability",
             },
             PropertyNames(json));
 
@@ -179,6 +193,9 @@ public class ReportingContractJsonSerializationTests
             new[]
             {
                 "from", "to", "rows", "totals", "dataQuality", "page", "pageSize", "totalCount", "filterOptions",
+                // Issue #731: one state, because every figure here comes from the stored sales
+                // themselves and nothing in this report comes from a settlement import.
+                "salesAvailability",
             },
             PropertyNames(json));
 

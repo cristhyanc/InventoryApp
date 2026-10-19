@@ -358,6 +358,7 @@ public class EfInventoryCostRepairStoreTests
             TransactionID = transactionId,
             TransactionStatusId = NayaxTransactionStatusIds.Completed,
             MachineID = 1,
+            ProductId = productId,
             NayaxProductId = productId,
             ProductName = productName,
             MachineAuthorizationTime = at
