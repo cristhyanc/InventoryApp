@@ -59,7 +59,25 @@
   <ul class="flex flex-col gap-1">
     @for (item of navigation; track item.label) {
       <li>
-        @if (item.kind === 'group') {
+        @if (isSectionHeading(item)) {
+          <!--
+            The live provider section's heading (issue #729). It is a heading, not a control: it
+            toggles nothing, links nowhere, and is announced as the heading of the entries after it.
+            Collapsed to the icon rail there is no room for its label or its sentence, so a rule
+            stands in for it visually while the heading itself stays in the accessibility tree.
+          -->
+          @if (expanded || drawer) {
+            <h2 class="mt-3 border-t border-md-gray-200 px-3 pb-1 pt-3 text-xs font-semibold uppercase tracking-wide text-md-gray-500">
+              {{ item.label }}
+              <span class="block text-xs font-normal normal-case tracking-normal text-md-gray-500">{{
+                item.description
+              }}</span>
+            </h2>
+          } @else {
+            <h2 class="sr-only">{{ item.label }}: {{ item.description }}</h2>
+            <div aria-hidden="true" class="my-2 border-t border-md-gray-200"></div>
+          }
+        } @else if (item.kind === 'group') {
           <button
             type="button"
             class="flex w-full items-center gap-3 rounded-md-control px-3 py-2 font-medium text-md-gray-800 transition hover:bg-md-gray-100"
@@ -91,11 +109,17 @@
                       [class.bg-md-dark-gradient]="isLinkActive(child)"
                       [class.text-white]="isLinkActive(child)"
                       [class.font-semibold]="isLinkActive(child)"
-                      [class.text-md-gray-800]="!isLinkActive(child)"
+                      [class.text-md-gray-800]="!isLinkActive(child) && !isLinkLocked(child)"
+                      [class.text-md-gray-400]="!isLinkActive(child) && isLinkLocked(child)"
                       [attr.aria-current]="isLinkActive(child) ? 'page' : null"
+                      [attr.title]="isLinkLocked(child) ? lockSummary(child) : null"
                       (click)="navigated.emit()"
                     >
                       <span class="truncate">{{ child.label }}</span>
+                      @if (isLinkLocked(child)) {
+                        <span class="badge badge-neutral">Locked</span>
+                        <span class="sr-only">{{ lockSummary(child) }}</span>
+                      }
                       @if (isBusinessesLink(child) && pendingBusinessCount) {
                         <span class="badge badge-warning">{{ pendingBusinessCount }}</span>
                       }
@@ -115,13 +139,24 @@
             class="flex items-center gap-3 rounded-md-control px-3 py-2 font-medium transition hover:bg-md-gray-100"
             [class.bg-md-dark-gradient]="isLinkActive(item)"
             [class.text-white]="isLinkActive(item)"
-            [class.text-md-gray-800]="!isLinkActive(item)"
+            [class.text-md-gray-800]="!isLinkActive(item) && !isLinkLocked(item)"
+            [class.text-md-gray-400]="!isLinkActive(item) && isLinkLocked(item)"
             [attr.aria-current]="isLinkActive(item) ? 'page' : null"
-            [attr.title]="expanded ? null : item.label"
+            [attr.title]="linkTitle(item)"
             (click)="navigated.emit()"
           >
             <app-icon [name]="item.icon ?? ''" variant="outlined" [size]="20" />
             <span class="truncate" [class.sr-only]="!expanded">{{ item.label }}</span>
+            <!--
+              A locked destination (issue #729) keeps its link and is marked rather than disabled:
+              clicking it is how an operator reaches the explanation. The badge is the visible mark
+              and the sentence beside it is the one a screen reader announces, so neither audience
+              is told only that something is "locked" without being told what would unlock it.
+            -->
+            @if (isLinkLocked(item)) {
+              <span class="badge badge-neutral ml-auto" [class.sr-only]="!expanded">Locked</span>
+              <span class="sr-only">{{ lockSummary(item) }}</span>
+            }
           </a>
         }
       </li>

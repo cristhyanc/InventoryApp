@@ -13,6 +13,8 @@ import { ApplicationPendingComponent } from './access/application-pending.compon
 import { ApplicationRejectedComponent } from './access/application-rejected.component';
 import { routes } from './app.routes';
 import { SignInComponent } from './auth/sign-in.component';
+import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
+import { ProviderLockedComponent } from './provider/provider-locked.component';
 import { StockHistoryPageComponent } from './components/stock/stock-history-page.component';
 import { AdminImportsComponent } from './components/admin/imports/admin-imports.component';
 import { HistoricalCostRecoveryComponent } from './components/admin/historical-cost-recovery/historical-cost-recovery.component';
@@ -184,7 +186,10 @@ describe('capability route guards (issue #528)', () => {
 
   /**
    * `/access-not-allowed` is where a capability guard *sends* a member, so guarding it by one
-   * would send them away from their own explanation. The account-state routing destinations and
+   * would send them away from their own explanation, and `/needs-provider` (issue #729) is there
+   * for exactly the same reason - with the added one that the destinations redirecting to it need
+   * different capabilities, each already checked by the capability guard that ran before
+   * `requireProvider`. The account-state routing destinations and
    * the invite route (issue #529) are the other exceptions, with the business application form
    * (issue #543) that those destinations link to, for the same reason `accountStateGuard`
    * is absent from them - see the `account-state routing and the global 403 handler` describe
@@ -200,6 +205,7 @@ describe('capability route guards (issue #528)', () => {
 
     expect(unguarded).toEqual([
       ACCESS_NOT_ALLOWED_PATH,
+      PROVIDER_LOCKED_PATH,
       'welcome',
       'application-pending',
       'application-rejected',
@@ -314,6 +320,74 @@ describe('super-admin routing (issue #546)', () => {
 
   it('loads the Super Admin Businesses page component', async () => {
     await expect(loadedComponent('super-admin/businesses')).resolves.toBe(SuperAdminBusinessesComponent);
+  });
+});
+
+/**
+ * The live provider routes and the "needs a provider" page (issue #729, child E2 of issue #329).
+ *
+ * `requireProvider` is presentation exactly as the capability guard is: each endpoint behind these
+ * pages resolves the business's own Nayax credentials and answers for itself. What the guard adds is
+ * that the URL behaves like the locked menu entry - typing `/machines` with no provider reaches one
+ * explanation instead of a page of refusals.
+ */
+describe('provider-locked routes (issue #729)', () => {
+  /** The live provider destinations: exactly the ones the menu shows in its own section. */
+  const lockedPaths = ['machines', 'machines/:id', 'sites', 'sites/:id/products', 'reports/site-commissions'];
+
+  /**
+   * **Historical reports stay accessible** (decision P5). These read stored sales, so they carry no
+   * provider guard at all and open normally with no provider, reporting their own availability
+   * states instead (issues #730 and #731). The site commission report is deliberately not here: a
+   * site is known only from the live fleet read, so it has nothing stored to report on.
+   */
+  const storedDataReportPaths = [
+    'reports',
+    'reports/bookkeeping',
+    'reports/daily',
+    'reports/transactions',
+    'reports/reconciliation',
+    'reports/machines',
+    'reports/products',
+    'reports/gst'
+  ];
+
+  it('serves the needs-a-provider page behind authentication alone', async () => {
+    expect(route(PROVIDER_LOCKED_PATH).canActivate).toEqual([MsalGuard]);
+    await expect(loadedComponent(PROVIDER_LOCKED_PATH)).resolves.toBe(ProviderLockedComponent);
+  });
+
+  it('guards every live provider route, after its capability guard rather than before it', () => {
+    for (const path of lockedPaths) {
+      const guards = route(path).canActivate ?? [];
+
+      expect(guards).toHaveLength(4);
+      expect(guards[0]).toBe(MsalGuard);
+      expect(guards[1]).toBe(accountStateGuard);
+      // The capability guard stays third, so a role that does not include the page is sent to its
+      // own explanation rather than told to connect a provider it still could not use.
+      expect(guards[2]).not.toBe(guards[3]);
+    }
+  });
+
+  it('leaves every report over stored data with no provider guard at all', () => {
+    for (const path of storedDataReportPaths) {
+      expect(route(path).canActivate).toHaveLength(3);
+    }
+  });
+
+  /**
+   * The provider repair and admin tools are hidden from the menu (issue #729) and no more than
+   * that: their URLs keep working exactly as before, because each one's API authorizes and answers
+   * for itself and page behaviour is out of this issue's scope.
+   */
+  it('leaves the Nayax imports and the sale timestamp repair routes unguarded by the provider', () => {
+    expect(route('admin/imports').canActivate).toHaveLength(3);
+    expect(route('admin/nayax-sale-timestamp-repair').canActivate).toHaveLength(3);
+  });
+
+  it('keeps the Integrations page reachable, because it is where a connection is made', () => {
+    expect(route('admin/nayax-settings').canActivate).toHaveLength(3);
   });
 });
 

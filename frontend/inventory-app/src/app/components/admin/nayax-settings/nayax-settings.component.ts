@@ -31,7 +31,9 @@ import { NayaxConnectionWizardComponent } from './nayax-connection-wizard.compon
       <header class="page-header">
         <div>
           <a routerLink="/admin" class="btn-link text-sm">&larr; Back to Admin</a>
-          <h1 class="page-title mt-2">Nayax Settings</h1>
+          <!-- "Integrations" since issue #729: the menu, the Admin hub card and this heading name
+               one destination, so they say one name. The URL is unchanged. -->
+          <h1 class="page-title mt-2">Integrations</h1>
           <p class="page-subtitle">Connect this business's own Nayax account, and configure the estimated processing fee rate used for current-period reporting until actual Nayax fee data is imported. Imported reimbursement data always takes precedence.</p>
         </div>
       </header>
