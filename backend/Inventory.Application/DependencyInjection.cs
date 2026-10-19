@@ -1,6 +1,7 @@
 using Inventory.Application.Access;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
+using Inventory.Application.CatalogueReview;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
@@ -220,6 +221,13 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetNayaxCatalogReconciliation>();
         services.AddScoped<GetSiteSummaries>();
         services.AddScoped<GetSiteProducts>();
+        // The business's own machine records (issue #740), which work with no provider at all. They
+        // are deliberately separate from the live-fleet use cases below.
+        services.AddScoped<ListLocalMachines>();
+        services.AddScoped<GetLocalMachine>();
+        services.AddScoped<CreateLocalMachine>();
+        services.AddScoped<RenameLocalMachine>();
+        services.AddScoped<SetLocalMachineActivation>();
         services.AddScoped<ListMachineDashboard>();
         services.AddScoped<GetMachineDashboard>();
         services.AddScoped<ListMachineProducts>();
@@ -285,6 +293,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ApplyHistoricalGstClassification>();
         services.AddScoped<ApplyInventoryCount>();
         services.AddScoped<ImportNayaxProductCatalog>();
+        // The provider catalogue review (issue #738). The direct import above is unchanged and keeps
+        // its own path; these are the deliberate link-or-create alternative to it.
+        services.AddScoped<StartCatalogueReview>();
+        services.AddScoped<ApplyCatalogueReview>();
+        services.AddScoped<ResolveLinkedProviderSales>();
         services.AddScoped<ImportNayaxSales>();
         services.AddScoped<ImportPendingReimbursementXmlFiles>();
         services.AddScoped<GetStockHistory>();

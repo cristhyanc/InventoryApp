@@ -58,6 +58,7 @@
     <Compile Include="..\Inventory.UnitTests\Application\CatalogReconciliation\FakeCatalogSnapshotProviders.cs" Link="Application\CatalogReconciliation\FakeCatalogSnapshotProviders.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Categories\FakeCategoryStore.cs" Link="Application\Categories\FakeCategoryStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Gst\FakeCurrentBusinessProvider.cs" Link="Application\Gst\FakeCurrentBusinessProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Machines\FakeLocalMachineStore.cs" Link="Application\Machines\FakeLocalMachineStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberInviteAudit.cs" Link="Application\Members\FakeMemberInviteAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberManagementAudit.cs" Link="Application\Members\FakeMemberManagementAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Nayax\FakeNayaxProductLinkStore.cs" Link="Application\Nayax\FakeNayaxProductLinkStore.cs" />

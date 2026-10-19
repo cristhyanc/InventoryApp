@@ -233,6 +233,15 @@ public class OperatorReadableFinancialFigureTests
         "PUT api/Products/{id:long}/gst-rule",
         "PUT api/Suppliers/{id:int}",
 
+        // The machine write surface of issue #740: the business's own machine records. A machine is
+        // name-only - it carries no revenue, cost or valuation of any kind - and each of these three
+        // answers a status code or the one refusal sentence saying the name is missing. The list and
+        // read actions are deliberately *not* here: they declare their response payload, so the scan
+        // above inspects them like any other read.
+        "POST api/local-machines/{id:long}/deactivate",
+        "POST api/local-machines/{id:long}/reactivate",
+        "PUT api/local-machines/{id:long}",
+
         // The purchase's stored document: a file stream with its own content type and name, and
         // never a projection of the purchase's figures.
         "GET api/purchases/{id:int}/file",

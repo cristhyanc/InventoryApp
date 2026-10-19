@@ -5,6 +5,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 ## Capabilities
 
 - Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
+- Nayax is an optional add-on: inventory, purchasing, expenses and the reports over sales already imported work without it, while the features that read live Nayax data are grouped together in the menu and shown locked until a provider is connected (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
 - Nayax product and transaction imports with explicit payment/status handling.
@@ -188,7 +189,7 @@ for exactly one business, that business is the one `bootstrap-business` adopted,
 credential is already stored, and a `NayaxTokenProtection` key is provisioned.
 
 A new business does not need this command: an Owner connects their own Nayax account from the
-application, through the wizard on Admin → Nayax Settings (see
+application, through the wizard on Admin → Integrations (see
 [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)). The command exists for the business
 whose credential was already in global configuration before that wizard did.
 
@@ -376,7 +377,7 @@ Who may apply: an account with **no active membership anywhere** — never a mem
 
 **The flag is `false` in source control and must stay off in production until a human has verified the release gate** — see [docs/tenant-rollout.md § Enabling self-service onboarding](docs/tenant-rollout.md#enabling-self-service-onboarding-issue-541). With it off, the endpoint answers `404` and `onboardingEnabled` is `false`.
 
-The journey a second live business needs is now complete end to end. The application form exists (issue #543, `/apply`, above), and the approval **user interface** of issue #510 does too: the Super Admin's own Businesses page (issue #547, see [Super Admin businesses API](#super-admin-businesses-api) above) approves, rejects, deactivates and reactivates a business and releases a member of a deactivated one. The Nayax credential is no longer a blocker either: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). An Owner can test a pasted operator id and token, save the tested pair and re-test the stored one (`/api/settings/nayax-connection/test`, `.../save`, `.../retest`; see [docs/architecture.md § Saving a tested connection and re-testing it](docs/architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)), and drives it from the connection wizard on Admin → Nayax Settings (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)); the connection banners of issue #539 are on the screens that depend on Nayax — the machine list and machine detail, Sync Restock, the site list and a site's products, and the pick list — so a member who cannot reach that wizard still sees why those screens have no Nayax data. The business that is live today had its credential moved in by the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
+The journey a second live business needs is now complete end to end. The application form exists (issue #543, `/apply`, above), and the approval **user interface** of issue #510 does too: the Super Admin's own Businesses page (issue #547, see [Super Admin businesses API](#super-admin-businesses-api) above) approves, rejects, deactivates and reactivates a business and releases a member of a deactivated one. The Nayax credential is no longer a blocker either: since issue #520 every Nayax call uses the current business's own encrypted operator id and token, with no global fallback (see [docs/architecture.md § Per-business Nayax credentials](docs/architecture.md#per-business-nayax-credentials-issue-520)). An Owner can test a pasted operator id and token, save the tested pair and re-test the stored one (`/api/settings/nayax-connection/test`, `.../save`, `.../retest`; see [docs/architecture.md § Saving a tested connection and re-testing it](docs/architecture.md#saving-a-tested-connection-and-re-testing-it-issue-537)), and drives it from the connection wizard on Admin → Integrations (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)); the connection banners of issue #539 are on the screens that depend on Nayax — the machine list and machine detail, Sync Restock, the site list and a site's products, and the pick list — so a member who cannot reach that wizard still sees why those screens have no Nayax data. The business that is live today had its credential moved in by the human-run [`migrate-nayax-connection`](#migrating-the-nayax-connection-into-the-business) command. See [docs/tenant-rollout.md](docs/tenant-rollout.md) for the bootstrap procedure and [docs/architecture.md](docs/architecture.md#tenant-ownership-issue-64) for the design.
 
 ## Roles and capabilities
 
@@ -394,14 +395,14 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
 - **Every endpoint is enforced by capability** (issues #525 and #526). The capability a role must grant is checked before the request reaches the endpoint, and a refusal is a plain `403` that describes neither the capability nor the role. What each role can reach:
   - **Operator** — the Dashboard (including its sales refresh) and the Pick List; inventory: products, take inventory, categories, stock and stock history, machines including Sync Restock, and sites; purchasing: purchases, supplier orders and suppliers. They may record a purchase but not change a supplier's GST defaults (`Suppliers.ManageGstDefaults`), and they reach no report, expense, import, site commission, setting or maintenance tool at all.
   - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
-  - **Owner** — everything a Manager reaches, plus Admin → Nayax Settings (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, all five maintenance repairs (Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery), Admin → Users (below), Admin → Roles and Admin → Business Settings (see [Business settings (Admin page)](#business-settings-admin-page)). Each repair's preview and dry run is as restricted as its apply.
+  - **Owner** — everything a Manager reaches, plus Admin → Integrations (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, all five maintenance repairs (Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery), Admin → Users (below), Admin → Roles and Admin → Business Settings (see [Business settings (Admin page)](#business-settings-admin-page)). Each repair's preview and dry run is as restricted as its apply.
   - **Admin → Roles** (issue #530) is a read-only page, on `Roles.View`, which only an Owner holds: it explains what Owner, Manager and Operator can each access, from the same table above. It edits nothing — no role, no permission and no member — and is rendered from one frontend definition kept from drifting away from the published capability vocabulary by its own test (see [docs/architecture.md § The Roles page](docs/architecture.md#the-roles-page-issue-530)).
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **`Dashboard.ViewFinancials` covers every sales, revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699) — not only the two headline cards above. The Sites list and the home Dashboard's Sites/Machines tables hide their revenue, direct-profit, margin and trend columns without it; Site Products hides Estimated Card Profit (and drops it from the CSV export); the Machines list hides sales, direct profit and the profitability-status badge; and Machine Detail hides its revenue/direct-profit summary cards and the Estimated Card Profit/50% Card Margin Price product columns. Unit cost, site/machine selling price, stock, restock and navigation stay visible to every role. That page-level hide is read from `GET /api/me/access` rather than from each endpoint's response, so on its own it hides a figure rather than protecting it; the API withholds the figures too, for the site endpoints since #697, for the machine and product endpoints since #698, and for the stock-movement and purchasing endpoints since #700 (the next three bullets).
   - **The site endpoints withhold revenue and estimated profit from a role that may not see them** (issue #697). Every role reaches `GET /api/sites` and `GET /api/sites/{id}/products` — stocking and pricing a site is day-to-day inventory work, on `Inventory.Operate` — but a role without `Dashboard.ViewFinancials`, today an Operator, is sent `null` for `todayRevenue`, `currentWeekRevenue` and `previousComparableWeekRevenue` on every site row and for `estimatedCardProfit` on every site product row. Never `0`: a period with no completed sale still reports an honest `0` to a caller who may see it, so `null` means "not yours to see". The revenue and the estimate are never calculated for that caller at all — the completed-sales read behind the revenue and the commission and processing-fee reads behind the estimate are not made. **Unit cost (`averageUnitCost`) and site price (`sitePrice`) stay visible to every role**, together with stock, MDB codes, machine counts and the alert counts, and a Manager's and an Owner's response is unchanged. A platform administrator in a [support session](#super-admin-support-sessions) sees the figures, because that session's fixed capability set grants `Dashboard.ViewFinancials`. The machine and product endpoints are covered separately by #698 (next bullet).
   - **The machine and product endpoints withhold their financial figures too** (issue #698). `GET /api/machines`, `GET /api/machines/{id}`, `GET /api/machines/{id}/products`, `GET /api/products`, `GET /api/products/{id}` and the low-stock list all stay available to an Operator — restocking machines is what they are for — but for a caller without `Dashboard.ViewFinancials` every machine revenue, direct-profit and `profitabilityStatus` field and every product's `inventoryValue` is **`null`, never `0`**: a withheld revenue arriving as zero would be a false statement about the business, and summing `inventoryValue` would have recovered the valuation the dashboard withholds. Machine identity, stock, restock and Sync Restock are untouched, and **unit cost (`averageUnitCost`, `unitPrice`) and selling price (`machinePrice` and the slot's suggested price fields) stay visible to every role** by the recorded decision — an Operator needs them to restock and price a slot. A Manager's and an Owner's responses are unchanged. The one gap #698 left open — a product's `stockAdjustments` still carrying each movement's inventory value — is closed by #700 in the next bullet. See [docs/architecture.md § Machine and product financial redaction](docs/architecture.md#machine-and-product-financial-redaction-issue-698).
   - **Every remaining Operator-readable endpoint has been audited, and the last two leaks are closed** (issue #700). Issue #700 walked every endpoint a role without `Dashboard.ViewFinancials` can reach — taken from the capability policies themselves — and classified each restricted figure on each one; the endpoint-by-endpoint table is in [docs/architecture.md § Operator-readable financial disclosure](docs/architecture.md#operator-readable-financial-disclosure-issue-700). Two figures were still being sent. A **stock movement's `inventoryValueAfter`** — the business's inventory value at cost after that movement, so the latest one reports the current valuation — is now `null` for a caller without the capability on `GET`/`POST api/products/{id}/stock`, on `GET api/stock-history`, and nested in a product's `stockAdjustments`. The **catalogue product nested in a purchase line or a supplier-order line** now withholds its `inventoryValue` on the `api/purchases` and `api/supplierorders` responses, the same way `api/products` has since #698 — otherwise listing purchases was a way around that. Never `0`: both fields already mean "no cost" or "no valuation yet" when they are `null`, and a withheld amount arriving as zero would be a false statement about the business. **Nothing else is withheld.** A movement's own `unitCost`, `totalCost` and `averageUnitCostAfter`, a purchase's `totalAmount`, delivery and package charges, each line's `unitCost` and `lineTotal` and its input-GST block, and a supplier order's quantities, `unitPrice` and `outstandingQuantity` all stay visible to every role, because they are purchasing and unit-cost data an Operator enters and has to be able to read back. Every other Operator-readable endpoint — the pick list, categories, take inventory, the price history and restock-cost suggestion, Sync Restock, the machine stock ledger, suppliers and the stored purchase document — carries no restricted figure at all. A Manager's and an Owner's responses are unchanged, and a new revenue, profit, margin, sales or inventory-value property on any of these responses now fails the build until somebody decides what happens to it.
-  - **The Angular application renders what the role allows** (issue #528). It reads the caller's capabilities once from `GET /api/me/access` and builds the sidebar from them, so an Operator is offered no Expenses, Reports or Admin entries and a Manager no Nayax Settings or data-repair entries; a route the role does not allow shows an "access not allowed" page, and an action the role cannot use — the supplier GST defaults editor — is not offered. **None of that is the boundary**: the API checks the same capability on every request and refuses it there, so a hidden entry hides a page rather than protecting one, and a capability list that cannot be read hides nothing at all. Since every current member is an Owner, nothing changed for anybody using the application today.
+  - **The Angular application renders what the role allows** (issue #528). It reads the caller's capabilities once from `GET /api/me/access` and builds the sidebar from them, so an Operator is offered no Expenses, Reports or Admin entries and a Manager no Integrations or data-repair entries; a route the role does not allow shows an "access not allowed" page, and an action the role cannot use — the supplier GST defaults editor — is not offered. **None of that is the boundary**: the API checks the same capability on every request and refuses it there, so a hidden entry hides a page rather than protecting one, and a capability list that cannot be read hides nothing at all. Since every current member is an Owner, nothing changed for anybody using the application today.
   - The capability vocabulary and the one role → capability table are described in [docs/architecture.md](docs/architecture.md#membership-roles-and-capabilities-issue-521), how they are enforced in [docs/architecture.md § Capability authorization](docs/architecture.md#capability-authorization-issue-525), and the full matrix by page and endpoint in [docs/architecture.md § Capability authorization on the Manager and Owner endpoints](docs/architecture.md#capability-authorization-on-the-manager-and-owner-endpoints-issue-526).
 
 ### Managing members: changing a role and revoking access
@@ -1111,8 +1112,19 @@ does not manage.
   it would create a duplicate of each of yours. A business whose products all came from Nayax
   imports exactly as before, and the check is made again at the moment the import is written, so a
   product somebody creates while Nayax is being read refuses the import rather than slipping past
-  it — nothing is imported in that case either. Linking your own products to Nayax products
-  deliberately is the next step (issues #738 and #739).
+  it — nothing is imported in that case either.
+- **Linking your own products to Nayax products now has an API, and not yet a screen** (issue #738).
+  `POST /api/catalogue-review` previews the Nayax catalogue against your own: which Nayax products and
+  groups nothing of yours is linked to, which linked products Nayax has renamed, re-grouped or
+  repriced, and how many unresolved sales each link would explain. `POST /api/catalogue-review/apply`
+  then links or creates per entry, per your decisions. Once a product is linked, Nayax owns its name
+  and its category; its price is yours to keep or take, per product, and a price you keep is not
+  offered again until Nayax changes it. Nothing is ever linked by matching names, nothing changes a
+  sale you already have, and applying the same review twice changes nothing. Attributing older
+  unresolved sales to a product you have just linked is a separate, confirmed step
+  (`POST /api/catalogue-review/unresolved-sales/apply`, Owner only) because it replays that product's
+  cost history. The **Import Products** button still behaves exactly as described above; the screen
+  that will send you to the review instead is issue #739.
 
 ## Product and supplier GST rules
 
@@ -1210,7 +1222,8 @@ costing value that was never recorded in the first place.
 
 ## Connecting Nayax (Admin page)
 
-**Admin → Nayax Settings** is where an Owner connects this business's own Nayax account. Only an
+**Admin → Integrations** (called Nayax Settings until issue #729) is where an Owner connects this
+business's own Nayax account. Only an
 Owner can reach it, and the connection wizard at the top of the page walks through six steps; the
 estimated processing fee rate is configured further down the same page and is unrelated to the
 connection.
@@ -1364,6 +1377,97 @@ the filters and fields below.
 
 **A connected business sees no change here either.** Every filter, field and category is exactly as
 before.
+
+#### The menu without a usable provider
+
+Issue #729 puts the same answer in the navigation, so the menu says which features need a provider
+before a page has to.
+
+- **What works without a provider comes first.** Dashboard, Pick List, **Machines** (since issue
+  #740 — see [Machines](#machines) below), **Inventory** (the group that
+  used to be called Products — the Products page inside it, its URL and its breadcrumb are
+  unchanged), Purchases, Expenses, Reports and Admin.
+- **The live provider features sit in one section at the bottom, under a "Needs Nayax" heading**:
+  **Sites** and **Site Commissions**. Each of them exists only for what the live Nayax
+  fleet read returns, so without a usable connection it is shown **locked** — still visible, still
+  clickable — and opening it, or typing its URL, reaches a "needs a provider" page with a **Connect**
+  button for a member who may manage integrations. A member whose role may not see one of these
+  entries does not see it locked either: the role rules apply first, so a locked entry is never an
+  advertisement for a page that role never had.
+- **Historical reports are never locked.** Bookkeeping, Daily, Transactions, Reconciliation, machine
+  profitability, product profitability, GST and the reporting dashboard all read **stored** data.
+  They stay in the Reports group, open normally with no provider at all, and show their own
+  availability states instead — complete, stale, unverified or missing (see
+  [docs/architecture.md § Report availability model](docs/architecture.md#report-availability-model-issue-730)).
+  Sales imported before a connection was removed stay readable afterwards. The site commission report
+  is the one report in the provider section, because a site is known only from the live fleet read —
+  with no provider it has no sites to report on at all.
+- **Waiting for one Nayax permission reads differently from having no connection.** With a usable
+  connection whose Nayax account has not granted one read (`PendingPermissions`), the entries that
+  need that read are locked as *waiting for a Nayax permission* and their page names the Nayax read
+  and the endpoint behind it — "Machine list (GET machines)" — which is what a support request to
+  Nayax has to ask for. No **Connect** button is offered there: the credentials are working, so
+  re-entering them would fix nothing. Entries whose own reads are granted keep working beside them.
+  The Nayax permission *key* behind a read is not named, because no published contract states it (see
+  [docs/architecture.md § Provider-locked navigation](docs/architecture.md#provider-locked-navigation-issue-729)).
+- **The provider's repair and admin tools are hidden, not locked**: Admin → Imports (the Nayax sales
+  and settlement imports) and Admin → Nayax Sale Timestamp Repair are left out of the menu until the
+  connection is usable, because without a provider there is nothing of the provider's to import or
+  repair. The costing and GST repairs are the business's own data and stay. **Admin → Nayax Settings
+  is now Admin → Integrations** and is always reachable — it is where a connection is made — with the
+  page's own heading, the Admin hub card and its breadcrumb renamed with it; its URL is unchanged.
+- **An unread connection status locks nothing.** If the status cannot be read, the menu offers every
+  entry unlocked and each page's own request reports its own outcome, for the same reason a failed
+  probe hides no filter above.
+- **The menu updates as soon as the connection does; no page reload is needed.** Save or re-test a
+  token on Admin → Integrations and the locked entries unlock and the provider's tools reappear
+  there and then; lose the connection, or have Nayax refuse one read, and they lock again with the
+  message that fits. The menu, the page and the URL always agree about the same destination.
+
+**A connected business sees no change in the menu either**, beyond the two renames and the new order.
+
+Since issue #740 the **Machines** entry is in the top section rather than this one, and is never
+locked: a business keeps its own machine records now (see the next section).
+
+## Machines
+
+The machines a business operates are its own records, and they work with or without a sales provider
+connected (issue #740). Before it, a machine was never stored at all — every machine list was a read
+of the live Nayax fleet — so a business with no provider had no machines.
+
+- **The Machines page is two lists.** *Your machines* is always there: it lists every machine this
+  business has recorded, active and inactive, and holds the Add, Rename, Deactivate and Reactivate
+  actions. *Live from Nayax* — the revenue and profit figures, and the links into each machine's
+  stock and Sync Restock workflow — appears below it only while the Nayax connection can serve the
+  fleet read. With no usable provider the live section is not shown at all, and the page is the local
+  machine list alone; if the fleet read fails for some other reason (an outage, a transport failure),
+  the page says so in place of that section instead of looking like a business with no machines.
+- **Create a machine** with `POST /api/local-machines`, which answers the created machine with its
+  new id. A machine needs a name and nothing else. Names are deliberately **not** unique within a
+  business: two machines in one corridor may legitimately both be called "Level 3", and nothing
+  resolves a machine by its name.
+- **Rename one** with `PUT /api/local-machines/{id}`. Unlike a product's or a category's name, a
+  machine's name is yours even when the provider named the machine: nothing synchronises a machine's
+  name, so no import can overwrite it.
+- **Deactivate and reactivate**, with `POST /api/local-machines/{id}/deactivate` and
+  `.../reactivate`. **There is no delete.** Recorded transactions, refills, machine counts and
+  expenses refer to a machine, so a machine that stops trading keeps all of its history and stays in
+  the list, marked *Inactive*, ready to be put back in service.
+- **A machine the provider named is marked "From Nayax".** Every machine this database already
+  referred to — through a sale, a refill, a machine count, an expense, a stock event, a sale
+  timestamp repair or an inventory-cost transition — was given a local record when this change was
+  released, carrying the provider's own machine id and the most recent name that had been stored for
+  it (or "Machine" and the number, where nothing had named it). That provider id is **not editable**
+  through the API and is never published: the machine list says only *whether* the provider names a
+  machine. Attaching one deliberately is the provider machine review (issue #742).
+- **Nothing else moved onto these records yet.** Sales, refills, counts and reports still refer to a
+  machine by the provider's own number, so no figure, report or export changes in this step; issue
+  #741 is where those references are repointed at the local machine.
+- **Sites still need Nayax.** A site is known only from the live fleet read, so the Sites page stays
+  in the "Needs Nayax" section with nothing local to fall back on. Manual sites are a separate
+  change.
+- **In a read-only support view** the machine list is readable and every one of its write controls is
+  hidden, like every other write surface in that view.
 
 ## Machine details: Sales and Products
 

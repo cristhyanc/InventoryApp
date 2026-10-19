@@ -15,8 +15,10 @@ interface AdminCard {
 const ADMIN_CARDS: readonly AdminCard[] = [
   {
     route: '/admin/nayax-settings',
-    title: 'Nayax Settings',
-    description: 'Processing-fee rate configuration and configured-rate history.'
+    // "Integrations" since issue #729, the same rename the sidebar's Admin group made: one
+    // destination has one name, and this is where a business connects its sales provider.
+    title: 'Integrations',
+    description: "Connect this business's Nayax account, and configure its processing-fee rate."
   },
   {
     route: '/admin/site-commission-agreements',

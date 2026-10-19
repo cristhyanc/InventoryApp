@@ -1553,7 +1553,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax **catalogue** is no longer part of that limit either: its products and categories used to be keyed by the Nayax `NayaxProductID`/`ProductGroupID`, which is one global identifier space, so two businesses could not both import the same Nayax product — issue #735 made a created row's key the database's own and left the provider's id as a per-business column, and `EfNayaxProductCatalogImportStoreTenancyTests` proves two businesses importing the same ids, see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735). The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Nayax Settings, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax **catalogue** is no longer part of that limit either: its products and categories used to be keyed by the Nayax `NayaxProductID`/`ProductGroupID`, which is one global identifier space, so two businesses could not both import the same Nayax product — issue #735 made a created row's key the database's own and left the provider's id as a per-business column, and `EfNayaxProductCatalogImportStoreTenancyTests` proves two businesses importing the same ids, see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735). The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Integrations, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
 
 #### Membership roles and capabilities (issue #521)
 
@@ -1621,18 +1621,18 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` **and** `Inventory.Operate` (issue #681) | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
-| Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
+| Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/local-machines` (the business's own machine records, issue #740: list, read, create, rename, deactivate, reactivate), `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Purchases, Supplier Orders, Suppliers | `api/purchases`, `api/supplierorders`, `api/suppliers` | `Purchasing.Operate` | ✔ | ✔ | ✔ |
 | Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
 | Reports (all of them, and their CSV/XLSX exports) | `api/reports/*`, `GET api/reports/{report}/export` | `Reports.View` | ✘ | ✔ | ✔ |
 | Admin → Imports | `api/imports/products`, `api/imports/nayax-sales`, `api/imports/pending-xml` | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
-| Admin → Nayax Settings | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
-| Admin → Nayax Settings → connection wizard, Test (issue #536, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
-| Admin → Nayax Settings → connection wizard, Save and Re-test (issue #537, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Integrations → connection wizard, Test (issue #536, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Admin → Integrations → connection wizard, Save and Re-test (issue #537, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Connection banners on every page that needs Nayax (issue #539) | `GET api/settings/nayax-connection/status` (issue #537) | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Admin → Costing Repair | `api/admin/inventory-cost-repair/*` (preview, apply, history) | `Data.Repair` | ✘ | ✘ | ✔ |
 | Admin → Inventory AVCO Transition Baseline | `api/admin/inventory-cost-transition/*` (preview, apply, preview-all, apply-all) | `Data.Repair` | ✘ | ✘ | ✔ |
@@ -2816,7 +2816,7 @@ machine-check flag all stay exactly as they were. The dry run and the apply agre
 run predicts the stored status rather than `Ready`, and the apply attempts no write at all, not
 even the conditional status write. This is what keeps a re-run from reviving a connection a Nayax
 `401` moved to `NeedsAttention`: that verdict came from Nayax, this command never calls Nayax, and
-only a connection test — the Owner's re-test on Admin → Nayax Settings — can conclude a new status.
+only a connection test — the Owner's re-test on Admin → Integrations — can conclude a new status.
 A matching pair stored but not yet `Ready` is therefore left on `PendingPermissions` as well, and
 is also a re-test rather than a re-run.
 
@@ -3401,7 +3401,8 @@ endpoints' capability rows.
 ### The Nayax connection wizard (issue #538)
 
 Issue #538 — the Owner-facing slice of #506, under #328 — is the screen over the endpoints above: a
-six-step wizard on Admin → Nayax Settings, beside the processing-fee editor it did not replace. It is
+six-step wizard on Admin → Integrations (called Nayax Settings until issue #729), beside the
+processing-fee editor it did not replace. It is
 **frontend only**: it adds no endpoint, changes no contract and holds no rule of its own.
 
 `NayaxConnectionWizardComponent` and the presentational `NayaxConnectionChecklistComponent`
@@ -3751,14 +3752,17 @@ and they are the first realized part of the target `layout/` folder described be
 
 | File | Responsibility |
 | --- | --- |
-| `layout/navigation.ts` | The navigation data (`primaryNavigation`) and the pure matching rules `navLinks`, `activeNavRoute` and `activeNavGroup` |
+| `layout/navigation.ts` | The navigation data (`primaryNavigation`) and the pure matching rules `navLinks`, `activeNavRoute`, `activeNavLink` and `activeNavGroup`, plus `navLockOf` (issue #729) |
 | `layout/sidebar-nav.component.*` | Renders that data, owns which groups are expanded, and resolves the active entry from the router |
 | `layout/user-menu.component.ts` | The top-right signed-in user control: the active account and a sign-out item, or a sign-in button |
 | `app.component.*` | The shell layout, the sidebar open/collapsed state and its handlers, the narrow layout's top-bar opener, the wide-versus-narrow layout decision, the MSAL identity it passes to the user menu, and whether the sidebar offers the ordinary business navigation at all (issue #676) |
 
-`primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Machines`,
-`Sites`, `Expenses`) and expandable groups (`Products`, `Purchases`, `Reports`, `Admin`). Each
-destination also declares the capability its own page needs, and the sidebar renders only the ones
+`primaryNavigation` is a `NavItem[]` of direct links (`Dashboard`, `Pick List`, `Expenses`, and the
+live provider destinations `Machines`, `Sites` and `Site Commissions`), expandable groups
+(`Inventory`, `Purchases`, `Reports`, `Admin`) and, since issue #729, one section heading over the
+live provider destinations — see [Provider-locked
+navigation](#provider-locked-navigation-issue-729) for the order, the renames and the lock states.
+Each destination also declares the capability its own page needs, and the sidebar renders only the ones
 the signed-in member holds — see [Member access](#member-access-capability-built-navigation-guards-and-hidden-actions-issue-528)
 below — while whether it renders any of them at all follows the authenticated account state the
 shell passes it (issue #676, see [Account-state
@@ -4262,7 +4266,7 @@ named business-admin mutation families the parent issue called out - Business Se
 Settings, and members/users/invitations - each judged by the same question: does this page's route
 capability stay granted inside a session?
 
-**Business Settings and Nayax Settings needed the guard, because their capabilities are granted.**
+**Business Settings and Integrations needed the guard, because their capabilities are granted.**
 `Business.Manage` and `Integration.Manage` are both in `SupportSessionAccessPolicy.Capabilities`
 (see [Hiding write controls and support-view messages](#hiding-write-controls-and-support-view-messages-issue-554)
 for why a granted capability is the wrong signal for a write control), so a Super Admin's support
@@ -5073,9 +5077,12 @@ destination over the same `unavailable` answer a confirmed member's failed probe
 `navigationFor` drops each destination whose capability the member does not hold and drops a group
 once all of its children are gone. An Operator is therefore offered no `Expenses`, no `Reports`
 group and no `Admin` group; a Manager's `Admin` group holds `Site Commission Agreements` and
-`Imports` without `Nayax Settings` or any of the five repairs; an Owner is offered every declared
-destination. `Reports → Site Commissions` follows the API and declares `SiteCommissions.Manage`
-rather than `Reports.View` ([issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526)).
+`Imports` without `Integrations` or any of the five repairs; an Owner is offered every declared
+destination. `Site Commissions` follows the API and declares `SiteCommissions.Manage`
+rather than `Reports.View` ([issue #526](#capability-authorization-on-the-manager-and-owner-endpoints-issue-526));
+since issue #729 it is a live provider destination rather than a child of the `Reports` group, and
+the provider answer is applied **after** this capability filter — see [Provider-locked
+navigation](#provider-locked-navigation-issue-729).
 Until the capability set has been read the sidebar renders **no** destination, because a menu that
 offered everything and then took entries away would show entries that were never this member's —
 and it renders none again from the moment the signed-in identity changes until the new identity's
@@ -5469,7 +5476,7 @@ themselves regardless of what this page renders.
 | `services/member.service.ts` | `MemberService`: the four `/api/members` calls, and `BUSINESS_ROLES`, the three published role names mirrored for the role-change and invite-creation dropdowns |
 | `services/member-invite.service.ts` | `MemberInviteService`: the three `/api/members/invites` calls |
 
-**Composition, not a grown page.** Per [Page composition boundary](#page-composition-boundary-issue-191), the Members and Invites sections are each a distinct workflow with its own substantial UI, state, actions and error lifecycle, so each is its own feature component injecting its own service - the same shape `NayaxConnectionWizardComponent` composes into the Nayax Settings page - rather than two sets of state grown directly into `AdminUsersComponent`.
+**Composition, not a grown page.** Per [Page composition boundary](#page-composition-boundary-issue-191), the Members and Invites sections are each a distinct workflow with its own substantial UI, state, actions and error lifecycle, so each is its own feature component injecting its own service - the same shape `NayaxConnectionWizardComponent` composes into the Integrations page - rather than two sets of state grown directly into `AdminUsersComponent`.
 
 **Every refusal is shown exactly as the API phrases it.** Neither section interprets, reworks or duplicates a membership rule: a role change or revocation that would leave the business with no active Owner, a reinstatement of someone who has since joined another business, a role change on a revoked membership, and a cancellation of a used or expired invite are all `409` sentences read from `error.error.message` (the `ProblemDetails` extension `DomainExceptionHandler` writes) and shown through the toast unchanged - see [Member management](#member-management-list-role-revoke-and-reinstate-issue-533) and [Invite links](#invite-links-create-list-and-cancel-issue-531) for what each sentence is. The confirmation dialog before a role change, a revoke, a reinstate or a cancel is a safety prompt only; the server's own rule, re-checked under its write lock, is what actually decides the request.
 
@@ -5787,6 +5794,19 @@ many banners, filters and forms want it, the endpoint is asked a single time. `l
 **settled** answer, so no screen renders a decision that has not been made. A read that failed emits
 `unknown` and drops the shared attempt, so the next screen asks again.
 
+**`load()` answers once; `watch()` keeps answering.** `load()` completes, which is what a page
+resolving its own state or a route guard asking per navigation wants. A surface that stays mounted
+across a reconnect — the sidebar of
+[issue #729](#provider-locked-navigation-issue-729) — subscribes with `watch()` instead and is told
+again every time this session's answer changes: a state `accept`ed, a refusal retained by
+`noteRefusal`, a context forgotten by `reset`. Without it such a surface would hold the answer read
+when it was created while the guards had already moved on, and one destination would have two
+verdicts. Observing a change is **not** a second probe: `accept` and `noteRefusal` state the new
+answer themselves, so only `reset` — which says this is a different business — makes the next ask
+read the status again, and that read is still the one shared read. `watch()` emits `undefined`
+before the first answer settles and again while a change is being answered, so a subscriber shows
+the fail-open state rather than the previous business's locks while the new answer is on its way.
+
 **The answer has one overall state and one state per feature.** `ProviderConnection` is `usable`,
 `needsAttention`, `notConnected` or `unknown`. `providerConnectionOf` is a translation of
 `Inventory.Domain.Nayax.NayaxConnectionStatusGate` and not a second opinion - `Ready` and
@@ -5872,7 +5892,10 @@ therefore cannot be built on this signal as it stands, and neither is invented h
   refused;
 - issue #729's "waiting for Nayax permission (naming the missing permission)" wording. The
   application knows its own check names, not the Nayax permission an operator has to grant, and a
-  name nothing published must not be guessed.
+  name nothing published must not be guessed. Issue #729 therefore names the refused **read** and
+  its endpoint - the only authoritative name there is - and prints no permission key; its own
+  record states what Nayax's documentation does and does not publish, and what naming the key
+  would need. See [Provider-locked navigation](#provider-locked-navigation-issue-729).
 
 Closing either needs a backend contract change - the status response (or a new read) publishing each
 declared check's last outcome, and an authoritative Nayax statement of the permission behind it -
@@ -5943,8 +5966,9 @@ the page reports on.
 **What is deliberately not here.** The home Dashboard and Needs Ordering keep issue #727's own
 answer, derived from the summary and the reorder listing they already fetch: those responses are
 authoritative about the cards beside them, and a second probe would be a second answer that could
-disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b), and the menu is
-issue #729 (E2).
+disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b). The menu was
+issue #729 (E2), and it reads this signal through
+[Provider-locked navigation](#provider-locked-navigation-issue-729).
 
 **What proves it.** `provider/provider-availability.service.spec.ts` covers the status derivation,
 the one-read-per-session cache, the retry after a failed read, the four per-feature states, a usable
@@ -5968,6 +5992,191 @@ cover each screen's hidden control, its error state, and the empty list neither 
 re-test, including the per-feature permissions a re-test found, granted and refused alike;
 `nayax-status-banner.component.spec.ts` covers three banners costing one read; and
 `support-session.service.spec.ts` covers the answer being forgotten on a context transition.
+
+### Provider-locked navigation (issue #729)
+
+Child E2 of issue #329 (decision P6), after [the shared availability signal of issue
+#728](#shared-provider-availability-and-error-versus-empty-states-issue-728). It puts that one
+answer in the menu, so the application says which features need a sales provider **before** a page
+has to. It is frontend only: no endpoint, no contract and no rule of its own, and every answer it
+renders comes from `ProviderAvailabilityService`.
+
+**The order is the statement.** `primaryNavigation` is: `Dashboard`, `Pick List`, `Machines`, the
+`Inventory` group, `Purchases`, `Expenses`, `Reports`, `Admin` — everything that works with no
+provider at all — then one `NavSectionHeading` ("Needs Nayax") and the live provider destinations
+under it: `Sites` and `Site Commissions`. A heading is a heading, not a
+control: it toggles nothing, links nowhere, renders as an `<h2>` over the entries after it, and
+`navigationFor` drops it when every entry under it was left out, because a heading over nothing
+claims a section this member does not have.
+
+**`Machines` left that section in issue #740**, which is the only change to this design since. A
+business keeps [its own machine records](#local-machines-and-external-machine-ids-issue-740) now, so
+the destination always has something to show and its own create/rename/deactivate actions to offer:
+the entry declares no `lockedWithout`, is never locked, and `/machines` carries no `requireProvider`
+guard. The page withholds its own live stock, revenue and sync parts while the provider cannot serve
+them, which is a decision about one page's content rather than about whether a destination exists.
+The machine **details** route keeps its guard, because every panel on it is a Nayax read.
+
+**Two renames, and one name per destination.** The `Products` group is `Inventory` (decision P11),
+because it holds the whole of the business's own stock keeping, all of which works without a
+provider; the Products **page** inside it keeps its own name, its URL and its breadcrumb. `Nayax
+Settings` is `Integrations`, in the sidebar, on the `/admin` hub card and in the page's own heading
+and breadcrumb — one destination with one name — and its URL (`/admin/nayax-settings`) is unchanged.
+Every other breadcrumb is untouched: a breadcrumb parent is the real page that owns a child route,
+and a sidebar group heading is not a page, so renaming a group and moving the site commission report
+into its own menu section change no trail (`breadcrumb-routes.spec.ts`).
+
+**Two declarations on a `NavLink`, because the two cases are not the same.**
+
+| Declaration | What it means | What the menu does |
+| --- | --- | --- |
+| `lockedWithout: ProviderFeature` | the destination's page is a live Nayax read | shown **locked** while the shared answer refuses that read, and its route redirects to the "needs a provider" page |
+| `hiddenWithoutProvider: true` | a provider repair or admin tool | left out of the menu entirely until the connection is usable |
+
+Locking rather than hiding is the point for the first: a page an operator could have used, and could
+use again by connecting Nayax, has to stay visible and explain itself. Hiding is right for the
+second — Admin → `Imports` (the Nayax sales and settlement imports) and Admin → `Nayax Sale
+Timestamp Repair` — because with no provider there is nothing of the provider's to import or repair,
+so a locked entry would offer a tool for data that does not exist. `Integrations` carries neither: it
+is where a connection is made, so it can never depend on one. The costing and GST repairs carry
+neither either — they are the business's own data.
+
+**`provider/provider-lock.ts` is the one place that answer becomes a verdict about a destination**,
+and it holds nothing but pure functions, because the menu, the route guard and the page the guard
+redirects to must agree about one destination. A menu that locked a page which then opened, or a page
+that refused an entry the menu offered, is what that separation prevents.
+
+| Function | Answer |
+| --- | --- |
+| `providerLockOf(availability)` | `open`, `connect` or `permission` - `providerFeatureOffered` with the refused case split in two |
+| `providerToolsOffered(connection)` | whether the repair and admin tools are offered: `usable` or `unknown` |
+| `providerFeatureReadLabels(feature)` | the declared Nayax reads that feature needs, each named with its endpoint |
+| `providerLockSummary` / `providerLockSentence` | the one line a locked entry carries, and the sentence its page shows |
+
+`connect` and `permission` are kept apart for the reason issue #728 keeps `notConnected` and
+`permissionNotGranted` apart: they need opposite things from an operator. Telling somebody whose
+credentials work that Nayax is not connected sends them to re-enter a token that was never the
+problem. And `unknown` is `open`, for the same fail-open reason the banners and the filters offer a
+feature nothing has refused: a status probe that failed must not lock a page whose own request would
+have answered it, so an unread status locks nothing and withholds no repair tool.
+
+**Capability rules apply first.** `navigationFor` filters by capability and only then by the provider
+answer, so an entry the role may not see stays **hidden** rather than becoming a locked advertisement
+for a page that role never had. On the routes, `requireProvider` is declared **after**
+`requireCapability` for the same reason: a member whose role does not include `/reports/site-commissions`
+reaches the "access not allowed" page, not an invitation to connect a provider they still could not
+use.
+
+**Historical reports are never locked** (decision P5). Bookkeeping, Daily, Transactions,
+Reconciliation, machine profitability, product profitability, GST and the reporting dashboard read
+**stored** data, so they stay in the `Reports` group, carry no provider guard on their routes at all,
+and report their own availability states instead (issues #730 and #731). Previously imported sales
+stay readable after a disconnect. The site commission report is the one report in the provider
+section, and it is not an exception: a site is known only from the live fleet read's `CustomerID`, so
+with no usable provider it has no sites to report on and the API itself answers `isAvailable: false`
+(see [Site commissions](#site-commissions) in AGENTS.md and issue #731). Its breadcrumb still names
+`Reports` as its parent page, because `/reports` is still the page that owns that route.
+
+**`requireProvider(feature)` is the URL half of a locked entry** (`provider/provider-lock.guard.ts`),
+and it is presentation exactly as `requireCapability` is: every endpoint behind these pages resolves
+the business's own Nayax credentials and answers `409` itself, whatever the router did. What the
+guard changes is that typing `/machines` with no provider reaches one explanation instead of a page
+of refusals, so the menu entry and the URL behave identically. It carries the refused URL to the page
+as the `from` query parameter, which decides nothing: the page resolves the destination from the
+declared navigation through `activeNavLink` and re-reads the availability answer itself, so a URL
+somebody typed cannot make it say a page is locked when it is not.
+
+**`ProviderLockedComponent` (`/needs-provider`) explains, and never refuses.** Like
+`/access-not-allowed` it is where a guard *sends* somebody, so it declares no capability of its own -
+the destinations that redirect to it need different ones, each already checked - and it is never a
+dead end: it links to the Dashboard and says what still works without a provider. The two locks read
+differently, which is the whole reason they are separate states:
+
+- **`connect`** - "Machines is unavailable because Nayax is not connected", with a **Connect** button
+  to `/admin/nayax-settings` for a member who holds `Integration.Manage`, and "Ask the business Owner
+  to connect Nayax" for one who does not, rather than a dead button.
+- **`permission`** - "Machines is waiting for a Nayax permission", the connection stated as working,
+  and the refused read named with its endpoint: "Machine list (GET machines)". **No Connect button**,
+  because re-entering credentials that already work fixes nothing; the action is to have the
+  permission granted and then re-test on Integrations.
+
+**What is named, and what is deliberately not.** Issue #729 asks for the permission message to name
+the missing permission. What exists to name is the **read**: `PROVIDER_FEATURE_CHECKS` (issue #728)
+maps a feature to the reads this application declares in
+`Inventory.Domain.Nayax.NayaxConnectionCheck`, and `provider/nayax-read-areas.ts` words each one with
+its endpoint. That file is the **one** vocabulary for naming a refused Nayax area, shared with the
+Owner's connection checklist and support request (issue #538), which is why it moved out of
+`nayax-connection-checklist.component.ts` and is re-exported from there: two wordings for one refusal
+is how a screen ends up asking Nayax for the wrong permission.
+
+The Nayax permission **key** behind one of these reads is not printed, because nothing published
+states it. Nayax's own developer documentation publishes a permission key and OAuth scope per
+endpoint for its three dashboard-widget report endpoints only (`lynx_report_get_widgets`,
+`lynx_report_get_widget_data`, `lynx_report_get_widget`), and for none of the five reads this
+application depends on — `GET machines`, `GET machines/{id}/machineProducts`,
+`GET machines/{id}/lastSales`, `GET operators/{operatorId}/products`,
+`GET operators/{operatorId}/productGroups`; its app-tokens page documents only the *format* of a
+scope (`{domain}:{action}`) with examples. The server does not say which operation was refused either
+— `NayaxConnectionExceptionHandler` deliberately keeps
+`NayaxPermissionNotGrantedException.Operation` out of the `409` body. So naming the Nayax permission
+would mean guessing a name, which [issue #728's own
+record](#shared-provider-availability-and-error-versus-empty-states-issue-728) already refused and
+which AGENTS.md § Nayax contract verification forbids. Naming the read and its endpoint is the
+authoritative thing this application can say, and it is what a support request to Nayax has to ask
+for. Printing the permission key needs a published Nayax statement of it, and is a reviewed decision
+of its own.
+
+**One shared read, and none at all without a business.** `SidebarNavComponent` subscribes to
+`ProviderAvailabilityService.watch()` only while the shell says the business navigation is `offered`:
+a signed-out visitor and an account with no usable membership resolve no business, so there is no
+connection to read a status for. That subscription is deliberately **its own**, beside the existing
+`combineLatest` over the access answers rather than another arm of it - the provider answer changes
+what the menu renders and nothing else, and re-asking the platform-admin probe or the
+pending-applications count because a connection status settled would be one extra request per page
+load. It starts `undefined`, so the menu renders immediately and locks nothing until the answer
+settles. A locked entry keeps its `routerLink` and is **marked, not disabled**: clicking it is how an
+operator reaches the explanation, so it carries a visible `Locked` badge, the lock sentence as its
+`title` and the same sentence for a screen reader, and no `aria-disabled` - which would be untrue of
+a link that does navigate.
+
+**The menu follows the answer for as long as it is mounted.** It `watch`es rather than `load`s
+because the sidebar outlives the answer: an Owner who saves working credentials on `Integrations`,
+loses them, has one read refused by a page's own request, or starts a support session on another
+business never leaves this component, and `requireProvider` asks again on every navigation. A menu
+built from the answer read at mount would go on locking what now works - or offering a repair tool
+for a provider that is gone - and disagree with the route and the locked page about the same
+destination, which is exactly the agreement `provider-lock.ts` exists to guarantee. Following the
+answer costs no extra probe (see
+[`watch()`](#shared-provider-availability-and-error-versus-empty-states-issue-728)); only a context
+reset reads a status, for the business the tab now resolves.
+
+**What proves it.** `provider/provider-lock.spec.ts` covers every lock state, the fail-open `unknown`,
+the tools gate over all four connection states, the read labels and both sentences.
+`layout/navigation.spec.ts` covers the declared order and the section, the `Inventory` rename with
+Products keeping its own name, the live provider destinations and the reports that are never locked
+(including the machine profitability report that shares the `Machines` label), each lock state per
+status and per role, the per-feature case where one refused read locks its destinations and leaves a
+granted one open, the repair tools hidden and offered, the group dropped when the provider's was its
+only child, and the capability rule applying first. `layout/sidebar-nav.component.spec.ts` covers the
+rendered section heading, a locked entry still being a link with its badge and sentence, the
+permission lock's own wording, the reports linked and unlocked with no provider, the hidden repair
+tools, the one status read however many entries depend on it, and the read never made for a withheld
+business menu; its `provider changes while it stays mounted` block proves the same sidebar - never a
+recreated one - unlocks and offers the tools when a connection is accepted, locks them and withdraws
+the tools when the credentials stop working, locks a destination as a *permission* when a refusal is
+retained for its read, renders the new business's answer after a context reset, and reaches the same
+verdict as `requireProvider` before and after the change.
+`provider/provider-availability.service.spec.ts` covers `watch()` itself: the settled answer after
+the nothing-known one, each kind of change told to a subscriber already listening, no second probe
+for an accepted state, nothing said twice for a refusal already retained, the one new read for a
+context reset, and `load()` still completing for a caller that asks once. `provider/provider-lock.guard.spec.ts` covers the URL half: the page opening, each
+refusal redirecting with the exact refused URL, a detail URL, the granted sibling read, and the
+unreadable status that opens the page. `provider/provider-locked.component.spec.ts` covers both
+messages, the Connect button offered and withheld, the named read, the destination resolved from a
+detail URL, the page opened with no destination, and the answer re-read rather than taken from the
+URL. `app.routes.spec.ts` covers the guard order on every live provider route and its absence from
+every report over stored data. `layout/breadcrumbs/breadcrumb-routes.spec.ts` covers the trails that
+did not change and the one label that did.
 
 ### Target feature boundaries
 
@@ -6560,7 +6769,7 @@ Reconciliation applies the same separation as bookkeeping, and adds a third cate
 
 **The JSON field this value is imported from is confirmed (issue #363).** A human confirmed from a live `GET /v1/operators/{OperatorID}/products` response that the product selling price field is `ProductDefaultRetailPrice`, matching the Nayax developer portal, which documents that field on `GET /v1/operators/{OperatorID}/products` and `GET /v1/products/{NayaxProductID}` and documents no bare `RetailPrice` field on either endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` above correctly use. The operator-catalogue DTO `Inventory.Application.Nayax.NayaxProduct.ProductDefaultRetailPrice` binds that confirmed JSON name. Products already imported with `UnitPrice` of `0` under the previous, unconfirmed `RetailPrice` mapping are not backfilled by this change; whether to backfill them is a separate decision.
 
-The public property name `UnitPrice` is retained for API/contract compatibility. **Since issue #736 the business owns this value too** (parent #329 decision P2 and P3): `PUT /api/products/{id}` accepts it, `ProductUpdateFields` carries it, and the only bound on it is that it is not negative (`Inventory.Domain.Products.ProductCataloguePolicy`). It had to become editable, because a business with no sales provider has no import to set it. **Since issue #737 (B2) the product edit screen presents it editable for every product**, and presents the name and the category as read-only inputs only for a product carrying an external id, naming the provider in a note beside them. The Nayax catalogue import still overwrites it for a product the provider names, and a local price edit of such a product is accepted rather than refused — the price is deliberately *not* one of the provider-managed fields that are locked, which are the product's name and category only (see [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)); #739 is where the operator chooses per field whether to keep the local price or take the provider's. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
+The public property name `UnitPrice` is retained for API/contract compatibility. **Since issue #736 the business owns this value too** (parent #329 decision P2 and P3): `PUT /api/products/{id}` accepts it, `ProductUpdateFields` carries it, and the only bound on it is that it is not negative (`Inventory.Domain.Products.ProductCataloguePolicy`). It had to become editable, because a business with no sales provider has no import to set it. **Since issue #737 (B2) the product edit screen presents it editable for every product**, and presents the name and the category as read-only inputs only for a product carrying an external id, naming the provider in a note beside them. The Nayax catalogue import still overwrites it for a product the provider names, and a local price edit of such a product is accepted rather than refused — the price is deliberately *not* one of the provider-managed fields that are locked, which are the product's name and category only (see [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)). Choosing per field whether to keep the local price or take the provider's is the catalogue review of issue #738, which also remembers the provider value a skipped price was decided about so it is not proposed again until the provider changes it (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)); #739 is the screen for it. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
 
 ### Purchase GST classification (issue #429)
 
@@ -9468,6 +9677,111 @@ replay → report with no reader ever comparing two numbers;
 local product carries both the provider's number and the name the sale reports, at a different unit
 cost.
 
+### Local machines and external machine ids (issue #740)
+
+Child G1 of issue #329, after [the local key is the database's
+own](#the-local-key-is-the-databases-own-issue-735) and reusing [#759's external-id column
+pattern](#provider-identity-on-the-local-row-issues-732-759-and-735). Until it, **a machine was never
+persisted at all**: every machine list was a read of the live Nayax fleet, and every stored machine
+reference — a sale's `MachineID`, a refill's `MachineId`, a machine count's, an expense's, a stock
+event's, a timestamp repair's, an inventory-cost transition's — was Nayax's own number. A business
+with no sales provider therefore had no machines, in an application whose whole purpose is the
+machines it refills.
+
+**The table.** `Machines`, mapped by `Inventory.Infrastructure.Models.LocalMachine`:
+
+| Column | What it is |
+| --- | --- |
+| `Id` | this application's own key, **assigned by the database** (#735's rule, decision A4). Nothing assigns it, and a local id equal to a Nayax machine id is a coincidence |
+| `BusinessId` | the owning business. Ordinary tenant-owned data: the central query filters and `BusinessOwnershipEnforcer` scope every read and stamp every write, and no adapter writes a `BusinessId` predicate of its own |
+| `Name` | required, and otherwise unconstrained. Deliberately **not** unique per business: two machines in one corridor may legitimately be called "Level 3", and nothing resolves a machine by its name |
+| `IsActive` | whether the machine is in service. There is no delete |
+| `ExternalMachineId` | the business's sales provider's own id for the machine, as **opaque text** bounded by `ExternalId.MaxLength`, or `null` when the provider names none. For Nayax it is written only through `Inventory.Domain.Providers.NayaxExternalId` |
+
+`(BusinessId, ExternalMachineId)` carries a **filtered** unique index, `WHERE "ExternalMachineId" IS
+NOT NULL`, for the two reasons the product and category columns do: "this machine has no provider id"
+is the normal state of every machine of a business with no provider, so a plain unique index would
+allow exactly one of them, and two operators' fleets may legitimately both contain machine 7. There
+is **no machine link table** — the id is a column on the row it belongs to.
+
+**The entity is called `LocalMachine` and the table is called `Machines`.** The type name `Machine`
+is still occupied by the retired live-fleet response shape the machine wire-contract test compares
+against, and removing that belongs to issue #153's legacy-structure removal. The table name is
+declared explicitly in `AppDbContext.ConfigureMachines`, so it does not depend on which type owns it.
+
+**The backfill.** `AddMachines` is additive — one table, its indexes, and an insert into it — and
+**nothing is repointed**: every stored machine reference still holds the provider's number, and issue
+#741 (G2) is what moves them onto `Machines.Id`. That is what makes the migration releasable on its
+own, which matters because Production applies migrations at startup and the code already running
+there reads no machine row at all.
+
+It creates one machine per distinct machine number each business refers to, across all seven columns
+that hold one, de-duplicated. A number of `0` is excluded: it is the absent value a non-nullable
+column records, not a machine. The name comes from the most recent stored data that carried one — a
+sale's `MachineName` at its authorization instant, or an inventory-cost transition's recorded machine
+name at its baseline's creation instant — and otherwise from
+`Inventory.Domain.Machines.MachineCataloguePolicy.DefaultName`, "Machine" and the provider's number.
+That shape is mirrored in SQL because a migration cannot call into the Domain, and
+`AddMachinesMigrationTests` compares the two so they cannot drift.
+
+**It asserts the provider rather than assuming it.** A business has one sales provider and it cannot
+change (#759, `BusinessSalesProviderEnforcer`), so a machine number stored against a business was
+issued by that business's provider. The migration therefore **refuses before it writes anything** if
+any business holds machine data while its `SalesProvider` is anything other than Nayax, including not
+set at all: copying such a number into a column every later lookup reads as "the provider's id for
+this machine" would record a claim nothing supports. It then verifies the result — exactly one
+machine per referenced number, and no other row — and aborts the whole upgrade rather than leaving it
+half applied. Both refusals are raised the way #759's copy raises its own, through a scratch table
+and a SQLite trigger, and the scratch table is dropped again.
+
+**The API.** `/api/local-machines` — `GET` (the list, active and inactive, ordered by name), `GET
+{id}`, `POST` (create), `PUT {id}` (rename), `POST {id}/deactivate`, `POST {id}/reactivate` — behind
+`Inventory.Operate`, the capability the fleet reads and the rest of day-to-day stock keeping already
+declare. It is a **separate resource from `/api/machines`**, which is the live Nayax fleet and needs
+working credentials for every one of its reads; nothing on this one touches the provider, so it works
+identically for a business that has never connected one.
+
+Three things it deliberately does not do. It **never writes `ExternalMachineId`**: no request field
+corresponds to it, a created machine has none, a rename leaves it alone, and only provider
+synchronization and the provider machine review (issue #742) may attach one. It **publishes no
+provider identifier** either — the response carries `isProviderNamed`, the fact and not the id. And
+it offers **no delete**: stored sales, refills, counts and expenses refer to a machine, so a machine
+that stops trading is deactivated and stays listed. Because the capability is `Inventory.Operate`,
+which a support session grants, every write here is refused in a read-only support session by the one
+central rule that allows it only `GET` and `HEAD` (issue #551) — there is no per-action check for it.
+
+A rename is allowed on a provider-named machine, unlike a product's or a category's name ([Manual
+catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)):
+nothing synchronises a machine's name, so no import can overwrite the operator's own label and there
+is no second name to defend.
+
+**The page, and why it left the provider-locked section.** The Machines menu entry moved out of
+"Needs Nayax" and into the top section, and `/machines` carries no `requireProvider` guard any more
+(see [Provider-locked navigation](#provider-locked-navigation-issue-729)): the page always has
+something to show, so it is never locked. It is two lists. `LocalMachineListComponent` — the
+dedicated feature component the [page composition
+boundary](#page-composition-boundary-issue-191) requires, holding the list, its load state, the add
+and rename drafts, the refusal message and every write — is always shown. The live Nayax fleet below
+it (revenue, profit, and the links into each machine's stock and Sync Restock workflow) is shown only
+while the shared availability signal says the fleet read can be served, through the one shared path
+`loadProviderList` (issue #728): an unavailable provider withholds that section entirely rather than
+rendering a screen of refusals, while an outage is reported as an error **in place of** it, because
+presenting a `502` as "this business has no machines" is a claim nobody made. The machine **details**
+page is still a live provider destination and keeps its guard — every panel on it is a Nayax read —
+so a direct request for `/machines/{id}` with no provider reaches the "needs a provider" page with
+its generic explanation rather than one naming a read the navigation no longer claims; giving that
+page a local half belongs to issue #742.
+
+Write controls are hidden while a support session is active, on the established rule of issues #554
+and #658: the session grants `Inventory.Operate`, which is what the page would otherwise gate them
+on, and the backend refuses the write by its read-only method rule rather than by withholding the
+capability.
+
+**What is deliberately out of scope**: repointing the stored machine references (#741), the provider
+machine review (#742), provider switching (#761), slots, planograms, par levels, and manual sites —
+a site is known only from the live fleet read's `CustomerID`, so the Sites destination stays in the
+provider section with nothing local to fall back on.
+
 ### Resolving a Nayax product id to a local product (issue #733)
 
 Every feature that reads a machine's live selections gets `NayaxProductID` values back — the Lynx
@@ -9703,8 +10017,14 @@ neither reads nor writes any of them.
 
 #### Deciding a conflicting sale: `resolve-nayax-sale-products`
 
-The one way a conflicting — or otherwise unresolved — sale gets a product after the migration, and a
-human-invoked command rather than a screen, which parent #329 left out of scope here.
+How a conflicting sale gets a product after the migration, and a human-invoked command rather than a
+screen, which parent #329 left out of scope here. It was the only such path until issue #738, which
+added the one other: the catalogue review's sale resolution settles an unresolved sale whose stored
+provider id is the one a product was just linked to, which is a different question from a conflict
+between two recorded candidates and is deliberately never answered automatically either (see
+[Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)).
+Both only ever fill a null, through the same guarded statement, so neither can move a decided sale and
+running one after the other changes nothing twice.
 
 ```bash
 dotnet InventoryApi.dll resolve-nayax-sale-products --dry-run
@@ -9893,8 +10213,12 @@ unrelated follow-up work, not part of #737. Nothing on the server depends on any
 external id, `POST api/imports/products` answers `409` with how many they are, before anything is
 written, because the import identifies a product only by the provider's own id and would create a
 duplicate of each of them. A business whose products all carry one imports exactly as before. The
-catalogue review (issue #738 for the API, #739 for the screen) is what replaces the refusal with a
-deliberate link-or-create per product.
+catalogue review is what replaces that refusal with a deliberate link-or-create per product: issue
+#738 built its API — see
+[Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)
+below — and #739 is the screen that will send the operator there instead of to this refusal. **This
+refusal itself is unchanged by #738**: the direct import endpoint still answers `409` for a manual
+catalogue, because switching the import over to the review flow is explicitly #739's work.
 
 **That count is asked twice, and the second answer is the one the import is decided on.** The first
 read runs before the two remote catalogue reads, so a business the import would duplicate spends no
@@ -9906,6 +10230,168 @@ and a person can commit a `POST api/products` while they are in flight, so
 are one operation, and a catalogue that became manual in between is refused with nothing committed
 rather than duplicated. The transaction is opened only after the remote reads, so no Nayax request
 is ever made while a database transaction is held open.
+
+### Provider catalogue review: link-or-create and change review (issue #738)
+
+The direct import of the section below writes straight through: it creates a product for every
+provider entry it does not recognise and overwrites four fields on every one it does. That is the
+right behaviour for a catalogue the provider has always owned, and the wrong behaviour for a business
+that kept its own — which is why issue #736 refuses it outright for a manual catalogue. Issue #738
+(parent #329 decision C1) adds the deliberate alternative: **a catalogue import that is previewed as
+a review, decided per entry, and then applied as one transaction.** The screen that will use it, and
+switching the import over to it, are #739 and explicitly out of scope here; the direct import keeps
+working exactly as it did.
+
+**Three endpoints, two capabilities.** `InventoryApi.Controllers.CatalogueReviewController`:
+
+| Endpoint | Capability | What it does |
+| --- | --- | --- |
+| `POST api/catalogue-review` | `Imports.Run` | Reads the provider's catalogue and reports it against this business's rows. Writes no product, category, price or sale. |
+| `POST api/catalogue-review/apply` | `Imports.Run` | Carries out the submitted decisions against a named review, as one transaction. |
+| `POST api/catalogue-review/unresolved-sales/apply` | `Data.Repair` | Attributes the still-unresolved sales carrying a linked product's provider id to that product and replays its costing. |
+
+The split is a security decision rather than a tidying one. A review *is* the catalogue import,
+decided row by row, so starting and applying it require what running the import requires. Attributing
+a historical sale consumes costed inventory, moves product-level revenue and recosts the sales after
+it, so it requires `Data.Repair` — an Owner alone, the same authority the costing repair and the sale
+timestamp repair are behind. All three are `POST`, including the one that previews: it reads the
+provider's live catalogue and records the review the apply is then authorised by, and a cached `GET`
+would hand a caller a review id for a catalogue it never read.
+
+**What the review reports.** `Inventory.Application.CatalogueReview.StartCatalogueReview` reads the
+operator's products and groups through the existing `INayaxLynxClient` port, as the same concurrent
+fan-out of two independent calls the direct import uses, and reconciles them against the business's
+rows **through the provider id columns alone**:
+
+- A provider group or product that no local row carries the `ExternalCategoryId`/`ExternalProductId`
+  of (issue #759) is reported **unlinked**, with the operator's two honest options: link it to a local
+  row they name, or create a new one. The review picks neither.
+- A linked row's differences are reported in two separate lists, because they are two different kinds
+  of fact. `automaticChanges` is what the apply will write **without asking** — the provider's name,
+  and the category its group resolves to. `choices` is what it will **ask about** — the negotiable
+  fields.
+- Each product entry carries `unresolvedSaleCount`: how many stored sales carry that provider product
+  id, are still unresolved and have known raw provenance. The review reports them and resolves none.
+
+**Nothing is linked automatically by name.** A local product called exactly what the provider calls
+its product stays unlinked, and a local key that happens to equal a provider id is a coincidence
+(issue #735). The only ways a link comes about are an operator naming a row and a row the review
+creates, which is what keeps a provider id from ever being inferred.
+
+**Name and category follow the provider; price is negotiated.**
+`Inventory.Domain.Providers.ProviderManagedCatalogueFields` already says which fields a provider owns
+on a row it names (issue #736), and this review is where that becomes a *transition*: linking a
+product replaces its name with the provider's and its category with the local category carrying the
+provider's group id — which the review links or creates first, in the same apply — and linking a
+category replaces its name with the provider's. From then on those fields are read-only locally and a
+later provider rename or group move is applied automatically and listed. A group no local category
+carries leaves the product uncategorised rather than pointing it at a category that merely shares a
+number, exactly as the direct import does.
+
+The negotiable fields are `Inventory.Domain.Providers.NegotiableCatalogueField`, and
+`CatalogueReviewPolicy` is the one rule about them:
+
+- **A value is proposed only when three things hold**: the provider has one, it differs from the local
+  value, and it differs from the provider value this field was **last decided about**. The third is
+  what makes a skip stick — an operator who kept their own $3.00 over the provider's $3.50 is not
+  asked again until the provider moves it somewhere new.
+- That last-decided value is the whole reason `ProviderCatalogueFieldDecisions` exists: one row per
+  product and field, holding the provider value and which way it went, replaced rather than appended
+  because "what did we last ask about?" has one current answer. Both answers are recorded — keeping
+  the local value is a decision about that provider value just as taking it is.
+- Values are compared as the opaque text `ProviderCatalogueFieldValue` renders, in the invariant
+  culture and with a price's trailing zeros fixed, so `3.5` and `3.50` are one answer rather than two
+  and the operator is not asked the same question on every review.
+- A field nobody answered is left exactly as it is and proposed again next time. A **created** row has
+  no local value to keep, so it takes the provider's.
+
+**The provider publishes no unit/volume label, so none is proposed.** `NegotiableCatalogueField`
+declares `UnitVolume` beside `UnitPrice`, and its provider value is always absent. The authoritative
+Lynx contract for `GET /v1/operators/{OperatorID}/products` declares no unit or volume *label*: its
+only volume-shaped fields are `ProductVolumeTypeID`, an `int32` whose vocabulary the documentation
+does not publish, and `ProductPackageQuantity`, which is units per package. `Product.Unit` is a
+free-text label ("can", "bottle"), so neither field is it, and mapping one onto it would be exactly
+the invented property AGENTS.md § Nayax contract verification forbids. The field, the column and the
+decision row stay in place so that the day a human decides which Lynx field means it, only the
+projection changes; `CatalogueReviewPolicy.UnitVolumeUnavailableNote` is the one sentence the review
+says about it, and the API returns it as `unitVolumeNote`.
+
+**The review is persisted, and the apply is authorised by it.** `ProviderCatalogueReviews` and
+`ProviderCatalogueReviewItems` hold the provider's side exactly as it was read. The apply request
+carries item keys, one of three actions (`Defer`, `LinkExisting`, `CreateNew`) and the two field
+answers — **nothing a caller submits reaches a catalogue field**: every provider name, price and group
+id comes from the stored items, and every local value from the rows read inside the transaction. A
+business has at most one *pending* review, enforced by a filtered unique index over `(BusinessId)`
+where `AppliedAtUtc IS NULL`: a review is a reading of the provider's catalogue at an instant, and an
+older reading is not a second opinion, so starting one replaces the unapplied one. An applied review
+is never rewritten — it is the record of what was decided, with the actor's `(tid, oid)` and the
+instant.
+
+**The apply is one transaction, and its read, its comparison and its write are one operation.**
+`EfCatalogueReviewStore.ApplyAsync` re-reads the review and every local row it is about to write
+inside the caller's transaction and decides each link there, because two of the refusals are
+statements about *stored* rows:
+
+- the chosen local row already carries a **different** provider id, or
+- **another** local row already carries this one.
+
+Recording the id a row already carries is deliberately **not** a refusal: it is the state the apply
+was asked to reach. A use-case read followed by a separate write would be a window in which a product
+takes the provider id this plan was about to record on a different row — the silent identity error the
+provider-id work exists to end — so the sequence stays in the adapter, on the precedent
+`EfProductCatalogueWrite` and the historical GST apply set, with `CatalogueReviewPolicy` supplying the
+rules.
+
+**Atomic, and idempotent.** One refused link refuses the whole apply: nothing is linked, created or
+renamed and no field decision is recorded, because a half-applied review is the one outcome an
+operator cannot reason about — the rows it did write are the ones the next review treats as settled.
+A second apply of an applied review writes nothing and answers `alreadyApplied: true` with the
+original instant, rather than failing or repeating itself.
+
+**Linking never touches a sale, and never recosts history.** No statement in the catalogue apply reads
+or writes `NayaxSales` beyond the unresolved *count* the review reports. A sale already attributed to
+a product keeps that product, its recorded `UnitCostAtSale` and its `CostOfGoodsSold` exactly (issue
+#758), and the product's costing position is untouched. The sales a link makes **resolvable** are left
+unresolved on purpose.
+
+**Resolving those sales is a separate, explicit, audited apply.** Linking a provider product id to a
+local product says what the id means; it does not say that the business's historical sales carrying
+that id belong to that product's inventory.
+`Inventory.Application.CatalogueReview.ResolveLinkedProviderSales` is where that second decision is
+taken, and the counts the review reports are its preview:
+
+- It requires explicit confirmation. Seeing a count is not consenting to recost history.
+- It matches on the **provider id**, never a name, and only while the sale's stored provider id has
+  known raw provenance (`NayaxSales.ProviderProductIdIsRaw`) — a provenance-unknown value may be
+  either a raw provider id or the local product id the old synchronization wrote, so it is read as an
+  identifier of nothing.
+- It **only ever fills a null**, through the same guarded `ExecuteUpdate` whose own predicate carries
+  the expected null that the `resolve-nayax-sale-products` command uses, with one
+  `NayaxSaleProductResolutions` audit row per sale recording the previous value, the new product, the
+  new `ProviderCatalogueLink` rule, the actor and the instant. A rerun writes nothing, and nothing
+  here can move a sale off the product it already carries.
+- It replays each affected product's costing from the **earliest completed** sale it resolved, through
+  the same baseline-cutoff gate the uploaded sales import and the latest-sales synchronization apply:
+  a sale at or before the product's transition baseline cutoff is covered by that baseline, and a
+  product with no baseline is replayed by no write path in the application, so this one does not
+  invent one either.
+- Failure is all-or-nothing. A product whose cost history cannot be replayed rolls the whole run back
+  — no sale keeps its new product, no audit row survives — and the message names the product to fix
+  first. Nothing fabricates an opening cost, and a failed replay is never reported as a successful
+  resolution.
+
+**Three additive tables, and nothing existing changes.** `AddProviderCatalogueReview` creates
+`ProviderCatalogueReviews`, `ProviderCatalogueReviewItems` and `ProviderCatalogueFieldDecisions` and
+alters no existing table, so it works with the code already in production (which applies migrations at
+startup) and a business that never starts a review sees no behaviour change at all. The review items'
+`LinkedProductId`/`LinkedCategoryId` and a field decision's `ProductId` are foreign keys on
+`(BusinessId, …)` against the `(BusinessId, Id)` business keys, for the reason `NayaxSales.ProductId`
+is — but they **cascade** rather than restrict, which is the one place they differ from a sale: a
+review is a draft about the catalogue and a field decision is a note about what was last asked, so
+neither is historical financial data and neither may be a reason a product cannot be deleted. Every
+table is tenant-owned in the ordinary way, so two businesses may review and link the same provider
+ids and neither can read, apply or resolve anything of the other's
+(`EfCatalogueReviewStoreTenancyTests`).
 
 ### Nayax product catalogue import (issue #300)
 
@@ -9964,7 +10450,9 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   snapshot that does not already carry one — on the row itself since issue #759 — and leaves an
   existing one untouched (see
   [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735)). It is
-  the only writer of a Nayax id besides those issues' migrations, and it refuses to run at all for a
+  one of two writers of a Nayax id besides those issues' migrations — the catalogue review's apply
+  (issue #738) is the other, and it writes one only on an operator's explicit decision — and it
+  refuses to run at all for a
   business whose `SalesProvider` is not Nayax. Since issue #735 (A4) it sets no `Id` at all: the row
   it creates is keyed by the database and records the remote id beside that key — see
   [The local key is the database's own](#the-local-key-is-the-databases-own-issue-735).
@@ -9990,7 +10478,10 @@ product and category tables. It is `Inventory.Application.Imports.ImportNayaxPro
   external id, before either remote read: the import would create a duplicate of every one of them,
   because it identifies a product only by the provider's own id. See
   [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736);
-  the catalogue review (#738/#739) is what replaces the refusal.
+  the catalogue review is what replaces the refusal, and issue #738 built its API beside this import
+  rather than inside it — see
+  [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738).
+  Sending the operator there instead of to this refusal is #739.
 - `ImportsController.ImportProducts` calls the use case directly; the route, the constant `true`
   `200 OK` body and the status codes are unchanged, except for that refusal, which reaches the
   caller as the centrally mapped `409` of a `DomainConflictException`. The action now also binds the request's

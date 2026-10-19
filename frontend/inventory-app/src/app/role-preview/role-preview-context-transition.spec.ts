@@ -15,6 +15,7 @@ import { DashboardComponent } from '../components/dashboard/dashboard.component'
 import { DashboardSummary, Machine, Site } from '../models/models';
 import { BusinessService } from '../services/business.service';
 import { ConfigService } from '../services/config.service';
+import { provideNayaxConnectionStatus } from '../provider/provider-availability.spec-helpers';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { SuperAdminBusinessesService } from '../services/super-admin-businesses.service';
 import { supportSessionMessageInterceptor } from '../support-session/support-session-message.interceptor';
@@ -220,6 +221,10 @@ async function render(options: { at?: string; answer?: boolean } = {}): Promise<
       // taking it away is visible.
       { provide: PlatformDiagnosticsAccessService, useValue: { granted$: of(true), isGranted: () => of(true) } },
       { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } },
+      // The sidebar reads the shared provider-availability status, which decides what issue #729's
+      // menu locks; it is stubbed as a connected business so the requests this spec asserts on stay
+      // the ones it is about.
+      provideNayaxConnectionStatus(),
       {
         // No support session anywhere in this spec: a preview is its own transition, and what a
         // support session does to one is `role-preview.service.spec.ts`'s. The request-context

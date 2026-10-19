@@ -14,6 +14,7 @@ import { AppComponent } from './app.component';
 import { BusinessTimeZoneService } from './formatting/business-time-zone.service';
 import { NavLink, primaryNavigation } from './layout/navigation';
 import { ConfigService } from './services/config.service';
+import { provideNayaxConnectionStatus } from './provider/provider-availability.spec-helpers';
 import { PlatformDiagnosticsAccessService } from './services/platform-diagnostics-access.service';
 import { SuperAdminBusinessesService } from './services/super-admin-businesses.service';
 import { BusinessService, CurrentBusiness } from './services/business.service';
@@ -253,6 +254,11 @@ async function render(
       // sidebar-nav.component.spec.ts; stubbed here only so the real service's HttpClient
       // dependency is not constructed in a shell test that never grants super-admin access.
       { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } },
+      // And it reads the shared provider-availability status, which decides what issue #729's menu
+      // locks and hides. The shell owns no part of that either: the status read is stubbed as a
+      // connected business here and the menu's own behaviour is tested in
+      // sidebar-nav.component.spec.ts and navigation.spec.ts.
+      provideNayaxConnectionStatus(),
       // The sidebar also renders the capabilities GET /api/me/access reported (issue #528). The
       // shell owns no part of that decision either, so it is stubbed as every capability here and
       // tested in access.service.spec.ts and sidebar-nav.component.spec.ts.

@@ -93,9 +93,16 @@ describe('ICON_PATHS', () => {
  */
 describe('OUTLINED_ICON_SHAPES', () => {
   const sidebarControlIcons = ['menu', 'close'];
+  // A section heading (issue #729) draws no glyph: it is a heading over the entries after it, and
+  // the collapsed rail stands a rule in for it rather than an icon.
   const navigationIcons = [
     ...new Set(
-      primaryNavigation.flatMap((item) => (item.kind === 'group' ? [item.icon] : item.icon ? [item.icon] : []))
+      primaryNavigation.flatMap((item) => {
+        if (item.kind === 'group') {
+          return [item.icon];
+        }
+        return item.kind === 'link' && item.icon ? [item.icon] : [];
+      })
     )
   ];
   const expectedNames = [...sidebarControlIcons, ...navigationIcons];
