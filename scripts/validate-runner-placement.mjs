@@ -50,39 +50,49 @@ export function workflowJobs(workflowText, source) {
   return jobs;
 }
 
+const jobValues = (job, key) => [...job.matchAll(new RegExp(`^ {4}${key}:(.*)$`, 'gm'))].map((match) => match[1].trim());
+
+// A job that calls a reusable workflow has no runner of its own; the called workflow's jobs are
+// checked as workflow files. Only a local reusable workflow is repository-owned.
+function reusableWorkflowViolations(where, uses, runsOn) {
+  const violations = [];
+  if (runsOn.length > 0) violations.push(`${where}: declares both uses: and runs-on:.`);
+  if (uses.length > 1 || !LOCAL_REUSABLE_WORKFLOW.test(uses[0])) {
+    violations.push(`${where}: calls ${uses.join(', ')}; only a reusable workflow in this repository's .github/workflows is allowed.`);
+  }
+  return violations;
+}
+
+function runsOnViolation(where, value) {
+  if (HOSTED_LABEL.test(value)) return `${where}: selects a GitHub-hosted runner (${value}).`;
+  if (value.includes('${{')) return `${where}: selects its runner with an expression (${value}); a computed runner can fall back to a GitHub-hosted one.`;
+  if (value !== SELF_HOSTED_RUNS_ON) return `${where}: runs-on must be exactly ${SELF_HOSTED_RUNS_ON} (found ${value || 'a multi-line value'}).`;
+  return undefined;
+}
+
+function nodeSetupViolation(where, job) {
+  const nodeAt = job.search(NODE_INVOCATION);
+  if (nodeAt < 0) return undefined;
+  const setupAt = job.indexOf(SETUP_NODE_STEP);
+  return setupAt < 0 || setupAt > nodeAt ? `${where}: runs node without first installing it with ${SETUP_NODE_STEP}.` : undefined;
+}
+
+function jobViolations(where, job) {
+  const runsOn = jobValues(job, 'runs-on');
+  const uses = jobValues(job, 'uses');
+  if (uses.length > 0) return reusableWorkflowViolations(where, uses, runsOn);
+  if (runsOn.length !== 1) return [`${where}: must declare exactly one runs-on: ${SELF_HOSTED_RUNS_ON} (found ${runsOn.length}).`];
+  return [runsOnViolation(where, runsOn[0]), nodeSetupViolation(where, job)].filter(Boolean);
+}
+
 /** Returns a list of violations for one workflow; an empty list means it satisfies the contract. */
 export function runnerPlacementViolations(workflowText, source) {
   const text = workflowText.replaceAll('\r\n', '\n');
-  const violations = [];
-  if (text.includes(RETIRED_RUNNER_SWITCH)) {
-    violations.push(`${source}: still reads the retired ${RETIRED_RUNNER_SWITCH} runner switch, which allowed a GitHub-hosted fallback.`);
-  }
+  const violations = text.includes(RETIRED_RUNNER_SWITCH)
+    ? [`${source}: still reads the retired ${RETIRED_RUNNER_SWITCH} runner switch, which allowed a GitHub-hosted fallback.`]
+    : [];
   for (const [id, job] of Object.entries(workflowJobs(text, source))) {
-    const where = `${source} job '${id}'`;
-    const runsOn = [...job.matchAll(/^ {4}runs-on:(.*)$/gm)].map((match) => match[1].trim());
-    const uses = [...job.matchAll(/^ {4}uses:(.*)$/gm)].map((match) => match[1].trim());
-    if (uses.length > 0) {
-      // A job that calls a reusable workflow has no runner of its own; the called workflow's jobs
-      // are checked as workflow files. Only a local reusable workflow is repository-owned.
-      if (runsOn.length > 0) violations.push(`${where}: declares both uses: and runs-on:.`);
-      if (uses.length > 1 || !LOCAL_REUSABLE_WORKFLOW.test(uses[0])) {
-        violations.push(`${where}: calls ${uses.join(', ')}; only a reusable workflow in this repository's .github/workflows is allowed.`);
-      }
-      continue;
-    }
-    if (runsOn.length !== 1) {
-      violations.push(`${where}: must declare exactly one runs-on: ${SELF_HOSTED_RUNS_ON} (found ${runsOn.length}).`);
-      continue;
-    }
-    const [value] = runsOn;
-    if (HOSTED_LABEL.test(value)) violations.push(`${where}: selects a GitHub-hosted runner (${value}).`);
-    else if (value.includes('${{')) violations.push(`${where}: selects its runner with an expression (${value}); a computed runner can fall back to a GitHub-hosted one.`);
-    else if (value !== SELF_HOSTED_RUNS_ON) violations.push(`${where}: runs-on must be exactly ${SELF_HOSTED_RUNS_ON} (found ${value || 'a multi-line value'}).`);
-    const nodeAt = job.search(NODE_INVOCATION);
-    if (nodeAt >= 0) {
-      const setupAt = job.indexOf(SETUP_NODE_STEP);
-      if (setupAt < 0 || setupAt > nodeAt) violations.push(`${where}: runs node without first installing it with ${SETUP_NODE_STEP}.`);
-    }
+    violations.push(...jobViolations(`${source} job '${id}'`, job));
   }
   return violations;
 }
