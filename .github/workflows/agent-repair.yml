@@ -26,9 +26,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  isolation-gate:
+    name: Refuse repair until runner isolation is verified
+    # The repair job holds the Claude token and the App key, so it is skipped until a human confirms
+    # the self-hosted runners are reset or ephemeral per job (issue #645 review). This job makes that
+    # refusal a visible failure on the same explicit repair request.
+    if: |
+      vars.INVENTORY_RUNNER_ISOLATION_VERIFIED != 'true' &&
+      github.event.issue.pull_request != null &&
+      github.event.issue.state == 'open' &&
+      contains(github.event.issue.labels.*.name, 'agent-review') &&
+      startsWith(github.event.comment.body, '@claude repair') &&
+      github.event.comment.user.login == github.repository_owner &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: [self-hosted, linux, x64, inventory-agent]
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require verified runner isolation for credentialed jobs
+        run: |
+          echo "::error::Repair is disabled until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Self-hosted runner placement."
+          exit 1
+
   repair:
     name: Repair pull request on explicit request
     if: |
+      vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' &&
       github.event.issue.pull_request != null &&
       github.event.issue.state == 'open' &&
       contains(github.event.issue.labels.*.name, 'agent-review') &&
@@ -300,7 +323,7 @@ jobs:
   dispatch-validation:
     name: Dispatch exact-SHA validation
     needs: repair
-    if: always() && needs.repair.outputs.dispatch_validation == 'true'
+    if: always() && needs.repair.outputs.dispatch_validation == 'true' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     runs-on: [self-hosted, linux, x64, inventory-agent]
     permissions:
       actions: write

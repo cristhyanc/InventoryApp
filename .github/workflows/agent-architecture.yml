@@ -111,11 +111,23 @@ jobs:
             echo "checker_name=$checker_name"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Require verified runner isolation for credentialed jobs
+        # Issue #645 review: jobs that receive a long-lived secret, an App key or Azure OIDC are skipped
+        # until a human confirms the self-hosted runners are reset or ephemeral per job. This step makes
+        # that refusal a visible failure instead of a silent skip.
+        env:
+          RUNNER_ISOLATION_VERIFIED: ${{ vars.INVENTORY_RUNNER_ISOLATION_VERIFIED }}
+        run: |
+          if [ "$RUNNER_ISOLATION_VERIFIED" != "true" ]; then
+            echo "::error::Credentialed jobs are disabled until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Self-hosted runner placement."
+            exit 1
+          fi
+
   claude-check:
     name: Same-provider Claude architecture check (read-only)
     needs: context
     # Every Claude route: a fresh Claude invocation with no implementation conversation state.
-    if: needs.context.outputs.checker == 'claude'
+    if: needs.context.outputs.checker == 'claude' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 45
     # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
@@ -243,6 +255,7 @@ jobs:
   sonar:
     name: Read SonarCloud issues on the implementation head
     needs: context
+    if: vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 20
     # Read-only and deterministic: no model runs here. The trusted script from this workflow's own
@@ -287,7 +300,7 @@ jobs:
       - sonar
     # Runs only after a successful Claude architecture check. A failed SonarCloud read
     # never blocks: the sonar job's result is not required, and a missing count is treated as zero.
-    if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) }}
+    if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' }}
     runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 120
     permissions:
@@ -479,7 +492,7 @@ jobs:
       - architecture
     # Runs even when the target check fails, so a rejected or broken handoff never leaves the
     # issue in agent-working with nothing scheduled.
-    if: always()
+    if: always() && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 10
     permissions:

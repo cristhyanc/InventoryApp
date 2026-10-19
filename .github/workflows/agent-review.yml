@@ -132,11 +132,23 @@ jobs:
             echo "review_relation=$review_relation"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Require verified runner isolation for credentialed jobs
+        # Issue #645 review: jobs that receive a long-lived secret, an App key or Azure OIDC are skipped
+        # until a human confirms the self-hosted runners are reset or ephemeral per job. This step makes
+        # that refusal a visible failure instead of a silent skip.
+        env:
+          RUNNER_ISOLATION_VERIFIED: ${{ vars.INVENTORY_RUNNER_ISOLATION_VERIFIED }}
+        run: |
+          if [ "$RUNNER_ISOLATION_VERIFIED" != "true" ]; then
+            echo "::error::Credentialed jobs are disabled until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Self-hosted runner placement."
+            exit 1
+          fi
+
   review:
     name: Claude review of current head
     needs: context
     # Claude reviews only as a separate same-provider invocation, on the full-claude fallback.
-    if: needs.context.outputs.reviewer == 'claude'
+    if: needs.context.outputs.reviewer == 'claude' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     runs-on: [self-hosted, linux, x64, inventory-agent]
     timeout-minutes: 45
     # Read-only: this job runs Claude and holds no pull-request, issue, status or workflow write
@@ -288,7 +300,7 @@ jobs:
     # outcome. No checkout and no Anthropic credential: it reads the review only from this run's own
     # review artifact (actions: read), verified by scripts/agent-review-transport.mjs fetched from
     # the trusted workflow commit, and the live pull request state through the API.
-    if: always() && needs.context.result == 'success'
+    if: always() && needs.context.result == 'success' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     needs:
       - context
       - review
