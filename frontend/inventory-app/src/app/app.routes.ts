@@ -18,6 +18,8 @@ import { AuthCallbackComponent } from './auth/auth-callback.component';
 import { SIGN_IN_ROUTE } from './auth/intended-destination';
 import { SignInComponent } from './auth/sign-in.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
+import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
+import { requireProvider } from './provider/provider-lock.guard';
 
 /**
  * Every authenticated route carries `MsalGuard`, then, since issue #529, `accountStateGuard`, then
@@ -54,6 +56,16 @@ export const routes: Routes = [
     path: ACCESS_NOT_ALLOWED_PATH,
     canActivate: [MsalGuard],
     loadComponent: () => import('./access/access-not-allowed.component').then((m) => m.AccessNotAllowedComponent)
+  },
+  {
+    // The "needs a provider" page (issue #729). Like `/access-not-allowed` above it is where a
+    // guard *sends* an operator, so it carries no capability of its own: the destinations that
+    // redirect here need different ones (`Inventory.Operate`, `SiteCommissions.Manage`), each
+    // already checked by the capability guard that ran before `requireProvider`, and sending
+    // somebody away from their own explanation is the one thing this page must not do.
+    path: PROVIDER_LOCKED_PATH,
+    canActivate: [MsalGuard],
+    loadComponent: () => import('./provider/provider-locked.component').then((m) => m.ProviderLockedComponent)
   },
   {
     // Account-state routing destinations (issue #529) and the invite route it bypasses for
@@ -177,23 +189,29 @@ export const routes: Routes = [
     loadComponent: () => import('./components/suppliers/supplier-list.component').then((m) => m.SupplierListComponent)
   },
   {
+    // The machine and site pages are the live provider destinations of issue #729: they exist only
+    // for what the Nayax fleet read returns, so `requireProvider` shows the "needs a provider" page
+    // instead of a screen of refusals. It is declared last, after the capability guard, so a role
+    // that does not include the page is sent to its own explanation first.
     path: 'machines',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate'), requireProvider('machineFleet')],
     loadComponent: () => import('./components/machines/machine-list.component').then((m) => m.MachineListComponent)
   },
   {
     path: 'machines/:id',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate'), requireProvider('machineFleet')],
     loadComponent: () => import('./components/machines/machine-detail.component').then((m) => m.MachineDetailComponent)
   },
   {
+    // A site is known only from the fleet read's `CustomerID` (AGENTS.md § Site commissions), so the
+    // site pages depend on the same read the machine pages do.
     path: 'sites',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate'), requireProvider('machineFleet')],
     loadComponent: () => import('./components/sites/site-list.component').then((m) => m.SiteListComponent)
   },
   {
     path: 'sites/:id/products',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate'), requireProvider('machineFleet')],
     loadComponent: () => import('./components/sites/site-products.component').then((m) => m.SiteProductsComponent)
   },
   {
@@ -266,8 +284,18 @@ export const routes: Routes = [
   {
     // The site commission report is on `SiteCommissions.Manage`, not `Reports.View`: it is the
     // surface the agreements are maintained from, and the API draws the same line (issue #526).
+    //
+    // It is also the one report that is not a read of stored data: a site is known only from the
+    // live fleet read, so with no usable provider it has no sites to report on and the API answers
+    // `isAvailable: false` (issue #731). Issue #729 therefore locks it with the other live provider
+    // destinations, while every report over stored sales deliberately stays open.
     path: 'reports/site-commissions',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('SiteCommissions.Manage')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('SiteCommissions.Manage'),
+      requireProvider('machineFleet')
+    ],
     loadComponent: () =>
       import('./components/reports/site-commissions-report.component').then((m) => m.SiteCommissionsReportComponent)
   },

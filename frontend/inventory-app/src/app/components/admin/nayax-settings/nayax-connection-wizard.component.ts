@@ -70,7 +70,7 @@ const STEP_LABELS = [
 ];
 
 /**
- * The Owner-only Nayax connection wizard (issue #538), composed by the Nayax Settings page beside
+ * The Owner-only Nayax connection wizard (issue #538), composed by the Integrations page beside
  * the processing-fee editor, over the endpoints of issues #536 and #537.
  *
  * **The token is write-only.** The field on step 3 is bound to no component state at all: it is
