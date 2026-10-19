@@ -1502,6 +1502,136 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("ProductExternalIds");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueFieldDecision", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("DecidedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Decision")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Field")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("ProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProviderValue")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "ProductId", "Field")
+                        .IsUnique();
+
+                    b.ToTable("ProviderCatalogueFieldDecisions");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueReview", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("AppliedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AppliedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("StartedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex(new[] { "BusinessId" }, "IX_ProviderCatalogueReviews_BusinessId_Pending")
+                        .IsUnique()
+                        .HasFilter("\"AppliedAtUtc\" IS NULL");
+
+                    b.ToTable("ProviderCatalogueReviews");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueReviewItem", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ExternalId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("LinkedCategoryId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("LinkedProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProviderGroupExternalId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderName")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderUnitPrice")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderUnitVolume")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ReviewId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("UnresolvedSaleCount")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("ReviewId");
+
+                    b.HasIndex("BusinessId", "LinkedCategoryId");
+
+                    b.HasIndex("BusinessId", "LinkedProductId");
+
+                    b.HasIndex("BusinessId", "ReviewId", "Kind");
+
+                    b.ToTable("ProviderCatalogueReviewItems");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderDataCoverage", b =>
                 {
                     b.Property<long>("Id")
@@ -2155,6 +2285,39 @@ namespace Inventory.Infrastructure.Migrations
                     b.Navigation("Product");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueFieldDecision", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.Product", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "ProductId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueReviewItem", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.ProviderCatalogueReview", "Review")
+                        .WithMany("Items")
+                        .HasForeignKey("ReviewId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Inventory.Infrastructure.Models.Category", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "LinkedCategoryId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("Inventory.Infrastructure.Models.Product", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "LinkedProductId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("Review");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.Purchase", b =>
                 {
                     b.HasOne("Inventory.Infrastructure.Models.Supplier", "Supplier")
@@ -2284,6 +2447,11 @@ namespace Inventory.Infrastructure.Migrations
             modelBuilder.Entity("Inventory.Infrastructure.Models.Product", b =>
                 {
                     b.Navigation("StockAdjustments");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueReview", b =>
+                {
+                    b.Navigation("Items");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Purchase", b =>

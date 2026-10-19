@@ -169,6 +169,24 @@ public class AppDbContext : DbContext
         Set<NayaxSaleTimestampRepairPreviewDraft>();
 
     /// <summary>
+    /// The provider catalogue reviews a link-or-create apply is authorised by (issue #738). At most
+    /// one of a business's rows is pending; an applied one is the record of what was decided and is
+    /// never rewritten. See <see cref="ConfigureProviderCatalogueReview"/>.
+    /// </summary>
+    public DbSet<ProviderCatalogueReview> ProviderCatalogueReviews => Set<ProviderCatalogueReview>();
+
+    /// <summary>The provider products and groups inside those reviews (issue #738).</summary>
+    public DbSet<ProviderCatalogueReviewItem> ProviderCatalogueReviewItems =>
+        Set<ProviderCatalogueReviewItem>();
+
+    /// <summary>
+    /// The last provider value each negotiable catalogue field was decided about (issue #738) - the
+    /// rows that stop a skipped value being proposed again until the provider changes it.
+    /// </summary>
+    public DbSet<ProviderCatalogueFieldDecision> ProviderCatalogueFieldDecisions =>
+        Set<ProviderCatalogueFieldDecision>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -222,6 +240,7 @@ public class AppDbContext : DbContext
         ConfigureProviderIdentityColumns(modelBuilder);
         ConfigureProviderDataCoverage(modelBuilder);
         ConfigureSaleProductAssociation(modelBuilder);
+        ConfigureProviderCatalogueReview(modelBuilder);
 
         modelBuilder.Entity<Product>()
             .Property(p => p.UnitPrice)
@@ -1118,6 +1137,114 @@ public class AppDbContext : DbContext
         resolution.Property(x => x.CandidateProductIds).HasMaxLength(64);
         resolution.Property(x => x.DecidedBy).HasMaxLength(256);
         resolution.HasIndex(x => new { x.BusinessId, x.NayaxSaleId });
+    }
+
+    /// <summary>
+    /// Maps the provider catalogue review and the last-decided provider field values (issue #738,
+    /// parent #329 decision C1).
+    ///
+    /// <para><strong>Three additive tables, and nothing existing changes.</strong> A business with a
+    /// usable provider connection that never starts a review has three empty tables and identical
+    /// behaviour, which is what lets this ship on its own while Production applies migrations at
+    /// startup.</para>
+    ///
+    /// <para><strong>The link columns are foreign keys on the business key, and they cascade.</strong>
+    /// A review item's <c>LinkedProductId</c>/<c>LinkedCategoryId</c> and a field decision's
+    /// <c>ProductId</c> are pairs with <c>BusinessId</c> against the <c>(BusinessId, Id)</c> alternate
+    /// keys on <c>Products</c>/<c>Categories</c>, for the reason <c>NayaxSales.ProductId</c> is
+    /// (<see cref="ConfigureSaleProductAssociation"/>): "this draft names a row of its own business"
+    /// becomes something SQLite enforces on every insert rather than a rule only
+    /// <see cref="BusinessOwnershipEnforcer"/> applies. The delete behaviour is
+    /// <see cref="DeleteBehavior.Cascade"/> rather than <c>Restrict</c>, which is the one place this
+    /// differs from a sale: a review is a draft about the catalogue and a field decision is a note
+    /// about what was last asked, so neither is historical financial data and neither may be a reason
+    /// a product cannot be deleted.</para>
+    ///
+    /// <para><strong>At most one pending review per business, enforced by the database.</strong> The
+    /// filtered unique index over <c>(BusinessId)</c> where <c>AppliedAtUtc IS NULL</c> is what makes
+    /// "the business's pending review" a single row rather than whichever one a query happened to
+    /// order first. It is filtered for the same reason the external id indexes are: an applied review
+    /// is a normal, repeatable state, so a plain unique index would allow exactly one of those.</para>
+    ///
+    /// <para><strong>One decision per product and field.</strong> That unique index is what makes the
+    /// upsert an upsert: the answer to "what did we last ask about this field?" is single-valued, so a
+    /// second row for the same pair would make the skip rule depend on which one was read.</para>
+    /// </summary>
+    private static void ConfigureProviderCatalogueReview(ModelBuilder modelBuilder)
+    {
+        var review = modelBuilder.Entity<ProviderCatalogueReview>();
+
+        review.Property(x => x.Provider).IsRequired();
+        review.Property(x => x.AppliedBy).HasMaxLength(256);
+
+        // Both instants are persisted UTC and both are reported by the review API, so each is marked
+        // UTC on the way out - the SQLite provider otherwise reads them back as Unspecified. The
+        // conversion changes no stored byte and no comparison.
+        review.Property(x => x.StartedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        review.Property(x => x.AppliedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        // Declared with a name of its own so it is a *second* index over BusinessId rather than a
+        // reconfiguration of the tenant index ConfigureBusinessOwnership adds to every owned entity:
+        // that one is what every scoped read uses, and this one is a constraint. The filter cannot be
+        // moved into the key either - SQLite treats NULLs as distinct in a unique index, so
+        // UNIQUE(BusinessId, AppliedAtUtc) would permit exactly the two pending reviews it is meant
+        // to refuse.
+        review
+            .HasIndex(x => x.BusinessId, "IX_ProviderCatalogueReviews_BusinessId_Pending")
+            .IsUnique()
+            .HasFilter(@"""AppliedAtUtc"" IS NULL");
+
+        var item = modelBuilder.Entity<ProviderCatalogueReviewItem>();
+
+        item.Property(x => x.Kind).IsRequired();
+        item.Property(x => x.ExternalId).IsRequired().HasMaxLength(ExternalId.MaxLength);
+        item.Property(x => x.ProviderName).IsRequired().HasMaxLength(512);
+        item.Property(x => x.ProviderGroupExternalId).HasMaxLength(ExternalId.MaxLength);
+        item.Property(x => x.ProviderUnitPrice).HasMaxLength(64);
+        item.Property(x => x.ProviderUnitVolume).HasMaxLength(64);
+        item.HasIndex(x => new { x.BusinessId, x.ReviewId, x.Kind });
+
+        item
+            .HasOne(x => x.Review)
+            .WithMany(x => x.Items)
+            .HasForeignKey(x => x.ReviewId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        item
+            .HasOne<Product>()
+            .WithMany()
+            .HasForeignKey(x => new { x.BusinessId, x.LinkedProductId })
+            .HasPrincipalKey(product => new { product.BusinessId, product.Id })
+            .OnDelete(DeleteBehavior.Cascade);
+
+        item
+            .HasOne<Category>()
+            .WithMany()
+            .HasForeignKey(x => new { x.BusinessId, x.LinkedCategoryId })
+            .HasPrincipalKey(category => new { category.BusinessId, category.Id })
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var decision = modelBuilder.Entity<ProviderCatalogueFieldDecision>();
+
+        decision.Property(x => x.Field).IsRequired();
+        decision.Property(x => x.Decision).IsRequired();
+        decision.Property(x => x.ProviderValue).IsRequired().HasMaxLength(64);
+        decision.Property(x => x.DecidedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        decision.HasIndex(x => new { x.BusinessId, x.ProductId, x.Field }).IsUnique();
+
+        decision
+            .HasOne<Product>()
+            .WithMany()
+            .HasForeignKey(x => new { x.BusinessId, x.ProductId })
+            .HasPrincipalKey(product => new { product.BusinessId, product.Id })
+            .OnDelete(DeleteBehavior.Cascade);
     }
 
     /// <summary>
