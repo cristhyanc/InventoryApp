@@ -78,7 +78,10 @@ test.describe('sidebar navigation visual evidence', () => {
   test('navigation with its groups open', async ({ page }) => {
     await open(page, FIXTURE_PATH);
     await Promise.all(
-      ['Products', 'Purchases', 'Reports'].map((group) => navigation(page).getByRole('button', { name: group }).click())
+      // "Inventory" since issue #729 renamed the group; the Products page inside it is unchanged.
+      ['Inventory', 'Purchases', 'Reports'].map((group) =>
+        navigation(page).getByRole('button', { name: group }).click()
+      )
     );
 
     await capture(navigation(page), 'sidebar-groups-open');

@@ -1,16 +1,25 @@
 import { capabilitySet } from '../access/capabilities';
 import { routes } from '../app.routes';
+import { ProviderAvailability, providerFeatureAvailabilities, providerConnectionOf } from '../provider/provider-availability.service';
+import {
+  ProviderPermissionEvidence,
+  UNKNOWN_PROVIDER_PERMISSIONS,
+  withProviderPermission
+} from '../provider/provider-feature-permissions';
 import {
   NavGroup,
   NavItem,
   NavLink,
   activeNavGroup,
+  activeNavLink,
   activeNavRoute,
   businessesNavLink,
   navLinks,
+  navLockOf,
   navigationFor,
   platformDiagnosticsNavLink,
   primaryNavigation,
+  providerSectionHeading,
   superAdminNavGroup
 } from './navigation';
 
@@ -57,7 +66,26 @@ function ownerNavigation(hasPlatformDiagnosticsAccess = false): readonly NavItem
   return navigationFor(OWNER, hasPlatformDiagnosticsAccess, 'offered');
 }
 
-function item(label: string, items: readonly NavItem[] = primaryNavigation): NavLink | NavGroup {
+/**
+ * The shared provider answer (issue #728) for one published status and one body of permission
+ * evidence, derived by that signal's own functions rather than written out here: the menu must react
+ * to the answer the application actually produces, not to a shape this spec invented.
+ */
+function availability(
+  status: ProviderAvailability['status'],
+  permissions: ProviderPermissionEvidence = UNKNOWN_PROVIDER_PERMISSIONS
+): ProviderAvailability {
+  const connection = providerConnectionOf(status);
+  return { status, connection, features: providerFeatureAvailabilities(connection, permissions), permissions };
+}
+
+/** A usable connection whose machine fleet read Nayax has refused for lack of permission. */
+const FLEET_REFUSED = availability(
+  'PendingPermissions',
+  withProviderPermission(UNKNOWN_PROVIDER_PERMISSIONS, 'machineFleet', 'denied')
+);
+
+function item(label: string, items: readonly NavItem[] = primaryNavigation): NavItem {
   const match = items.find((candidate) => candidate.label === label);
   expect(match).toBeDefined();
   return match!;
@@ -85,7 +113,7 @@ function undeclaredRoutes(items: readonly NavItem[]): string[] {
 }
 
 const adminChildRoutes: { label: string; route: string }[] = [
-  { label: 'Nayax Settings', route: '/admin/nayax-settings' },
+  { label: 'Integrations', route: '/admin/nayax-settings' },
   { label: 'Site Commission Agreements', route: '/admin/site-commission-agreements' },
   { label: 'Imports', route: '/admin/imports' },
   { label: 'Historical Cost Recovery', route: '/admin/historical-cost-recovery' },
@@ -99,37 +127,60 @@ const adminChildRoutes: { label: string; route: string }[] = [
 ];
 
 describe('primary navigation (issue #391)', () => {
-  it('declares the target navigation in order', () => {
+  /**
+   * The order is itself a decision (issue #729, decision P6): everything that works without a sales
+   * provider first, then one section holding the destinations that read live provider data.
+   */
+  it('declares the target navigation in order, provider-independent entries first', () => {
     expect(primaryNavigation.map((entry) => `${entry.kind}:${entry.label}`)).toEqual([
       'link:Dashboard',
       'link:Pick List',
-      'group:Products',
-      'link:Machines',
-      'link:Sites',
+      'group:Inventory',
       'group:Purchases',
       'link:Expenses',
       'group:Reports',
-      'group:Admin'
+      'group:Admin',
+      'section:Needs Nayax',
+      'link:Machines',
+      'link:Sites',
+      'link:Site Commissions'
     ]);
   });
 
-  it('keeps Pick List, Machines, Sites and Expenses as top-level direct links', () => {
+  it('puts every live provider destination after the section heading, and nothing else there', () => {
+    const headingAt = primaryNavigation.indexOf(providerSectionHeading);
+    const locked = primaryNavigation.filter((entry) => entry.kind === 'link' && entry.lockedWithout !== undefined);
+
+    expect(headingAt).toBeGreaterThan(0);
+    expect(locked.map((entry) => entry.label)).toEqual(['Machines', 'Sites', 'Site Commissions']);
+    for (const entry of locked) {
+      expect(primaryNavigation.indexOf(entry)).toBeGreaterThan(headingAt);
+    }
+  });
+
+  it('keeps Pick List, Machines, Sites, Site Commissions and Expenses as top-level direct links', () => {
     expect(primaryNavigation.filter((entry) => entry.kind === 'link').map((entry) => (entry as NavLink).route)).toEqual([
       '/',
       '/pick-list',
+      '/expenses',
       '/machines',
       '/sites',
-      '/expenses'
+      '/reports/site-commissions'
     ]);
   });
 
-  it('groups the Products pages', () => {
-    expect(childRoutes('Products')).toEqual([
+  /**
+   * The group is "Inventory" since issue #729 (decision P11), and the Products page inside it keeps
+   * its own name, its URL and its breadcrumb - the rename is of the heading alone.
+   */
+  it('groups the Inventory pages, with Products keeping its own name and URL', () => {
+    expect(childRoutes('Inventory')).toEqual([
       { label: 'Products', route: '/products' },
       { label: 'Take Inventory', route: '/take-inventory' },
       { label: 'Categories', route: '/categories' },
       { label: 'Stock History', route: '/stock-history' }
     ]);
+    expect(primaryNavigation.map((entry) => entry.label)).not.toContain('Products');
   });
 
   it('groups the Purchases pages', () => {
@@ -140,7 +191,13 @@ describe('primary navigation (issue #391)', () => {
     ]);
   });
 
-  it('groups every report page', () => {
+  /**
+   * Every report left in this group reads stored data, so none of them is ever locked by provider
+   * status (issue #729, decision P5). The site commission report left the group: a site is known
+   * only from the live fleet read, so it is a live provider destination rather than a report over
+   * sales already imported.
+   */
+  it('groups every report over stored data, and locks none of them', () => {
     expect(childRoutes('Reports')).toEqual([
       { label: 'Dashboard', route: '/reports' },
       { label: 'Bookkeeping', route: '/reports/bookkeeping' },
@@ -149,9 +206,13 @@ describe('primary navigation (issue #391)', () => {
       { label: 'Reconciliation', route: '/reports/reconciliation' },
       { label: 'Machines', route: '/reports/machines' },
       { label: 'Products', route: '/reports/products' },
-      { label: 'GST', route: '/reports/gst' },
-      { label: 'Site Commissions', route: '/reports/site-commissions' }
+      { label: 'GST', route: '/reports/gst' }
     ]);
+
+    for (const report of navLinks([group('Reports')])) {
+      expect(report.lockedWithout).toBeUndefined();
+      expect(report.hiddenWithoutProvider).toBeUndefined();
+    }
   });
 
   it('groups the dedicated Admin pages', () => {
@@ -224,18 +285,21 @@ describe('navigationFor (issue #546)', () => {
   it('leaves primaryNavigation itself untouched, so one granted navigation cannot leak into another', () => {
     ownerNavigation(true);
     navigationFor(OPERATOR, true, 'offered');
+    navigationFor(OWNER, false, 'offered', availability('NotConfigured'));
 
     expect(childRoutes('Admin')).toEqual(adminChildRoutes);
     expect(primaryNavigation.map((entry) => entry.label)).toEqual([
       'Dashboard',
       'Pick List',
-      'Products',
-      'Machines',
-      'Sites',
+      'Inventory',
       'Purchases',
       'Expenses',
       'Reports',
-      'Admin'
+      'Admin',
+      'Needs Nayax',
+      'Machines',
+      'Sites',
+      'Site Commissions'
     ]);
   });
 
@@ -305,7 +369,15 @@ describe('navigationFor capabilities (issue #528)', () => {
   it('offers an Operator no Expenses, no Reports group and no Admin group', () => {
     const operator = navigationFor(OPERATOR, false, 'offered');
 
-    expect(labels(operator)).toEqual(['Dashboard', 'Pick List', 'Products', 'Machines', 'Sites', 'Purchases']);
+    expect(labels(operator)).toEqual([
+      'Dashboard',
+      'Pick List',
+      'Inventory',
+      'Purchases',
+      'Needs Nayax',
+      'Machines',
+      'Sites'
+    ]);
     expect(navLinks(operator).map((entry) => entry.route)).toEqual([
       '/',
       '/pick-list',
@@ -313,27 +385,29 @@ describe('navigationFor capabilities (issue #528)', () => {
       '/take-inventory',
       '/categories',
       '/stock-history',
-      '/machines',
-      '/sites',
       '/purchases',
       '/purchases/orders',
-      '/suppliers'
+      '/suppliers',
+      '/machines',
+      '/sites'
     ]);
   });
 
-  it('offers a Manager the reports and expenses, but no Nayax Settings and no data repair', () => {
+  it('offers a Manager the reports and expenses, but no Integrations and no data repair', () => {
     const manager = navigationFor(MANAGER, false, 'offered');
 
     expect(labels(manager)).toEqual([
       'Dashboard',
       'Pick List',
-      'Products',
-      'Machines',
-      'Sites',
+      'Inventory',
       'Purchases',
       'Expenses',
       'Reports',
-      'Admin'
+      'Admin',
+      'Needs Nayax',
+      'Machines',
+      'Sites',
+      'Site Commissions'
     ]);
     expect(childRoutes('Reports', manager).map((child) => child.route)).toEqual(
       childRoutes('Reports').map((child) => child.route)
@@ -374,15 +448,25 @@ describe('navigationFor capabilities (issue #528)', () => {
   });
 
   /**
-   * No current role is missing `Reports.View` while holding `SiteCommissions.Manage`, but the
-   * group must drop only the children the capability set actually withholds, not the whole group.
+   * No current role is missing `Reports.View` while holding `Imports.Run`, but the group must drop
+   * only the children the capability set actually withholds, not the whole group.
    */
   it('keeps a group whose children are only partly allowed, with only those children', () => {
-    const reportsOnly = capabilitySet(['SiteCommissions.Manage']);
+    const importsOnly = capabilitySet(['Imports.Run']);
 
-    expect(childRoutes('Reports', navigationFor(reportsOnly, false, 'offered'))).toEqual([
-      { label: 'Site Commissions', route: '/reports/site-commissions' }
+    expect(childRoutes('Admin', navigationFor(importsOnly, false, 'offered'))).toEqual([
+      { label: 'Imports', route: '/admin/imports' }
     ]);
+  });
+
+  /**
+   * `SiteCommissions.Manage` alone leaves one live provider destination, so the section heading
+   * stays with it - and nothing else does.
+   */
+  it('keeps the provider section heading for the one destination a capability set leaves in it', () => {
+    const commissionsOnly = navigationFor(capabilitySet(['SiteCommissions.Manage']), false, 'offered');
+
+    expect(labels(commissionsOnly)).toEqual(['Admin', 'Needs Nayax', 'Site Commissions']);
   });
 
   it('offers nothing at all for an empty capability set, which is what an unread one renders as', () => {
@@ -479,7 +563,7 @@ describe('activeNavGroup', () => {
   it('names the group that owns the active page', () => {
     expect(activeNavGroup(primaryNavigation, '/reports/gst')?.label).toBe('Reports');
     expect(activeNavGroup(primaryNavigation, '/admin/costing-repair')?.label).toBe('Admin');
-    expect(activeNavGroup(primaryNavigation, '/products/12/edit')?.label).toBe('Products');
+    expect(activeNavGroup(primaryNavigation, '/products/12/edit')?.label).toBe('Inventory');
     expect(activeNavGroup(primaryNavigation, '/purchases/orders')?.label).toBe('Purchases');
   });
 
@@ -487,5 +571,202 @@ describe('activeNavGroup', () => {
     expect(activeNavGroup(primaryNavigation, '/machines')).toBeUndefined();
     expect(activeNavGroup(primaryNavigation, '/')).toBeUndefined();
     expect(activeNavGroup(primaryNavigation, '/auth')).toBeUndefined();
+  });
+
+  /** The site commission report is a top-level provider destination now, not a Reports child. */
+  it('is undefined for the site commission report, which left the Reports group (issue #729)', () => {
+    expect(activeNavGroup(primaryNavigation, '/reports/site-commissions')).toBeUndefined();
+    expect(activeNavRoute(primaryNavigation, '/reports/site-commissions')).toBe('/reports/site-commissions');
+  });
+});
+
+/**
+ * The live provider destinations, the locked state the menu renders them in, and the repair tools
+ * that are hidden outright (issue #729, child E2 of issue #329, decision P6). Every answer here
+ * comes from the shared availability signal of issue #728; this file only decides what the menu
+ * does with it.
+ */
+describe('navigationFor with the provider answer (issue #729)', () => {
+  function labels(items: readonly NavItem[]): string[] {
+    return items.map((entry) => entry.label);
+  }
+
+  /**
+   * By route, not by label: "Machines" names both the live machine list and the machine
+   * profitability report, which is the very distinction issue #729 draws - one is locked without a
+   * provider and the other never is.
+   */
+  function lockOf(route: string, provider: ProviderAvailability | undefined): string {
+    const entry = navLinks(ownerNavigation()).find((candidate) => candidate.route === route);
+    expect(entry).toBeDefined();
+    return navLockOf(entry!, provider);
+  }
+
+  it('locks every live provider destination for a business with no connection at all', () => {
+    const noProvider = availability('NotConfigured');
+
+    expect(lockOf('/machines', noProvider)).toBe('connect');
+    expect(lockOf('/sites', noProvider)).toBe('connect');
+    expect(lockOf('/reports/site-commissions', noProvider)).toBe('connect');
+  });
+
+  /** The machine profitability report shares its label and is never locked. */
+  it('leaves the machine profitability report open with no provider at all', () => {
+    expect(lockOf('/reports/machines', availability('NotConfigured'))).toBe('open');
+  });
+
+  /**
+   * Stored credentials that stopped working cannot serve a live read either, so the destination is
+   * locked - and locked as a connection, because reconnecting is what fixes it.
+   */
+  it('locks them for credentials that are stored and known not to work', () => {
+    expect(lockOf('/machines', availability('NeedsAttention'))).toBe('connect');
+  });
+
+  it('leaves them open on a usable connection', () => {
+    expect(lockOf('/machines', availability('Ready'))).toBe('open');
+    expect(lockOf('/reports/site-commissions', availability('Ready'))).toBe('open');
+  });
+
+  /**
+   * The per-feature case of issue #329's decision P9: in `PendingPermissions` the connection is
+   * usable and Nayax may have granted some reads and refused others, so one refused read locks the
+   * destinations that need it and **nothing else**.
+   */
+  it('locks only the destinations whose own read Nayax refused, as a permission', () => {
+    expect(lockOf('/machines', FLEET_REFUSED)).toBe('permission');
+    expect(lockOf('/sites', FLEET_REFUSED)).toBe('permission');
+    expect(lockOf('/reports/site-commissions', FLEET_REFUSED)).toBe('permission');
+    expect(lockOf('/reports/machines', FLEET_REFUSED)).toBe('open');
+  });
+
+  it('leaves a destination whose read is granted open beside a refused one', () => {
+    const fleetGranted = availability(
+      'PendingPermissions',
+      withProviderPermission(
+        withProviderPermission(UNKNOWN_PROVIDER_PERMISSIONS, 'machineFleet', 'granted'),
+        'machineSales',
+        'denied'
+      )
+    );
+
+    expect(lockOf('/machines', fleetGranted)).toBe('open');
+  });
+
+  /** An unread status is not a refusal, so nothing locks before the answer settles. */
+  it('locks nothing while the provider answer is not known, and nothing on an unreadable status', () => {
+    expect(lockOf('/machines', undefined)).toBe('open');
+    expect(lockOf('/machines', availability(null))).toBe('open');
+  });
+
+  it('never locks a destination that declares no live provider read', () => {
+    for (const entry of navLinks(ownerNavigation()).filter((candidate) => candidate.lockedWithout === undefined)) {
+      expect(navLockOf(entry, availability('NotConfigured'))).toBe('open');
+    }
+  });
+
+  /**
+   * **Historical reports stay accessible** (decision P5): with no provider at all they are still in
+   * the menu, in the Reports group, and not locked - the availability states inside each report say
+   * what their figures are based on (issues #730 and #731).
+   */
+  it('keeps every report over stored data in the Reports group, unlocked, with no provider', () => {
+    const noProvider = navigationFor(OWNER, false, 'offered', availability('NotConfigured'));
+
+    expect(childRoutes('Reports', noProvider).map((child) => child.route)).toEqual([
+      '/reports',
+      '/reports/bookkeeping',
+      '/reports/daily',
+      '/reports/transactions',
+      '/reports/reconciliation',
+      '/reports/machines',
+      '/reports/products',
+      '/reports/gst'
+    ]);
+
+    for (const report of navLinks([group('Reports', noProvider)])) {
+      expect(navLockOf(report, availability('NotConfigured'))).toBe('open');
+    }
+  });
+
+  /** The provider repair and admin tools are hidden outright, not locked. */
+  it('hides the Nayax imports and the sale timestamp repair until the connection is usable', () => {
+    const hidden = ['/admin/imports', '/admin/nayax-sale-timestamp-repair'];
+
+    for (const status of ['NotConfigured', 'NeedsAttention'] as const) {
+      const routesOffered = childRoutes('Admin', navigationFor(OWNER, false, 'offered', availability(status))).map(
+        (child) => child.route
+      );
+
+      for (const tool of hidden) {
+        expect(routesOffered).not.toContain(tool);
+      }
+      // Integrations stays: it is where the connection is fixed, so it can never depend on one.
+      expect(routesOffered).toContain('/admin/nayax-settings');
+      expect(routesOffered).toContain('/admin/costing-repair');
+    }
+  });
+
+  it('offers them on a usable connection, and while the answer is not known', () => {
+    for (const provider of [availability('Ready'), availability('PendingPermissions'), undefined]) {
+      expect(childRoutes('Admin', navigationFor(OWNER, false, 'offered', provider))).toEqual(adminChildRoutes);
+    }
+  });
+
+  /**
+   * A capability set whose only Admin child is the Nayax imports leaves that group with no child at
+   * all once the provider is gone, so the group goes with its last one - exactly as it does for a
+   * capability set that withholds every child. A Manager keeps the group, because the site
+   * commission agreements are still there.
+   */
+  it("drops a group whose only children were the provider's", () => {
+    const importsOnly = capabilitySet(['Imports.Run']);
+
+    expect(childRoutes('Admin', navigationFor(importsOnly, false, 'offered'))).toEqual([
+      { label: 'Imports', route: '/admin/imports' }
+    ]);
+    expect(labels(navigationFor(importsOnly, false, 'offered', availability('NotConfigured')))).not.toContain('Admin');
+    expect(childRoutes('Admin', navigationFor(MANAGER, false, 'offered', availability('NotConfigured')))).toEqual([
+      { label: 'Site Commission Agreements', route: '/admin/site-commission-agreements' }
+    ]);
+  });
+
+  /** Capability rules apply first: an entry the role cannot see stays hidden, never locked. */
+  it('hides a live provider destination the role may not see, rather than locking it', () => {
+    const operator = navigationFor(OPERATOR, false, 'offered', availability('NotConfigured'));
+
+    expect(navLinks(operator).map((entry) => entry.route)).toContain('/machines');
+    expect(navLinks(operator).map((entry) => entry.route)).not.toContain('/reports/site-commissions');
+  });
+
+  it('withholds the business menu entirely whatever the provider answer says', () => {
+    expect(navigationFor(OWNER, false, 'withheld', availability('Ready'))).toEqual([]);
+    expect(navigationFor(OWNER, false, 'withheld', availability('NotConfigured'))).toEqual([]);
+  });
+});
+
+/**
+ * `activeNavLink` (issue #729): the declared destination a URL belongs to, which is how the "needs
+ * a provider" page names the page an operator asked for and finds the read it needs.
+ */
+describe('activeNavLink (issue #729)', () => {
+  it('names the destination a provider-locked URL belongs to, with its live read', () => {
+    expect(activeNavLink(primaryNavigation, '/machines')?.label).toBe('Machines');
+    expect(activeNavLink(primaryNavigation, '/machines')?.lockedWithout).toBe('machineFleet');
+    expect(activeNavLink(primaryNavigation, '/reports/site-commissions')?.label).toBe('Site Commissions');
+  });
+
+  it('keeps a detail URL on its own list destination', () => {
+    expect(activeNavLink(primaryNavigation, '/machines/7')?.label).toBe('Machines');
+    expect(activeNavLink(primaryNavigation, '/sites/3/products')?.label).toBe('Sites');
+  });
+
+  it('names a destination inside a group too', () => {
+    expect(activeNavLink(primaryNavigation, '/stock-history')?.label).toBe('Stock History');
+  });
+
+  it('is undefined for a URL outside the navigation', () => {
+    expect(activeNavLink(primaryNavigation, '/needs-provider')).toBeUndefined();
+    expect(activeNavLink(primaryNavigation, '/auth')).toBeUndefined();
   });
 });

@@ -9,15 +9,28 @@ import {
   filter,
   of,
   startWith,
+  switchMap,
   takeUntil
 } from 'rxjs';
 import { AccessService, MemberAccessState } from '../access/access.service';
 import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { CapabilitySet } from '../access/capabilities';
 import { IconComponent } from '../components/shared/icon.component';
+import { ProviderAvailability, ProviderAvailabilityService } from '../provider/provider-availability.service';
+import { ProviderLock, providerLockSummary } from '../provider/provider-lock';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { SuperAdminBusinessesService } from '../services/super-admin-businesses.service';
-import { NavGroup, NavItem, NavLink, activeNavGroup, activeNavRoute, navigationFor, superAdminNavGroup } from './navigation';
+import {
+  NavGroup,
+  NavItem,
+  NavLink,
+  NavSectionHeading,
+  activeNavGroup,
+  activeNavRoute,
+  navLockOf,
+  navigationFor,
+  superAdminNavGroup
+} from './navigation';
 
 /**
  * The id of the navigation landmark. It lives here because the `<nav>` that carries it is this
@@ -47,6 +60,14 @@ export const PRIMARY_NAVIGATION_ID = 'primary-navigation';
  * capability set has been read it renders no destination at all, because a menu that offered
  * everything and then removed what the role cannot use would show entries that were never this
  * member's.
+ *
+ * It owns no provider decision either (issue #729). Whether a live provider destination is locked,
+ * and whether the provider repair tools are offered at all, comes from the shared availability
+ * signal of issue #728 through `navigationFor` and `navLockOf`; this component subscribes to that
+ * one shared read and renders its answer. Unlike the capability set the menu is **not** held back
+ * for it: nothing is locked until the answer settles, because an unread status is not a refusal,
+ * and a withheld business menu asks for no provider answer at all - there is no business to ask
+ * about.
  *
  * The host renders as `display: contents` (issue #455) so it contributes no box of its own: the
  * shell's `items-stretch` row needs to stretch the actual white `<nav>` panel to the row's full
@@ -131,11 +152,22 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
   private readonly destroying$ = new Subject<void>();
   private hasSuperAdminAccess = false;
 
+  /** The settled provider answer, or `undefined` while nothing is known about it (issue #729). */
+  private provider?: ProviderAvailability;
+
+  /** The access answers the menu is built from, once they have been read at all. */
+  private menuInputs?: {
+    readonly capabilities: CapabilitySet | undefined;
+    readonly diagnosticsOffered: boolean;
+    readonly businessNavigation: BusinessNavigationVisibility;
+  };
+
   constructor(
     private readonly router: Router,
     private readonly access: AccessService,
     private readonly diagnosticsAccess: PlatformDiagnosticsAccessService,
-    private readonly superAdminBusinesses: SuperAdminBusinessesService
+    private readonly superAdminBusinesses: SuperAdminBusinessesService,
+    private readonly providerAvailability: ProviderAvailabilityService
   ) {}
 
   ngOnInit(): void {
@@ -167,10 +199,12 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
         // what the previewed role is shown is the business menu its own capabilities allow, and
         // that group belongs to no business role at all.
         const diagnosticsOffered = diagnosticsGranted && !rolePreviewActive;
-        this.navigation = navigationFor(renderedCapabilities(access), diagnosticsOffered, businessNavigation);
-        // A page opened by URL before the answers arrived becomes the active entry once its link
-        // exists, so the owning group reflects where the operator actually is.
-        this.applyActiveRoute(this.router.url);
+        this.menuInputs = {
+          capabilities: renderedCapabilities(access),
+          diagnosticsOffered,
+          businessNavigation
+        };
+        this.renderNavigation();
 
         this.hasSuperAdminAccess = diagnosticsOffered;
         if (diagnosticsOffered) {
@@ -180,6 +214,34 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
           // must not survive the switch (issue #605's same rule for the group itself).
           this.pendingBusinessCount = null;
         }
+      });
+
+    // The shared provider answer (issue #729), asked for only while this account state has a
+    // business menu at all: a signed-out visitor and a known nonmember resolve no business, so
+    // there is no connection to read a status for. It starts `undefined` so the menu renders
+    // immediately and locks nothing until the answer settles, and a failed read settles as
+    // `unknown`, which locks nothing either (issue #728's fail-open rule).
+    //
+    // It is deliberately its own subscription rather than another arm of the `combineLatest` above:
+    // the provider answer changes what the menu *renders*, and nothing else - the platform-admin
+    // probe and the pending-applications count answer different questions, and re-asking either one
+    // because a connection status settled would be one extra request per page load.
+    this.businessNavigation$
+      .pipe(
+        distinctUntilChanged(),
+        switchMap((visibility) =>
+          visibility === 'offered'
+            ? this.providerAvailability.load().pipe(
+                catchError(() => of(undefined)),
+                startWith(undefined)
+              )
+            : of(undefined)
+        ),
+        takeUntil(this.destroying$)
+      )
+      .subscribe((provider) => {
+        this.provider = provider;
+        this.renderNavigation();
       });
 
     // The Businesses page (issue #547) reports every approve, reject, deactivate, reactivate and
@@ -206,6 +268,42 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
 
   isLinkActive(link: NavLink): boolean {
     return this.activeRoute === link.route;
+  }
+
+  /** Whether the entry is one of issue #729's section headings rather than a destination. */
+  isSectionHeading(item: NavItem): item is NavSectionHeading {
+    return item.kind === 'section';
+  }
+
+  /**
+   * Whether this destination is shown locked (issue #729). A locked entry keeps its link: clicking
+   * it navigates, and `requireProvider` on the route shows the "needs a provider" page, so the
+   * entry and the URL behave identically - which is exactly what the issue asks for, and is why
+   * nothing here is `aria-disabled`, a claim that would be untrue of a link that does navigate.
+   */
+  isLinkLocked(link: NavLink): boolean {
+    return navLockOf(link, this.provider) !== 'open';
+  }
+
+  /** The one sentence a locked entry carries, as its accessible description and its tooltip. */
+  lockSummary(link: NavLink): string {
+    return providerLockSummary(this.lockOf(link), link.label);
+  }
+
+  /**
+   * A destination's tooltip: the lock sentence while it is locked, because that is what an operator
+   * needs before clicking; otherwise the label the collapsed rail has no room to print.
+   */
+  linkTitle(link: NavLink): string | null {
+    const summary = this.lockSummary(link);
+    if (summary !== '') {
+      return summary;
+    }
+    return this.expanded ? null : link.label;
+  }
+
+  private lockOf(link: NavLink): ProviderLock {
+    return navLockOf(link, this.provider);
   }
 
   /** Whether `item`'s badge is the pending-business-applications count (issue #547). */
@@ -247,6 +345,29 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
     } else {
       this.openGroups.add(group.label);
     }
+  }
+
+  /**
+   * Rebuilds the menu from the answers read so far. It renders nothing until the access answers
+   * have arrived - a menu that offered everything and then removed what the role cannot use would
+   * show entries that were never this member's - and it is called again whenever either the access
+   * answers or the provider answer changes.
+   */
+  private renderNavigation(): void {
+    const inputs = this.menuInputs;
+    if (inputs === undefined) {
+      return;
+    }
+
+    this.navigation = navigationFor(
+      inputs.capabilities,
+      inputs.diagnosticsOffered,
+      inputs.businessNavigation,
+      this.provider
+    );
+    // A page opened by URL before the answers arrived becomes the active entry once its link
+    // exists, so the owning group reflects where the operator actually is.
+    this.applyActiveRoute(this.router.url);
   }
 
   private applyActiveRoute(url: string): void {

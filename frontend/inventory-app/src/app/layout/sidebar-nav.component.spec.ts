@@ -12,7 +12,18 @@ import { CAPABILITIES, Capability, capabilitySet } from '../access/capabilities'
 import { FORBIDDEN_INTERCEPTORS } from '../access/forbidden-interceptors';
 import { apiConfig, queuedReads, readingHttp, signedInIdentity } from '../access/identity-cache.spec-helpers';
 import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
+import { ProviderAvailabilityService } from '../provider/provider-availability.service';
+import {
+  SpecConnectionStatus,
+  nayaxConnectionStatusDouble,
+  provideNayaxConnectionStatus
+} from '../provider/provider-availability.spec-helpers';
 import { ConfigService } from '../services/config.service';
+import {
+  NayaxConnectionCheckLine,
+  NayaxConnectionService,
+  NayaxConnectionStatusName
+} from '../services/nayax-connection.service';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { PlatformDiagnosticsAccess, PlatformDiagnosticsService } from '../services/platform-diagnostics.service';
 import { SuperAdminBusinessesService } from '../services/super-admin-businesses.service';
@@ -71,12 +82,25 @@ async function render(
      * above it is the shell's, and the sidebar only renders it.
      */
     rolePreviewActive?: boolean;
+    /**
+     * The published Nayax connection status the shared availability signal reads (issue #728), which
+     * decides what issue #729's menu locks and hides. It defaults to `Ready`, the connected business
+     * every test here but that issue's own is about, so those tests see the menu unchanged.
+     */
+    providerStatus?: SpecConnectionStatus;
+    /**
+     * Permission evidence to seed the shared signal with before the sidebar renders, as a completed
+     * re-test's check lines - the only way a session learns that Nayax refused one read
+     * (issue #728). Used for the `PendingPermissions` case of issue #729.
+     */
+    providerChecks?: readonly NayaxConnectionCheckLine[];
   } = {}
 ): Promise<Rendered> {
   await TestBed.configureTestingModule({
     imports: [SidebarNavComponent],
     providers: [
       provideRouter([{ path: '**', component: BlankPageComponent }]),
+      provideNayaxConnectionStatus(options.providerStatus ?? 'Ready'),
       {
         provide: AccessService,
         useValue: options.accessService ?? { access$: options.access ?? of(EVERY_CAPABILITY) }
@@ -97,6 +121,15 @@ async function render(
 
   if (options.url) {
     await TestBed.inject(Router).navigateByUrl(options.url);
+  }
+
+  if (options.providerChecks !== undefined) {
+    // Through the signal's own `accept`, so the per-feature answers are derived by issue #728's
+    // code from a completed run's check lines rather than written out by this spec.
+    TestBed.inject(ProviderAvailabilityService).accept(
+      { status: (options.providerStatus ?? 'PendingPermissions') as NayaxConnectionStatusName, machineChecksPending: false },
+      options.providerChecks
+    );
   }
 
   const fixture = TestBed.createComponent(SidebarNavComponent);
@@ -152,7 +185,7 @@ describe('SidebarNavComponent structure (issue #391)', () => {
   it('keeps every group collapsed until its heading is used, and exposes aria-expanded on it', async () => {
     const { host } = await render();
 
-    for (const label of ['Products', 'Purchases', 'Reports', 'Admin']) {
+    for (const label of ['Inventory', 'Purchases', 'Reports', 'Admin']) {
       expect(groupToggle(host, label).getAttribute('aria-expanded')).toBe('false');
     }
 
@@ -184,7 +217,7 @@ describe('SidebarNavComponent structure (issue #391)', () => {
 
   it('renders a link for every declared destination once its group is open', async () => {
     const { fixture, host } = await render();
-    for (const label of ['Products', 'Purchases', 'Reports', 'Admin']) {
+    for (const label of ['Inventory', 'Purchases', 'Reports', 'Admin']) {
       groupToggle(host, label).click();
       fixture.detectChanges();
     }
@@ -227,7 +260,7 @@ describe('SidebarNavComponent active route (issue #391)', () => {
     const { host } = await render({ url: '/machines/7' });
 
     expect(link(host, '/machines')?.getAttribute('aria-current')).toBe('page');
-    expect(groupToggle(host, 'Products').getAttribute('aria-expanded')).toBe('false');
+    expect(groupToggle(host, 'Inventory').getAttribute('aria-expanded')).toBe('false');
     expect(link(host, '/machines')?.classList.contains('bg-md-dark-gradient')).toBe(true);
     expect(link(host, '/')?.classList.contains('bg-md-dark-gradient')).toBe(false);
   });
@@ -366,10 +399,11 @@ describe('SidebarNavComponent during a role preview (issue #721)', () => {
     expect(component.navigation.map((entry) => entry.label)).toEqual([
       'Dashboard',
       'Pick List',
-      'Products',
+      'Inventory',
+      'Purchases',
+      'Needs Nayax',
       'Machines',
-      'Sites',
-      'Purchases'
+      'Sites'
     ]);
     expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
       '/',
@@ -378,11 +412,11 @@ describe('SidebarNavComponent during a role preview (issue #721)', () => {
       '/take-inventory',
       '/categories',
       '/stock-history',
-      '/machines',
-      '/sites',
       '/purchases',
       '/purchases/orders',
-      '/suppliers'
+      '/suppliers',
+      '/machines',
+      '/sites'
     ]);
     expect(host.textContent).not.toContain('Super Admin');
     expect(link(host, '/super-admin/businesses')).toBeNull();
@@ -496,6 +530,9 @@ describe('SidebarNavComponent pending-count refusal (issue #673)', () => {
         provideRouter([{ path: '**', component: BlankPageComponent }]),
         provideHttpClient(withInterceptors([...FORBIDDEN_INTERCEPTORS])),
         provideHttpClientTesting(),
+        // The shared provider-availability read (issues #728, #729) is stubbed, so the requests this
+        // test asserts on stay the ones it is about.
+        provideNayaxConnectionStatus(),
         { provide: ConfigService, useValue: apiConfig() },
         { provide: ToastService, useValue: { error: toastError } },
         { provide: MsalService, useValue: identity.msal },
@@ -622,6 +659,7 @@ describe('SidebarNavComponent Super Admin group across an identity change (issue
       imports: [SidebarNavComponent],
       providers: [
         provideRouter([{ path: '**', component: BlankPageComponent }]),
+        provideNayaxConnectionStatus(),
         { provide: AccessService, useValue: { access$: of(EVERY_CAPABILITY) } },
         { provide: PlatformDiagnosticsService, useValue: { access, query: jest.fn() } },
         { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } },
@@ -734,7 +772,7 @@ describe('SidebarNavComponent capability-driven menu (issue #528)', () => {
     expect(host.textContent).not.toContain('Admin');
   });
 
-  it('offers a Manager the Reports and Admin groups, without Nayax Settings or a repair page', async () => {
+  it('offers a Manager the Reports and Admin groups, without Integrations or a repair page', async () => {
     const { fixture, host } = await render({ access: of(manager) });
     groupToggle(host, 'Admin').click();
     groupToggle(host, 'Reports').click();
@@ -885,13 +923,15 @@ describe('SidebarNavComponent outlined icons (issue #456)', () => {
 
   it('draws an outlined glyph for every declared destination and group icon', async () => {
     const { fixture, host } = await render({ expanded: true });
-    for (const label of ['Products', 'Purchases', 'Reports', 'Admin']) {
+    for (const label of ['Inventory', 'Purchases', 'Reports', 'Admin']) {
       groupToggle(host, label).click();
     }
     fixture.detectChanges();
 
-    const declaredIcons = primaryNavigation.flatMap((item) => (item.icon === undefined ? [] : [item.icon]));
-    expect(declaredIcons).toHaveLength(primaryNavigation.length);
+    // A section heading (issue #729) declares no icon: it is a heading over the entries after it.
+    const iconBearing = primaryNavigation.filter((item) => item.kind !== 'section');
+    const declaredIcons = iconBearing.flatMap((item) => (item.icon === undefined ? [] : [item.icon]));
+    expect(declaredIcons).toHaveLength(iconBearing.length);
 
     for (const icon of declaredIcons) {
       for (const expected of OUTLINED_ICON_SHAPES[icon].paths) {
@@ -1056,7 +1096,7 @@ describe('SidebarNavComponent drawer behaviour (issue #391)', () => {
     fixture.detectChanges();
     expect(navigated).toHaveBeenCalledTimes(1);
 
-    groupToggle(host, 'Products').click();
+    groupToggle(host, 'Inventory').click();
     fixture.detectChanges();
     link(host, '/categories')?.click();
 
@@ -1135,10 +1175,13 @@ describe('SidebarNavComponent with the business navigation withheld (issue #676)
 
   /** The input is what says so: nothing is offered to a host that never answered the question. */
   it('renders no business destination until a host says the menu is offered', async () => {
+    const connections = nayaxConnectionStatusDouble('Ready');
+
     await TestBed.configureTestingModule({
       imports: [SidebarNavComponent],
       providers: [
         provideRouter([{ path: '**', component: BlankPageComponent }]),
+        { provide: NayaxConnectionService, useValue: connections },
         { provide: AccessService, useValue: { access$: of(EVERY_CAPABILITY) } },
         { provide: PlatformDiagnosticsAccessService, useValue: { granted$: of(false) } },
         { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } }
@@ -1149,5 +1192,185 @@ describe('SidebarNavComponent with the business navigation withheld (issue #676)
     fixture.detectChanges();
 
     expect(businessDestinations(fixture.nativeElement as HTMLElement)).toEqual([]);
+    // And the provider status was never asked for: an account state with no business menu resolves
+    // no business, so there is no connection to read a status for (issue #729).
+    expect(connections.status).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The provider-locked menu (issue #729, child E2 of issue #329, decision P6): the live provider
+ * section, what a locked entry renders as, and the repair tools that are hidden outright. Every
+ * answer is derived by the shared availability signal of issue #728 from a stubbed status read, so
+ * what is asserted here is what the application actually decides, not a shape this spec invented.
+ */
+describe('SidebarNavComponent provider-locked destinations (issue #729)', () => {
+  const PERMISSION_REFUSED: readonly NayaxConnectionCheckLine[] = [
+    { check: 'Machines', status: 'Failed', failure: 'PermissionNotGranted' },
+    { check: 'MachineLastSales', status: 'Passed', failure: null }
+  ];
+
+  function lockBadges(host: HTMLElement, route: string): string {
+    return link(host, route)?.textContent ?? '';
+  }
+
+  it('renders the live provider section heading, with the entries under it', async () => {
+    const { host } = await render();
+    const heading = Array.from(host.querySelectorAll('h2')).find((entry) =>
+      (entry.textContent ?? '').includes('Needs Nayax')
+    );
+
+    expect(heading).toBeDefined();
+    expect(heading?.tagName).toBe('H2');
+    expect(link(host, '/machines')).not.toBeNull();
+    expect(link(host, '/sites')).not.toBeNull();
+    expect(link(host, '/reports/site-commissions')).not.toBeNull();
+  });
+
+  it('renames the Products group Inventory, leaving the Products page its own name and URL', async () => {
+    const { fixture, host } = await render();
+    groupToggle(host, 'Inventory').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/products')?.textContent).toContain('Products');
+    expect(link(host, '/take-inventory')).not.toBeNull();
+  });
+
+  it('locks nothing on a usable connection', async () => {
+    const { host } = await render({ providerStatus: 'Ready' });
+
+    expect(lockBadges(host, '/machines')).not.toContain('Locked');
+    expect(lockBadges(host, '/sites')).not.toContain('Locked');
+    expect(lockBadges(host, '/reports/site-commissions')).not.toContain('Locked');
+  });
+
+  /**
+   * A locked entry keeps its link: clicking it is how an operator reaches the explanation, and the
+   * route's own `requireProvider` guard is what shows it. So it is marked, never disabled.
+   */
+  it('shows every live provider entry locked, and still linked, with no connection at all', async () => {
+    const { host } = await render({ providerStatus: 'NotConfigured' });
+
+    for (const route of ['/machines', '/sites', '/reports/site-commissions']) {
+      const entry = link(host, route);
+      expect(entry).not.toBeNull();
+      expect(entry?.textContent).toContain('Locked');
+      expect(entry?.hasAttribute('aria-disabled')).toBe(false);
+      expect(entry?.getAttribute('title')).toContain('Nayax is not connected');
+    }
+  });
+
+  it('locks them for credentials that are stored and known not to work', async () => {
+    const { host } = await render({ providerStatus: 'NeedsAttention' });
+
+    expect(lockBadges(host, '/machines')).toContain('Locked');
+  });
+
+  /**
+   * The per-feature case of decision P9: in `PendingPermissions` the connection is usable and the
+   * entry whose own read Nayax refused is locked as a **permission**, which is a different message
+   * and a different fix from a missing connection.
+   */
+  it('locks a refused feature as a Nayax permission, naming the destination', async () => {
+    const { host } = await render({ providerStatus: 'PendingPermissions', providerChecks: PERMISSION_REFUSED });
+
+    const machines = link(host, '/machines');
+    expect(machines?.textContent).toContain('Locked');
+    expect(machines?.getAttribute('title')).toBe('Machines is waiting for a Nayax permission.');
+    expect(machines?.getAttribute('title')).not.toContain('not connected');
+  });
+
+  it('leaves a destination whose read Nayax granted unlocked beside a refused one', async () => {
+    const { host } = await render({
+      providerStatus: 'PendingPermissions',
+      providerChecks: [
+        { check: 'Machines', status: 'Passed', failure: null },
+        { check: 'MachineLastSales', status: 'Failed', failure: 'PermissionNotGranted' }
+      ]
+    });
+
+    expect(lockBadges(host, '/machines')).not.toContain('Locked');
+  });
+
+  /** An unread status is not a refusal, so a failed probe locks nothing (issue #728's rule). */
+  it('locks nothing when the connection status could not be read', async () => {
+    const { host } = await render({ providerStatus: 'unreadable' });
+
+    expect(lockBadges(host, '/machines')).not.toContain('Locked');
+    expect(link(host, '/machines')?.getAttribute('title')).toBeNull();
+  });
+
+  /**
+   * **Historical reports stay accessible** (decision P5): with no provider at all they are in the
+   * Reports group, linked and unlocked, because they read stored data.
+   */
+  it('keeps every report over stored data in the Reports group, linked and unlocked', async () => {
+    const { fixture, host } = await render({ providerStatus: 'NotConfigured' });
+    groupToggle(host, 'Reports').click();
+    fixture.detectChanges();
+
+    for (const route of [
+      '/reports/bookkeeping',
+      '/reports/daily',
+      '/reports/transactions',
+      '/reports/reconciliation',
+      '/reports/machines'
+    ]) {
+      expect(link(host, route)).not.toBeNull();
+      expect(lockBadges(host, route)).not.toContain('Locked');
+    }
+  });
+
+  it('hides the Nayax imports and the sale timestamp repair until the connection is usable', async () => {
+    const { fixture, host } = await render({ providerStatus: 'NotConfigured' });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/admin/imports')).toBeNull();
+    expect(link(host, '/admin/nayax-sale-timestamp-repair')).toBeNull();
+    // Integrations is where the connection is made, so it is always reachable, and the costing
+    // repairs are the business's own data rather than the provider's.
+    expect(link(host, '/admin/nayax-settings')?.textContent).toContain('Integrations');
+    expect(link(host, '/admin/costing-repair')).not.toBeNull();
+  });
+
+  it('offers them again on a usable connection', async () => {
+    const { fixture, host } = await render({ providerStatus: 'Ready' });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/admin/imports')).not.toBeNull();
+    expect(link(host, '/admin/nayax-sale-timestamp-repair')).not.toBeNull();
+  });
+
+  /** Capability rules apply first: an entry the role cannot see stays hidden, never locked. */
+  it('hides a live provider entry the role may not see rather than locking it', async () => {
+    const operator = granted(['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate']);
+    const { host } = await render({ access: of(operator), providerStatus: 'NotConfigured' });
+
+    expect(lockBadges(host, '/machines')).toContain('Locked');
+    expect(link(host, '/reports/site-commissions')).toBeNull();
+  });
+
+  it('reads the connection status once however many entries depend on it', async () => {
+    const connections = nayaxConnectionStatusDouble('NotConfigured');
+
+    await TestBed.configureTestingModule({
+      imports: [SidebarNavComponent],
+      providers: [
+        provideRouter([{ path: '**', component: BlankPageComponent }]),
+        { provide: NayaxConnectionService, useValue: connections },
+        { provide: AccessService, useValue: { access$: of(EVERY_CAPABILITY) } },
+        { provide: PlatformDiagnosticsAccessService, useValue: { granted$: of(false) } },
+        { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(SidebarNavComponent);
+    fixture.componentRef.setInput('businessNavigation', 'offered');
+    fixture.detectChanges();
+
+    expect(connections.status).toHaveBeenCalledTimes(1);
+    expect(link(fixture.nativeElement as HTMLElement, '/machines')?.textContent).toContain('Locked');
   });
 });
