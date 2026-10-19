@@ -38,6 +38,7 @@ jobs:
     # Activate only after credentials, board rules and a preview have been checked.
     # A manual run from a feature branch must never execute code with the Project token.
     if: >-
+      vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' &&
       github.repository == 'cristhyanc/InventoryApp' &&
       (github.event_name == 'workflow_dispatch' || vars.PROJECT_SYNC_ENABLED == 'true') &&
       (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')

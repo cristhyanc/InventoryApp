@@ -106,8 +106,12 @@ every workflow's `jobs:` map and fails when any job: selects a GitHub-hosted lab
 `windows-*`, `macos-*`); computes its runner with an expression, which is how a fallback is written;
 uses a runner group or any label set other than exactly the four above; has no `runs-on`; calls a
 reusable workflow from outside this repository's `.github/workflows`; mentions the retired switch; or
-runs `node` before the pinned `actions/setup-node` step installs it. The existing agent and deployment
-contracts are unchanged apart from their fixtures now naming the self-hosted labels.
+runs `node` before the pinned `actions/setup-node` step installs it. It also enforces the credential
+isolation gate below: a job that receives a repository secret other than its own `GITHUB_TOKEN`, a
+reusable-workflow `secrets:` mapping or `id-token: write` fails the contract unless its job-level `if:`
+requires `vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'` joined by a top-level `&&`, and the
+implementation, architecture, review, repair and Deploy Production workflows must each carry the
+visible refusal step. The agent and deployment contracts lock the updated `if:` text.
 
 **When every runner is offline, jobs queue.** GitHub holds a job that no matching runner picks up and
 eventually fails it (currently after 24 hours); it never reroutes the job to a GitHub-hosted runner.
@@ -127,8 +131,13 @@ up first). Everything else must be on the runner host, installed by a human: `gi
 path), the Azure CLI `az` (required by `azure/login` in Deploy Production), and a Docker daemon the
 runner account can reach (required by the Docker validation and by `Azure/static-web-apps-deploy`,
 which is a container action). The manual **Inventory agent runner diagnostic** checks exactly this list
-without checking out code or using secrets, and fails when anything is missing. No workflow installs
-packages with `sudo`, and none may.
+without checking out code or using secrets, and fails when anything is missing. Because the pool has
+several runners and any of them can pick up a job, Deploy Production also checks its own host before it
+changes anything there: Deploy API fails before Azure login when `az`, `jq`, `curl` or `/usr/bin/gh` is
+missing, and Deploy Frontend fails before the Static Web Apps upload when `docker`, `curl`, `/usr/bin/gh`
+or the Docker daemon is unavailable. **The baseline is not verified until a human runs the diagnostic on
+every runner in the pool and it passes**; no agent has done so. No workflow installs packages with
+`sudo`, and none may.
 
 **Manual Docker validation.** `.github/workflows/inventoryapp-self-hosted-docker-validation.yml` is
 dispatched by hand from `main`. It checks out reviewed `main` code with read-only contents permission
@@ -164,6 +173,32 @@ job, registered with `--ephemeral` or just-in-time configuration) the deployment
 as safe as the runner host. Running more than one runner under the same account on one host also
 shares that home directory and tool cache between concurrent jobs. Workflow concurrency groups are
 unchanged and serialise only runs of the same workflow and pull request.
+
+**Credential isolation gate (fail closed).** Because documentation alone does not stop a job, every job
+that receives a long-lived credential is skipped until a human records that the isolation above exists:
+the Claude jobs (`agent-model-selection.yml` select, implement, the architecture check and fix, review
+and repair, all holding `CLAUDE_CODE_OAUTH_TOKEN` and, for the editing ones, the App private key), the
+SonarCloud read (`SONAR_TOKEN`), Project status sync (`PROJECT_SYNC_TOKEN`), Deploy API (Azure OIDC) and
+Deploy Frontend (the Static Web Apps token). Their job-level `if:` requires the repository variable
+`INVENTORY_RUNNER_ISOLATION_VERIFIED` to be exactly `true`. The condition sits on the job, not on a
+step, because GitHub sends a job's secrets to the runner when the job starts. Nothing falls back to a
+GitHub-hosted runner, and jobs without such credentials (pull-request validation, dispatchers, branch
+cleanup, the diagnostic and the push build) keep running. Deploy Production refuses in its first job,
+so it validates, builds and deploys nothing while the gate is closed.
+
+The refusal is visible rather than a silent skip: the implementation preflight, the architecture and
+review context jobs, a dedicated `isolation-gate` job beside repair, and the first job of Deploy
+Production each fail with an error naming the variable, so the run is red and no credentialed job
+starts. An implementation run refused this way leaves the issue's readiness label in place, as for any
+failed preflight; re-apply it after the variable is set. Project status sync is skipped without a red
+run, as it already is while `PROJECT_SYNC_ENABLED` is off.
+
+**To lift the gate**, a human first provisions reset or ephemeral runners for the `inventory-agent`
+labels (or another isolation boundary they have reviewed), runs the diagnostic on them, and only then
+sets `INVENTORY_RUNNER_ISOLATION_VERIFIED=true` in Repository Settings → Secrets and variables → Actions
+→ Variables. Removing the variable, or setting any other value, closes the gate again. Workflows that
+run from the default branch (`issues`, `issue_comment`, `pull_request_target` and `workflow_dispatch`
+triggers) enforce the gate once this reaches `main`.
 
 **Cost boundaries.** Moving jobs to self-hosted runners removes GitHub-hosted runner minutes for
 repository-owned jobs only. GitHub still coordinates every run; artifact and cache storage is still

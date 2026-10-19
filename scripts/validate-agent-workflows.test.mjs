@@ -1040,7 +1040,7 @@ describe('Claude-only review contract (Claude implements; separate Claude invoca
   it('rejects an architecture checker that is not selected by the verified route, or not read-only', () => {
     for (const [from, to, reason] of [
       // The checker runs only for a verified Claude route.
-      ["    if: needs.context.outputs.checker == 'claude'\n", '', /agent-architecture.yml same-provider Claude check/],
+      ["    if: needs.context.outputs.checker == 'claude' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n", '', /agent-architecture.yml same-provider Claude check/],
       // The route table: no route maps to Copilot.
       ['full-claude) checker=claude;', 'full-claude) checker=copilot;', /agent-architecture.yml context|checker=copilot/],
       ['cross-claude) checker=claude;', 'cross-claude) checker=copilot;', /agent-architecture.yml context|checker=copilot/],

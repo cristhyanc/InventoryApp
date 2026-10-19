@@ -6,6 +6,8 @@ import { resolve } from 'node:path';
 import { describe, it } from 'node:test';
 
 import {
+  ISOLATION_CONDITION,
+  ISOLATION_GATE_STEP,
   SELF_HOSTED_RUNS_ON,
   SETUP_NODE_STEP,
   listWorkflowFiles,
@@ -82,6 +84,40 @@ describe('runner placement contract', () => {
     assert.match(runnerPlacementViolations(runs(call + setup), 'fixture')[0], /runs node without first installing it/);
     assert.deepEqual(runnerPlacementViolations(runs(setup + call), 'fixture'), []);
     assert.deepEqual(runnerPlacementViolations(runs('      - run: echo "node-version is set elsewhere"\n'), 'fixture'), []);
+  });
+
+  it('requires the isolation condition on every job that receives a secret or OIDC token', () => {
+    const credentialed = (condition, body = "        env:\n          TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}\n") =>
+      workflow(`  agent:\n${condition}    runs-on: ${SELF_HOSTED_RUNS_ON}\n    steps:\n      - run: echo ok\n${body}`);
+    const rejected = /receives a secret or OIDC token/;
+    assert.match(runnerPlacementViolations(credentialed(''), 'fixture')[0], rejected);
+    assert.match(runnerPlacementViolations(credentialed("    if: github.ref == 'refs/heads/main'\n"), 'fixture')[0], rejected);
+    // `&&` binds tighter than `||`, so a trailing condition after a top-level `||` can be bypassed.
+    assert.match(runnerPlacementViolations(credentialed(`    if: github.event_name == 'push' || github.ref == 'refs/heads/main' && ${ISOLATION_CONDITION}\n`), 'fixture')[0], rejected);
+    assert.match(runnerPlacementViolations(credentialed(`    if: ${ISOLATION_CONDITION} || always()\n`), 'fixture')[0], rejected);
+    assert.match(runnerPlacementViolations(credentialed("    if: vars.INVENTORY_RUNNER_ISOLATION_VERIFIED != 'true'\n"), 'fixture')[0], rejected);
+    for (const body of ['    permissions:\n      id-token: write\n', '    secrets:\n      TOKEN: ${{ secrets.TOKEN }}\n']) {
+      const text = workflow(`  agent:\n    permissions:\n      contents: read\n${body.startsWith('    permissions') ? '      id-token: write\n' : ''}    runs-on: ${SELF_HOSTED_RUNS_ON}\n${body.startsWith('    secrets') ? body : ''}    steps:\n      - run: echo ok\n`);
+      assert.match(runnerPlacementViolations(text, 'fixture')[0], rejected, body);
+    }
+    for (const condition of [
+      `    if: ${ISOLATION_CONDITION}\n`,
+      `    if: (github.event_name == 'push' || github.ref == 'refs/heads/main') && ${ISOLATION_CONDITION}\n`,
+      `    if: \${{ !cancelled() && ${ISOLATION_CONDITION} }}\n`,
+      `    if: |\n      ${ISOLATION_CONDITION} &&\n      github.event.issue.pull_request != null\n`,
+    ]) {
+      assert.deepEqual(runnerPlacementViolations(credentialed(condition), 'fixture'), [], condition);
+    }
+    // The job's own GITHUB_TOKEN expires with the job and needs no gate.
+    assert.deepEqual(runnerPlacementViolations(credentialed('', "        env:\n          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"), 'fixture'), []);
+  });
+
+  it('requires a visible isolation refusal in the workflows a person starts', () => {
+    const path = '.github/workflows/deploy-production.yml';
+    const text = readFileSync(resolve(path), 'utf8');
+    assert.deepEqual(runnerPlacementViolations(text, path), []);
+    const silent = text.replaceAll(`      - name: ${ISOLATION_GATE_STEP}\n`, '      - name: Something else\n');
+    assert.match(runnerPlacementViolations(silent, path).at(-1), /refused credentialed job would be skipped silently/);
   });
 
   it('fails closed on a workflow it cannot read', () => {

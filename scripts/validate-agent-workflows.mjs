@@ -557,7 +557,7 @@ export const PREFLIGHT_JOB_CONTRACT = Object.freeze({
 
 export const IMPLEMENT_JOB_DOCUMENTATION_CONTRACT = Object.freeze({
   needs: '    needs: [preflight, model]\n',
-  condition: "if: needs.preflight.result == 'success' && needs.model.result == 'success' && (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null",
+  condition: "if: needs.preflight.result == 'success' && needs.model.result == 'success' && (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'",
   prompt: [
     'Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details.',
     "Follow the issue's Documentation impact decision exactly.",
@@ -1386,7 +1386,7 @@ function verifyArchitectureClaudeCheck(architectureWorkflow) {
   // Every Claude route: a separate read-only Claude invocation, labelled a same-provider check.
   const source = 'agent-architecture.yml same-provider Claude check';
   const claudeCheck = section(architectureWorkflow, '  claude-check:\n', '  sonar:\n', source);
-  requireText(claudeCheck, "    if: needs.context.outputs.checker == 'claude'\n", source);
+  requireText(claudeCheck, "    if: needs.context.outputs.checker == 'claude' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n", source);
   verifyReadOnlyClaudeCheck(claudeCheck, source);
   for (const required of [
     'This is a same-provider check, not an independent one', 'claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
@@ -1415,7 +1415,7 @@ function verifyArchitectureFixJob(architectureWorkflow) {
   requireText(architectureJob, '      - context\n      - claude-check\n      - sonar\n', 'agent-architecture.yml architecture job');
   requireText(
     architectureJob,
-    "if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) }}",
+    "if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' }}",
     'agent-architecture.yml architecture job',
   );
   requireText(architectureJob, 'node "$transport" fetch-findings .git/architecture-findings.md', 'agent-architecture.yml architecture job');

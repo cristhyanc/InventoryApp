@@ -59,6 +59,18 @@ jobs:
           echo "::error::Deploy Production must be started from main; this run was started from $RUN_REF."
           exit 1
 
+      - name: Require verified runner isolation for credentialed jobs
+        # Issue #645 review: jobs that receive a long-lived secret, an App key or Azure OIDC are skipped
+        # until a human confirms the self-hosted runners are reset or ephemeral per job. This step makes
+        # that refusal a visible failure instead of a silent skip.
+        env:
+          RUNNER_ISOLATION_VERIFIED: ${{ vars.INVENTORY_RUNNER_ISOLATION_VERIFIED }}
+        run: |
+          if [ "$RUNNER_ISOLATION_VERIFIED" != "true" ]; then
+            echo "::error::Credentialed jobs are disabled until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Self-hosted runner placement."
+            exit 1
+          fi
+
       - name: Check out main history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -258,7 +270,7 @@ jobs:
 
   deploy-api:
     name: Deploy API
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     needs:
       - resolve
       - validate
@@ -274,6 +286,16 @@ jobs:
       webapp_url: ${{ steps.deploy.outputs.webapp-url }}
 
     steps:
+      - name: Check runner tools for the API deployment
+        run: |
+          missing=0
+          for tool in az jq curl; do
+            if ! command -v "$tool" >/dev/null 2>&1; then echo "::error::$tool is not installed on runner $RUNNER_NAME."; missing=1; fi
+          done
+          if [ ! -x /usr/bin/gh ]; then echo "::error::/usr/bin/gh is not installed on runner $RUNNER_NAME."; missing=1; fi
+          [ "$missing" -eq 0 ] || exit 1
+          echo "Runner $RUNNER_NAME has the tools the API deployment needs."
+
       - name: Announce release and migrations
         env:
           RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
@@ -405,7 +427,7 @@ jobs:
 
   deploy-frontend:
     name: Deploy frontend
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
     needs:
       - resolve
       - build
@@ -421,6 +443,19 @@ jobs:
       url: ${{ steps.deploy.outputs.static_web_app_url }}
 
     steps:
+      - name: Check runner tools for the frontend deployment
+        run: |
+          missing=0
+          for tool in docker curl; do
+            if ! command -v "$tool" >/dev/null 2>&1; then echo "::error::$tool is not installed on runner $RUNNER_NAME."; missing=1; fi
+          done
+          if [ ! -x /usr/bin/gh ]; then echo "::error::/usr/bin/gh is not installed on runner $RUNNER_NAME."; missing=1; fi
+          [ "$missing" -eq 0 ] || exit 1
+          echo "Runner $RUNNER_NAME has the tools the frontend deployment needs."
+
+      - name: Check the Docker daemon is reachable
+        run: docker info >/dev/null || { echo "::error::The Docker daemon is not reachable by the runner account on $RUNNER_NAME."; exit 1; }
+
       - name: Reverify release SHA is in main
         env:
           GH_TOKEN: ${{ github.token }}
