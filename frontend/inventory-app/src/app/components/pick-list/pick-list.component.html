@@ -8,6 +8,35 @@
 
   <app-nayax-status-banner></app-nayax-status-banner>
 
+  @if (calculatedUnavailableReason !== '') {
+    <section class="card">
+      <div class="card-body">
+        <p data-testid="pick-list-provider-unavailable" class="text-md-body value-muted">{{ calculatedUnavailableReason }}</p>
+      </div>
+    </section>
+  } @else {
+    <section class="card">
+      <div class="card-body flex gap-2">
+        <button
+          type="button"
+          class="btn"
+          [ngClass]="mode === 'calculated' ? 'btn-primary' : 'btn-secondary'"
+          [attr.aria-pressed]="mode === 'calculated'"
+          (click)="switchMode('calculated')">Calculated</button>
+        <button
+          type="button"
+          class="btn"
+          [ngClass]="mode === 'manual' ? 'btn-primary' : 'btn-secondary'"
+          [attr.aria-pressed]="mode === 'manual'"
+          (click)="switchMode('manual')">Enter quantities taken</button>
+      </div>
+    </section>
+  }
+
+  @if (mode === 'manual') {
+    <app-manual-pick-list [products]="allProducts" (refillRecorded)="refreshProductsAfterManualRefill()"></app-manual-pick-list>
+  } @else {
+
   <section class="card">
     <div class="card-body flex flex-wrap items-end gap-4">
       <div>
@@ -63,9 +92,7 @@
 
   <section class="card">
     <div class="card-body">
-    @if (machinesUnavailable) {
-      <p data-testid="pick-list-provider-unavailable" class="text-md-body value-muted">{{ machinesUnavailable }}</p>
-    } @else if (machinesError) {
+    @if (machinesError) {
       <p data-testid="pick-list-machines-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
     } @else if (appliedMachineIds.length === 0) {
       <p class="text-md-body value-muted">Select at least one machine to build a pick list.</p>
@@ -169,4 +196,5 @@
     }
     </div>
   </section>
+  }
 </div>

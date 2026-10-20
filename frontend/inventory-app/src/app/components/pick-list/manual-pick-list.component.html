@@ -1,0 +1,68 @@
+<section class="card">
+  <div class="card-body flex flex-wrap gap-4">
+    <input
+      class="max-w-[220px]"
+      [(ngModel)]="search"
+      placeholder="Search products"
+      aria-label="Search products" />
+
+    <select class="max-w-[180px]" [(ngModel)]="categoryId" aria-label="Category">
+      <option value="">All Categories</option>
+      @for (c of categories(); track c.id) {
+        <option [ngValue]="c.id">{{ c.name }}</option>
+      }
+    </select>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-header">
+    <h2 class="card-title">Enter quantities taken</h2>
+  </div>
+  <div class="card-body p-0">
+    @if (visibleProducts().length === 0) {
+      <p class="p-4 text-md-body value-muted">No active products match your filters.</p>
+    } @else {
+      <table class="table">
+        <thead class="table-head">
+          <tr>
+            <th scope="col" class="table-cell">Product</th>
+            <th scope="col" class="table-cell">Category</th>
+            <th scope="col" class="table-cell table-num">Storage Qty</th>
+            <th scope="col" class="table-cell">Taken</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (product of visibleProducts(); track product.id) {
+            <tr class="table-row">
+              <td class="table-cell">{{ product.name }}</td>
+              <td class="table-cell">{{ product.category?.name ?? '—' }}</td>
+              <td class="table-cell table-num" data-testid="manual-pick-list-storage-qty">{{ product.quantityInStock }}</td>
+              <td class="table-cell">
+                <input
+                  type="text"
+                  inputmode="numeric"
+                  class="max-w-[100px]"
+                  [attr.aria-label]="'Taken: ' + product.name"
+                  [ngModel]="takenValue(product.id)"
+                  (ngModelChange)="onTakenChange(product.id, $event)"
+                  [disabled]="saving" />
+                @if (rowError(product.id); as message) {
+                  <p data-testid="manual-pick-list-row-error" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    }
+  </div>
+  <div class="card-body flex items-center gap-4">
+    @if (requestErrors.length > 0) {
+      <p data-testid="manual-pick-list-request-error" class="text-md-body text-md-danger-text">{{ requestErrors.join(' ') }}</p>
+    }
+    <button type="button" class="btn btn-primary" [disabled]="!canSave" (click)="save()">
+      {{ saving ? 'Saving…' : 'Save' }}
+    </button>
+  </div>
+</section>

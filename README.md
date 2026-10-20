@@ -1399,9 +1399,12 @@ the filters and fields below.
 
 - **A filter over a list that cannot exist is not shown.** Without a usable connection, the machine
   filter disappears from Stock History and the report pages, the Site filter disappears from Site
-  Commissions, the machine selection and matrix disappear from the Pick List (which says "The pick
-  list is unavailable because Nayax is not connected"), and the optional machine field disappears from
-  the stock adjustment form and the Expenses form. No request is sent that could only be refused.
+  Commissions, and the optional machine field disappears from the stock adjustment form and the
+  Expenses form. No request is sent that could only be refused. The Pick List is the one exception
+  (see [Recording a pick without a provider](#recording-a-pick-without-a-provider) below): instead of
+  disappearing, it opens straight into its manual entry screen and says why the calculated matrix is
+  unavailable, because a business can still record what it took out of storage with no provider at
+  all.
 - **A request that *failed* says so where its filter was.** "The machine list could not be loaded, so
   this report cannot be narrowed to one machine", for example. It is never shown as "All machines"
   narrowing nothing, and a business that genuinely has no machines is never reported as an error.
@@ -1426,6 +1429,37 @@ the filters and fields below.
 
 **A connected business sees no change here either.** Every filter, field and category is exactly as
 before.
+
+#### Recording a pick without a provider
+
+Issue #744 gives the Pick List a second, machine-free way to record what a worker took out of
+storage, so a business with no usable Nayax connection — or whose account has not granted the
+calculated list's permission — still has a way to record a refill instead of just a read-only page
+that cannot be used.
+
+- **The calculated matrix is offered only when it can actually work.** With a usable connection and
+  Nayax granted both the machine fleet read and each machine's own product read, the page opens on
+  the existing calculated matrix exactly as before, with a toggle to **Enter quantities taken**
+  alongside it. Without either, the page opens straight into that manual entry screen instead, with
+  one sentence saying why the calculated list is unavailable, and the toggle to switch back is not
+  offered — there is nothing to switch to.
+- **Manual entry needs no machine, no fleet read and no product read.** It lists the business's
+  active products with a search box, a category filter and a "Taken" quantity box per row, from the
+  same catalogue the calculated view's Products filter already reads. Saving sends every entered
+  quantity as one request to the same batch refill endpoint the calculated view's future machine-aware
+  entry will use (`POST /api/pick-list/refills`), recording one `MachineRefill` stock movement per
+  product in a single all-or-nothing operation — the same guarantee the per-product Restock action
+  never had. A malformed "Taken" entry (anything that is not a whole number greater than zero) is
+  reported on its own row before anything is sent, and any refusal the server returns is put back on
+  the row it was about.
+- **A retry never double-deducts.** Each save keeps an exact record of what it last sent. Clicking
+  Save again with nothing changed — after a failure that could not be confirmed, for instance — resends
+  the identical request under the identical idempotency key, which the server answers with the result
+  it already recorded rather than taking the stock twice; changing any quantity before retrying sends
+  a new key, because it is a different pick.
+- **No machine selector yet.** Issue #746 is what lets an operator attribute a manual pick to one of
+  the business's own machines; until it ships, every manual save omits a machine and is recorded as a
+  whole-business pick, exactly as the batch refill endpoint already allows.
 
 #### The menu without a usable provider
 

@@ -9,13 +9,17 @@ import { Machine, PickListMachineQuantity, PickListProduct, Product } from '../.
 import { ListLoadState } from '../shared/list-load-state';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../shared/multi-select-dropdown.component';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
-import { nayaxUnavailableMessage } from '../../provider/nayax-availability';
+import { PERMISSION_NOT_GRANTED_REASON, nayaxUnavailableMessage } from '../../provider/nayax-availability';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { loadProviderList } from '../../provider/provider-list-load';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 import { SortDirection, compareSortValues, nextSortState, sortAriaState, sortColumnLabel } from '../shared/sortable-column';
+import { ManualPickListComponent } from './manual-pick-list.component';
 
 type PickListSortColumn = 'name' | 'mdbCode';
+
+/** Which of the page's two views is showing. See `PickListComponent.calculatedUnavailableReason`. */
+export type PickListMode = 'calculated' | 'manual';
 
 /**
  * Pick List (Restock Planning) page (issues #222, #226): a read-only matrix built on the #221
@@ -30,16 +34,35 @@ type PickListSortColumn = 'name' | 'mdbCode';
  * matrix, because "No machines selected yet" is a claim about this business's selection rather than
  * about Nayax - and a machine read that *failed* leaves {@link machinesError}, which says so instead
  * of presenting an empty dropdown as "this business has no machines".
+ *
+ * **Issue #744 adds a second, machine-free view: manual entry.** With a usable provider and the
+ * permissions the calculated list needs (the machine fleet read and each machine's own product
+ * read), both views are offered and {@link mode} defaults to `'calculated'`, unchanged from before
+ * this issue. Without either - {@link calculatedUnavailableReason} is non-empty, from
+ * {@link machinesUnavailable} or from a stated refusal of the `machineStock` permission, checked
+ * up front and, for the latter, also caught live if a selected machine's own product read is
+ * refused only once Apply actually asks for it - the page opens straight into manual mode and
+ * states why, and the toggle to switch back to calculated is not offered at all: there is nothing
+ * to switch to. `ManualPickListComponent` is composed in rather than grown inline (docs/
+ * architecture.md § Page composition boundary) and is handed {@link allProducts}, the same
+ * already-fetched active catalogue the calculated view's Products filter uses, rather than fetching
+ * it a second time.
  */
 @Component({
   selector: 'app-pick-list',
   standalone: true,
-  imports: [CommonModule, MultiSelectDropdownComponent, BusinessDateTimePipe, NayaxStatusBannerComponent],
+  imports: [CommonModule, MultiSelectDropdownComponent, BusinessDateTimePipe, NayaxStatusBannerComponent, ManualPickListComponent],
   templateUrl: './pick-list.component.html'
 })
 export class PickListComponent implements OnInit {
   allMachines: Machine[] = [];
   allProducts: Product[] = [];
+
+  /** Which view is showing; see the class doc for when it is forced to `'manual'`. */
+  mode: PickListMode = 'calculated';
+
+  /** The one sentence saying Nayax has refused the `machineStock` permission the calculated list needs; `''` while it has not. */
+  machineProductsUnavailable = '';
 
   /** Staged filter choices from the dropdowns, not yet applied to the matrix. */
   stagedMachineIds: number[] = [];
@@ -83,6 +106,18 @@ export class PickListComponent implements OnInit {
         outcome.kind === 'unavailable' ? nayaxUnavailableMessage(outcome.unavailability, 'The pick list') : '';
       this.machinesError =
         outcome.kind === 'failed' ? 'The machine list could not be loaded, so a pick list cannot be built.' : '';
+      if (this.machinesUnavailable !== '') {
+        this.mode = 'manual';
+      }
+    });
+    // Checked up front, beside the machine fleet above: a usable connection does not mean Nayax has
+    // granted every read the calculated list needs, and a permission this session already knows is
+    // refused must open straight into manual mode rather than offering a matrix that will only fail.
+    this.provider.featureAvailability('machineStock').subscribe((availability) => {
+      if (availability === 'permissionNotGranted') {
+        this.machineProductsUnavailable = nayaxUnavailableMessage(PERMISSION_NOT_GRANTED_REASON, 'The calculated pick list');
+        this.mode = 'manual';
+      }
     });
     this.productService.getAll().subscribe((products) => {
       this.allProducts = products;
@@ -90,6 +125,28 @@ export class PickListComponent implements OnInit {
       this.stagedProductIds = allProductIds;
       this.appliedProductIds = allProductIds;
     });
+  }
+
+  /**
+   * The one sentence saying why the calculated view is not a real choice right now, or `''` while
+   * it is. Non-empty forces {@link mode} to `'manual'` and hides the toggle to switch back: there
+   * is nothing to switch to.
+   */
+  get calculatedUnavailableReason(): string {
+    return this.machinesUnavailable || this.machineProductsUnavailable;
+  }
+
+  /** Switches the visible view - refused for `'calculated'` once {@link calculatedUnavailableReason} is set. */
+  switchMode(mode: PickListMode): void {
+    if (mode === 'calculated' && this.calculatedUnavailableReason !== '') {
+      return;
+    }
+    this.mode = mode;
+  }
+
+  /** Refreshes the active catalogue `ManualPickListComponent` reads, after it records a refill. */
+  refreshProductsAfterManualRefill(): void {
+    this.productService.getAll().subscribe((products) => (this.allProducts = products));
   }
 
   /**
@@ -242,9 +299,19 @@ export class PickListComponent implements OnInit {
         }
         this.loadState.succeed(token);
       }),
-      catchError(() => {
+      catchError((error: unknown) => {
         this.loadState.fail(token);
-        this.toastService.error('Failed to load the pick list.');
+        // The permission `machineStock` evidence above is read once at init; a session's first
+        // concrete proof that it is refused is often this very read, once Apply actually asks a
+        // machine for its products, so it is recorded here too rather than only reported as a
+        // generic failure.
+        const unavailability = this.provider.noteRefusal(error, 'machineStock');
+        if (unavailability !== null) {
+          this.machineProductsUnavailable = nayaxUnavailableMessage(unavailability, 'The calculated pick list');
+          this.mode = 'manual';
+        } else {
+          this.toastService.error('Failed to load the pick list.');
+        }
         return EMPTY;
       })
     ).subscribe();
