@@ -6,12 +6,15 @@
       placeholder="Search products"
       aria-label="Search products" />
 
-    <select class="max-w-[180px]" [(ngModel)]="categoryId">
-      <option value="">All Categories</option>
-      @for (c of categories(); track c.id) {
-        <option [ngValue]="c.id">{{ c.name }}</option>
-      }
-    </select>
+    <label class="text-sm self-center" for="manual-pick-list-category">
+      Category
+      <select id="manual-pick-list-category" class="ml-2 max-w-[180px]" [(ngModel)]="categoryId">
+        <option value="">All Categories</option>
+        @for (c of categories(); track c.id) {
+          <option [ngValue]="c.id">{{ c.name }}</option>
+        }
+      </select>
+    </label>
   </div>
 </section>
 

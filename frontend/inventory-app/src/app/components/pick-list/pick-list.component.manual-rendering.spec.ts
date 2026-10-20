@@ -116,6 +116,18 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
     expect(host.querySelector('tbody')?.textContent).toContain('Chips');
   });
 
+  it('names the manual entry filters: the category select has its own visible, associated label', async () => {
+    const { host, requireButton, click } = await render();
+    click(requireButton('Enter quantities taken'));
+
+    const select = host.querySelector<HTMLSelectElement>('select#manual-pick-list-category');
+    expect(select).not.toBeNull();
+    const label = host.querySelector<HTMLLabelElement>('label[for="manual-pick-list-category"]');
+    expect(label?.textContent?.trim()).toContain('Category');
+    expect(label?.contains(select as Node)).toBe(true);
+    expect(host.querySelector('input[aria-label="Search products"]')).not.toBeNull();
+  });
+
   it('shows no provider-unavailable banner for a usable provider', async () => {
     const { host } = await render(undefined, 'Ready');
 
