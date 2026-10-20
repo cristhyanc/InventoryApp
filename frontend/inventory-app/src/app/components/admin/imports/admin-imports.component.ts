@@ -5,19 +5,27 @@ import { Subscription } from 'rxjs';
 import { ImportService } from '../../../services/import.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+import { CatalogueReviewComponent } from './catalogue-review/catalogue-review.component';
 
 /**
  * Dedicated page for the supported import workflows, split out of `AdminComponent`
  * (issue #389, Admin split 2/3): the Nayax sales file upload and its CSV template, the product
- * catalogue refresh and the pending reimbursement XML import. `ImportService` remains the sole
- * authority for every import call, so no import, deduplication, transaction-parsing or
- * reimbursement rule is reimplemented or reinterpreted here - the entry points moved, the
- * contracts, client-side validation and messages did not.
+ * catalogue import and the pending reimbursement XML import. `ImportService` remains the sole
+ * authority for the sales and reimbursement import calls, so no import, deduplication,
+ * transaction-parsing or reimbursement rule is reimplemented or reinterpreted here.
+ *
+ * <p><strong>Importing the product catalogue is the catalogue review</strong> (issue #739, parent
+ * #329 decision C2). There is no direct catalogue import any more: the button opens
+ * `CatalogueReviewComponent`, which previews Nayax's catalogue against the business's own rows and
+ * applies the operator's decisions per entry. That is what lets a business that maintains its own
+ * products import at all - the direct import had to be refused for one (issue #736), because it
+ * recognised a product only by Nayax's id and would have duplicated every manual row. The page
+ * composes the review and owns nothing of its workflow (AGENTS.md § Frontend rules).</p>
  */
 @Component({
   selector: 'app-admin-imports',
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, RouterLink, CatalogueReviewComponent],
   template: `
     <div class="page">
       <header class="page-header">
@@ -44,8 +52,11 @@ import { SupportSessionService } from '../../../support-session/support-session.
         <section class="card">
           <div class="card-body">
             <h2 class="card-title">Import products</h2>
-            <p class="mt-1 text-sm value-muted">Refresh the product catalogue from the configured source.</p>
-            <button type="button" class="btn btn-primary mt-4" [disabled]="loading || sessionActive" (click)="importProducts()">Import products</button>
+            <p class="mt-1 text-sm value-muted">
+              Review the Nayax catalogue against your own products and categories, then link, create
+              or update them per entry. Nothing is written until you apply the review.
+            </p>
+            <button type="button" class="btn btn-primary mt-4" [disabled]="loading || sessionActive || reviewing" (click)="importProducts()">Import products</button>
           </div>
         </section>
 
@@ -57,11 +68,18 @@ import { SupportSessionService } from '../../../support-session/support-session.
           </div>
         </section>
       </div>
+
+      @if (reviewing) {
+        <app-catalogue-review (closed)="closeReview()" />
+      }
     </div>
   `
 })
 export class AdminImportsComponent implements OnDestroy {
   loading = false;
+
+  /** Whether the catalogue review is on screen (issue #739). It owns its own loading lifecycle. */
+  reviewing = false;
 
   /**
    * Whether a support session is active (issue #661): every import on this page is disabled while
@@ -111,13 +129,19 @@ export class AdminImportsComponent implements OnDestroy {
     const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'nayax-sales-import-template.csv'; anchor.click(); URL.revokeObjectURL(url);
   }
 
+  /**
+   * Opens the catalogue review (issue #739). It is the product catalogue import: the review reads
+   * Nayax's catalogue and writes nothing until the operator applies their decisions, so this page
+   * starts no import of its own and reports no result. Guarded here as well as disabled in the
+   * template, so the action is actually unavailable in a support session rather than merely inert.
+   */
   importProducts(): void {
     if (this.sessionActive) return;
-    this.loading = true;
-    this.importService.importProducts().subscribe({
-      next: () => { this.loading = false; this.toast.success('Products imported successfully.'); },
-      error: () => { this.loading = false; this.toast.error('Failed to import products.'); }
-    });
+    this.reviewing = true;
+  }
+
+  closeReview(): void {
+    this.reviewing = false;
   }
 
   importXml(): void {

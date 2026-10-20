@@ -16,6 +16,13 @@ export interface ImportedFileImportResult {
   failedFiles: number;
 }
 
+/**
+ * The uploaded sales import and the pending reimbursement XML import.
+ *
+ * <p>There is no product catalogue import here: `POST api/imports/products` was replaced by the
+ * catalogue review for every business in issue #739, so the catalogue is imported through
+ * `CatalogueReviewService` instead - previewed, decided per entry and applied.</p>
+ */
 @Injectable({ providedIn: 'root' })
 export class ImportService {
   private get baseUrl(): string {
@@ -23,10 +30,6 @@ export class ImportService {
   }
 
   constructor(private http: HttpClient, private config: ConfigService) {}
-
-  importProducts(): Observable<boolean> {
-    return this.http.post<boolean>(`${this.baseUrl}/products`, {});
-  }
 
   importNayaxSales(file: File): Observable<NayaxSalesImportResult> {
     const formData = new FormData();
