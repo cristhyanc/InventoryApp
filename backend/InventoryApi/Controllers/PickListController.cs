@@ -71,11 +71,13 @@ public sealed class PickListController : ControllerBase
     public async Task<ActionResult<PickListRefillResponse>> RecordRefill(
         PickListRefillRequest request, CancellationToken cancellationToken)
     {
-        var rows = request?.Rows is null
+        // A missing element is passed on as a missing row rather than read: JSON can put null in an
+        // array whatever the element type says, and the row rules - including the one that refuses
+        // an absent row on its own line - are the policy's, not this boundary's.
+        List<PickListRefillRequestRow?>? rows = request?.Rows is null
             ? null
-            : request.Rows
-                .Select(row => new PickListRefillRequestRow(row.ProductId, row.QuantityTaken))
-                .ToList();
+            : [.. request.Rows.Select(row =>
+                row is null ? null : new PickListRefillRequestRow(row.ProductId, row.QuantityTaken))];
 
         var attempt = await _recordRefill.Handle(
             new PickListRefillInput(request?.IdempotencyKey, request?.MachineId, request?.Notes, rows),

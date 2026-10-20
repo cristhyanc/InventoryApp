@@ -23,12 +23,18 @@ public sealed record PickListRefillRowRequest(long ProductId, int QuantityTaken)
 /// issue #741), never a provider machine number, and it is optional: a business may pick before its
 /// machines are recorded. No owning business - it is resolved from the caller's membership
 /// (AGENTS.md § Tenant ownership and data isolation).</para>
+///
+/// <para><see cref="Rows"/> is a list of nullable rows because that is what the wire can carry:
+/// <c>"rows": [null]</c> deserializes to a missing element whatever the element type declares, so
+/// the contract admits it and <c>PickListRefillPolicy</c> refuses it on its own row with a
+/// <c>400</c> - rather than a non-nullable declaration producing a <c>500</c> on the first read of
+/// a property.</para>
 /// </summary>
 public sealed record PickListRefillRequest(
     string? IdempotencyKey,
     long? MachineId,
     string? Notes,
-    IReadOnlyList<PickListRefillRowRequest>? Rows);
+    IReadOnlyList<PickListRefillRowRequest?>? Rows);
 
 /// <summary>
 /// One recorded row of a batch refill: the product, the units taken, and the id of the

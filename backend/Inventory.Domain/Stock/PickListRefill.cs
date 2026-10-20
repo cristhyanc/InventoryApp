@@ -53,8 +53,12 @@ public sealed record PickListRefillRequestRefusal(PickListRefillRequestPart Part
 /// One refusal about one submitted row, identified by its position in the request the operator
 /// sent. The index is the request's own ordering and not a sorted one, because what it addresses is
 /// a line on somebody's screen.
+///
+/// <para><see cref="ProductId"/> is <see langword="null"/> for a row that is not there at all - a
+/// row the caller sent as a missing value - because such a row names no product and reporting one
+/// would be this refusal inventing it.</para>
 /// </summary>
-public sealed record PickListRefillRowRefusal(int RowIndex, long ProductId, string Message);
+public sealed record PickListRefillRowRefusal(int RowIndex, long? ProductId, string Message);
 
 /// <summary>
 /// Everything wrong with one batch refill request. An empty rejection is the only thing that lets

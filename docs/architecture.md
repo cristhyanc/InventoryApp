@@ -8488,11 +8488,17 @@ scoped to that business.
 
 **The validation, and why a refusal is a return value.** `Inventory.Domain.Stock.PickListRefillPolicy`
 is in two halves. `ValidateRequestShape` judges the request alone — the key is present and bounded, the
-note is bounded, there is at least one row and at most `MaximumRows` (500), every quantity is greater
-than zero, and no product appears twice — and runs **before** the transaction is opened, so a malformed
-request does not make every other picker wait on it. A product submitted twice is refused rather than
-summed: two rows for one product are two statements about one storage balance, and adding them up would
-invent a quantity nobody typed. `ValidateAgainstState` judges the same request against what the
+note is bounded, there is at least one row and at most `MaximumRows` (500), every row is **present**,
+every quantity is greater than zero, and no product appears twice — and runs **before** the transaction
+is opened, so a malformed request does not make every other picker wait on it. A product submitted
+twice is refused rather than summed: two rows for one product are two statements about one storage
+balance, and adding them up would invent a quantity nobody typed. A row that is *not present* is a row
+the caller sent as a missing value — `"rows": [null]`, which JSON carries whatever the element type
+declares — so the request contract admits it (`PickListRefillRequest.Rows` is a list of nullable rows
+all the way through to the policy) and the policy refuses it on its own index with `MissingRowMessage`,
+naming no product because there is none to name. That is deliberately not a `500` from the first
+property read, and not a short circuit either: a missing row is reported beside every other refusal,
+like any of them. `ValidateAgainstState` judges the same request against what the
 transaction read — the product is in the caller's catalogue, is not retired, and the quantity is not
 above its storage stock; the machine, when one is named, is an **active** machine of the business.
 That last rule is deliberately stricter than
@@ -8543,8 +8549,12 @@ the earlier rows unwritten), `PickListRefillConcurrencyTests` (a real SQLite fil
 a barrier: one key submitted twice recording once, two requests that together exceed stock leaving
 exactly one, and two that both fit both recorded), `AddPickListRefillsMigrationTests` (the two tables,
 the per-business unique index refusing a second row, and the inventory tables byte-identical before and
-after) and `PickListControllerTests` (the `200`, the replayed `200`, the per-row `400` and the key
-conflict propagating).
+after), `PickListControllerTests` (the `200`, the replayed `200`, the per-row `400`, a missing row
+refused rather than read, and the key conflict propagating) and `PickListRefillApiTests` (the endpoint
+over the real pipeline, where a body is JSON rather than objects a compiler built: `"rows": [null]`
+beside a valid row answered `400` on `rows[1]` with nothing written, and a body with every row present
+recorded as one `MachineRefill` movement — the control that makes "nothing written" a fact about the
+refusal).
 
 #### Pick List frontend page (issue #222)
 

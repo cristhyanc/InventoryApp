@@ -9,12 +9,17 @@ namespace Inventory.Application.PickList;
 ///
 /// <para>No owning business: it is resolved from the authenticated actor's membership and stamped
 /// centrally (AGENTS.md § Tenant ownership and data isolation).</para>
+///
+/// <para>Every part of it is as the caller sent it, which is why the rows and the elements of the
+/// rows are both nullable: a JSON body can arrive without rows and with a missing value among them,
+/// and <see cref="PickListRefillPolicy"/> is what refuses either, so the boundary hands this layer
+/// what was submitted rather than deciding anything about it.</para>
 /// </summary>
 public sealed record PickListRefillInput(
     string? IdempotencyKey,
     long? MachineId,
     string? Notes,
-    IReadOnlyList<PickListRefillRequestRow>? Rows);
+    IReadOnlyList<PickListRefillRequestRow?>? Rows);
 
 /// <summary>
 /// One row of a recorded batch refill: the product, the units taken out of storage, and the

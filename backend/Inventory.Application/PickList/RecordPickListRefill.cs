@@ -70,15 +70,19 @@ public sealed class RecordPickListRefill
         // fingerprint is paired with are the same string, and a note is either text or nothing.
         var idempotencyKey = input.IdempotencyKey?.Trim() ?? string.Empty;
         var notes = string.IsNullOrWhiteSpace(input.Notes) ? null : input.Notes.Trim();
-        var rows = input.Rows ?? [];
+        var submitted = input.Rows ?? [];
 
         // Before anything is read and before the write lock is taken: a malformed request must not
         // make every other picker wait on it.
-        var shape = PickListRefillPolicy.ValidateRequestShape(idempotencyKey, notes, rows);
+        var shape = PickListRefillPolicy.ValidateRequestShape(idempotencyKey, notes, submitted);
         if (!shape.IsEmpty)
         {
             return PickListRefillAttempt.Rejected(shape);
         }
+
+        // A row a caller sent as a missing value is one of the refusals above, so an accepted shape
+        // is also the proof that every element is there: from here on the rows are rows.
+        List<PickListRefillRequestRow> rows = [.. submitted.Select(row => row!)];
 
         var fingerprint = PickListRefillFingerprint.Compute(input.MachineId, notes, rows);
 

@@ -68,6 +68,14 @@ public static class PickListRefillPolicy
     public const string QuantityMustBePositiveMessage =
         "Quantity taken must be a whole number greater than 0.";
 
+    /// <summary>
+    /// What a caller is told about a row that is not there at all. A JSON array may carry a missing
+    /// value as an element - <c>"rows": [null]</c> - whatever the element type says, so a submitted
+    /// row that is absent is a refusal of this request like any other, reported on its own index
+    /// rather than reaching anything that would read a product id out of it.
+    /// </summary>
+    public const string MissingRowMessage = "This row is missing.";
+
     public const string DuplicateProductMessage = "This product appears more than once in the request.";
 
     public const string UnknownProductMessage = "This product is not a product of this business.";
@@ -99,15 +107,19 @@ public static class PickListRefillPolicy
 
     /// <summary>
     /// Everything that can be decided from the request alone, before any read: the key, the note,
-    /// the number of rows, each row's quantity and a product named more than once.
+    /// the number of rows, each row's presence and quantity, and a product named more than once.
     /// </summary>
     /// <param name="idempotencyKey">The key exactly as the caller is to be held to it - already trimmed.</param>
     /// <param name="notes">The note, already normalised to <see langword="null"/> when blank.</param>
-    /// <param name="rows">Every submitted row, in the order the caller sent them.</param>
+    /// <param name="rows">
+    /// Every submitted row, in the order the caller sent them. An element may be
+    /// <see langword="null"/>: that is a row a caller sent as a missing value, which this is the
+    /// one place that refuses, so nothing downstream has to be defensive about it.
+    /// </param>
     public static PickListRefillRejection ValidateRequestShape(
         string? idempotencyKey,
         string? notes,
-        IReadOnlyList<PickListRefillRequestRow> rows)
+        IReadOnlyList<PickListRefillRequestRow?> rows)
     {
         ArgumentNullException.ThrowIfNull(rows);
 
@@ -142,6 +154,14 @@ public static class PickListRefillPolicy
         for (var index = 0; index < rows.Count; index++)
         {
             var row = rows[index];
+
+            // A row that is not there is refused before anything reads a product or a quantity out
+            // of it, and keeps the index the caller sent so the refusal still addresses its line.
+            if (row is null)
+            {
+                rowRefusals.Add(new(index, null, MissingRowMessage));
+                continue;
+            }
 
             if (row.QuantityTaken <= 0)
             {

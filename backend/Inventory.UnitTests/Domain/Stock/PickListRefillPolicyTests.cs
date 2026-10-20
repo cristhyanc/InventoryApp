@@ -142,6 +142,58 @@ public class PickListRefillPolicyTests
         Assert.Equal([0, 1], rejection.Rows.Select(row => row.RowIndex));
     }
 
+    /// <summary>
+    /// A row a caller sent as a missing value - <c>"rows": [null]</c>, which JSON carries whatever
+    /// the element type declares - is refused on its own index and names no product, because there
+    /// is none to name. It is refused here rather than being read anywhere: this is the only place
+    /// that may see an absent row.
+    /// </summary>
+    [Fact]
+    public void A_missing_row_is_refused_on_its_own_row_and_names_no_product()
+    {
+        var rejection = PickListRefillPolicy.ValidateRequestShape(Key, null, [Row(10, 2), null]);
+
+        Assert.Empty(rejection.Request);
+        var refusal = Assert.Single(rejection.Rows);
+        Assert.Equal(1, refusal.RowIndex);
+        Assert.Null(refusal.ProductId);
+        Assert.Equal(PickListRefillPolicy.MissingRowMessage, refusal.Message);
+    }
+
+    /// <summary>
+    /// A missing row is one refusal among the others rather than a short circuit, so an operator
+    /// still gets every line they have to fix in one answer.
+    /// </summary>
+    [Fact]
+    public void A_missing_row_is_reported_beside_every_other_invalid_row()
+    {
+        var rejection = PickListRefillPolicy.ValidateRequestShape(
+            Key, null, [null, Row(11, 0), Row(12, 4), null]);
+
+        Assert.Equal([0, 1, 3], rejection.Rows.Select(row => row.RowIndex));
+        Assert.Equal(
+            [PickListRefillPolicy.MissingRowMessage,
+             PickListRefillPolicy.QuantityMustBePositiveMessage,
+             PickListRefillPolicy.MissingRowMessage],
+            rejection.Rows.Select(row => row.Message));
+    }
+
+    /// <summary>
+    /// Two missing rows are two refusals and not a duplicate: an absent row is refused before
+    /// anything reads a product id out of it, so neither one can collide with the other or with a
+    /// real product.
+    /// </summary>
+    [Fact]
+    public void Two_missing_rows_are_not_read_as_the_same_product()
+    {
+        var rejection = PickListRefillPolicy.ValidateRequestShape(Key, null, [null, null]);
+
+        Assert.All(
+            rejection.Rows,
+            refusal => Assert.Equal(PickListRefillPolicy.MissingRowMessage, refusal.Message));
+        Assert.Equal([0, 1], rejection.Rows.Select(row => row.RowIndex));
+    }
+
     #endregion
 
     #region The request against the stored state

@@ -177,6 +177,40 @@ public class PickListControllerTests
         Assert.DoesNotContain(PickListRefillResponseMapper.RowKey(0), details.Errors.Keys);
     }
 
+    /// <summary>
+    /// A row the caller sent as a missing value is refused on its own line, not dereferenced. The
+    /// element type says it cannot be null, but a JSON array can carry one anyway, so the row is
+    /// carried through as a missing row and refused by the policy - and the valid row beside it is
+    /// not written, because one refusal refuses the whole batch.
+    ///
+    /// <para><c>PickListRefillApiTests</c> proves the same thing through real JSON model binding,
+    /// which is where such an element actually comes from; this one holds the controller's own
+    /// projection to it.</para>
+    /// </summary>
+    [Fact]
+    public async Task RecordRefill_RefusesAMissingRowRatherThanReadingIt()
+    {
+        var store = new FakePickListRefillStore();
+        var controller = ControllerWith(NoPickList(), RefillWith(store));
+
+        var result = await controller.RecordRefill(
+            new PickListRefillRequest(Key, null, null, [new PickListRefillRowRequest(100, 3), null]),
+            CancellationToken.None);
+
+        var problem = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+        var details = Assert.IsType<ValidationProblemDetails>(problem.Value);
+        Assert.Equal(
+            PickListRefillPolicy.MissingRowMessage,
+            Assert.Single(details.Errors[PickListRefillResponseMapper.RowKey(1)]));
+        Assert.DoesNotContain(PickListRefillResponseMapper.RowKey(0), details.Errors.Keys);
+
+        // Refused before the write lock is even taken, so the valid row beside it is not written.
+        Assert.Equal(0, store.TransactionsOpened);
+        Assert.Equal(0, store.ApplyCalls);
+        Assert.Empty(store.Committed);
+    }
+
     [Fact]
     public async Task RecordRefill_ReportsAMissingBodyAsARefusalRatherThanThrowing()
     {
