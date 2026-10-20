@@ -178,7 +178,7 @@ describe('OperatingExpenseComponent provider-optional form (issue #728)', () => 
   it('hides the machine field when no listed machine has a local record', async () => {
     const { component } = await render({ machines: of([{ machineID: 9, machineName: 'Lobby' } as Machine]) });
 
-    expect(component.machines.length).toBe(1);
+    expect(component.machines).toHaveLength(1);
     expect(component.machineOptions).toEqual([]);
     expect(component.machineFieldShown).toBe(false);
     expect(component.machinesError).toBe('');
