@@ -44,6 +44,7 @@ public class MachinesController : ControllerBase
     private readonly ResolveMachineStockEventsAsAlreadyRecorded _resolveMachineStockEventsAsAlreadyRecorded;
     private readonly GetMachineStockReconciliation _getMachineStockReconciliation;
     private readonly RecordMachineStockCount _recordMachineStockCount;
+    private readonly ResolveMachineIdentity _resolveMachine;
     private readonly CurrentCapabilities _capabilities;
 
     public MachinesController(
@@ -57,6 +58,7 @@ public class MachinesController : ControllerBase
         ResolveMachineStockEventsAsAlreadyRecorded resolveMachineStockEventsAsAlreadyRecorded,
         GetMachineStockReconciliation getMachineStockReconciliation,
         RecordMachineStockCount recordMachineStockCount,
+        ResolveMachineIdentity resolveMachine,
         CurrentCapabilities capabilities)
     {
         _getMachineDashboard = getMachineDashboard;
@@ -69,15 +71,27 @@ public class MachinesController : ControllerBase
         _resolveMachineStockEventsAsAlreadyRecorded = resolveMachineStockEventsAsAlreadyRecorded;
         _getMachineStockReconciliation = getMachineStockReconciliation;
         _recordMachineStockCount = recordMachineStockCount;
+        _resolveMachine = resolveMachine;
         _capabilities = capabilities;
     }
 
+    // Every {id} below is a local machine, Machines.Id (issue #741): the id GET api/machines
+    // publishes as localMachineId. It is resolved once per request into the pair of ids the feature
+    // needs; an id that names no machine of this business - another business's machine, or a
+    // provider machine number sent by an older client - is a 404, and so is a Nayax-only feature
+    // asked about a machine that has no Nayax number. The machine-stock ledger and its counts are
+    // this application's own data and work for a machine without one.
     [HttpGet("{id:long}")]
     public async Task<ActionResult<MachineResponse>> GetById(long id)
     {
+        var machineIdentity = await _resolveMachine.Handle(id, CancellationToken.None);
+        if (machineIdentity?.NayaxMachineId is not { } nayaxMachineId) return NotFound();
+
         var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
-        var machine = await _getMachineDashboard.Handle(id, CancellationToken.None);
-        return machine is null ? NotFound() : Ok(MachineResponseMapper.ToResponse(machine, visibility));
+        var machine = await _getMachineDashboard.Handle(nayaxMachineId, CancellationToken.None);
+        return machine is null
+            ? NotFound()
+            : Ok(MachineResponseMapper.ToResponse(machine with { LocalMachineId = id }, visibility));
     }
 
     [HttpGet]
@@ -91,8 +105,11 @@ public class MachinesController : ControllerBase
     [HttpGet("{id:long}/products")]
     public async Task<ActionResult<List<ProductResponse>>> GetMachineProducts(long id)
     {
+        var machine = await _resolveMachine.Handle(id, CancellationToken.None);
+        if (machine?.NayaxMachineId is not { } nayaxMachineId) return NotFound();
+
         var visibility = await _capabilities.ForCurrentRequestAsync(CancellationToken.None);
-        var products = await _listMachineProducts.Handle(id, CancellationToken.None);
+        var products = await _listMachineProducts.Handle(nayaxMachineId, CancellationToken.None);
         return Ok(products.Select(product => ProductRecordResponseMapper.ToResponse(product, visibility)).ToList());
     }
 
@@ -107,8 +124,16 @@ public class MachinesController : ControllerBase
     [HttpGet("{id:long}/latest-sales")]
     public async Task<ActionResult<MachineLatestSalesResponse>> GetLatestSales(long id, CancellationToken ct)
     {
+        var machine = await _resolveMachine.Handle(id, ct);
+        if (machine is null) return NotFound();
+
+        // A machine with no Nayax number - every machine of a business with no sales provider, and
+        // one the business created itself - has no provider sales to read, which is the same honest
+        // NoSalesProvider answer #768 gives rather than a 404 for a machine that exists.
         var visibility = await _capabilities.ForCurrentRequestAsync(ct);
-        var latest = await _getMachineLatestSales.Handle(id, ct);
+        var latest = machine.NayaxMachineId is { } nayaxMachineId
+            ? await _getMachineLatestSales.Handle(nayaxMachineId, ct)
+            : MachineLatestSales.Unavailable(MachineLatestSalesUnavailableReason.NoSalesProvider);
         return Ok(MachineLatestSalesResponseMapper.ToResponse(id, latest, visibility));
     }
 
@@ -128,7 +153,10 @@ public class MachinesController : ControllerBase
     public async Task<ActionResult<NayaxMachineStockSyncPreviewDto>> SyncRestock(
         long id, CancellationToken ct, [FromQuery] DateTimeOffset? fromDate = null, [FromQuery] bool includeReconciled = false)
     {
-        var preview = await _syncMachineStock.Handle(id, ct, fromDate?.UtcDateTime, includeReconciled);
+        var machine = await _resolveMachine.Handle(id, ct);
+        if (machine?.NayaxMachineId is null) return NotFound();
+
+        var preview = await _syncMachineStock.Handle(machine, ct, fromDate?.UtcDateTime, includeReconciled);
         return Ok(preview);
     }
 
@@ -140,7 +168,10 @@ public class MachinesController : ControllerBase
     public async Task<ActionResult<NayaxMachineStockApplyResponseDto>> ApplySyncRestock(
         long id, NayaxStockEventApplyRequestDto dto, CancellationToken ct)
     {
-        var result = await _applyMachineStockSync.Handle(id, dto.EventIds, ct);
+        var machine = await _resolveMachine.Handle(id, ct);
+        if (machine?.NayaxMachineId is null) return NotFound();
+
+        var result = await _applyMachineStockSync.Handle(machine, dto.EventIds, ct);
         return Ok(result);
     }
 
@@ -151,7 +182,10 @@ public class MachinesController : ControllerBase
     public async Task<ActionResult<NayaxStockEventApplyResultDto>> ResolveSyncRestockDuplicate(
         long id, NayaxResolveDuplicateRequestDto dto, CancellationToken ct)
     {
-        var result = await _resolveMachineStockDuplicate.Handle(id, dto.EventId, dto.Resolution, ct);
+        var machine = await _resolveMachine.Handle(id, ct);
+        if (machine?.NayaxMachineId is null) return NotFound();
+
+        var result = await _resolveMachineStockDuplicate.Handle(machine, dto.EventId, dto.Resolution, ct);
         return Ok(result);
     }
 
@@ -163,7 +197,10 @@ public class MachinesController : ControllerBase
     public async Task<ActionResult<NayaxMachineStockApplyResponseDto>> ResolveSyncRestockManually(
         long id, NayaxResolveManyAsAlreadyRecordedRequestDto dto, CancellationToken ct)
     {
-        var result = await _resolveMachineStockEventsAsAlreadyRecorded.Handle(id, dto.EventIds, ct);
+        var machine = await _resolveMachine.Handle(id, ct);
+        if (machine?.NayaxMachineId is null) return NotFound();
+
+        var result = await _resolveMachineStockEventsAsAlreadyRecorded.Handle(machine, dto.EventIds, ct);
         return Ok(result);
     }
 
@@ -173,7 +210,10 @@ public class MachinesController : ControllerBase
     [HttpGet("{id:long}/stock-ledger")]
     public async Task<ActionResult<MachineStockReconciliationDto>> GetStockLedger(long id, CancellationToken ct)
     {
-        var reconciliation = await _getMachineStockReconciliation.Handle(id, ct);
+        var machine = await _resolveMachine.Handle(id, ct);
+        if (machine is null) return NotFound();
+
+        var reconciliation = await _getMachineStockReconciliation.Handle(machine, ct);
         return Ok(reconciliation);
     }
 
@@ -185,6 +225,8 @@ public class MachinesController : ControllerBase
     public async Task<ActionResult<MachineStockCountResultDto>> RecordStockCount(
         long id, MachineStockCountRequestDto dto, CancellationToken ct)
     {
+        if (await _resolveMachine.Handle(id, ct) is null) return NotFound();
+
         var count = await _recordMachineStockCount.Handle(id, dto, ct);
         return count is null ? NotFound() : Ok(count);
     }

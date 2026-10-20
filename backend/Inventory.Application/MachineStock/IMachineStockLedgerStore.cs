@@ -1,3 +1,4 @@
+using Inventory.Application.Machines;
 using Inventory.Domain.MachineStock;
 
 namespace Inventory.Application.MachineStock;
@@ -44,8 +45,14 @@ public interface IMachineStockLedgerStore
     /// source reported for this machine, so their names resolve in the same read; pass an empty
     /// collection when no observation is available.
     /// </summary>
+    /// <remarks>
+    /// The refills and counts are this application's rows and are read by the machine's local id;
+    /// the sales, the pending Nayax stock events and the inventory-cost transition's opening machine
+    /// stock are the provider's numbers and are read by its Nayax number, and are empty for a machine
+    /// that has none (issue #741).
+    /// </remarks>
     Task<MachineStockLedgerFacts> GetLedgerFactsAsync(
-        long machineId, IReadOnlyCollection<long> observedProductIds, CancellationToken cancellationToken);
+        MachineIdentity machine, IReadOnlyCollection<long> observedProductIds, CancellationToken cancellationToken);
 
     /// <summary>
     /// Appends one counted reconciliation. Returns <c>null</c> when the product does not exist (or is
@@ -53,7 +60,7 @@ public interface IMachineStockLedgerStore
     /// costing quantity, no inventory value, no stock movement and no sale cost.
     /// </summary>
     Task<MachineStockCountRecord?> RecordCountAsync(
-        long machineId,
+        long localMachineId,
         long productId,
         int countedQuantity,
         DateTime countedAtUtc,

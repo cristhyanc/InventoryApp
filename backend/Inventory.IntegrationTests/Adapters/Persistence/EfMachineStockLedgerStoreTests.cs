@@ -1,4 +1,6 @@
+using Inventory.Application.Machines;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
 using Inventory.Domain.Nayax;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -24,7 +26,22 @@ public class EfMachineStockLedgerStoreTests
     private const int BusinessB = 2;
     private const long ProductA = 100;
     private const long ProductB = 200;
+    /// <summary>The machine's Nayax number: what its sales, stock events and opening baseline carry.</summary>
     private const long MachineId = 42;
+
+    /// <summary>
+    /// The same machine's local id in each business (issue #741): what its refills and counts carry.
+    /// Each differs from <see cref="MachineId"/> and from the other, so a reader that confused a local
+    /// id with a provider number, or one business's machine with another's, would read nothing.
+    /// </summary>
+    private const long LocalMachineA = 7;
+    private const long LocalMachineB = 8;
+
+    /// <summary>Another machine of business A, whose refills are not this machine's.</summary>
+    private const long OtherLocalMachineA = 9;
+
+    private static readonly MachineIdentity MachineA = new(LocalMachineA, MachineId);
+    private static readonly MachineIdentity MachineB = new(LocalMachineB, MachineId);
     private static readonly DateTime OpeningAt = new(2026, 1, 1, 12, 0, 0, DateTimeKind.Utc);
 
     [Fact]
@@ -35,7 +52,7 @@ public class EfMachineStockLedgerStoreTests
 
         await using var db = TestAppDbContext.For(options, BusinessA);
         var facts = await new EfMachineStockLedgerStore(db)
-            .GetLedgerFactsAsync(MachineId, [], CancellationToken.None);
+            .GetLedgerFactsAsync(MachineA, [], CancellationToken.None);
 
         var refill = Assert.Single(facts.Refills);
         Assert.Equal(ProductA, refill.ProductId);
@@ -76,7 +93,7 @@ public class EfMachineStockLedgerStoreTests
                 ProductId = ProductA,
                 QuantityChange = -2,
                 Reason = StockAdjustmentReason.MachineRefill,
-                MachineId = 99,
+                MachineId = OtherLocalMachineA,
                 EffectiveAt = OpeningAt.AddDays(2),
             });
             seed.StockAdjustments.Add(new StockAdjustment
@@ -91,9 +108,52 @@ public class EfMachineStockLedgerStoreTests
 
         await using var db = TestAppDbContext.For(options, BusinessA);
         var facts = await new EfMachineStockLedgerStore(db)
-            .GetLedgerFactsAsync(MachineId, [], CancellationToken.None);
+            .GetLedgerFactsAsync(MachineA, [], CancellationToken.None);
 
         Assert.Equal(-6, Assert.Single(facts.Refills).StorageQuantityChange);
+    }
+
+    /// <summary>
+    /// A machine's refills and counts are found by its local id and everything the provider reported
+    /// by its Nayax number (issue #741). A machine known only locally reads its own refills and counts
+    /// and none of the provider's facts, even though business A's provider data for machine 42 exists.
+    /// </summary>
+    [Fact]
+    public async Task A_machine_without_a_nayax_number_reads_its_refills_and_counts_but_no_provider_facts()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await SeedTwoBusinessesAsync(connection);
+
+        await using (var seed = TestAppDbContext.For(options, BusinessA))
+        {
+            seed.StockAdjustments.Add(new StockAdjustment
+            {
+                ProductId = ProductA,
+                QuantityChange = -1,
+                Reason = StockAdjustmentReason.MachineRefill,
+                MachineId = OtherLocalMachineA,
+                EffectiveAt = OpeningAt.AddDays(2),
+            });
+            seed.MachineStockCounts.Add(new MachineStockCount
+            {
+                MachineId = OtherLocalMachineA,
+                ProductId = ProductA,
+                CountedQuantity = 1,
+                CountedAtUtc = OpeningAt.AddDays(3),
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = TestAppDbContext.For(options, BusinessA);
+        var facts = await new EfMachineStockLedgerStore(db)
+            .GetLedgerFactsAsync(new MachineIdentity(OtherLocalMachineA, NayaxMachineId: null), [], CancellationToken.None);
+
+        Assert.Equal(-1, Assert.Single(facts.Refills).StorageQuantityChange);
+        Assert.Equal(1, Assert.Single(facts.Counts).CountedQuantity);
+        Assert.Empty(facts.Sales);
+        Assert.Empty(facts.OpeningBaselines);
+        Assert.Equal(0, facts.PendingNayaxStockEventCount);
+        Assert.Equal(0, facts.UnattributedCompletedSaleCount);
     }
 
     /// <summary>
@@ -123,7 +183,7 @@ public class EfMachineStockLedgerStoreTests
 
         await using var db = TestAppDbContext.For(options, BusinessA);
         var facts = await new EfMachineStockLedgerStore(db)
-            .GetLedgerFactsAsync(MachineId, [], CancellationToken.None);
+            .GetLedgerFactsAsync(MachineA, [], CancellationToken.None);
 
         Assert.Equal(5001, Assert.Single(facts.Sales).TransactionId);
     }
@@ -136,7 +196,7 @@ public class EfMachineStockLedgerStoreTests
 
         await using var db = TestAppDbContext.For(options, BusinessA);
         var facts = await new EfMachineStockLedgerStore(db)
-            .GetLedgerFactsAsync(MachineId, [ProductA, ProductB, 999], CancellationToken.None);
+            .GetLedgerFactsAsync(MachineA, [ProductA, ProductB, 999], CancellationToken.None);
 
         Assert.Equal("Coke Zero", facts.ProductNames[ProductA]);
         Assert.DoesNotContain(ProductB, facts.ProductNames.Keys);
@@ -151,7 +211,7 @@ public class EfMachineStockLedgerStoreTests
 
         await using var db = TestAppDbContext.For(options, BusinessB);
         var facts = await new EfMachineStockLedgerStore(db)
-            .GetLedgerFactsAsync(MachineId, [ProductA], CancellationToken.None);
+            .GetLedgerFactsAsync(MachineB, [ProductA], CancellationToken.None);
 
         Assert.Equal(ProductB, Assert.Single(facts.Refills).ProductId);
         Assert.Equal(3, Assert.Single(facts.Counts).CountedQuantity);
@@ -174,7 +234,7 @@ public class EfMachineStockLedgerStoreTests
 
         await using var db = TestAppDbContext.Denied(options);
         var facts = await new EfMachineStockLedgerStore(db)
-            .GetLedgerFactsAsync(MachineId, [ProductA], CancellationToken.None);
+            .GetLedgerFactsAsync(MachineA, [ProductA], CancellationToken.None);
 
         Assert.Empty(facts.Refills);
         Assert.Empty(facts.Sales);
@@ -195,7 +255,7 @@ public class EfMachineStockLedgerStoreTests
         await using (var db = TestAppDbContext.For(options, BusinessA))
         {
             var record = await new EfMachineStockLedgerStore(db)
-                .RecordCountAsync(MachineId, ProductA, 11, countedAt, "Counted after refill", CancellationToken.None);
+                .RecordCountAsync(LocalMachineA, ProductA, 11, countedAt, "Counted after refill", CancellationToken.None);
 
             Assert.NotNull(record);
             Assert.Equal("Coke Zero", record!.ProductName);
@@ -206,7 +266,7 @@ public class EfMachineStockLedgerStoreTests
         await using var verify = TestAppDbContext.Unrestricted(options);
         var stored = await verify.MachineStockCounts.OrderByDescending(count => count.Id).FirstAsync();
         Assert.Equal(BusinessA, stored.BusinessId);
-        Assert.Equal(MachineId, stored.MachineId);
+        Assert.Equal(LocalMachineA, stored.MachineId);
         Assert.Equal(ProductA, stored.ProductId);
         Assert.Equal(11, stored.CountedQuantity);
         Assert.Equal("Counted after refill", stored.Notes);
@@ -230,7 +290,7 @@ public class EfMachineStockLedgerStoreTests
         await using (var db = TestAppDbContext.For(options, BusinessA))
         {
             var record = await new EfMachineStockLedgerStore(db)
-                .RecordCountAsync(MachineId, ProductB, 5, OpeningAt.AddDays(3), null, CancellationToken.None);
+                .RecordCountAsync(LocalMachineA, ProductB, 5, OpeningAt.AddDays(3), null, CancellationToken.None);
 
             Assert.Null(record);
         }
@@ -249,13 +309,13 @@ public class EfMachineStockLedgerStoreTests
         await using (var db = TestAppDbContext.For(options, BusinessA))
         {
             var store = new EfMachineStockLedgerStore(db);
-            await store.RecordCountAsync(MachineId, ProductA, 5, OpeningAt.AddDays(3), null, CancellationToken.None);
-            await store.RecordCountAsync(MachineId, ProductA, 2, OpeningAt.AddDays(4), null, CancellationToken.None);
+            await store.RecordCountAsync(LocalMachineA, ProductA, 5, OpeningAt.AddDays(3), null, CancellationToken.None);
+            await store.RecordCountAsync(LocalMachineA, ProductA, 2, OpeningAt.AddDays(4), null, CancellationToken.None);
         }
 
         await using var db2 = TestAppDbContext.For(options, BusinessA);
         var facts = await new EfMachineStockLedgerStore(db2)
-            .GetLedgerFactsAsync(MachineId, [], CancellationToken.None);
+            .GetLedgerFactsAsync(MachineA, [], CancellationToken.None);
 
         Assert.Equal([6, 5, 2], facts.Counts.OrderBy(count => count.CountedAtUtc).Select(count => count.CountedQuantity));
     }
@@ -269,6 +329,9 @@ public class EfMachineStockLedgerStoreTests
 
         await using (var a = TestAppDbContext.For(options, BusinessA))
         {
+            a.Machines.AddRange(
+                new LocalMachine { Id = LocalMachineA, Name = "Machine 42", ExternalMachineId = NayaxExternalId.From(MachineId) },
+                new LocalMachine { Id = OtherLocalMachineA, Name = "Machine 99", ExternalMachineId = NayaxExternalId.From(99) });
             a.Products.Add(new Product
             {
                 Id = ProductA,
@@ -284,7 +347,7 @@ public class EfMachineStockLedgerStoreTests
                 QuantityChange = -6,
                 QuantityAfter = 4,
                 Reason = StockAdjustmentReason.MachineRefill,
-                MachineId = MachineId,
+                MachineId = LocalMachineA,
                 EffectiveAt = OpeningAt.AddHours(1),
             });
             a.NayaxSales.Add(new NayaxSales
@@ -312,7 +375,7 @@ public class EfMachineStockLedgerStoreTests
             });
             a.MachineStockCounts.Add(new MachineStockCount
             {
-                MachineId = MachineId,
+                MachineId = LocalMachineA,
                 ProductId = ProductA,
                 CountedQuantity = 6,
                 CountedAtUtc = OpeningAt.AddDays(2),
@@ -351,6 +414,7 @@ public class EfMachineStockLedgerStoreTests
 
         await using (var b = TestAppDbContext.For(options, BusinessB))
         {
+            b.Machines.Add(new LocalMachine { Id = LocalMachineB, Name = "Machine 42", ExternalMachineId = NayaxExternalId.From(MachineId) });
             b.Products.Add(new Product { Id = ProductB, Name = "Business B Product", QuantityInStock = 5 });
             b.StockAdjustments.Add(new StockAdjustment
             {
@@ -358,7 +422,7 @@ public class EfMachineStockLedgerStoreTests
                 QuantityChange = -2,
                 QuantityAfter = 5,
                 Reason = StockAdjustmentReason.MachineRefill,
-                MachineId = MachineId,
+                MachineId = LocalMachineB,
                 EffectiveAt = OpeningAt.AddHours(1),
             });
             b.NayaxSales.Add(new NayaxSales
@@ -376,7 +440,7 @@ public class EfMachineStockLedgerStoreTests
             });
             b.MachineStockCounts.Add(new MachineStockCount
             {
-                MachineId = MachineId,
+                MachineId = LocalMachineB,
                 ProductId = ProductB,
                 CountedQuantity = 3,
                 CountedAtUtc = OpeningAt.AddDays(2),

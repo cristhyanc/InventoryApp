@@ -130,7 +130,15 @@ export class StockHistoryPageComponent implements OnInit {
    * provider - and so no machine list - simply has no machine filter.
    */
   get machineFilterShown(): boolean {
-    return this.machinesError === '' && this.machines.length > 0;
+    return this.machinesError === '' && this.attributableMachines.length > 0;
+  }
+
+  /**
+   * The machines the filter offers: those with a local machine record, because a movement records
+   * the local machine (issue #741) and the filter is matched against that.
+   */
+  get attributableMachines(): Machine[] {
+    return this.machines.filter((machine) => machine.localMachineId != null);
   }
 
   private loadMachines(): void {
@@ -257,7 +265,7 @@ export class StockHistoryPageComponent implements OnInit {
 
   machineLabel(machineId?: number | null): string {
     if (machineId === null || machineId === undefined) return '—';
-    return this.machines.find((machine) => machine.machineID === machineId)?.machineName ?? String(machineId);
+    return this.machines.find((machine) => machine.localMachineId === machineId)?.machineName ?? String(machineId);
   }
 
   /** Unit cost is unavailable on many movements; an unknown cost is shown as unknown, never as $0.00. */

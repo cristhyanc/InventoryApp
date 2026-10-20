@@ -12,6 +12,16 @@ namespace Inventory.Domain.Stock;
 /// </summary>
 public static class ManualStockAdjustmentPolicy
 {
+    /// <summary>
+    /// What a caller is told when a manual adjustment names a machine that is not one of this
+    /// business's machines (issue #741). Since #741 the field holds a local machine id, so a provider
+    /// machine number sent by an older client is one of the values refused. The rule needs the
+    /// business's machines, so the use case applies it; the message lives here with the
+    /// adjustment's other refusals. It names no machine and no business.
+    /// </summary>
+    public const string UnknownMachineMessage =
+        "The selected machine is not a machine of this business.";
+
     public static void Validate(StockAdjustmentReason reason, int quantityChange, decimal? unitCost)
     {
         if (reason == StockAdjustmentReason.Correction && quantityChange >= 0)

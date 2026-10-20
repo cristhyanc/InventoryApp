@@ -33,7 +33,9 @@ function product(overrides: Partial<Product> = {}): Product {
 }
 
 function machine(machineID: number, machineName: string): Machine {
-  return { machineID, machineName } as Machine;
+  // The local machine (issue #741) is what a movement records and the filter sends; it is
+  // deliberately a different number from the provider's.
+  return { machineID, localMachineId: machineID + 100, machineName } as Machine;
 }
 
 function entry(overrides: Partial<StockHistoryEntry> = {}): StockHistoryEntry {
@@ -324,7 +326,7 @@ describe('StockHistoryPageComponent labels', () => {
     expect(component.reasonLabel(StockAdjustmentReason.Correction)).toBe('Correction');
     expect(component.sourceLabel(StockAdjustmentSource.Nayax)).toBe('Nayax Sync Restock');
     expect(component.sourceLabel(StockAdjustmentSource.Manual)).toBe('Manual');
-    expect(component.machineLabel(9)).toBe('Lobby');
+    expect(component.machineLabel(109)).toBe('Lobby');
     expect(component.machineLabel(404)).toBe('404');
     expect(component.machineLabel(null)).toBe('—');
     expect(component.unitCostLabel(null)).toBe('—');

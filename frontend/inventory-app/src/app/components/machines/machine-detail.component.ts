@@ -258,7 +258,8 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
     const payload: StockAdjustmentDto = {
       quantityChange: qtyNum*-1,
       reason: StockAdjustmentReason.MachineRefill,
-      machineId: machine?.machineID ?? null,
+      // The local machine (issue #741): what a stock movement records since then.
+      machineId: machine?.localMachineId ?? null,
       notes: `${machine?.machineName ?? ''} - ${machine?.machineID ?? ''} - Machine restock`
     };
 

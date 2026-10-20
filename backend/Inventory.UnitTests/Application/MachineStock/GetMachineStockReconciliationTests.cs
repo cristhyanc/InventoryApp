@@ -1,3 +1,4 @@
+using Inventory.Application.Machines;
 using Inventory.Application.MachineStock;
 using Inventory.Application.Nayax;
 using Inventory.Domain.MachineStock;
@@ -19,7 +20,13 @@ namespace InventoryApi.Tests.Application.MachineStock;
 /// </summary>
 public class GetMachineStockReconciliationTests
 {
+    /// <summary>The machine's Nayax number, which the live observation is read by.</summary>
     private const long MachineId = 42;
+
+    /// <summary>The same machine's local id (issue #741), which the response names it by.</summary>
+    private const long LocalMachineId = 7;
+
+    private static readonly MachineIdentity Machine = new(LocalMachineId, MachineId);
     private const long Product = 500;
     private static readonly DateTime Now = new(2026, 3, 10, 2, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime CountedAt = new(2026, 3, 2, 0, 0, 0, DateTimeKind.Utc);
@@ -44,7 +51,7 @@ public class GetMachineStockReconciliationTests
     {
         var store = new Mock<IMachineStockLedgerStore>();
         store.Setup(x => x.GetLedgerFactsAsync(
-                MachineId, It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+                Machine, It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(facts);
         return store;
     }
@@ -70,9 +77,9 @@ public class GetMachineStockReconciliationTests
             sales: [new MachineSaleFact(9001, Product, CountedAt.AddDays(1))]));
         var observations = ObservationOf(new MachineStockObservationSlot(Product, 24, 8));
 
-        var result = await UseCase(store, observations).Handle(MachineId, CancellationToken.None);
+        var result = await UseCase(store, observations).Handle(Machine, CancellationToken.None);
 
-        Assert.Equal(MachineId, result.MachineId);
+        Assert.Equal(LocalMachineId, result.MachineId);
         Assert.Equal(Now, result.AsOfUtc);
         Assert.Equal(Now, result.ObservedAtUtc);
         var row = Assert.Single(result.Products);
@@ -93,7 +100,7 @@ public class GetMachineStockReconciliationTests
         observations.Setup(x => x.GetObservationAsync(MachineId, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new NayaxNotConnectedException(NayaxConnectionStatus.NotConfigured));
 
-        var result = await UseCase(store, observations).Handle(MachineId, CancellationToken.None);
+        var result = await UseCase(store, observations).Handle(Machine, CancellationToken.None);
 
         Assert.Null(result.ObservedAtUtc);
         Assert.Contains(
@@ -114,7 +121,7 @@ public class GetMachineStockReconciliationTests
         observations.Setup(x => x.GetObservationAsync(MachineId, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new NayaxPermissionNotGrantedException("GetMachineProductsAsync"));
 
-        var result = await UseCase(store, observations).Handle(MachineId, CancellationToken.None);
+        var result = await UseCase(store, observations).Handle(Machine, CancellationToken.None);
 
         Assert.Null(result.ObservedAtUtc);
         Assert.Contains(
@@ -135,7 +142,7 @@ public class GetMachineStockReconciliationTests
             .ThrowsAsync(new HttpRequestException("upstream down"));
 
         await Assert.ThrowsAsync<HttpRequestException>(
-            () => UseCase(store, observations).Handle(MachineId, CancellationToken.None));
+            () => UseCase(store, observations).Handle(Machine, CancellationToken.None));
     }
 
     [Fact]
@@ -146,7 +153,7 @@ public class GetMachineStockReconciliationTests
             new MachineStockObservationSlot(Product, 10, 2),
             new MachineStockObservationSlot(999, 10, 0));
 
-        var result = await UseCase(store, observations).Handle(MachineId, CancellationToken.None);
+        var result = await UseCase(store, observations).Handle(Machine, CancellationToken.None);
 
         var row = Assert.Single(result.Products);
         Assert.Equal(Product, row.ProductId);
@@ -161,7 +168,7 @@ public class GetMachineStockReconciliationTests
             unattributedCompletedSaleCount: 5));
         var observations = ObservationOf(new MachineStockObservationSlot(Product, 20, 0));
 
-        var result = await UseCase(store, observations).Handle(MachineId, CancellationToken.None);
+        var result = await UseCase(store, observations).Handle(Machine, CancellationToken.None);
 
         Assert.Equal(
             [
@@ -179,13 +186,38 @@ public class GetMachineStockReconciliationTests
             new MachineStockObservationSlot(Product, 10, 2),
             new MachineStockObservationSlot(Product, 4, 1));
 
-        await UseCase(store, observations).Handle(MachineId, CancellationToken.None);
+        await UseCase(store, observations).Handle(Machine, CancellationToken.None);
 
         store.Verify(
             x => x.GetLedgerFactsAsync(
-                MachineId,
+                Machine,
                 It.Is<IReadOnlyCollection<long>>(ids => ids.Count == 1 && ids.Contains(Product)),
                 It.IsAny<CancellationToken>()),
             Times.Once);
+    }
+
+    /// <summary>
+    /// A machine with no Nayax number - one the business created itself (issue #741) - has nothing
+    /// the provider could observe, so the observation source is never asked and the expected stock
+    /// is reported with the same data-quality state an unconnected business gets.
+    /// </summary>
+    [Fact]
+    public async Task A_machine_without_a_nayax_number_is_never_observed_and_still_gets_expected_stock()
+    {
+        var localOnly = new MachineIdentity(LocalMachineId, NayaxMachineId: null);
+        var store = new Mock<IMachineStockLedgerStore>();
+        store.Setup(x => x.GetLedgerFactsAsync(
+                localOnly, It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Facts(counts: [new MachineStockCountFact(1, Product, 20, CountedAt)]));
+        var observations = new Mock<IMachineStockObservationSource>(MockBehavior.Strict);
+
+        var result = await UseCase(store, observations).Handle(localOnly, CancellationToken.None);
+
+        Assert.Equal(LocalMachineId, result.MachineId);
+        Assert.Null(result.ObservedAtUtc);
+        Assert.Contains(
+            MachineStockDataQualityIssueCodes.ObservationSourceUnavailable,
+            result.DataQuality.Select(issue => issue.Code));
+        Assert.Equal(20, Assert.Single(result.Products).ExpectedQuantity);
     }
 }

@@ -229,7 +229,10 @@ describe('MachineDetailComponent Products panel read (issue #768)', () => {
    */
   function answerPageReads({ fixture, httpMock }: Rendered, machineId: number): void {
     fixture.detectChanges(false);
-    httpMock.match(`/api/machines/${machineId}`).forEach((request) => request.flush({ machineID: machineId } as Machine));
+    // The route id is the local machine (issue #741); the provider's number is a different one.
+    httpMock
+      .match(`/api/machines/${machineId}`)
+      .forEach((request) => request.flush({ machineID: machineId + 9000, localMachineId: machineId } as Machine));
     fixture.detectChanges(false);
     httpMock
       .match(`/api/machines/${machineId}/latest-sales`)
@@ -497,6 +500,14 @@ describe('MachineDetailComponent write control during a support session (issue #
     fixture.componentInstance.restockProduct(product(8), { machineID: 7 } as Machine, 5);
 
     expect(stockAdjust).not.toHaveBeenCalled();
+  });
+
+  it('records the restock against the local machine, not the provider machine number (issue #741)', async () => {
+    const { fixture, stockAdjust } = await render(of(false));
+
+    fixture.componentInstance.restockProduct(product(8), { machineID: 900, localMachineId: 7 } as Machine, 5);
+
+    expect(stockAdjust).toHaveBeenCalledWith(55, expect.objectContaining({ machineId: 7, quantityChange: -5 }));
   });
 });
 

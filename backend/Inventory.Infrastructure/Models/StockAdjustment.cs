@@ -52,6 +52,15 @@ public class StockAdjustment : IBusinessOwned
 
     public StockAdjustmentReason Reason { get; set; } = StockAdjustmentReason.MachineRefill;
     public StockAdjustmentSource Source { get; set; } = StockAdjustmentSource.Manual;
+    /// <summary>
+    /// The machine a refill went to, or <c>null</c> for a movement that names no machine: a local
+    /// machine, <c>Machines.Id</c> (issue #741), never the provider's machine number. The pair
+    /// <c>(BusinessId, MachineId)</c> is a foreign key on the machines' <c>(BusinessId, Id)</c> key,
+    /// restricted on delete; the <c>RepointStockMachineReferences</c> migration moved every stored
+    /// movement onto its machine's local row. A Nayax Sync Restock event keeps the provider's number
+    /// on <see cref="NayaxMachineStockEvent.MachineId"/>; the movement it produces records the local
+    /// machine.
+    /// </summary>
     public long? MachineId { get; set; }
     public string? Notes { get; set; }
 

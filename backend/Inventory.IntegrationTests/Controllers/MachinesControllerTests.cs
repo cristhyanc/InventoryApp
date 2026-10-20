@@ -12,6 +12,7 @@ using InventoryApi.Controllers;
 using InventoryApi.DTOs;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.Machines;
 using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
@@ -32,7 +33,30 @@ namespace InventoryApi.Tests.Controllers;
 /// </summary>
 public class MachinesControllerTests
 {
+    /// <summary>The machine's Nayax number: what the provider and its stored events know it by.</summary>
     private const long MachineId = 42;
+
+    /// <summary>
+    /// The same machine's local id (issue #741): what every <c>api/machines/{id}</c> route takes.
+    /// Deliberately not <see cref="MachineId"/>, so a route that used the id it was given as a
+    /// provider number would read the wrong machine.
+    /// </summary>
+    private const long LocalMachineId = 4321;
+
+    /// <summary>A machine the business created itself, with no Nayax number.</summary>
+    private const long LocalOnlyMachineId = 4322;
+
+    private static readonly MachineIdentity Machine = new(LocalMachineId, MachineId);
+
+    /// <summary>The business's machines and the one Nayax link the route ids resolve through.</summary>
+    private static ResolveMachineIdentity MachineResolver() =>
+        new(
+            new FakeLocalMachineStore(
+            [
+                new LocalMachineRecord(LocalMachineId, "Pavillion Left", IsActive: true, IsProviderNamed: true),
+                new LocalMachineRecord(LocalOnlyMachineId, "Back office", IsActive: true),
+            ]),
+            FakeNayaxMachineLinkStore.Linking((MachineId, LocalMachineId)));
 
     /// <summary>
     /// One pinned instant drives the dashboard clock, so the rolling Australia/Sydney comparison
@@ -70,6 +94,7 @@ public class MachinesControllerTests
             new ResolveMachineStockEventsAsAlreadyRecorded(store),
             new GetMachineStockReconciliation(ledgerStore, observationSource, Time.Clock),
             new RecordMachineStockCount(ledgerStore, Time.Clock),
+            MachineResolver(),
             // An Owner, so the dashboard actions answer the full response; the role-dependent shape
             // itself is MachineAndProductFinancialRedactionApiTests, through the real pipeline.
             new CurrentCapabilities(
@@ -83,7 +108,7 @@ public class MachinesControllerTests
     {
         var ledger = new Mock<IMachineStockLedgerStore>();
         ledger.Setup(x => x.GetLedgerFactsAsync(
-                It.IsAny<long>(), It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+                It.IsAny<MachineIdentity>(), It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MachineStockLedgerFacts([], [], [], [], new Dictionary<long, string>(), 0, 0));
         return ledger.Object;
     }
@@ -108,14 +133,14 @@ public class MachinesControllerTests
         store.Setup(x => x.GetUnprocessedEventsAsync(
                 MachineId, It.IsAny<CancellationToken>(), It.IsAny<DateTime?>(), It.IsAny<bool>()))
             .ReturnsAsync(new MachineStockEventsPage([], 0));
-        store.Setup(x => x.GetManualMachineRefillsAsync(MachineId, It.IsAny<CancellationToken>()))
+        store.Setup(x => x.GetManualMachineRefillsAsync(LocalMachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
 
-        var result = await Controller(store.Object, nayax.Object).SyncRestock(MachineId, CancellationToken.None);
+        var result = await Controller(store.Object, nayax.Object).SyncRestock(LocalMachineId, CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result.Result);
         var preview = Assert.IsType<NayaxMachineStockSyncPreviewDto>(ok.Value);
-        Assert.Equal(MachineId, preview.MachineId);
+        Assert.Equal(LocalMachineId, preview.MachineId);
         Assert.Equal("No new Nayax stock-adjustment alerts to review.", preview.Message);
     }
 
@@ -132,11 +157,11 @@ public class MachinesControllerTests
             .ReturnsAsync([]);
         store.Setup(x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), expectedUtc, true))
             .ReturnsAsync(new MachineStockEventsPage([], 3));
-        store.Setup(x => x.GetManualMachineRefillsAsync(MachineId, It.IsAny<CancellationToken>()))
+        store.Setup(x => x.GetManualMachineRefillsAsync(LocalMachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
 
         var result = await Controller(store.Object, nayax.Object)
-            .SyncRestock(MachineId, CancellationToken.None, fromDate, includeReconciled: true);
+            .SyncRestock(LocalMachineId, CancellationToken.None, fromDate, includeReconciled: true);
 
         var ok = Assert.IsType<OkObjectResult>(result.Result);
         var preview = Assert.IsType<NayaxMachineStockSyncPreviewDto>(ok.Value);
@@ -165,10 +190,10 @@ public class MachinesControllerTests
             .ReturnsAsync([]);
         store.Setup(x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), expectedUtc, false))
             .ReturnsAsync(new MachineStockEventsPage([], 0));
-        store.Setup(x => x.GetManualMachineRefillsAsync(MachineId, It.IsAny<CancellationToken>()))
+        store.Setup(x => x.GetManualMachineRefillsAsync(LocalMachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
 
-        await Controller(store.Object, nayax.Object).SyncRestock(MachineId, CancellationToken.None, fromDate);
+        await Controller(store.Object, nayax.Object).SyncRestock(LocalMachineId, CancellationToken.None, fromDate);
 
         store.Verify(
             x => x.GetUnprocessedEventsAsync(MachineId, It.IsAny<CancellationToken>(), expectedUtc, false), Times.Once);
@@ -184,14 +209,14 @@ public class MachinesControllerTests
                 NayaxStockEventProcessingStatus.Unprocessed, 200, 2, null, NayaxDuplicateResolution.None));
         store.Setup(x => x.FindStorageProductAsync(200, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new NayaxStockSyncProduct(200, "Coke 375mL", 10));
-        store.Setup(x => x.GetManualMachineRefillsAsync(MachineId, It.IsAny<CancellationToken>()))
+        store.Setup(x => x.GetManualMachineRefillsAsync(LocalMachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         store.Setup(x => x.ApplyRefillAsync(
-                7, MachineId, 5001, 200, 2, NayaxDuplicateResolution.None, null, It.IsAny<CancellationToken>()))
+                7, Machine, 5001, 200, 2, NayaxDuplicateResolution.None, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MachineRefillApplication(true, 99));
 
         var result = await Controller(store.Object)
-            .ApplySyncRestock(MachineId, new NayaxStockEventApplyRequestDto([7]), CancellationToken.None);
+            .ApplySyncRestock(LocalMachineId, new NayaxStockEventApplyRequestDto([7]), CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result.Result);
         var response = Assert.IsType<NayaxMachineStockApplyResponseDto>(ok.Value);
@@ -206,7 +231,7 @@ public class MachinesControllerTests
     public async Task ResolveSyncRestockManually_passes_the_requested_event_ids_through()
     {
         var store = new Mock<IMachineStockEventStore>();
-        store.Setup(x => x.GetManualMachineRefillsAsync(MachineId, It.IsAny<CancellationToken>()))
+        store.Setup(x => x.GetManualMachineRefillsAsync(LocalMachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([]);
         store.Setup(x => x.FindEventAsync(MachineId, 7, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MachineStockEventState(
@@ -216,7 +241,7 @@ public class MachinesControllerTests
             .ReturnsAsync(true);
 
         var result = await Controller(store.Object)
-            .ResolveSyncRestockManually(MachineId, new NayaxResolveManyAsAlreadyRecordedRequestDto([7]), CancellationToken.None);
+            .ResolveSyncRestockManually(LocalMachineId, new NayaxResolveManyAsAlreadyRecordedRequestDto([7]), CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result.Result);
         var response = Assert.IsType<NayaxMachineStockApplyResponseDto>(ok.Value);
@@ -245,7 +270,7 @@ public class MachinesControllerTests
             });
 
         var result = await Controller(Mock.Of<IMachineStockEventStore>(), nayax.Object, EmptyCostedFacts())
-            .GetById(MachineId);
+            .GetById(LocalMachineId);
 
         var machine = Assert.IsType<MachineResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
         Assert.Equal(MachineId, machine.MachineID);
@@ -263,7 +288,7 @@ public class MachinesControllerTests
             .ReturnsAsync((NayaxMachine)null!);
 
         var result = await Controller(Mock.Of<IMachineStockEventStore>(), nayax.Object, EmptyCostedFacts())
-            .GetById(MachineId);
+            .GetById(LocalMachineId);
 
         Assert.IsType<NotFoundResult>(result.Result);
     }
@@ -314,28 +339,76 @@ public class MachinesControllerTests
     }
 
     /// <summary>
-    /// Issue #780 adds the local machine id to the fleet <em>list</em> only: every change to the
-    /// <c>api/machines/{id}</c> route is explicitly out of its scope (issue #741 owns that route).
-    /// The single-machine read therefore resolves nothing - no lookup is made at all, which this
-    /// asserts on the link store the list path uses - and answers <c>null</c> in the field the two
-    /// reads share, even for a machine this business has a local record for.
+    /// Issue #741: the single-machine read takes the local id, reads the provider by that machine's
+    /// own Nayax number, and answers both - the local id the route was given and the provider's
+    /// number - the way the fleet list does.
     /// </summary>
     [Fact]
-    public async Task GetById_does_not_resolve_or_publish_the_local_machine_id()
+    public async Task GetById_reads_the_provider_by_the_machines_nayax_number_and_answers_both_ids()
     {
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachineAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new NayaxMachine { MachineID = MachineId, MachineName = "Pavillion Left", CustomerID = 91 });
-        var machineLinks = FakeNayaxMachineLinkStore.Linking((MachineId, 4321));
 
-        var result = await Controller(
-                Mock.Of<IMachineStockEventStore>(), nayax.Object, EmptyCostedFacts(), machineLinks: machineLinks)
-            .GetById(MachineId);
+        var result = await Controller(Mock.Of<IMachineStockEventStore>(), nayax.Object, EmptyCostedFacts())
+            .GetById(LocalMachineId);
 
         var machine = Assert.IsType<MachineResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
         Assert.Equal(MachineId, machine.MachineID);
-        Assert.Null(machine.LocalMachineId);
-        Assert.Empty(machineLinks.Requests);
+        Assert.Equal(LocalMachineId, machine.LocalMachineId);
+    }
+
+    /// <summary>
+    /// An id that is not a local machine of this business is a 404 on every route, and so is a
+    /// provider machine number an older client still sends: it is never tried as a fallback, so
+    /// nothing reaches the provider or the stores (issue #741).
+    /// </summary>
+    [Theory]
+    [InlineData(9999)]
+    [InlineData(MachineId)]
+    public async Task Every_machine_route_answers_not_found_for_an_id_that_is_not_a_local_machine(long id)
+    {
+        var nayax = new Mock<INayaxLynxClient>(MockBehavior.Strict);
+        var store = new Mock<IMachineStockEventStore>(MockBehavior.Strict);
+        var ledger = new Mock<IMachineStockLedgerStore>(MockBehavior.Strict);
+        var controller = Controller(store.Object, nayax.Object, EmptyCostedFacts(), ledger: ledger.Object);
+
+        Assert.IsType<NotFoundResult>((await controller.GetById(id)).Result);
+        Assert.IsType<NotFoundResult>((await controller.GetMachineProducts(id)).Result);
+        Assert.IsType<NotFoundResult>((await controller.GetLatestSales(id, CancellationToken.None)).Result);
+        Assert.IsType<NotFoundResult>((await controller.SyncRestock(id, CancellationToken.None)).Result);
+        Assert.IsType<NotFoundResult>(
+            (await controller.ApplySyncRestock(id, new NayaxStockEventApplyRequestDto([7]), CancellationToken.None)).Result);
+        Assert.IsType<NotFoundResult>(
+            (await controller.ResolveSyncRestockManually(
+                id, new NayaxResolveManyAsAlreadyRecordedRequestDto([7]), CancellationToken.None)).Result);
+        Assert.IsType<NotFoundResult>((await controller.GetStockLedger(id, CancellationToken.None)).Result);
+        Assert.IsType<NotFoundResult>(
+            (await controller.RecordStockCount(id, new MachineStockCountRequestDto(200, 9, null), CancellationToken.None)).Result);
+    }
+
+    /// <summary>
+    /// A machine the business created itself has no Nayax number: the Nayax-only reads and Sync
+    /// Restock have nothing to read and answer 404, while its stock ledger - this application's own
+    /// data - still answers (issue #741).
+    /// </summary>
+    [Fact]
+    public async Task A_machine_without_a_nayax_number_has_a_stock_ledger_but_no_provider_routes()
+    {
+        var nayax = new Mock<INayaxLynxClient>(MockBehavior.Strict);
+        var store = new Mock<IMachineStockEventStore>(MockBehavior.Strict);
+        var observations = new Mock<IMachineStockObservationSource>(MockBehavior.Strict);
+        var controller = Controller(
+            store.Object, nayax.Object, EmptyCostedFacts(), observations: observations.Object);
+
+        Assert.IsType<NotFoundResult>((await controller.GetById(LocalOnlyMachineId)).Result);
+        Assert.IsType<NotFoundResult>((await controller.SyncRestock(LocalOnlyMachineId, CancellationToken.None)).Result);
+
+        var ledger = await controller.GetStockLedger(LocalOnlyMachineId, CancellationToken.None);
+        var reconciliation = Assert.IsType<MachineStockReconciliationDto>(
+            Assert.IsType<OkObjectResult>(ledger.Result).Value);
+        Assert.Equal(LocalOnlyMachineId, reconciliation.MachineId);
+        Assert.Null(reconciliation.ObservedAtUtc);
     }
 
     /// <summary>
@@ -377,7 +450,7 @@ public class MachinesControllerTests
 
         var result = await Controller(
                 Mock.Of<IMachineStockEventStore>(), nayax.Object, EmptyCostedFacts(), catalog.Object)
-            .GetMachineProducts(MachineId);
+            .GetMachineProducts(LocalMachineId);
 
         var products = Assert.IsType<List<ProductResponse>>(Assert.IsType<OkObjectResult>(result.Result).Value);
         var product = Assert.Single(products);
@@ -403,7 +476,7 @@ public class MachinesControllerTests
         var countedAt = Time.NowUtc.AddDays(-1);
         var ledger = new Mock<IMachineStockLedgerStore>();
         ledger.Setup(x => x.GetLedgerFactsAsync(
-                MachineId, It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
+                Machine, It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new MachineStockLedgerFacts(
                 [],
                 [],
@@ -419,11 +492,11 @@ public class MachinesControllerTests
 
         var result = await Controller(
                 Mock.Of<IMachineStockEventStore>(), ledger: ledger.Object, observations: observations.Object)
-            .GetStockLedger(MachineId, CancellationToken.None);
+            .GetStockLedger(LocalMachineId, CancellationToken.None);
 
         var reconciliation = Assert.IsType<MachineStockReconciliationDto>(
             Assert.IsType<OkObjectResult>(result.Result).Value);
-        Assert.Equal(MachineId, reconciliation.MachineId);
+        Assert.Equal(LocalMachineId, reconciliation.MachineId);
         var row = Assert.Single(reconciliation.Products);
         Assert.Equal("Coke", row.ProductName);
         Assert.Equal(10, row.ExpectedQuantity);
@@ -436,11 +509,11 @@ public class MachinesControllerTests
     {
         var ledger = new Mock<IMachineStockLedgerStore>();
         ledger.Setup(x => x.RecordCountAsync(
-                MachineId, 200, 9, It.IsAny<DateTime>(), "Counted", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new MachineStockCountRecord(5, MachineId, 200, "Coke", 9, Time.NowUtc, "Counted"));
+                LocalMachineId, 200, 9, It.IsAny<DateTime>(), "Counted", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new MachineStockCountRecord(5, LocalMachineId, 200, "Coke", 9, Time.NowUtc, "Counted"));
 
         var result = await Controller(Mock.Of<IMachineStockEventStore>(), ledger: ledger.Object)
-            .RecordStockCount(MachineId, new MachineStockCountRequestDto(200, 9, "Counted"), CancellationToken.None);
+            .RecordStockCount(LocalMachineId, new MachineStockCountRequestDto(200, 9, "Counted"), CancellationToken.None);
 
         var count = Assert.IsType<MachineStockCountResultDto>(Assert.IsType<OkObjectResult>(result.Result).Value);
         Assert.Equal(5, count.CountId);
@@ -453,11 +526,11 @@ public class MachinesControllerTests
     {
         var ledger = new Mock<IMachineStockLedgerStore>();
         ledger.Setup(x => x.RecordCountAsync(
-                MachineId, 200, 9, It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
+                LocalMachineId, 200, 9, It.IsAny<DateTime>(), null, It.IsAny<CancellationToken>()))
             .ReturnsAsync((MachineStockCountRecord?)null);
 
         var result = await Controller(Mock.Of<IMachineStockEventStore>(), ledger: ledger.Object)
-            .RecordStockCount(MachineId, new MachineStockCountRequestDto(200, 9, null), CancellationToken.None);
+            .RecordStockCount(LocalMachineId, new MachineStockCountRequestDto(200, 9, null), CancellationToken.None);
 
         Assert.IsType<NotFoundResult>(result.Result);
     }

@@ -14,12 +14,10 @@ namespace Inventory.Application.Machines;
 /// machine has to record (issue #780 moved the operating expenses onto it), and the two are never
 /// interchangeable: a local id equal to a provider number is a coincidence.</para>
 ///
-/// <para><b>Only <see cref="ListMachineDashboard"/> resolves it.</b> Issue #780 added it for the
-/// machine list the expense form reads and excludes every change to the <c>api/machines/{id}</c>
-/// route (issue #741 owns that route), so <see cref="GetMachineDashboard"/> looks nothing up and
-/// leaves it <c>null</c>. A <c>null</c> from the single-machine read therefore means "not resolved
-/// on this route" and must not be read as "this business has recorded no such machine"; a consumer
-/// that needs the local id reads the fleet list.</para>
+/// <para><b>The fleet list resolves it from the provider number; the single-machine read is
+/// given it.</b> Since issue #741 every <c>api/machines/{id}</c> route takes the local id, so the
+/// route already knows it: <see cref="GetMachineDashboard"/> looks nothing up and leaves it
+/// <c>null</c>, and the controller answers the id the route was given.</para>
 /// </summary>
 public sealed record MachineSummary(
     long MachineId,

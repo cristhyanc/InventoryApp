@@ -76,10 +76,18 @@ public sealed record MachineRefillApplication(bool Succeeded, int? StockAdjustme
 /// Application layer. Everything transactional, relational, or costing-specific lives behind it, so
 /// the use cases stay free of EF Core.
 /// </summary>
+///
+/// <para><strong>Two machine ids, never confused</strong> (issue #741). The imported events are the
+/// provider's own rows and keep the provider's machine number, so every event read and write takes
+/// <c>nayaxMachineId</c>. The stock movements are this application's, and since #741
+/// <c>StockAdjustment.MachineId</c> holds the local machine, so the manual-refill evidence takes
+/// <c>localMachineId</c> and an applied refill takes the whole
+/// <see cref="Inventory.Application.Machines.MachineIdentity"/>: it finds the event by the one and
+/// records the movement against the other.</para>
 public interface IMachineStockEventStore
 {
     /// <summary>The Nayax <c>EventLogID</c>s already imported for this machine; the basis of idempotency.</summary>
-    Task<IReadOnlyList<long>> GetImportedNayaxEventLogIdsAsync(long machineId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<long>> GetImportedNayaxEventLogIdsAsync(long nayaxMachineId, CancellationToken cancellationToken);
 
     /// <summary>
     /// The local products with the given local product ids, keyed by that id. Since issue #733 the
@@ -104,16 +112,19 @@ public interface IMachineStockEventStore
     /// the same imported audit facts.
     /// </summary>
     Task<MachineStockEventsPage> GetUnprocessedEventsAsync(
-        long machineId,
+        long nayaxMachineId,
         CancellationToken cancellationToken,
         DateTime? fromDateGmt = null,
         bool includeReconciled = false);
 
-    /// <summary>Manual (operator-entered) machine refills for this machine, as duplicate evidence.</summary>
+    /// <summary>
+    /// Manual (operator-entered) machine refills for this machine, as duplicate evidence. A stock
+    /// movement names the local machine (issue #741), so this takes the local id.
+    /// </summary>
     Task<IReadOnlyList<ManualRefillEvidence>> GetManualMachineRefillsAsync(
-        long machineId, CancellationToken cancellationToken);
+        long localMachineId, CancellationToken cancellationToken);
 
-    Task<MachineStockEventState?> FindEventAsync(long machineId, int eventId, CancellationToken cancellationToken);
+    Task<MachineStockEventState?> FindEventAsync(long nayaxMachineId, int eventId, CancellationToken cancellationToken);
 
     Task<NayaxStockSyncProduct?> FindStorageProductAsync(long productId, CancellationToken cancellationToken);
 
@@ -126,11 +137,12 @@ public interface IMachineStockEventStore
     /// <see cref="NayaxDuplicateResolution.AppliedAsSeparateRestock"/> when the operator explicitly
     /// overrode a possible-duplicate warning (issue #196); in that case
     /// <paramref name="matchedManualStockAdjustmentId"/> is the manual refill the override was
-    /// resolved against, persisted alongside the movement for auditability.
+    /// resolved against, persisted alongside the movement for auditability. The event is found by
+    /// the machine's Nayax number and the movement records its local id (issue #741).
     /// </summary>
     Task<MachineRefillApplication> ApplyRefillAsync(
         int eventId,
-        long machineId,
+        Machines.MachineIdentity machine,
         long nayaxEventLogId,
         long productId,
         int quantity,
@@ -148,5 +160,5 @@ public interface IMachineStockEventStore
     /// nothing. Returns <c>false</c> only when the event does not exist for this machine.
     /// </summary>
     Task<bool> ReconcileAsManualDuplicateAsync(
-        int eventId, long machineId, int? matchedManualStockAdjustmentId, CancellationToken cancellationToken);
+        int eventId, long nayaxMachineId, int? matchedManualStockAdjustmentId, CancellationToken cancellationToken);
 }

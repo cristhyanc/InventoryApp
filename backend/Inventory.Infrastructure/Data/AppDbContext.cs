@@ -551,6 +551,27 @@ public class AppDbContext : DbContext
             .HasForeignKey(count => count.ProductId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        // The machine a count was taken in, and the machine a stock movement went to, are local
+        // machines (issue #741), with the same composite foreign key the operating expense uses
+        // (issue #780, see below): (BusinessId, MachineId) against the (BusinessId, Id) key on
+        // Machines, so SQLite itself refuses a reference to another business's machine. Restrict,
+        // never cascade: a count and a movement are inventory history, and there is no machine
+        // delete path at all - a machine is deactivated instead. No navigation property, for the
+        // same reason as the expense.
+        modelBuilder.Entity<MachineStockCount>()
+            .HasOne<LocalMachine>()
+            .WithMany()
+            .HasForeignKey(count => new { count.BusinessId, count.MachineId })
+            .HasPrincipalKey(machine => new { machine.BusinessId, machine.Id })
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<StockAdjustment>()
+            .HasOne<LocalMachine>()
+            .WithMany()
+            .HasForeignKey(adjustment => new { adjustment.BusinessId, adjustment.MachineId })
+            .HasPrincipalKey(machine => new { machine.BusinessId, machine.Id })
+            .OnDelete(DeleteBehavior.Restrict);
+
         modelBuilder.Entity<Product>()
             .HasOne(p => p.Category)
             .WithMany(c => c.Products)

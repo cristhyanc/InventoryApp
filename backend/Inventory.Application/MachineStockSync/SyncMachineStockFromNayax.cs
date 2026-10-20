@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Nayax;
 
@@ -39,13 +40,21 @@ public sealed class SyncMachineStockFromNayax
     /// <c>EventDateTimeGMT</c>; <c>null</c> shows the complete unprocessed history. <paramref
     /// name="includeReconciled"/> shows or hides events already reconciled as "already recorded
     /// manually"; the default hides them. Neither parameter changes what was imported or persisted.
+    ///
+    /// <para>Everything read from or stored for Nayax - the alerts, the machine's MDB map, the
+    /// imported events - uses <paramref name="machine"/>'s Nayax number; the manual refills checked
+    /// for duplicates are this application's movements and use its local id, which is also the
+    /// machine id the preview reports (issue #741).</para>
     /// </summary>
     public async Task<NayaxMachineStockSyncPreviewDto> Handle(
-        long machineId,
+        MachineIdentity machine,
         CancellationToken cancellationToken,
         DateTime? fromDateGmt = null,
         bool includeReconciled = false)
     {
+        ArgumentNullException.ThrowIfNull(machine);
+
+        var machineId = machine.RequiredNayaxMachineId;
         var alerts = await _nayax.GetMachineLastAlertsAsync(machineId, cancellationToken);
         var stockAlerts = alerts
             .Where(alert => alert.EventCode == NayaxMachineAlertEventCodes.StockAdjustForMachine)
@@ -86,7 +95,7 @@ public sealed class SyncMachineStockFromNayax
                 cancellationToken);
         }
 
-        return await BuildPreviewAsync(machineId, newAlerts.Count, fromDateGmt, includeReconciled, cancellationToken);
+        return await BuildPreviewAsync(machine, newAlerts.Count, fromDateGmt, includeReconciled, cancellationToken);
     }
 
     private static MachineStockEventImport ToImport(
@@ -139,17 +148,20 @@ public sealed class SyncMachineStockFromNayax
     };
 
     private async Task<NayaxMachineStockSyncPreviewDto> BuildPreviewAsync(
-        long machineId,
+        MachineIdentity machine,
         int newEventCount,
         DateTime? fromDateGmt,
         bool includeReconciled,
         CancellationToken cancellationToken)
     {
-        var page = await _store.GetUnprocessedEventsAsync(machineId, cancellationToken, fromDateGmt, includeReconciled);
+        var page = await _store.GetUnprocessedEventsAsync(
+            machine.RequiredNayaxMachineId, cancellationToken, fromDateGmt, includeReconciled);
         var pendingEvents = page.Events;
-        var manualRefills = await _store.GetManualMachineRefillsAsync(machineId, cancellationToken);
+        var manualRefills = await _store.GetManualMachineRefillsAsync(machine.LocalMachineId, cancellationToken);
 
-        var events = pendingEvents.Select(pending => ToPreviewDto(pending, manualRefills)).ToList();
+        var events = pendingEvents
+            .Select(pending => ToPreviewDto(machine.LocalMachineId, pending, manualRefills))
+            .ToList();
 
         var productImpacts = pendingEvents
             .Where(pending => pending.MatchStatus == NayaxStockEventMatchStatus.Matched
@@ -169,7 +181,7 @@ public sealed class SyncMachineStockFromNayax
             .ToList();
 
         return new NayaxMachineStockSyncPreviewDto(
-            machineId,
+            machine.LocalMachineId,
             newEventCount,
             events,
             productImpacts,
@@ -177,8 +189,13 @@ public sealed class SyncMachineStockFromNayax
             events.Count == 0 ? "No new Nayax stock-adjustment alerts to review." : null);
     }
 
+    /// <summary>
+    /// The preview of one stored event. The event row holds the provider's machine number, but the
+    /// API speaks local machine ids since issue #741, so the preview reports the local machine the
+    /// route named.
+    /// </summary>
     private static NayaxStockEventPreviewDto ToPreviewDto(
-        PendingMachineStockEvent pending, IReadOnlyList<ManualRefillEvidence> manualRefills)
+        long localMachineId, PendingMachineStockEvent pending, IReadOnlyList<ManualRefillEvidence> manualRefills)
     {
         var impact = NayaxMachineStockImpactPolicy.Evaluate(
             pending.MatchStatus, pending.ParsedQuantity, pending.MatchedProductQuantityInStock);
@@ -191,7 +208,7 @@ public sealed class SyncMachineStockFromNayax
         return new NayaxStockEventPreviewDto(
             pending.Id,
             pending.NayaxEventLogId,
-            pending.MachineId,
+            localMachineId,
             pending.EventDateTimeGmt,
             pending.EventDateTimeVmc,
             pending.RawEventData,

@@ -9,14 +9,12 @@ namespace Inventory.Application.Machines;
 /// comparison periods come from the business day rather than the host's local
 /// clock (issue #310; see <see cref="MachineDashboardWindow"/>).
 ///
-/// <para><b>It resolves no local machine id, deliberately.</b> Issue #780 moved the operating
-/// expenses onto this business's own machine rows and added <c>localMachineId</c> to the machine
-/// <em>list</em> the expense form reads, and it excludes every change to the
-/// <c>api/machines/{id}</c> route, which belongs to issue #741. The two reads share one wire shape,
-/// so the field exists here too and this use case leaves it <c>null</c>: nothing is looked up and
-/// nothing is published, and <see cref="MachineSummary.LocalMachineId"/> says that a value from this
-/// route means "not resolved on this route", not "no local machine". <see cref="ListMachineDashboard"/>
-/// is the one read that resolves it.</para>
+/// <para><b>It resolves no local machine id, deliberately.</b> It reads the provider's fleet by the
+/// provider's number. Since issue #741 the <c>api/machines/{id}</c> route takes the local id and
+/// resolves it to that number before calling here, so the controller already holds the local id
+/// and sets <see cref="MachineSummary.LocalMachineId"/> itself; looking it up again here would be a
+/// second answer to the same question. <see cref="ListMachineDashboard"/> resolves it for the fleet
+/// list, where only the provider numbers are known.</para>
 /// </summary>
 public sealed class GetMachineDashboard
 {

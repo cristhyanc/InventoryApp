@@ -88,11 +88,11 @@ describe('StockAdjustmentFormComponent restock cost', () => {
     const { component, adjust } = createHarness();
     component.form.quantityChange = -3;
     component.form.reason = StockAdjustmentReason.MachineRefill;
-    component.form.machineId = 9;
+    component.form.machineId = 109;
 
     component.adjust();
 
-    expect(adjust).toHaveBeenCalledWith(7, expect.objectContaining({ quantityChange: -3, unitCost: null, machineId: 9 }));
+    expect(adjust).toHaveBeenCalledWith(7, expect.objectContaining({ quantityChange: -3, unitCost: null, machineId: 109 }));
   });
 });
 
@@ -281,7 +281,7 @@ describe('StockAdjustmentFormComponent machine field (issue #728)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
   it('offers the machine field while the page has machines to offer', async () => {
-    const host = await render([{ machineID: 9, machineName: 'Lobby' } as Machine]);
+    const host = await render([{ machineID: 9, localMachineId: 109, machineName: 'Lobby' } as Machine]);
 
     expect(host.querySelector('#adjustment-machine')).not.toBeNull();
   });
@@ -294,23 +294,23 @@ describe('StockAdjustmentFormComponent machine field (issue #728)', () => {
 
   it('drops a staged machine when the list it came from goes away', () => {
     const { component } = createHarness();
-    component.machines = [{ machineID: 9, machineName: 'Lobby' } as Machine];
-    component.form.machineId = 9;
+    component.machines = [{ machineID: 9, localMachineId: 109, machineName: 'Lobby' } as Machine];
+    component.form.machineId = 109;
 
     component.machines = [];
-    component.ngOnChanges({ machines: new SimpleChange([{ machineID: 9 }], [], false) });
+    component.ngOnChanges({ machines: new SimpleChange([{ machineID: 9, localMachineId: 109 }], [], false) });
 
     expect(component.form.machineId).toBeNull();
   });
 
   it('keeps a staged machine while the list still holds it', () => {
     const { component } = createHarness();
-    component.machines = [{ machineID: 9, machineName: 'Lobby' } as Machine];
-    component.form.machineId = 9;
+    component.machines = [{ machineID: 9, localMachineId: 109, machineName: 'Lobby' } as Machine];
+    component.form.machineId = 109;
 
-    component.ngOnChanges({ machines: new SimpleChange([], [{ machineID: 9 }], false) });
+    component.ngOnChanges({ machines: new SimpleChange([], [{ machineID: 9, localMachineId: 109 }], false) });
 
-    expect(component.form.machineId).toBe(9);
+    expect(component.form.machineId).toBe(109);
   });
 });
 

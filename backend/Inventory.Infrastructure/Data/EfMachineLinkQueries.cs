@@ -60,4 +60,23 @@ internal static class EfMachineLinkQueries
 
         return localMachineIdByNayaxId;
     }
+
+    /// <summary>
+    /// The Nayax machine number recorded on local machine <paramref name="localMachineId"/> of this
+    /// business (issue #741), or <c>null</c> when it carries none, is not visible, or the business
+    /// does not sell through Nayax. A stored id this application could not have written resolves to
+    /// nothing, as it does in <see cref="LocalMachineIdsByNayaxIdAsync"/>.
+    /// </summary>
+    public static async Task<long?> NayaxMachineIdByLocalIdAsync(
+        AppDbContext db, long localMachineId, CancellationToken cancellationToken)
+    {
+        var externalMachineId = await EfSalesProviderQueries
+            .MachinesIdentifiedBy(db, ExternalProvider.Nayax)
+            .Where(machine => machine.Id == localMachineId)
+            .Select(machine => machine.ExternalMachineId)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return NayaxExternalId.TryParse(externalMachineId, out var nayaxMachineId) ? nayaxMachineId : null;
+    }
 }

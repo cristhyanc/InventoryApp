@@ -1,4 +1,6 @@
+using Inventory.Application.Machines;
 using Inventory.Application.MachineStock;
+using Inventory.Domain.Providers;
 using Inventory.Application.Stock;
 using Inventory.Domain.FinancialConfiguration;
 using Inventory.Domain.MachineStock;
@@ -35,7 +37,14 @@ public class MachineStockLedgerCostingIntegrityTests
 {
     private const int BusinessA = 1;
     private const long ProductId = 100;
+    /// <summary>The machine's Nayax number, which its sales and the live observation carry.</summary>
     private const long MachineId = 42;
+
+    /// <summary>The same machine's local id (issue #741), which its refills and counts carry.</summary>
+    private const long LocalMachineId = 7;
+
+    private static readonly MachineIdentity Machine = new(LocalMachineId, MachineId);
+
     /// <summary>
     /// The instants are anchored to this run rather than to a fixed calendar date, because the
     /// movements below are applied through the real stock adapter, which stamps a movement's
@@ -74,7 +83,7 @@ public class MachineStockLedgerCostingIntegrityTests
                 ProductId,
                 new ManualStockAdjustmentInput(
                     -6, DomainStock.StockAdjustmentReason.MachineRefill, "Refill",
-                    MachineId, EatBefore: null, UnitCost: null),
+                    LocalMachineId, EatBefore: null, UnitCost: null),
                 CancellationToken.None);
         }
 
@@ -86,7 +95,7 @@ public class MachineStockLedgerCostingIntegrityTests
         await using (var db = TestAppDbContext.For(options, BusinessA))
         {
             var count = await new RecordMachineStockCount(new EfMachineStockLedgerStore(db), new FakeClock(CountedAt))
-                .Handle(MachineId, new MachineStockCountRequestDto(ProductId, 6, "Counted at refill"), CancellationToken.None);
+                .Handle(LocalMachineId, new MachineStockCountRequestDto(ProductId, 6, "Counted at refill"), CancellationToken.None);
             Assert.NotNull(count);
             Assert.Equal(CountedAt, count!.CountedAtUtc);
         }
@@ -140,7 +149,7 @@ public class MachineStockLedgerCostingIntegrityTests
         await using (var db = TestAppDbContext.For(options, BusinessA))
         {
             var reconciliation = await Reconciliation(db, observedPar: 10, observedMissing: 5)
-                .Handle(MachineId, CancellationToken.None);
+                .Handle(Machine, CancellationToken.None);
 
             var row = Assert.Single(reconciliation.Products);
             Assert.Equal(5, row.ExpectedQuantity);
@@ -159,7 +168,7 @@ public class MachineStockLedgerCostingIntegrityTests
         await using (var db = TestAppDbContext.For(options, BusinessA))
         {
             var reconciliation = await Reconciliation(db, observedPar: 10, observedMissing: 7)
-                .Handle(MachineId, CancellationToken.None);
+                .Handle(Machine, CancellationToken.None);
 
             var row = Assert.Single(reconciliation.Products);
             Assert.Equal(5, row.ExpectedQuantity);
@@ -196,7 +205,7 @@ public class MachineStockLedgerCostingIntegrityTests
         {
             await new RecordMachineStockCount(
                     new EfMachineStockLedgerStore(db), new FakeClock(RecordedAt.AddMinutes(-10)))
-                .Handle(MachineId, new MachineStockCountRequestDto(ProductId, 0, null), CancellationToken.None);
+                .Handle(LocalMachineId, new MachineStockCountRequestDto(ProductId, 0, null), CancellationToken.None);
         }
 
         await using (var db = TestAppDbContext.For(options, BusinessA))
@@ -212,13 +221,13 @@ public class MachineStockLedgerCostingIntegrityTests
                 ProductId,
                 new ManualStockAdjustmentInput(
                     -6, DomainStock.StockAdjustmentReason.MachineRefill, "Refill",
-                    MachineId, EatBefore: null, UnitCost: null),
+                    LocalMachineId, EatBefore: null, UnitCost: null),
                 CancellationToken.None);
             await store.ApplyAsync(
                 ProductId,
                 new ManualStockAdjustmentInput(
                     2, DomainStock.StockAdjustmentReason.MachineRefill, "Pulled two back out",
-                    MachineId, EatBefore: null, UnitCost: null),
+                    LocalMachineId, EatBefore: null, UnitCost: null),
                 CancellationToken.None);
         }
 
@@ -228,7 +237,7 @@ public class MachineStockLedgerCostingIntegrityTests
         await using (var db = TestAppDbContext.For(options, BusinessA))
         {
             var row = Assert.Single(
-                (await Reconciliation(db, observedPar: 10, observedMissing: 6).Handle(MachineId, CancellationToken.None))
+                (await Reconciliation(db, observedPar: 10, observedMissing: 6).Handle(Machine, CancellationToken.None))
                     .Products);
 
             Assert.Equal(4, row.ExpectedQuantity);
@@ -297,6 +306,12 @@ public class MachineStockLedgerCostingIntegrityTests
 
         await using (var seed = TestAppDbContext.For(options, BusinessA))
         {
+            seed.Machines.Add(new LocalMachine
+            {
+                Id = LocalMachineId,
+                Name = "Machine 42",
+                ExternalMachineId = NayaxExternalId.From(MachineId),
+            });
             seed.Products.Add(new Product
             {
                 Id = ProductId,

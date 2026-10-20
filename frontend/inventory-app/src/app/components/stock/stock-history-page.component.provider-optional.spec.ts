@@ -15,7 +15,9 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 import { StockHistoryPageComponent } from './stock-history-page.component';
 
 function machine(machineID: number, machineName: string): Machine {
-  return { machineID, machineName } as Machine;
+  // The local machine (issue #741) is what a movement records and the filter sends; it is
+  // deliberately a different number from the provider's.
+  return { machineID, localMachineId: machineID + 100, machineName } as Machine;
 }
 
 function page(): StockHistoryPage {

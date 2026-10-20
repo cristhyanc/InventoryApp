@@ -67,7 +67,7 @@ public sealed class MachineLatestSalesApiTests : IClassFixture<MachineLatestSale
         ApiFactory.ProductCostPrice,
     ];
 
-    private static readonly string LatestSalesUri = Uri(ApiFactory.MachineId);
+    private static readonly string LatestSalesUri = Uri(ApiFactory.LocalMachineId);
 
     private readonly ApiFactory _factory;
 
@@ -87,7 +87,7 @@ public sealed class MachineLatestSalesApiTests : IClassFixture<MachineLatestSale
         var body = await ReadJsonAsync(response);
         Assert.True(body.GetProperty("isAvailable").GetBoolean());
         Assert.Equal(JsonValueKind.Null, body.GetProperty("unavailableReason").ValueKind);
-        Assert.Equal(ApiFactory.MachineId, body.GetProperty("machineId").GetInt64());
+        Assert.Equal(ApiFactory.LocalMachineId, body.GetProperty("machineId").GetInt64());
 
         var sales = body.GetProperty("sales").EnumerateArray().ToList();
         Assert.Equal(3, sales.Count);
@@ -254,7 +254,7 @@ public sealed class MachineLatestSalesApiTests : IClassFixture<MachineLatestSale
         await _factory.ResetAsync();
 
         var ours = await SalesAsync(ApiFactory.OwnerObjectId);
-        var theirs = await SalesAsync(ApiFactory.OtherBusinessOwnerObjectId, Uri(ApiFactory.OtherMachineId));
+        var theirs = await SalesAsync(ApiFactory.OtherBusinessOwnerObjectId, Uri(ApiFactory.OtherLocalMachineId));
 
         Assert.Equal(
             new[]
@@ -284,7 +284,7 @@ public sealed class MachineLatestSalesApiTests : IClassFixture<MachineLatestSale
 
         var response = await _factory
             .Authenticated(ApiFactory.NoProviderOwnerObjectId)
-            .GetAsync(Uri(ApiFactory.NoProviderMachineId));
+            .GetAsync(Uri(ApiFactory.NoProviderLocalMachineId));
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await ReadJsonAsync(response);
@@ -391,7 +391,12 @@ public sealed class MachineLatestSalesApiTests : IClassFixture<MachineLatestSale
 
         public const long MachineId = 942488501;
         public const long OtherMachineId = 629665354;
-        public const long NoProviderMachineId = 123456789;
+
+        // Each business's local machine for the provider numbers above (issue #741): what the
+        // route takes. The no-provider business's machine carries no provider number at all.
+        public const long LocalMachineId = 501;
+        public const long OtherLocalMachineId = 502;
+        public const long NoProviderLocalMachineId = 503;
 
         // Obviously fake credentials. No real token or operator account belongs in a test.
         public const string OperatorA = "2002736764";
@@ -588,6 +593,23 @@ public sealed class MachineLatestSalesApiTests : IClassFixture<MachineLatestSale
                 CreatedAt = CreatedAt,
                 UpdatedAt = CreatedAt,
             });
+
+            db.Machines.AddRange(
+                new LocalMachine
+                {
+                    BusinessId = BusinessId,
+                    Id = LocalMachineId,
+                    Name = "Pavillion Left",
+                    ExternalMachineId = NayaxExternalId.From(MachineId),
+                },
+                new LocalMachine
+                {
+                    BusinessId = OtherBusinessId,
+                    Id = OtherLocalMachineId,
+                    Name = "Rival machine",
+                    ExternalMachineId = NayaxExternalId.From(OtherMachineId),
+                },
+                new LocalMachine { BusinessId = NoProviderBusinessId, Id = NoProviderLocalMachineId, Name = "Back office" });
 
             db.BusinessNayaxConnections.AddRange(
                 Connection(BusinessId, OperatorA, TokenA),
