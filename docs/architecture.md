@@ -9909,7 +9909,10 @@ separate because SQLite rebuilds a table to add or drop a foreign key, and EF Co
 at the **end** of the migration that asks for it: in one migration, `Down` would write the provider's
 numbers back while the foreign key still stood and fail on every database with a machine reference.
 Split, the foreign keys' `Down` drops them first and the repoint's `Down` then restores the numbers,
-refusing if a referenced machine has none. `RepointOperatingExpenseMachines` (#780) keeps the
+refusing if a referenced machine has none. Downgrade is therefore not unconditional: that refusal
+leaves the database at `RepointStockMachineReferences` (local ids, no foreign keys), because the
+foreign keys' `Down` has already committed. The code of the release that introduced both reads that
+state correctly, but no earlier release does, so a verified backup is the real rollback. `RepointOperatingExpenseMachines` (#780) keeps the
 combined shape and so has the same `Down` ordering; that is not changed here.
 
 **The frontend.** The machine list and the dashboard link to `/machines/{localMachineId}` and link
