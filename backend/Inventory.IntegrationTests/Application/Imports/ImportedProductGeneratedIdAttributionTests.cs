@@ -1,7 +1,8 @@
-using Inventory.Application.Imports;
+using Inventory.Application.CatalogueReview;
 using Inventory.Application.Nayax;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Shared;
+using Inventory.Application.Time;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
@@ -10,8 +11,10 @@ using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Reporting.Persistence;
 using InventoryApi.Tests.Application.SaleTimestampRepair;
 using InventoryApi.Tests.Application.SalesSync;
+using InventoryApi.Tests.Application.Tenancy;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Moq;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Imports;
@@ -44,6 +47,8 @@ public class ImportedProductGeneratedIdAttributionTests : IDisposable
     private const long CollidingProductId = NayaxProductId;
     private const long MachineId = 1;
     private const string ReportedSaleName = "Mystery Bar";
+
+    private static readonly ActorIdentity Importer = Operator("11111111-1111-1111-1111-111111111111");
 
     private static readonly DateTime CutoffAt = new(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime ImportedAt = new(2026, 10, 2, 2, 15, 0, DateTimeKind.Utc);
@@ -165,20 +170,36 @@ public class ImportedProductGeneratedIdAttributionTests : IDisposable
     }
 
     /// <summary>
-    /// One catalogue import of one group and one product, over the real store, returning the local
-    /// id the database assigned the imported product - which the test only learns by reading the
-    /// recorded Nayax id back, exactly as every production reader does.
+    /// One catalogue import of one group and one product, returning the local id the database
+    /// assigned the imported product - which the test only learns by reading the recorded Nayax id
+    /// back, exactly as every production reader does.
+    ///
+    /// <para>It runs the catalogue review, because since issue #739 that <em>is</em> the catalogue
+    /// import: the review reads the provider's catalogue and the apply carries out one decision per
+    /// entry. An entry no local row carries the id of is created, which is what a first import is;
+    /// an entry a previous run already linked is left to its automatic provider changes, which is
+    /// what a re-import is.</para>
     /// </summary>
     private async Task<long> ImportCatalogueAsync()
     {
         await using (var db = TestAppDbContext.For(_options, BusinessA))
         {
-            await new EfNayaxProductCatalogImportStore(db).ApplyAsync(
-                new NayaxProductCatalogImport(
-                    [new ImportedProductCategory(NayaxProductGroupId, "Snacks", "Snacks")],
-                    [new ImportedProductCatalogEntry(NayaxProductId, "Chips", "Salted", 3.50m, NayaxProductGroupId)],
-                    ImportedAt),
-                CancellationToken.None);
+            var store = new EfCatalogueReviewStore(db);
+            var clock = new FixedClock(ImportedAt);
+            var review = await new StartCatalogueReview(OperatorCatalogue(), store, clock)
+                .Handle(CancellationToken.None);
+
+            var decisions = review.Categories
+                .Where(category => !category.IsLinked)
+                .Select(category => new CatalogueReviewDecisionRequest(category.ItemId, CatalogueReviewAction.CreateNew))
+                .Concat(review.Products
+                    .Where(product => !product.IsLinked)
+                    .Select(product => new CatalogueReviewDecisionRequest(product.ItemId, CatalogueReviewAction.CreateNew)))
+                .ToList();
+
+            await new ApplyCatalogueReview(
+                    store, FakeAuthenticatedActorAccessor.Identified(Importer), clock)
+                .Handle(new ApplyCatalogueReviewRequest(review.ReviewId, decisions), CancellationToken.None);
         }
 
         await using var verify = TestAppDbContext.For(_options, BusinessA);
@@ -251,6 +272,44 @@ public class ImportedProductGeneratedIdAttributionTests : IDisposable
         return report.Rows;
     }
 
+    /// <summary>
+    /// The operator's catalogue as the Lynx client answers it: one product group and one product in
+    /// it. The fields are the ones the authoritative contract publishes for
+    /// <c>GET /v1/operators/{OperatorID}/products</c> and its product groups endpoint.
+    /// </summary>
+    private static INayaxLynxClient OperatorCatalogue()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(client => client.GetProductsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new NayaxProduct
+                {
+                    NayaxProductId = NayaxProductId,
+                    ProductName = "Chips",
+                    ProductDescription = "Salted",
+                    ProductDefaultRetailPrice = 3.50m,
+                    ProductGroupId = NayaxProductGroupId,
+                },
+            ]);
+        nayax.Setup(client => client.GetProductGroupssAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new NayaxProductGroup
+                {
+                    ProductGroupID = (int)NayaxProductGroupId,
+                    ProductGroupName = "Snacks",
+                },
+            ]);
+        return nayax.Object;
+    }
+
+    private static ActorIdentity Operator(string objectId)
+    {
+        Assert.True(ActorIdentity.TryCreate("33333333-3333-3333-3333-333333333333", objectId, out var actor));
+        return actor!;
+    }
+
     private static Product CostedProduct(long id, string name, decimal averageUnitCost) =>
         new()
         {
@@ -272,4 +331,9 @@ public class ImportedProductGeneratedIdAttributionTests : IDisposable
             AverageUnitCost = openingValue / 10,
             CutoffAt = CutoffAt,
         };
+
+    private sealed class FixedClock(DateTime utcNow) : IClock
+    {
+        public DateTime UtcNow { get; } = utcNow;
+    }
 }

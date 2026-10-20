@@ -6,9 +6,10 @@ namespace Inventory.Domain.Providers;
 ///
 /// <para><strong>A row the provider names is partly the provider's.</strong> A product carrying an
 /// <c>ExternalProductId</c>, or a category carrying an <c>ExternalCategoryId</c>, takes its name -
-/// and, for a product, its category - from the provider's catalogue, because the provider's import
-/// rewrites exactly those fields on every run (docs/architecture.md § Nayax product catalogue
-/// import). Accepting a local edit of one would present a value the next import silently discards.
+/// and, for a product, its category - from the provider's catalogue, because the catalogue import
+/// applies exactly those fields on every run without asking (docs/architecture.md § Provider
+/// catalogue review). Accepting a local edit of one would present a value the next import silently
+/// discards.
 /// Everything else on the row is local: the price, the SKU, the unit, the supplier, the restock
 /// settings, the active flag and the stock itself stay editable, and nothing here touches them.</para>
 ///

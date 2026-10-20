@@ -244,8 +244,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
         services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
-        services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
-        // The provider catalogue review (issue #738). Scoped like every other adapter here: both
+        // The provider catalogue review (issue #738), the catalogue import's one persistence
+        // adapter since issue #739. Scoped like every other adapter here: both
         // operations read and write one caller's resolved business through the request's own
         // AppDbContext, and the review's link-or-create apply is decided inside its transaction.
         services.AddScoped<ICatalogueReviewStore, EfCatalogueReviewStore>();

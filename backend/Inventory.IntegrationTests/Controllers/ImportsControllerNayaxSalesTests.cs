@@ -126,10 +126,6 @@ public class ImportsControllerNayaxSalesTests
 
     private static ImportsController Controller(INayaxSalesWorkbookReader reader, INayaxSalesImportStore store) =>
         new(
-            new ImportNayaxProductCatalog(
-                Mock.Of<Inventory.Application.Nayax.INayaxLynxClient>(),
-                Mock.Of<INayaxProductCatalogImportStore>(),
-                Mock.Of<IClock>()),
             new ImportNayaxSales(
                 reader,
                 store,

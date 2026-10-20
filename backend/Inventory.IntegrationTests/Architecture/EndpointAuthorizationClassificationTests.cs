@@ -378,7 +378,12 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/reports/dashboard", "GET", Capability.ReportsView)]
     [InlineData("api/reports/transactions", "GET", Capability.ReportsView)]
     [InlineData("api/reports/{report}/export", "GET", Capability.ReportsView)]
-    [InlineData("api/imports/products", "POST", Capability.ImportsRun)]
+    // The catalogue import, which is the catalogue review since issue #739: starting and applying
+    // one is running the import, decided row by row, so both carry the import capability. Resolving
+    // the sales a link explains is Owner-only, because it replays cost history (issue #738).
+    [InlineData("api/catalogue-review", "POST", Capability.ImportsRun)]
+    [InlineData("api/catalogue-review/apply", "POST", Capability.ImportsRun)]
+    [InlineData("api/catalogue-review/unresolved-sales/apply", "POST", Capability.DataRepair)]
     [InlineData("api/imports/nayax-sales", "POST", Capability.ImportsRun)]
     [InlineData("api/imports/pending-xml", "POST", Capability.ImportsRun)]
     [InlineData("api/site-commissions", "GET", Capability.SiteCommissionsManage)]
