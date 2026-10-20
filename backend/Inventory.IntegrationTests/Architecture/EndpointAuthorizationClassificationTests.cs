@@ -312,6 +312,13 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/dashboard/summary", "GET", Capability.DashboardView)]
     [InlineData("api/business/current", "GET", Capability.DashboardView)]
     [InlineData("api/pick-list", "GET", Capability.PickListView)]
+
+    // The pick list's batch refill (issue #743). It is a stock write, so it declares
+    // Inventory.Operate on the action beside the controller's PickList.View; requirements
+    // accumulate, so it needs both and the read's rule is unchanged. Both rows are asserted, which
+    // is what would fail if a later change moved the write onto the read's capability alone.
+    [InlineData("api/pick-list/refills", "POST", Capability.PickListView)]
+    [InlineData("api/pick-list/refills", "POST", Capability.InventoryOperate)]
     [InlineData("api/Products", "GET", Capability.InventoryOperate)]
     [InlineData("api/Products/{id:long}", "PUT", Capability.InventoryOperate)]
     [InlineData("api/Products/{id:long}/gst-rule", "PUT", Capability.InventoryOperate)]

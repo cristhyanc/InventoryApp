@@ -1420,6 +1420,79 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("OperatingExpenses");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefill", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("MachineId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("BusinessId", "MachineId");
+
+                    b.ToTable("PickListRefills");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefillLine", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("ProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("QuantityTaken")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("RefillId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("StockAdjustmentId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("RefillId");
+
+                    b.HasIndex("BusinessId", "RefillId", "Id");
+
+                    b.ToTable("PickListRefillLines");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.Product", b =>
                 {
                     b.Property<long>("Id")
@@ -2306,6 +2379,26 @@ namespace Inventory.Infrastructure.Migrations
                     b.Navigation("Supplier");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefill", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.LocalMachine", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "MachineId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefillLine", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.PickListRefill", "Refill")
+                        .WithMany("Lines")
+                        .HasForeignKey("RefillId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Refill");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.Product", b =>
                 {
                     b.HasOne("Inventory.Infrastructure.Models.Category", "Category")
@@ -2498,6 +2591,11 @@ namespace Inventory.Infrastructure.Migrations
             modelBuilder.Entity("Inventory.Infrastructure.Models.InventoryCostTransitionBaseline", b =>
                 {
                     b.Navigation("MachineStocks");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefill", b =>
+                {
+                    b.Navigation("Lines");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Product", b =>

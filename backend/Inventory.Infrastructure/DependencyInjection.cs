@@ -241,6 +241,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<INayaxMachineLinkStore, EfNayaxMachineLinkStore>();
         services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
         services.AddScoped<IPickListStorageStockStore, EfPickListStorageStockStore>();
+        // The batch refill's own write path (issue #743). Scoped like every other adapter here: the
+        // BEGIN IMMEDIATE transaction it opens is on the request's own AppDbContext, which is what
+        // puts the key claim, the storage check and the deductions inside one write lock.
+        services.AddScoped<IPickListRefillStore, EfPickListRefillStore>();
         services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
         services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
