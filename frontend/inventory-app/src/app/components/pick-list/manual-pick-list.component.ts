@@ -29,7 +29,7 @@ function parseTakenQuantity(raw: string): number | null {
   if (trimmed === '' || trimmed === '0') {
     return 0;
   }
-  return /^[0-9]+$/.test(trimmed) ? Number(trimmed) : null;
+  return /^\d+$/.test(trimmed) ? Number(trimmed) : null;
 }
 
 /**
@@ -85,7 +85,7 @@ export class ManualPickListComponent {
   /** The exact rows and key of the last attempted save, kept so an unchanged retry reuses both. */
   private lastSubmission: { key: string; rows: PickListRefillRowRequest[] } | null = null;
 
-  constructor(private pickListService: PickListService, private toastService: ToastService) {}
+  constructor(private readonly pickListService: PickListService, private readonly toastService: ToastService) {}
 
   categories(): Category[] {
     const byId = new Map<number, Category>();

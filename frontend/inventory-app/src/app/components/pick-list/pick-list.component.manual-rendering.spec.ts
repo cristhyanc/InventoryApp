@@ -100,7 +100,7 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
     click(requireButton('Enter quantities taken'));
 
     const rows = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rows.length).toBe(2);
+    expect(rows).toHaveLength(2);
     expect(rows[0].textContent).toContain('Coke');
     expect(host.querySelectorAll('[data-testid="manual-pick-list-storage-qty"]')[0].textContent?.trim()).toBe('20');
   });
@@ -112,7 +112,7 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
     const search = host.querySelector<HTMLInputElement>('input[aria-label="Search products"]')!;
     type(search, 'chip');
 
-    expect(host.querySelectorAll('tbody tr').length).toBe(1);
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(1);
     expect(host.querySelector('tbody')?.textContent).toContain('Chips');
   });
 
@@ -129,7 +129,7 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
       'The pick list is unavailable because Nayax is not connected.'
     );
     expect(button('Calculated')).toBeUndefined();
-    expect(host.querySelectorAll('tbody tr').length).toBe(2);
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(2);
   });
 
   it('records a manual save and shows the Save button disabled until a quantity is entered', async () => {

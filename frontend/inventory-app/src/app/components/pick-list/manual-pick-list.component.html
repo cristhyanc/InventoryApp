@@ -6,7 +6,7 @@
       placeholder="Search products"
       aria-label="Search products" />
 
-    <select class="max-w-[180px]" [(ngModel)]="categoryId" aria-label="Category">
+    <select class="max-w-[180px]" [(ngModel)]="categoryId">
       <option value="">All Categories</option>
       @for (c of categories(); track c.id) {
         <option [ngValue]="c.id">{{ c.name }}</option>

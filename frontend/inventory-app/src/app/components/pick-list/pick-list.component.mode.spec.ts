@@ -175,13 +175,13 @@ describe('PickListComponent mode selection (issue #744)', () => {
   it('switching back to calculated preserves the already-fetched matrix (calculated mode unchanged)', () => {
     const { component } = createHarness();
     applyMachines(component, [10]);
-    expect(component.pickListProducts.length).toBe(1);
+    expect(component.pickListProducts).toHaveLength(1);
 
     component.switchMode('manual');
     component.switchMode('calculated');
 
     expect(component.mode).toBe('calculated');
-    expect(component.pickListProducts.length).toBe(1);
+    expect(component.pickListProducts).toHaveLength(1);
     expect(component.appliedMachineIds).toEqual([10]);
   });
 
