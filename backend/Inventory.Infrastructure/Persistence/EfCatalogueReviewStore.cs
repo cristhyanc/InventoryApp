@@ -9,8 +9,9 @@ namespace Inventory.Infrastructure.Persistence;
 
 /// <summary>
 /// The EF Core implementation of <see cref="ICatalogueReviewStore"/> (issue #738, parent #329 decision
-/// C1). It lives in Inventory.Infrastructure beside
-/// <see cref="EfNayaxProductCatalogImportStore"/>, whose shape it follows.
+/// C1). It lives in Inventory.Infrastructure beside the other catalogue adapters, whose shape it
+/// follows; since issue #739 it is the catalogue import's only persistence adapter, because the
+/// direct write-through import it was built beside is gone.
 ///
 /// <para><strong>The read-decide-write sequence stays in this adapter, and here that is the point
 /// rather than a precedent.</strong> Two of the review's refusals are statements about <em>stored</em>

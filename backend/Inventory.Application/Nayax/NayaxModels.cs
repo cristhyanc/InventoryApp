@@ -314,8 +314,9 @@ public class NayaxProduct
 
     /// <summary>
     /// The catalogue default/list selling price (issue #363; confirmed against a live
-    /// <c>GET /v1/operators/{OperatorID}/products</c> response), mapped to <c>Product.UnitPrice</c>
-    /// by <c>ImportNayaxProductCatalog</c>. Do not confuse it with the per-machine
+    /// <c>GET /v1/operators/{OperatorID}/products</c> response), proposed for <c>Product.UnitPrice</c>
+    /// by the catalogue review (<c>StartCatalogueReview</c>, issue #738, which replaced the direct
+    /// catalogue import in issue #739). Do not confuse it with the per-machine
     /// <c>NayaxMachineProduct.RetailPrice</c>, which is a distinct, correctly-named field on a
     /// different endpoint.
     /// </summary>

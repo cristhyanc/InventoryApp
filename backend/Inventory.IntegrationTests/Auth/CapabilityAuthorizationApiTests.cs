@@ -108,7 +108,7 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Reports.View", "GET", "/api/reports/dashboard", "Manager,Owner" },
         { "Reports.View", "GET", "/api/reports/transactions", "Manager,Owner" },
         { "Reports.View", "GET", "/api/reports/gst/export", "Manager,Owner" },
-        { "Imports.Run", "POST", "/api/imports/products", "Manager,Owner" },
+        { "Imports.Run", "POST", "/api/catalogue-review", "Manager,Owner" },
         { "Imports.Run", "POST", "/api/imports/nayax-sales", "Manager,Owner" },
         { "SiteCommissions.Manage", "GET", "/api/site-commissions?from=2026-07-01&to=2026-07-31", "Manager,Owner" },
         { "SiteCommissions.Manage", "GET", "/api/site-commissions/agreements", "Manager,Owner" },

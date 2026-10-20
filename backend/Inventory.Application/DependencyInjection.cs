@@ -295,9 +295,8 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<PreviewHistoricalGstClassification>();
         services.AddScoped<ApplyHistoricalGstClassification>();
         services.AddScoped<ApplyInventoryCount>();
-        services.AddScoped<ImportNayaxProductCatalog>();
-        // The provider catalogue review (issue #738). The direct import above is unchanged and keeps
-        // its own path; these are the deliberate link-or-create alternative to it.
+        // The provider catalogue review (issue #738), which since issue #739 is the product
+        // catalogue import: the direct write-through import it replaced is gone, for every business.
         services.AddScoped<StartCatalogueReview>();
         services.AddScoped<ApplyCatalogueReview>();
         services.AddScoped<ResolveLinkedProviderSales>();
