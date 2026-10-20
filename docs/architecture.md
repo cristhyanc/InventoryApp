@@ -9799,6 +9799,7 @@ keeps working for a business with no provider — which is the whole point of th
 | `OperatingExpense.MachineId` | the raw Nayax machine number, no foreign key | `Machines.Id`, with `(BusinessId, MachineId)` a foreign key on the `(BusinessId, Id)` key of `Machines`, restricted on delete |
 | Expense create/update/read/filter | the provider's number | the local machine id, and a machine that is not one of this business's is refused |
 | `GET api/machines` | the provider's number only | adds `localMachineId` beside `machineID`; every existing field is unchanged |
+| `GET api/machines/{id}` | the provider's number only | **unchanged** — out of scope (issue #741); it resolves no local machine id and answers `null` in the field the shared wire shape carries |
 | Report machine filters and machine keys | the provider's number | **unchanged** — still the provider's number |
 | `StockAdjustment.MachineId`, `MachineStockCount.MachineId`, `NayaxSales.MachineID`, the provider event tables, `InventoryCostTransitionMachineStock` | the provider's number | **unchanged** — issue #741 |
 
@@ -9840,9 +9841,12 @@ fact providers call directly — one translation, not one per caller.
 
 **The API and the form.** `GET api/machines` adds `localMachineId` as an appended, nullable field;
 it carries no financial figure, so it survives the `Dashboard.ViewFinancials` redaction with the rest
-of the machine's identity. `GET api/machines/{id}` carries the same field for the same value, because
-the two reads share one wire shape and a `null` there would claim the business has recorded no
-machine when it has; nothing else about that route changes. The expense form
+of the machine's identity. **`GET api/machines/{id}` resolves nothing and publishes nothing**: that
+route is out of scope for #780 (issue #741 owns it), so `GetMachineDashboard` makes no machine-link
+lookup at all and leaves the field the shared wire shape carries `null`. A `null` from the
+single-machine read therefore means only "this route does not resolve it" — a consumer that needs a
+machine's local id reads the fleet list, which is the read the expense form makes. Giving the detail
+route its own answer, or its own wire shape, is #741's decision to take. The expense form
 (`components/expenses/operating-expense.component.ts`) submits `machine.localMachineId`, and a listed
 machine with no local record is not offered at all — there is no id to store for it. The server does
 not trust the form: `CreateOperatingExpense`/`UpdateOperatingExpense` check the submitted machine

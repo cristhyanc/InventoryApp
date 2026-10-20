@@ -13,6 +13,13 @@ namespace Inventory.Application.Machines;
 /// <c>AddMachines</c> backfill, for example. It is what a feature that stores a reference to a
 /// machine has to record (issue #780 moved the operating expenses onto it), and the two are never
 /// interchangeable: a local id equal to a provider number is a coincidence.</para>
+///
+/// <para><b>Only <see cref="ListMachineDashboard"/> resolves it.</b> Issue #780 added it for the
+/// machine list the expense form reads and excludes every change to the <c>api/machines/{id}</c>
+/// route (issue #741 owns that route), so <see cref="GetMachineDashboard"/> looks nothing up and
+/// leaves it <c>null</c>. A <c>null</c> from the single-machine read therefore means "not resolved
+/// on this route" and must not be read as "this business has recorded no such machine"; a consumer
+/// that needs the local id reads the fleet list.</para>
 /// </summary>
 public sealed record MachineSummary(
     long MachineId,

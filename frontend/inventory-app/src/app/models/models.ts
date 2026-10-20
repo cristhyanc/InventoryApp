@@ -383,6 +383,10 @@ export interface Machine {
    * operating expense does - while `machineID` stays the provider's own number, which the machine
    * pages, the stock workflows and the report filters still speak. The two are never
    * interchangeable: a local id equal to a provider number is a coincidence.
+   *
+   * Only the fleet list, `GET api/machines`, resolves it: the single-machine read
+   * (`GET api/machines/{id}`) is out of #780's scope and always answers `null`, so read this from
+   * the list and never from a machine fetched by id.
    */
   localMachineId?: number | null;
   machineName?: string | null;

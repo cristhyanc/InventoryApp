@@ -25,8 +25,7 @@ public class MachineDashboardWindowResolutionTests
     public async Task GetMachineDashboard_PassesTheSydneyBusinessDayWindowToTheFactsStore()
     {
         var facts = new RecordingMachineDashboardFactsStore();
-        var useCase = new GetMachineDashboard(
-            Nayax(10), facts, FakeNayaxMachineLinkStore.NothingLinked(), Time.Clock, Time.Calendar);
+        var useCase = new GetMachineDashboard(Nayax(10), facts, Time.Clock, Time.Calendar);
 
         var summary = await useCase.Handle(10, CancellationToken.None);
 
@@ -42,8 +41,7 @@ public class MachineDashboardWindowResolutionTests
     public async Task GetMachineDashboard_ReadsNoFactsForAnUnknownMachine()
     {
         var facts = new RecordingMachineDashboardFactsStore();
-        var useCase = new GetMachineDashboard(
-            Nayax(10), facts, FakeNayaxMachineLinkStore.NothingLinked(), Time.Clock, Time.Calendar);
+        var useCase = new GetMachineDashboard(Nayax(10), facts, Time.Clock, Time.Calendar);
 
         Assert.Null(await useCase.Handle(404, CancellationToken.None));
         Assert.Empty(facts.Windows);

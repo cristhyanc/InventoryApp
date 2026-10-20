@@ -52,7 +52,6 @@ public class MachineUseCaseTests
         new(
             nayax,
             new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db, Time.Calendar)),
-            new EfNayaxMachineLinkStore(db),
             Time.Clock,
             Time.Calendar);
 

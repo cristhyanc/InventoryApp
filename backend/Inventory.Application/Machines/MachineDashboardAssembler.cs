@@ -17,6 +17,8 @@ internal static class MachineDashboardAssembler
     /// machine row for <paramref name="machine"/>, already resolved from the provider's number
     /// through <c>INayaxMachineLinkStore</c> (issue #780), or <c>null</c> when it has recorded
     /// none - resolved by the caller rather than here, because one lookup serves the whole fleet.
+    /// <see cref="GetMachineDashboard"/> passes <c>null</c> always: the single-machine route is out
+    /// of scope for issue #780 and resolves nothing (see <see cref="MachineSummary"/>).
     /// <paramref name="facts"/> carries the period aggregates the policies below are applied to.
     /// </summary>
     public static MachineSummary Build(

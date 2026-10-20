@@ -55,7 +55,7 @@ public class MachinesControllerTests
         var observationSource = observations ?? NoObservedSlots();
         var machines = machineLinks ?? FakeNayaxMachineLinkStore.NothingLinked();
         return new(
-            new GetMachineDashboard(nayaxClient, facts, machines, Time.Clock, Time.Calendar),
+            new GetMachineDashboard(nayaxClient, facts, Time.Clock, Time.Calendar),
             new ListMachineDashboard(nayaxClient, facts, machines, Time.Clock, Time.Calendar),
             new ListMachineProducts(
                 nayaxClient,
@@ -311,6 +311,31 @@ public class MachinesControllerTests
         Assert.Equal(4321, known.LocalMachineId);
         Assert.Equal(MachineId, known.MachineID);
         Assert.Null(Assert.Single(machines, machine => machine.MachineID == 99).LocalMachineId);
+    }
+
+    /// <summary>
+    /// Issue #780 adds the local machine id to the fleet <em>list</em> only: every change to the
+    /// <c>api/machines/{id}</c> route is explicitly out of its scope (issue #741 owns that route).
+    /// The single-machine read therefore resolves nothing - no lookup is made at all, which this
+    /// asserts on the link store the list path uses - and answers <c>null</c> in the field the two
+    /// reads share, even for a machine this business has a local record for.
+    /// </summary>
+    [Fact]
+    public async Task GetById_does_not_resolve_or_publish_the_local_machine_id()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachineAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new NayaxMachine { MachineID = MachineId, MachineName = "Pavillion Left", CustomerID = 91 });
+        var machineLinks = FakeNayaxMachineLinkStore.Linking((MachineId, 4321));
+
+        var result = await Controller(
+                Mock.Of<IMachineStockEventStore>(), nayax.Object, EmptyCostedFacts(), machineLinks: machineLinks)
+            .GetById(MachineId);
+
+        var machine = Assert.IsType<MachineResponse>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal(MachineId, machine.MachineID);
+        Assert.Null(machine.LocalMachineId);
+        Assert.Empty(machineLinks.Requests);
     }
 
     /// <summary>
