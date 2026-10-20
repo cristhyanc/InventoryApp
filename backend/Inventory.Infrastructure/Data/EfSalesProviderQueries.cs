@@ -49,6 +49,18 @@ internal static class EfSalesProviderQueries
                 && db.Businesses.Any(business =>
                     business.Id == product.BusinessId && business.SalesProvider == provider));
 
+    /// <summary>
+    /// The machine half of <see cref="ProductsIdentifiedBy"/> (issue #780): the current business's
+    /// machines that carry an external id issued by <paramref name="provider"/>.
+    /// </summary>
+    public static IQueryable<LocalMachine> MachinesIdentifiedBy(AppDbContext db, ExternalProvider provider) =>
+        db.Machines
+            .AsNoTracking()
+            .Where(machine =>
+                machine.ExternalMachineId != null
+                && db.Businesses.Any(business =>
+                    business.Id == machine.BusinessId && business.SalesProvider == provider));
+
     /// <summary>The category half of <see cref="ProductsIdentifiedBy"/>.</summary>
     public static IQueryable<Category> CategoriesIdentifiedBy(AppDbContext db, ExternalProvider provider) =>
         db.Categories

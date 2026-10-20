@@ -236,6 +236,9 @@ public static class InfrastructureServiceCollectionExtensions
         // How a Nayax product id becomes a local product id (issue #733): Product.ExternalProductId
         // (issue #759), read by every feature that matches live Nayax machine data to the catalogue.
         services.AddScoped<INayaxProductLinkStore, EfNayaxProductLinkStore>();
+        // And how a Nayax machine number becomes a local machine id (issue #780):
+        // LocalMachine.ExternalMachineId, the machine half of the same lookup.
+        services.AddScoped<INayaxMachineLinkStore, EfNayaxMachineLinkStore>();
         services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
         services.AddScoped<IPickListStorageStockStore, EfPickListStorageStockStore>();
         services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();

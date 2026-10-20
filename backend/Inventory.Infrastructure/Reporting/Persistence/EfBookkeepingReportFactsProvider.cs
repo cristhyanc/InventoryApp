@@ -135,11 +135,32 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
         return (costs?.Delivery ?? 0m, costs?.Package ?? 0m);
     }
 
+    /// <summary>
+    /// The period's operating expenses, optionally narrowed to one machine.
+    /// <paramref name="machineId"/> is the <em>provider's</em> machine number, because that is what
+    /// this report's filter speaks and issue #780 deliberately left it unchanged; the expenses
+    /// themselves record the local machine since that issue, so the number is resolved to a local
+    /// machine id through the one lookup (<see cref="EfMachineLinkQueries"/>) first.
+    ///
+    /// <para>A provider machine this business has recorded no machine for narrows the report to
+    /// <strong>no</strong> expenses - never silently to the whole business's, which would report
+    /// another machine's costs against the one that was asked about.</para>
+    /// </summary>
     private async Task<OperatingExpenseSummary> OperatingExpenseSummaryAsync(DateTime from, DateTime endExclusive, long? machineId, CancellationToken cancellationToken)
     {
+        long? localMachineId = null;
+        if (machineId.HasValue)
+        {
+            var localMachineIds = await EfMachineLinkQueries.LocalMachineIdsByNayaxIdAsync(
+                _db, [machineId.Value], cancellationToken);
+            if (!localMachineIds.TryGetValue(machineId.Value, out var resolved))
+                return new OperatingExpenseSummary(0m, 0m, new Dictionary<string, decimal>());
+            localMachineId = resolved;
+        }
+
         var rows = await _db.OperatingExpenses.AsNoTracking()
             .Where(x => x.ExpenseDate >= from && x.ExpenseDate < endExclusive &&
-                (!machineId.HasValue || x.MachineId == machineId.Value))
+                (!localMachineId.HasValue || x.MachineId == localMachineId.Value))
             .Select(x => new { x.Category, x.TotalAmount, x.GstAmount })
             .ToListAsync(cancellationToken);
         return new OperatingExpenseSummary(rows.Sum(x => x.TotalAmount), rows.Sum(x => x.GstAmount),

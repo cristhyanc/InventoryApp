@@ -41,6 +41,7 @@ public static class MachineResponseMapper
         MonthToDateGrossRevenue = summary.MonthToDateGrossRevenue,
         MonthToDateDirectProfit = summary.MonthToDateDirectProfit,
         ProfitabilityStatus = summary.ProfitabilityStatus,
+        LocalMachineId = summary.LocalMachineId,
     };
 
     /// <summary>
@@ -48,7 +49,9 @@ public static class MachineResponseMapper
     /// is written out as <c>null</c> rather than left to a default, so a revenue or profit field
     /// added to the response later has to be decided here too, and so a withheld figure can never
     /// arrive as the <c>0</c> a client would read as a real one. Identity, name, number and the
-    /// resolved site actor stay: without them the fleet an Operator restocks is unusable.
+    /// resolved site actor stay: without them the fleet an Operator restocks is unusable. The local
+    /// machine id (issue #780) is identity too and stays for the same reason - it names a row, not
+    /// an amount.
     /// </summary>
     private static MachineResponse Redacted(MachineSummary summary) => new()
     {
@@ -69,5 +72,6 @@ public static class MachineResponseMapper
         MonthToDateGrossRevenue = null,
         MonthToDateDirectProfit = null,
         ProfitabilityStatus = null,
+        LocalMachineId = summary.LocalMachineId,
     };
 }

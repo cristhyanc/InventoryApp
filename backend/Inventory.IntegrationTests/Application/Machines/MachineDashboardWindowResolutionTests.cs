@@ -1,6 +1,7 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Machines;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Time;
 using Moq;
 using Xunit;
@@ -54,7 +55,8 @@ public class MachineDashboardWindowResolutionTests
     public async Task ListMachineDashboard_UsesOneWindowForEveryMachine()
     {
         var facts = new RecordingMachineDashboardFactsStore();
-        var useCase = new ListMachineDashboard(Nayax(10, 11, 12), facts, Time.Clock, Time.Calendar);
+        var useCase = new ListMachineDashboard(
+            Nayax(10, 11, 12), facts, FakeNayaxMachineLinkStore.NothingLinked(), Time.Clock, Time.Calendar);
 
         var summaries = await useCase.Handle(CancellationToken.None);
 

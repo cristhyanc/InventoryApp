@@ -24,8 +24,16 @@ public class MachineJsonContractTests
 {
     private static readonly JsonSerializerOptions WebDefaults = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// The one key the entity never had: the local machine id issue #780 appended. The response is
+    /// compared against the retired entity's bytes plus exactly this, so the contract stays pinned
+    /// to "the old shape, with one field added at the end" rather than to whatever is generated.
+    /// </summary>
+    private const string AppendedLocalMachineIdKey = ",\"localMachineId\":";
+
     private static MachineSummary FullyPopulatedSummary() => new(
         MachineId: 42,
+        LocalMachineId: 7,
         MachineName: "Pavillion Left",
         MachineNumber: "PL-1",
         ActorId: 91,
@@ -68,15 +76,29 @@ public class MachineJsonContractTests
         ProfitabilityStatus = summary.ProfitabilityStatus,
     };
 
+    /// <summary>
+    /// The entity's serialised bytes with issue #780's one appended key, which is the whole of the
+    /// difference the contract allows.
+    /// </summary>
+    private static string ExpectedJson(MachineSummary summary)
+    {
+        var entity = JsonSerializer.Serialize(EquivalentEntity(summary), WebDefaults);
+        var localMachineId = summary.LocalMachineId is { } id
+            ? id.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "null";
+        return string.Concat(
+            entity.AsSpan(0, entity.Length - 1), AppendedLocalMachineIdKey, localMachineId, "}");
+    }
+
     [Fact]
-    public void Machine_response_serialises_byte_for_byte_like_the_entity_it_replaced()
+    public void Machine_response_serialises_byte_for_byte_like_the_entity_it_replaced_plus_the_local_machine_id()
     {
         var summary = FullyPopulatedSummary();
 
         var response = JsonSerializer.Serialize(
             MachineResponseMapper.ToResponse(summary, FinancialFigureVisibility.Visible), WebDefaults);
 
-        Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(summary), WebDefaults), response);
+        Assert.Equal(ExpectedJson(summary), response);
     }
 
     /// <summary>
@@ -89,6 +111,7 @@ public class MachineJsonContractTests
     {
         var summary = new MachineSummary(
             MachineId: 7,
+            LocalMachineId: null,
             MachineName: null,
             MachineNumber: null,
             ActorId: null,
@@ -109,11 +132,15 @@ public class MachineJsonContractTests
         var response = JsonSerializer.Serialize(
             MachineResponseMapper.ToResponse(summary, FinancialFigureVisibility.Visible), WebDefaults);
 
-        Assert.Equal(JsonSerializer.Serialize(EquivalentEntity(summary), WebDefaults), response);
+        Assert.Equal(ExpectedJson(summary), response);
         Assert.Contains("\"machineName\":null", response, StringComparison.Ordinal);
         Assert.Contains("\"actorID\":null", response, StringComparison.Ordinal);
         Assert.Contains("\"todayDirectProfit\":null", response, StringComparison.Ordinal);
         Assert.Contains("\"profitabilityStatus\":null", response, StringComparison.Ordinal);
+
+        // A machine the provider reports but this business has recorded no machine for: the key is
+        // present and null, which is "no local machine", not "no such field".
+        Assert.Contains("\"localMachineId\":null", response, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -129,18 +156,24 @@ public class MachineJsonContractTests
             WebDefaults);
 
         using var document = JsonDocument.Parse(json);
-        Assert.Equal(
-            new[]
-            {
-                "machineID", "machineName", "machineNumber", "actorID", "todayGrossRevenue",
-                "currentWeekGrossRevenue", "lastWeekGrossRevenue", "twoWeeksAgoGrossRevenue",
-                "todayDirectProfit", "twoWeeksAgoDirectProfit", "lastWeekDirectProfit",
-                "currentWeekDirectProfit", "previousComparableWeekGrossRevenue",
-                "previousComparableWeekDirectProfit", "monthToDateGrossRevenue",
-                "monthToDateDirectProfit", "profitabilityStatus",
-            },
-            document.RootElement.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(ExpectedKeys, document.RootElement.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(7, document.RootElement.GetProperty("localMachineId").GetInt64());
     }
+
+    /// <summary>
+    /// The keys clients read, in order: the entity's own seventeen, then the local machine id issue
+    /// #780 appended. Appended rather than placed beside <c>machineID</c> so that every key a client
+    /// already binds to keeps its position.
+    /// </summary>
+    private static readonly string[] ExpectedKeys =
+    [
+        "machineID", "machineName", "machineNumber", "actorID", "todayGrossRevenue",
+        "currentWeekGrossRevenue", "lastWeekGrossRevenue", "twoWeeksAgoGrossRevenue",
+        "todayDirectProfit", "twoWeeksAgoDirectProfit", "lastWeekDirectProfit",
+        "currentWeekDirectProfit", "previousComparableWeekGrossRevenue",
+        "previousComparableWeekDirectProfit", "monthToDateGrossRevenue",
+        "monthToDateDirectProfit", "profitabilityStatus", "localMachineId",
+    ];
 
     /// <summary>
     /// The redacted projection (issue #698): the same keys in the same order, with every one of the
@@ -157,23 +190,16 @@ public class MachineJsonContractTests
             WebDefaults);
 
         using var document = JsonDocument.Parse(json);
-        Assert.Equal(
-            new[]
-            {
-                "machineID", "machineName", "machineNumber", "actorID", "todayGrossRevenue",
-                "currentWeekGrossRevenue", "lastWeekGrossRevenue", "twoWeeksAgoGrossRevenue",
-                "todayDirectProfit", "twoWeeksAgoDirectProfit", "lastWeekDirectProfit",
-                "currentWeekDirectProfit", "previousComparableWeekGrossRevenue",
-                "previousComparableWeekDirectProfit", "monthToDateGrossRevenue",
-                "monthToDateDirectProfit", "profitabilityStatus",
-            },
-            document.RootElement.EnumerateObject().Select(property => property.Name));
+        Assert.Equal(ExpectedKeys, document.RootElement.EnumerateObject().Select(property => property.Name));
 
-        // Identity survives; every figure is null.
+        // Identity survives - the local machine id included, because it names a row rather than
+        // carrying an amount (issue #780); every figure is null.
         Assert.Equal(42, document.RootElement.GetProperty("machineID").GetInt64());
         Assert.Equal("Pavillion Left", document.RootElement.GetProperty("machineName").GetString());
         Assert.Equal(91, document.RootElement.GetProperty("actorID").GetInt64());
-        foreach (var property in document.RootElement.EnumerateObject().Skip(4))
+        Assert.Equal(7, document.RootElement.GetProperty("localMachineId").GetInt64());
+        foreach (var property in document.RootElement.EnumerateObject()
+                     .Skip(4).Where(property => property.Name != "localMachineId"))
         {
             Assert.Equal(JsonValueKind.Null, property.Value.ValueKind);
         }

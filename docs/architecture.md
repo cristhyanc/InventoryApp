@@ -9710,10 +9710,12 @@ against, and removing that belongs to issue #153's legacy-structure removal. The
 declared explicitly in `AppDbContext.ConfigureMachines`, so it does not depend on which type owns it.
 
 **The backfill.** `AddMachines` is additive — one table, its indexes, and an insert into it — and
-**nothing is repointed**: every stored machine reference still holds the provider's number, and issue
-#741 (G2) is what moves them onto `Machines.Id`. That is what makes the migration releasable on its
-own, which matters because Production applies migrations at startup and the code already running
-there reads no machine row at all.
+**nothing was repointed by it**: every stored machine reference still held the provider's number.
+That is what made the migration releasable on its own, which matters because Production applies
+migrations at startup and the code already running there read no machine row at all. [Expense
+machine references](#expense-machine-references-issue-780) (#780, G2a) has since moved
+`OperatingExpense.MachineId` onto `Machines.Id`; every other stored reference still holds the
+provider's number, and issue #741 (the stock half of G2) is what moves those.
 
 It creates one machine per distinct machine number each business refers to, across all seven columns
 that hold one, de-duplicated. A number of `0` is excluded: it is the absent value a non-nullable
@@ -9777,10 +9779,88 @@ and #658: the session grants `Inventory.Operate`, which is what the page would o
 on, and the backend refuses the write by its read-only method rule rather than by withholding the
 capability.
 
-**What is deliberately out of scope**: repointing the stored machine references (#741), the provider
-machine review (#742), provider switching (#761), slots, planograms, par levels, and manual sites —
-a site is known only from the live fleet read's `CustomerID`, so the Sites destination stays in the
-provider section with nothing local to fall back on.
+**What was deliberately out of scope of #740**: repointing the stored machine references (#780 did
+the expenses, #741 does the stock half), the provider machine review (#742), provider switching
+(#761), slots, planograms, par levels, and manual sites — a site is known only from the live fleet
+read's `CustomerID`, so the Sites destination stays in the provider section with nothing local to
+fall back on.
+
+### Expense machine references (issue #780)
+
+Child G2a of issue #329, the first half of G2, after [local
+machines](#local-machines-and-external-machine-ids-issue-740) created the rows to point at. **An
+operating expense that names a machine now names the business's own machine row**, so an expense
+keeps working for a business with no provider — which is the whole point of the G group.
+
+**What changed, and what deliberately did not.**
+
+| | Before | After |
+| --- | --- | --- |
+| `OperatingExpense.MachineId` | the raw Nayax machine number, no foreign key | `Machines.Id`, with `(BusinessId, MachineId)` a foreign key on the `(BusinessId, Id)` key of `Machines`, restricted on delete |
+| Expense create/update/read/filter | the provider's number | the local machine id, and a machine that is not one of this business's is refused |
+| `GET api/machines` | the provider's number only | adds `localMachineId` beside `machineID`; every existing field is unchanged |
+| `GET api/machines/{id}` | the provider's number only | **unchanged** — out of scope (issue #741); it resolves no local machine id and answers `null` in the field the shared wire shape carries |
+| Report machine filters and machine keys | the provider's number | **unchanged** — still the provider's number |
+| `StockAdjustment.MachineId`, `MachineStockCount.MachineId`, `NayaxSales.MachineID`, the provider event tables, `InventoryCostTransitionMachineStock` | the provider's number | **unchanged** — issue #741 |
+
+**The migration is two, and the second one refuses rather than guesses.**
+`AddMachineBusinessKey` declares the `(BusinessId, Id)` alternate key on `Machines` and changes no
+data; it is separate only because SQLite builds a dependent table's replacement before renaming the
+principal's, so a foreign key added in the same migration would reference a `Machines` that does not
+carry the key yet. `RepointOperatingExpenseMachines` then joins every non-null machine number to its
+business's machine on `ExternalMachineId = CAST(MachineId AS TEXT)` — the exact text
+`NayaxExternalId.From` writes and the `AddMachines` backfill wrote — updates only rows it has
+already matched, and verifies afterwards that every attributed expense names a machine of its own
+business. **A non-null number with no local machine aborts the whole upgrade**, before anything is
+written: an expense silently detached from its machine would move money out of that machine's direct
+profit, and a stored `0` (the absent value a non-nullable machine column records, which `AddMachines`
+created no machine for) is exactly such a value and has to be corrected by a person. A null stays
+null — that is a whole-business expense. `Down` puts the provider's numbers back, and refuses if an
+attributed machine carries none, because the release it returns to reads the column as a provider
+number.
+
+**Reports are unchanged, and that is the point.** The machine profitability report's rows are keyed
+by the provider's machine number and the bookkeeping report's machine filter is one, because that is
+what the fleet, the sales rows and the UI all speak and #780 does not touch them. Their expense
+facts therefore translate: `EfMachineProfitabilityReportFactsProvider` resolves the sale machines'
+numbers to local machine ids and groups the expenses by those, and
+`EfBookkeepingReportFactsProvider` resolves the filtered number before narrowing. A number this
+business has recorded no machine for contributes **no** expenses and narrows the bookkeeping report
+to none — never silently to the whole business's, which would report another machine's costs against
+the one that was asked about.
+
+**One lookup, gated on the provider.** `Inventory.Application.Nayax.INayaxMachineLinkStore` is the
+machine half of [`INayaxProductLinkStore`](#resolving-a-nayax-product-id-to-a-local-product-issue-733),
+with the same rules and for the same reason: `ExternalMachineId` holds whatever provider the business
+sells through and does not say who issued the value, so the read asks for machines whose owning
+business's `SalesProvider` is Nayax, in the same statement. A number recorded on no machine resolves
+to nothing, never to the machine whose local id happens to be that number.
+`Inventory.Infrastructure.Persistence.EfNayaxMachineLinkStore` is the adapter the use cases hold and
+`Inventory.Infrastructure.Data.EfMachineLinkQueries` is the read itself, which the two reporting
+fact providers call directly — one translation, not one per caller.
+
+**The API and the form.** `GET api/machines` adds `localMachineId` as an appended, nullable field;
+it carries no financial figure, so it survives the `Dashboard.ViewFinancials` redaction with the rest
+of the machine's identity. **`GET api/machines/{id}` resolves nothing and publishes nothing**: that
+route is out of scope for #780 (issue #741 owns it), so `GetMachineDashboard` makes no machine-link
+lookup at all and leaves the field the shared wire shape carries `null`. A `null` from the
+single-machine read therefore means only "this route does not resolve it" — a consumer that needs a
+machine's local id reads the fleet list, which is the read the expense form makes. Giving the detail
+route its own answer, or its own wire shape, is #741's decision to take. The expense form
+(`components/expenses/operating-expense.component.ts`) submits `machine.localMachineId`, and a listed
+machine with no local record is not offered at all — there is no id to store for it. The server does
+not trust the form: `CreateOperatingExpense`/`UpdateOperatingExpense` check the submitted machine
+against the business's machines through `ILocalMachineStore` (which reads through the ordinary tenant
+filters, so another business's machine is simply invisible) and refuse anything else with
+`OperatingExpenseDetails.UnknownMachineMessage`, before the expense is read or an attachment is
+written. A **deactivated** machine is accepted: it is a machine the business operated when the cost
+was incurred, and retiring a machine must not make its historical expenses uneditable.
+
+**What is deliberately out of scope**: the stock half (#741) — `StockAdjustment.MachineId`,
+`MachineStockCount.MachineId`, the ledger, sync restock and the `api/machines/{id}` route's own
+changes; the provider event tables and `InventoryCostTransitionMachineStock`; changing any report
+filter to a local id; and the provider machine review (#742), machine dropdowns without a provider
+(#746) and provider switching (#761).
 
 ### Resolving a Nayax product id to a local product (issue #733)
 
