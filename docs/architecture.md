@@ -8675,9 +8675,34 @@ already-fetched active product list (`PickListComponent.allProducts` - the same 
 view's Products filter already reads) through an `@Input() products`, rather than fetching it a
 second time. A successful save emits `@Output() refillRecorded`, which the page answers by
 re-fetching that list, so the manual table's storage quantities reflect the refill it just recorded.
-`PickListComponent.mode` (`'calculated' | 'manual'`) decides which one is shown; switching never
-destroys the other view's state - the calculated matrix stays fetched and the manual entries stay
-typed in while the other is hidden.
+`PickListComponent.mode` (`'calculated' | 'manual'`) decides which one is shown.
+
+**A mode switch never destroys manual entry, because manual entry is the only view here that
+writes.** What stops a retry deducting the same storage twice is the exact row set and idempotency
+key `ManualPickListComponent` keeps (see **Idempotency** below), and that protection lives in the
+component instance. So the page creates it once, the first time manual mode is shown
+(`manualViewCreated`), and **hides rather than destroys** it afterwards - `[hidden]="mode !==
+'manual'"` on the element, the same treatment `MachineDetailComponent` gives its tab panels - so the
+typed quantities, the per-row refusals and the key all survive every later switch. Destroying it
+instead is a double-deduction path, not a cosmetic loss: an operator whose save ended uncertain could
+switch views, find an empty form, retype the same pick and send it under a **new** key, which the
+server has no way to recognise as the same refill. Two further rules close the rest of that gap: an
+uncertain outcome raises `unresolvedSubmission`, an inline notice that stays on screen until a later
+Save resolves it rather than only the toast that fades, and while a save is actually in flight
+(`ManualPickListComponent.saveInFlightChange` → `PickListComponent.manualSaveInFlight`) switching
+back to calculated is refused outright - the Calculated button is disabled and `switchMode
+('calculated')` is a no-op - so no response can land on a view the operator has already left. A page
+that never enters manual mode never builds it at all, so the calculated-only path is unchanged. The
+calculated matrix needs none of this: it is a read-only projection with nothing to lose, and its
+already-fetched state survives simply because nothing clears it.
+
+**The page says what it does to inventory per mode.** The subtitle
+(`data-testid="pick-list-inventory-impact"`) is the calculated view's long-standing "Planning only.
+This is a read-only view … nothing selected or picked here is saved" only while the calculated view
+is showing. In manual mode it says instead that nothing is saved until Save is clicked and that Save
+then records one machine refill per entered quantity and reduces that product's storage quantity.
+Describing a view that writes `MachineRefill` movements as read-only is the one thing that line must
+never do, so both wordings are asserted in `pick-list.component.manual-rendering.spec.ts`.
 
 **When the calculated view is offered, and when it is not.** `PickListComponent.
 calculatedUnavailableReason` is the one sentence saying why - empty while the calculated view is a
@@ -8761,19 +8786,25 @@ client side).** `ManualPickListComponent` keeps the exact row set and key of its
   the entered quantities are **not** cleared, so clicking Save again - with nothing edited - resends
   precisely the same request under precisely the same key: if the first attempt had in fact been
   recorded, the retry is answered as a replay and writes nothing a second time; if it had not, the
-  retry records it. Either way the operator never has to decide which happened.
+  retry records it. Either way the operator never has to decide which happened. This is the one
+  outcome that sets `unresolvedSubmission`, so the attempt stays reported on screen until a later
+  Save resolves it, and it is why the component survives a mode switch at all; a `400` and a `409`
+  are definite answers and leave it clear.
 
 **What proves it.** `idempotency-key.spec.ts` (the generator's uniqueness and the 128-character
 contract bound), `pick-list-refill-errors.spec.ts` (`rows[i]` mapped back to the submitted row's
 product id, request-level keys kept separate, and `null` for a `409`/network failure/a body with no
 `errors`), `manual-pick-list.component.spec.ts` (filtering, the blank/zero/malformed "Taken" rules,
 the exact submitted row set and order, the three failure outcomes above including the idempotency-key
-reuse/mint rules, and that a save in flight is never resent), `pick-list.component.mode.spec.ts` (the
-default calculated mode, both forced-manual triggers - up front and live - the generic-failure
-exception, the manual-mode toggle, and that switching back to calculated preserves the already-fetched
-matrix) and `pick-list.component.manual-rendering.spec.ts` (the toggle and the manual table rendered
-through the real template, including the provider-unavailable case hiding the Calculated option
-entirely).
+reuse/mint rules, that a save in flight is never resent, and which outcomes leave `unresolvedSubmission`
+set), `pick-list.component.mode.spec.ts` (the default calculated mode, both forced-manual triggers -
+up front and live - the generic-failure exception, the manual-mode toggle, that switching back to
+calculated preserves the already-fetched matrix, that the manual view is created once and kept, and
+that manual mode cannot be left while a save is in flight) and
+`pick-list.component.manual-rendering.spec.ts` (the toggle and the manual table rendered through the
+real template, including the provider-unavailable case hiding the Calculated option entirely, both
+mode-specific inventory-impact wordings, an uncertain save retried with the identical key and body
+after switching to calculated and back, and the toggle refusing to move while a save is in flight).
 
 #### Supplier Orders frontend page (issue #387)
 

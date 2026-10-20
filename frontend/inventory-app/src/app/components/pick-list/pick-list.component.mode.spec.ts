@@ -185,6 +185,32 @@ describe('PickListComponent mode selection (issue #744)', () => {
     expect(component.appliedMachineIds).toEqual([10]);
   });
 
+  it('creates the manual view on first use and keeps it for every later switch', () => {
+    const { component } = createHarness();
+    expect(component.manualViewCreated).toBe(false);
+
+    component.switchMode('manual');
+    component.switchMode('calculated');
+
+    expect(component.mode).toBe('calculated');
+    expect(component.manualViewCreated).toBe(true);
+  });
+
+  it('refuses to leave manual mode while a manual save is still in flight', () => {
+    const { component } = createHarness();
+    component.switchMode('manual');
+    component.onManualSaveInFlightChange(true);
+
+    component.switchMode('calculated');
+
+    expect(component.mode).toBe('manual');
+
+    component.onManualSaveInFlightChange(false);
+    component.switchMode('calculated');
+
+    expect(component.mode).toBe('calculated');
+  });
+
   it('refuses to switch back to calculated once it is genuinely unavailable', () => {
     const { component } = createHarness({ machineStockAlreadyRefused: true });
 

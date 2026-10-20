@@ -329,4 +329,67 @@ describe('ManualPickListComponent save', () => {
       expect(recordRefill).toHaveBeenCalledTimes(1);
     });
   });
+
+  /**
+   * The kept rows and key are what stop a retry double-deducting, so an uncertain attempt has to
+   * stay visible until it is resolved, and the page has to know a save is outstanding so it can
+   * refuse to destroy this component while one is.
+   */
+  describe('reporting an unresolved submission (issue #744)', () => {
+    it('raises an unresolved submission for an uncertain failure and clears it once a retry succeeds', () => {
+      let uncertain = true;
+      const recordRefill = jest.fn((request: PickListRefillRequest) =>
+        uncertain ? throwError(() => new HttpErrorResponse({ status: 0 })) : of(recordedResponse(request))
+      );
+      const { component } = createHarness(undefined, recordRefill);
+      component.onTakenChange(1, '3');
+
+      component.save();
+      expect(component.unresolvedSubmission).toBe(true);
+
+      uncertain = false;
+      component.save();
+
+      expect(component.unresolvedSubmission).toBe(false);
+    });
+
+    it('leaves a 400 resolved: a per-row refusal is a definite answer, not an unknown outcome', () => {
+      const rejected = jest.fn((_request: PickListRefillRequest) =>
+        throwError(() => validationError({ 'rows[0].quantityTaken': ['Too many.'] }))
+      );
+      const { component } = createHarness(undefined, rejected);
+      component.onTakenChange(1, '3');
+
+      component.save();
+
+      expect(component.unresolvedSubmission).toBe(false);
+    });
+
+    it('leaves a 409 resolved: a spent key is a definite answer too', () => {
+      const conflicted = jest.fn((_request: PickListRefillRequest) => throwError(() => new HttpErrorResponse({ status: 409, error: {} })));
+      const { component } = createHarness(undefined, conflicted);
+      component.onTakenChange(1, '3');
+
+      component.save();
+
+      expect(component.unresolvedSubmission).toBe(false);
+    });
+
+    it('tells the page when a save starts and when it finishes', () => {
+      const pending = new Subject<PickListRefillResponse>();
+      const recordRefill = jest.fn(() => pending.asObservable());
+      const { component } = createHarness(undefined, recordRefill);
+      const inFlight: boolean[] = [];
+      component.saveInFlightChange.subscribe((value) => inFlight.push(value));
+      component.onTakenChange(1, '3');
+
+      component.save();
+      expect(inFlight).toEqual([true]);
+
+      pending.next(recordedResponse({ idempotencyKey: 'key', rows: [{ productId: 1, quantityTaken: 3 }] }));
+      pending.complete();
+
+      expect(inFlight).toEqual([true, false]);
+    });
+  });
 });

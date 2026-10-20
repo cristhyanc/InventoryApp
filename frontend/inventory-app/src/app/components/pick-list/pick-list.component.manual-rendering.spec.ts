@@ -1,9 +1,10 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { of } from 'rxjs';
+import { Subject, of, throwError } from 'rxjs';
 import { AccessService } from '../../access/access.service';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
-import { Product } from '../../models/models';
+import { PickListRefillRequest, PickListRefillResponse, Product } from '../../models/models';
 import { MachineService } from '../../services/machine.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ProductService } from '../../services/product.service';
@@ -84,6 +85,17 @@ async function render(
   return { fixture, host, click, type, button, requireButton, recordRefill };
 }
 
+function refillResponse(): PickListRefillResponse {
+  return {
+    idempotencyKey: 'k',
+    replayed: false,
+    machineId: null,
+    notes: null,
+    recordedAtUtc: '2026-01-01T00:00:00Z',
+    rows: [{ productId: 1, quantityTaken: 2, stockAdjustmentId: 1 }]
+  };
+}
+
 afterEach(() => TestBed.resetTestingModule());
 
 describe('PickListComponent + ManualPickListComponent rendering (issue #744)', () => {
@@ -145,16 +157,7 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
   });
 
   it('records a manual save and shows the Save button disabled until a quantity is entered', async () => {
-    const recordRefill = jest.fn(() =>
-      of({
-        idempotencyKey: 'k',
-        replayed: false,
-        machineId: null,
-        notes: null,
-        recordedAtUtc: '2026-01-01T00:00:00Z',
-        rows: [{ productId: 1, quantityTaken: 2, stockAdjustmentId: 1 }]
-      })
-    );
+    const recordRefill = jest.fn(() => of(refillResponse()));
     const { host, requireButton, click, type } = await render(undefined, 'Ready', recordRefill);
     click(requireButton('Enter quantities taken'));
     const saveButton = requireButton('Save');
@@ -179,5 +182,100 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
     expect(host.querySelector('[data-testid="manual-pick-list-row-error"]')?.textContent?.trim()).toBe(
       'Enter a whole number greater than 0.'
     );
+  });
+});
+
+describe('PickListComponent inventory-impact description per mode (issue #744)', () => {
+  const impact = (host: HTMLElement) =>
+    host.querySelector('[data-testid="pick-list-inventory-impact"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+
+  it('describes the calculated view as planning only that saves nothing', async () => {
+    const { host } = await render();
+
+    expect(impact(host)).toBe(
+      'Planning only. This is a read-only view: it never changes requested quantities or inventory, and nothing selected or picked here is saved.'
+    );
+  });
+
+  it('describes manual entry as saving a refill and reducing storage, never as read-only', async () => {
+    const { host, requireButton, click } = await render();
+
+    click(requireButton('Enter quantities taken'));
+
+    expect(impact(host)).toBe(
+      "Entry mode. Nothing is saved until you click Save; Save then records one machine refill per quantity you entered and reduces that product's storage quantity."
+    );
+    expect(impact(host)).not.toContain('read-only');
+    expect(impact(host)).not.toContain('nothing selected or picked here is saved');
+  });
+
+  it('describes manual entry as saving when there is no usable provider and manual is the only view', async () => {
+    const { host } = await render(undefined, 'NotConfigured');
+
+    expect(impact(host)).toContain("reduces that product's storage quantity");
+    expect(impact(host)).not.toContain('read-only');
+  });
+});
+
+describe('PickListComponent keeps an unresolved manual submission across mode switches (issue #744)', () => {
+  it('retries an uncertain save with the identical key and body after switching to calculated and back', async () => {
+    const requests: PickListRefillRequest[] = [];
+    const recordRefill = jest.fn((request: PickListRefillRequest) => {
+      requests.push(request);
+      return requests.length === 1
+        ? throwError(() => new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' }))
+        : of(refillResponse());
+    });
+    const { fixture, host, requireButton, click, type } = await render(undefined, 'Ready', recordRefill);
+
+    click(requireButton('Enter quantities taken'));
+    // ngModel writes the initial value back in a microtask; let it finish before typing over it, so
+    // the input's own value is real evidence rather than a race with that write.
+    await fixture.whenStable();
+    fixture.detectChanges();
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!, '2');
+    click(requireButton('Save'));
+
+    // The outcome is unknown, so it is reported where the operator can act on it, not only as a toast.
+    expect(host.querySelector('[data-testid="manual-pick-list-unresolved"]')?.textContent).toContain(
+      "Couldn't confirm whether this refill was recorded."
+    );
+
+    click(requireButton('Calculated'));
+    click(requireButton('Enter quantities taken'));
+
+    // The entry and the unconfirmed attempt both survived the round trip, so Save is a retry of the
+    // same pick rather than a second one under a new key.
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!.value).toBe('2');
+    expect(host.querySelector('[data-testid="manual-pick-list-unresolved"]')).not.toBeNull();
+    click(requireButton('Save'));
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1].idempotencyKey).toBe(requests[0].idempotencyKey);
+    expect(requests[1].rows).toEqual(requests[0].rows);
+  });
+
+  it('refuses to leave manual entry while its save is still in flight, and releases the toggle once it lands', async () => {
+    const pending = new Subject<PickListRefillResponse>();
+    const recordRefill = jest.fn(() => pending);
+    const { fixture, host, requireButton, click, type } = await render(undefined, 'Ready', recordRefill);
+    const component = fixture.componentInstance;
+
+    click(requireButton('Enter quantities taken'));
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!, '2');
+    click(requireButton('Save'));
+
+    expect(requireButton('Calculated').disabled).toBe(true);
+    expect(host.querySelector('[data-testid="pick-list-save-in-flight"]')).not.toBeNull();
+
+    click(requireButton('Calculated'));
+    expect(component.mode).toBe('manual');
+
+    pending.next(refillResponse());
+    pending.complete();
+    fixture.detectChanges();
+
+    expect(requireButton('Calculated').disabled).toBe(false);
+    expect(host.querySelector('[data-testid="pick-list-save-in-flight"]')).toBeNull();
   });
 });

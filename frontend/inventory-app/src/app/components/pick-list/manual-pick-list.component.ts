@@ -56,6 +56,15 @@ function parseTakenQuantity(raw: string): number | null {
  * a row and nothing was recorded, a `409` means the key is spent on a different request and must
  * never be reused, and anything else (a network failure, a `5xx`) is uncertain, so the exact same
  * request is kept ready to retry rather than quietly replaced.
+ *
+ * **An uncertain attempt is visible until it is resolved, and this instance is what holds it.** The
+ * kept rows and key only protect against a double deduction while they still exist, so an uncertain
+ * outcome also raises {@link unresolvedSubmission} - an inline notice that stays on screen until a
+ * later Save resolves it, rather than only the toast that disappears - and {@link saveInFlightChange}
+ * tells the page a request is outstanding, which it uses to refuse switching views until it lands.
+ * `PickListComponent` keeps this component alive (hidden) rather than destroying it when the other
+ * view is shown, so neither the typed quantities nor the key can be lost by a mode switch; see
+ * docs/architecture.md § Manual pick-list entry and mode selection.
  */
 @Component({
   selector: 'app-manual-pick-list',
@@ -69,9 +78,22 @@ export class ManualPickListComponent {
   /** Emitted once a save recorded a refill, so the page can refresh storage quantities. */
   @Output() readonly refillRecorded = new EventEmitter<void>();
 
+  /** Emitted whenever a save starts or finishes, so the page can refuse a mode switch while one is outstanding. */
+  @Output() readonly saveInFlightChange = new EventEmitter<boolean>();
+
   search = '';
   categoryId: number | '' = '';
   saving = false;
+
+  /**
+   * Set when a save ended without the server's answer - a network failure or a `5xx` - so it is not
+   * known whether the refill was recorded. Stays set, and stays on screen, until a later Save
+   * resolves it; the kept rows and key make that retry the identical request.
+   */
+  unresolvedSubmission = false;
+
+  /** The inline wording for {@link unresolvedSubmission}; the same sentence the toast carries. */
+  readonly unresolvedMessage = REFILL_UNCERTAIN_MESSAGE;
 
   /** Per-row refusal messages from the last save attempt, keyed by product id. */
   rowErrors = new Map<number, readonly string[]>();
@@ -145,19 +167,23 @@ export class ManualPickListComponent {
     this.lastSubmission = { key, rows: submittedRows };
 
     this.saving = true;
+    this.unresolvedSubmission = false;
     this.requestErrors = [];
     this.rowErrors.clear();
+    this.saveInFlightChange.emit(true);
 
     this.pickListService.recordRefill({ idempotencyKey: key, rows: submittedRows }).subscribe({
       next: () => {
         this.saving = false;
         this.lastSubmission = null;
         this.takenById.clear();
+        this.saveInFlightChange.emit(false);
         this.toastService.success(REFILL_RECORDED_MESSAGE);
         this.refillRecorded.emit();
       },
       error: (error: unknown) => {
         this.saving = false;
+        this.saveInFlightChange.emit(false);
         this.handleSaveError(error, submittedRows);
       }
     });
@@ -197,7 +223,10 @@ export class ManualPickListComponent {
     }
 
     // An uncertain outcome - a network failure, a 5xx - so the exact submitted rows and key stay
-    // ready: clicking Save again with nothing changed resends precisely this request.
+    // ready: clicking Save again with nothing changed resends precisely this request. The notice
+    // stays on screen until that retry resolves it, because a toast the operator missed is not a
+    // reason to let an unconfirmed pick look finished.
+    this.unresolvedSubmission = true;
     this.toastService.error(REFILL_UNCERTAIN_MESSAGE);
   }
 

@@ -47,6 +47,18 @@ export type PickListMode = 'calculated' | 'manual';
  * architecture.md § Page composition boundary) and is handed {@link allProducts}, the same
  * already-fetched active catalogue the calculated view's Products filter uses, rather than fetching
  * it a second time.
+ *
+ * **A mode switch never destroys the manual entry, because manual entry can hold an unconfirmed
+ * write.** Manual mode is the only view here that saves anything, and what protects it from
+ * recording a pick twice is the exact row set and idempotency key its component keeps for a retry
+ * (see `ManualPickListComponent`). Destroying it would throw both away, so an operator whose save
+ * ended uncertain could switch views, retype the same pick, and deduct the same storage a second
+ * time under a new key. So the component is created once, the first time manual mode is shown
+ * ({@link manualViewCreated}), and is **hidden rather than destroyed** afterwards - the same
+ * treatment `MachineDetailComponent` gives its tab panels - and while a save is actually in flight
+ * ({@link manualSaveInFlight}) switching away is refused outright, so no response can land on a view
+ * the operator has already left. The calculated matrix is a read-only projection, so it has nothing
+ * comparable to lose; its own state survives because nothing clears it.
  */
 @Component({
   selector: 'app-pick-list',
@@ -60,6 +72,16 @@ export class PickListComponent implements OnInit {
 
   /** Which view is showing; see the class doc for when it is forced to `'manual'`. */
   mode: PickListMode = 'calculated';
+
+  /**
+   * Whether `ManualPickListComponent` exists yet. It is created the first time manual mode is shown
+   * and then kept alive - hidden while the calculated view is showing - so its typed quantities and
+   * its retry key survive every later switch. A page that never enters manual mode never builds it.
+   */
+  manualViewCreated = false;
+
+  /** Whether manual entry has a save outstanding; while it has, switching away from manual is refused. */
+  manualSaveInFlight = false;
 
   /** The one sentence saying Nayax has refused the `machineStock` permission the calculated list needs; `''` while it has not. */
   machineProductsUnavailable = '';
@@ -107,7 +129,7 @@ export class PickListComponent implements OnInit {
       this.machinesError =
         outcome.kind === 'failed' ? 'The machine list could not be loaded, so a pick list cannot be built.' : '';
       if (this.machinesUnavailable !== '') {
-        this.mode = 'manual';
+        this.setMode('manual');
       }
     });
     // Checked up front, beside the machine fleet above: a usable connection does not mean Nayax has
@@ -116,7 +138,7 @@ export class PickListComponent implements OnInit {
     this.provider.featureAvailability('machineStock').subscribe((availability) => {
       if (availability === 'permissionNotGranted') {
         this.machineProductsUnavailable = nayaxUnavailableMessage(PERMISSION_NOT_GRANTED_REASON, 'The calculated pick list');
-        this.mode = 'manual';
+        this.setMode('manual');
       }
     });
     this.productService.getAll().subscribe((products) => {
@@ -136,17 +158,35 @@ export class PickListComponent implements OnInit {
     return this.machinesUnavailable || this.machineProductsUnavailable;
   }
 
-  /** Switches the visible view - refused for `'calculated'` once {@link calculatedUnavailableReason} is set. */
+  /**
+   * Switches the visible view. Switching to `'calculated'` is refused once
+   * {@link calculatedUnavailableReason} is set (there is nothing to switch to) and while
+   * {@link manualSaveInFlight} is set (an outstanding save must land where the operator can see
+   * what it did); the toggle button is disabled in both cases, and this is the same rule behind it.
+   */
   switchMode(mode: PickListMode): void {
-    if (mode === 'calculated' && this.calculatedUnavailableReason !== '') {
+    if (mode === 'calculated' && (this.calculatedUnavailableReason !== '' || this.manualSaveInFlight)) {
       return;
     }
-    this.mode = mode;
+    this.setMode(mode);
   }
 
   /** Refreshes the active catalogue `ManualPickListComponent` reads, after it records a refill. */
   refreshProductsAfterManualRefill(): void {
     this.productService.getAll().subscribe((products) => (this.allProducts = products));
+  }
+
+  /** Records whether manual entry has a save outstanding; see {@link switchMode}. */
+  onManualSaveInFlightChange(inFlight: boolean): void {
+    this.manualSaveInFlight = inFlight;
+  }
+
+  /** The one place `mode` is written, so entering manual mode always creates the view that must then survive. */
+  private setMode(mode: PickListMode): void {
+    this.mode = mode;
+    if (mode === 'manual') {
+      this.manualViewCreated = true;
+    }
   }
 
   /**
@@ -308,7 +348,7 @@ export class PickListComponent implements OnInit {
         const unavailability = this.provider.noteRefusal(error, 'machineStock');
         if (unavailability !== null) {
           this.machineProductsUnavailable = nayaxUnavailableMessage(unavailability, 'The calculated pick list');
-          this.mode = 'manual';
+          this.setMode('manual');
         } else {
           this.toastService.error('Failed to load the pick list.');
         }

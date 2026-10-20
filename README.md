@@ -1452,11 +1452,20 @@ that cannot be used.
   never had. A malformed "Taken" entry (anything that is not a whole number greater than zero) is
   reported on its own row before anything is sent, and any refusal the server returns is put back on
   the row it was about.
+- **The page says which of the two it is.** The line under the title describes the view you are
+  actually in: the calculated matrix is planning only and saves nothing, while manual entry says that
+  nothing is saved until you click Save and that Save then records one machine refill per quantity
+  entered and reduces that product's storage quantity.
 - **A retry never double-deducts.** Each save keeps an exact record of what it last sent. Clicking
   Save again with nothing changed — after a failure that could not be confirmed, for instance — resends
   the identical request under the identical idempotency key, which the server answers with the result
   it already recorded rather than taking the stock twice; changing any quantity before retrying sends
   a new key, because it is a different pick.
+- **An unconfirmed save is not lost by switching views.** A save whose outcome could not be confirmed
+  stays reported on the screen until a later Save settles it, and switching to the calculated view and
+  back keeps every quantity you typed — so the retry is still the same request under the same key, not
+  a second pick. While a save is actually being sent, the Calculated button is disabled until it
+  finishes, so an outstanding write always lands where you can see what it did.
 - **No machine selector yet.** Issue #746 is what lets an operator attribute a manual pick to one of
   the business's own machines; until it ships, every manual save omits a machine and is recorded as a
   whole-business pick, exactly as the batch refill endpoint already allows.

@@ -2,7 +2,19 @@
   <header class="page-header">
     <div>
       <h1 class="page-title">Pick List (Restock Planning)</h1>
-      <p class="page-subtitle">Planning only. This is a read-only view: it never changes requested quantities or inventory, and nothing selected or picked here is saved.</p>
+      <!--
+        What this page does to inventory depends on which view is showing, so it has to be said per
+        mode: the calculated matrix saves nothing at all, while manual entry's Save records a
+        MachineRefill per entered quantity and reduces that product's storage. Describing the saving
+        view as read-only is the one thing this line must never do.
+      -->
+      <p class="page-subtitle" data-testid="pick-list-inventory-impact">
+        @if (mode === 'manual') {
+          Entry mode. Nothing is saved until you click Save; Save then records one machine refill per quantity you entered and reduces that product's storage quantity.
+        } @else {
+          Planning only. This is a read-only view: it never changes requested quantities or inventory, and nothing selected or picked here is saved.
+        }
+      </p>
     </div>
   </header>
 
@@ -16,12 +28,13 @@
     </section>
   } @else {
     <section class="card">
-      <div class="card-body flex gap-2">
+      <div class="card-body flex flex-wrap items-center gap-2">
         <button
           type="button"
           class="btn"
           [ngClass]="mode === 'calculated' ? 'btn-primary' : 'btn-secondary'"
           [attr.aria-pressed]="mode === 'calculated'"
+          [disabled]="manualSaveInFlight"
           (click)="switchMode('calculated')">Calculated</button>
         <button
           type="button"
@@ -29,13 +42,28 @@
           [ngClass]="mode === 'manual' ? 'btn-primary' : 'btn-secondary'"
           [attr.aria-pressed]="mode === 'manual'"
           (click)="switchMode('manual')">Enter quantities taken</button>
+        @if (manualSaveInFlight) {
+          <p data-testid="pick-list-save-in-flight" class="text-md-body value-muted">Saving your entries. The view stays here until this save finishes.</p>
+        }
       </div>
     </section>
   }
 
-  @if (mode === 'manual') {
-    <app-manual-pick-list [products]="allProducts" (refillRecorded)="refreshProductsAfterManualRefill()"></app-manual-pick-list>
-  } @else {
+  <!--
+    Created the first time manual mode is shown and hidden rather than destroyed afterwards: manual
+    entry holds the typed quantities and the idempotency key that make an uncertain save safe to
+    retry, and destroying it would let the same pick be re-entered under a new key and deduct storage
+    twice. See PickListComponent's class doc.
+  -->
+  @if (manualViewCreated) {
+    <app-manual-pick-list
+      [hidden]="mode !== 'manual'"
+      [products]="allProducts"
+      (refillRecorded)="refreshProductsAfterManualRefill()"
+      (saveInFlightChange)="onManualSaveInFlightChange($event)"></app-manual-pick-list>
+  }
+
+  @if (mode !== 'manual') {
 
   <section class="card">
     <div class="card-body flex flex-wrap items-end gap-4">
