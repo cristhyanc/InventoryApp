@@ -1106,25 +1106,21 @@ does not manage.
   follow-up work, not part of this change.
 - **A category products use is not deleted.** The refusal says how many products use it; move them
   to another category first, otherwise they would be left with no category at all.
-- **The Nayax catalogue import waits for the catalogue review.** While the business holds products
-  that Nayax does not manage, **Admin → Imports → Import Products** is refused with how many they
-  are, and nothing is imported: the import recognises a product only by Nayax's own product id, so
-  it would create a duplicate of each of yours. A business whose products all came from Nayax
-  imports exactly as before, and the check is made again at the moment the import is written, so a
-  product somebody creates while Nayax is being read refuses the import rather than slipping past
-  it — nothing is imported in that case either.
-- **Linking your own products to Nayax products now has an API, and not yet a screen** (issue #738).
-  `POST /api/catalogue-review` previews the Nayax catalogue against your own: which Nayax products and
-  groups nothing of yours is linked to, which linked products Nayax has renamed, re-grouped or
-  repriced, and how many unresolved sales each link would explain. `POST /api/catalogue-review/apply`
-  then links or creates per entry, per your decisions. Once a product is linked, Nayax owns its name
-  and its category; its price is yours to keep or take, per product, and a price you keep is not
-  offered again until Nayax changes it. Nothing is ever linked by matching names, nothing changes a
-  sale you already have, and applying the same review twice changes nothing. Attributing older
-  unresolved sales to a product you have just linked is a separate, confirmed step
-  (`POST /api/catalogue-review/unresolved-sales/apply`, Owner only) because it replays that product's
-  cost history. The **Import Products** button still behaves exactly as described above; the screen
-  that will send you to the review instead is issue #739.
+- **Importing the Nayax catalogue is a review you decide, entry by entry** (issue #739). **Admin →
+  Imports → Import products** opens it, for every business. It is no longer refused for a business
+  that keeps its own products (it was, until this change, because the old import recognised a product
+  only by Nayax's own id and would have created a duplicate of each of yours), and there is no
+  longer a direct import that writes Nayax's catalogue straight through: nothing is written until you
+  press Apply, and every row the import writes is a row you decided about. See
+  [Connecting Nayax when you already have products](#connecting-nayax-when-you-already-have-products)
+  below for the walk-through.
+- **Which fields Nayax manages once a row is linked.** A product: its **name** and its **category**.
+  A category: its **name**. Those become read-only on the Products and Categories screens and are
+  updated automatically by every later review, which lists each such change rather than asking about
+  it. Everything else stays yours — the **price** (you decide per product whether to keep yours or
+  take Nayax's), the SKU, the **unit/volume**, the supplier, the low-stock threshold, the restock
+  target, the active flag and all of your stock, costing and history. Nayax publishes no unit or
+  volume label at all, so the review never proposes one.
 
 ## Product and supplier GST rules
 
@@ -1274,6 +1270,57 @@ again, so the status always describes the token actually stored.
 
 Tests and re-tests share one allowance for the whole business (five runs per ten minutes); past it
 the page asks you to wait a few minutes, and no call reaches Nayax.
+
+### Connecting Nayax when you already have products
+
+Once the connection is saved, **Admin → Imports → Import products** brings Nayax's catalogue in.
+It opens a **review**: nothing is written until you press Apply, and every row it writes is a row
+you decided about. That is how a business that has been keeping its own products connects Nayax
+without ending up with two of everything — matching names are never linked for you, because two
+products that happen to share a name are two products.
+
+**Step 1 — categories.** Each Nayax product group is listed. For one nothing of yours is linked to,
+you can:
+
+- **Skip for now** — nothing happens to it, and the next review asks again.
+- **Link it to one of my categories** — search your categories and choose one. The screen states that
+  its name will be replaced by Nayax's name and become read-only here.
+- **Create a new category** — a new category with Nayax's name.
+
+Only categories you maintain yourself are offered: one already linked to a Nayax group cannot be
+linked to a second one. A group already linked is shown as linked, with any Nayax rename listed as
+**applied automatically**.
+
+**Step 2 — products.** Each Nayax product is listed, with the category it will end up in after your
+step-1 decisions — or **none**, when its Nayax group is linked to no category of yours, in which case
+the product is imported with no category rather than being put in one that merely shares a number.
+The same three choices apply, and linking states plainly that **the product's name and category will
+be replaced by Nayax's and become read-only here**; only its price is yours to decide:
+
+- **Linking** offers **take the Nayax price** or **keep my own price**.
+- A **product already linked** whose Nayax price has since moved offers **accept the Nayax price** or
+  **skip it and keep my price**, with both prices shown. Its name and category changes are listed as
+  applied automatically — Nayax owns those.
+- Either price answer is remembered, so that Nayax price is not proposed again until Nayax changes
+  it. Leaving both unanswered leaves your price exactly as it is and asks again next review.
+- Nothing about a **unit or volume** is ever offered: Nayax publishes no unit/volume label, so yours
+  stays yours.
+- A linked product can be one you have retired; retired products are offered and marked, because
+  linking one is better than creating a duplicate of it.
+
+**Then Apply.** It is one transaction: if any one decision is refused — the row you named was linked
+to a different Nayax product in the meantime, say — nothing at all is written and the message says
+which entry and why. Applying the same review twice changes nothing. **No sale is touched**: linking
+a product does not re-attribute the sales that already carry that Nayax product id, and the screen
+reports how many such sales a link would explain. Attributing them is a separate, confirmed Owner-only
+step, because it replays that product's cost history.
+
+**The endpoints behind it** (issue #738) are `POST /api/catalogue-review`, which reads Nayax's
+catalogue and reports it against your rows without writing a product, category, price or sale, and
+`POST /api/catalogue-review/apply`, which carries out your decisions as that one transaction; both
+need `Imports.Run`, the capability running an import has always needed. The separate sale attribution
+is `POST /api/catalogue-review/unresolved-sales/apply` (Owner only). `POST /api/imports/products`,
+the direct catalogue import, no longer exists.
 
 ### Reorder alerts without Nayax
 

@@ -852,7 +852,7 @@ InventoryApp/
 │   │   ├── Program.cs               Composition root; chooses the SQLite provider
 │   │   └── InventoryApi.csproj
 │   ├── Inventory.Domain/            NayaxFeeSettings rule, reporting policies/calculations (Inventory.Domain.Reporting.<Feature>), Purchases.PurchaseTotalValidationPolicy; other features not yet migrated
-│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, the three Imports use cases (ImportPendingReimbursementXmlFiles, ImportNayaxProductCatalog, ImportNayaxSales) with their source/reader/store ports, Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
+│   ├── Inventory.Application/       NayaxFeeSettings use cases/ports, Categories/Suppliers use cases/ports, Nayax.INayaxLynxClient port/DTOs, reporting use cases/contracts (Inventory.Application.Reporting.<Feature>), Purchases.ComputePurchaseTotalValidation, the two Imports use cases (ImportPendingReimbursementXmlFiles, ImportNayaxSales) with their source/reader/store ports and the CatalogueReview use cases that replaced the direct catalogue import (issue #739), Documents.IDocumentStorage, shared Inventory.Application.Time.IClock/IBusinessCalendar; other features not yet migrated
 │   ├── Inventory.Infrastructure/    Data/AppDbContext.cs and Data/BusinessOwnershipEnforcer.cs, Models/ (EF entities and enums), Migrations/ (SQLite schema history) — all since issue #307; Reporting.Persistence.Ef<Feature>…FactsProvider (the ten reporting EF fact providers), Reporting.Persistence.EfReportingSharedQueries and Data.EfNayaxSalesQueries — all since issue #308; Persistence.Ef<Feature>Store/Provider (every other EF persistence adapter) and Persistence.NayaxSaleCosting — all since issue #309; Nayax.NayaxLynxClient/NayaxLynxOptions (Nayax Lynx HTTP client) and Nayax.NayaxCatalogSnapshotProvider, SystemClock/CurrentBusinessCalendar/ZonedBusinessCalendar adapters (Inventory.Infrastructure.Time), FileSystemDocumentStorage and AzureBlobDocumentStorage (Inventory.Infrastructure.Documents), FileSystemPendingReimbursementXmlSource and ClosedXmlNayaxSalesWorkbookReader (Inventory.Infrastructure.Imports), Reporting.ReportExportFileWriter (CSV/XLSX byte encoding), Sites.SiteNameResolver, the verified-snapshot blob uploader (Inventory.Infrastructure.Backups); other features not yet migrated
 │   │   ├── Data/                    AppDbContext, tenant query filters, BusinessOwnershipEnforcer, EfNayaxSalesQueries, EfSalesProviderQueries
 │   │   ├── Migrations/              SQLite schema history and AppDbContextModelSnapshot
@@ -881,7 +881,7 @@ InventoryApp/
 
 The Angular application uses standalone components. `app.config.ts` registers the router, HTTP client, and a startup initializer that loads the API base URL. Routes load their page components lazily with `loadComponent`, except the public `/auth` Entra redirect callback, which stays eagerly imported (see [Routing and loading](#routing-and-loading)). Pages keep their own view state and call singleton services, which use `HttpClient` to reach the API.
 
-The API's production dependency skeleton (`Inventory.Domain`, `Inventory.Application`, `Inventory.Infrastructure`) is wired into the `InventoryApi` composition root through `AddApplicationServices()`/`AddInfrastructureServices()` extension methods. The Nayax fee-settings slice (GET/POST `api/settings/nayax-processing-fee-rates`) is the first feature moved into this shape: `Inventory.Domain.NayaxFeeSettings.NayaxFeeRate` validates the configured rate, `Inventory.Application.NayaxFeeSettings` holds the `ListNayaxFeeRates`/`SaveNayaxFeeRate` use cases and the `INayaxFeeRateStore` port (`SaveNayaxFeeRate` also takes the shared `Inventory.Application.Time.IClock` port, promoted out of this feature slice into a shared Application abstraction — see [Time](#time)), `Inventory.Infrastructure.Clock.SystemClock` implements `IClock`, and `SettingsController` only binds HTTP input and maps the use-case result. `INayaxFeeRateStore` is implemented by `Inventory.Infrastructure.Persistence.EfNayaxFeeRateStore`, registered by `AddInfrastructureServices()`. It was an API-owned adapter in `InventoryApi/Adapters/Persistence` for most of this migration, because `AppDbContext` and the EF entities were API-owned too; issue #307 moved those into `Inventory.Infrastructure`, issue #308 took the reporting half of the adapter family, and issue #309 (Persistence 8/8 of #153) took this one with the rest. The bookkeeping report (GET `api/reports/bookkeeping`) is the second feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Bookkeeping.BookkeepingProfitPolicy` computes profit/margin/GST/net-settlement from already-aggregated facts, `Inventory.Application.Reporting.Bookkeeping.GetBookkeepingReport` is the use case, `IBookkeepingReportFactsProvider` is its narrow port, and `Inventory.Infrastructure.Reporting.Persistence.EfBookkeepingReportFactsProvider` is its EF adapter (API-owned until issue #308 relocated it), now composing the Application-owned fee and commission use cases. `ReportsController` calls `GetBookkeepingReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetBookkeepingAsync` delegated to the same use case so CSV/XLSX export and the GST report (which reuses bookkeeping's result) stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The daily report (GET `api/reports/daily`) is the third feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Daily.DailyRowPolicy` computes each day's profit/margin/reconciliation status from already-aggregated facts, reusing the shared `Inventory.Domain.Reporting.ReconciliationStatusPolicy` (placed there, alongside `ReportingCalculations`, so the still-legacy reconciliation report can reuse the same policy once it migrates instead of reimplementing it), `Inventory.Application.Reporting.Daily.GetDailyReport` is the use case, `IDailyReportFactsProvider` is its narrow port, and `Inventory.Infrastructure.Reporting.Persistence.EfDailyReportFactsProvider` is its EF adapter (API-owned until issue #308 relocated it). Its completed-sale cost query and period-level imported-reimbursement summary are shared with `EfBookkeepingReportFactsProvider` through `Inventory.Infrastructure.Reporting.Persistence.EfReportingSharedQueries` rather than duplicated a third time; its per-date reimbursement grouping is specific to daily and has no bookkeeping equivalent. `ReportsController` calls `GetDailyReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetDailyAsync` delegated to the same use case so CSV/XLSX export stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The reconciliation report (GET `api/reports/reconciliation`) is the fourth feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Reconciliation.ReconciliationPeriodPolicy` computes each period's (and the totals row's) gross/settlement difference and status from already-aggregated facts, reusing the shared `Inventory.Domain.Reporting.ReconciliationStatusPolicy` daily also calls, `Inventory.Application.Reporting.Reconciliation.GetReconciliationReport` is the use case, `IReconciliationReportFactsProvider` is its narrow port, and `Inventory.Infrastructure.Reporting.Persistence.EfReconciliationReportFactsProvider` is its EF adapter (API-owned until issue #308 relocated it). Its completed and all-status sales queries are shared with `EfBookkeepingReportFactsProvider`/`EfDailyReportFactsProvider` through `EfReportingSharedQueries`; its per-reimbursement-period `Include` graph and card-gross fallback cascade are specific to reconciliation and have no bookkeeping or daily equivalent. `ReportsController` calls `GetReconciliationReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetReconciliationAsync` delegated to the same use case so CSV/XLSX export stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The machine and product profitability reports (GET `api/reports/machine-profitability` and GET `api/reports/product-profitability`) are the fifth and sixth features moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Profitability.ProfitabilityRowPolicy` computes the per-machine/per-product cost/gross-profit/margin gate shared by both reports, and `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy` computes machine profitability's direct-profit completeness rule (COGS complete, no missing Nayax fee rates, complete commission coverage), reusing the shared `ReportingCalculations`. `Inventory.Application.Reporting.MachineProfitability.GetMachineProfitabilityReport` and `Inventory.Application.Reporting.ProductProfitability.GetProductProfitabilityReport` are the use cases; `IMachineProfitabilityReportFactsProvider`/`IProductProfitabilityReportFactsProvider` are their narrow ports; `Inventory.Infrastructure.Reporting.Persistence.EfMachineProfitabilityReportFactsProvider`/`EfProductProfitabilityReportFactsProvider` are their EF adapters (API-owned until issue #308 relocated them), reusing `EfReportingSharedQueries`' completed-sale query. The machine profitability adapter also composes the migrated Application fee and commission use cases; its site-commission resolution is shared with `EfBookkeepingReportFactsProvider` through `EfReportingSharedQueries.GetMachineCommissionsAsync`/`GetSiteCommissionAsync` rather than duplicated a third time, while its per-machine operating-expense breakdown has no equivalent in the already-migrated adapters and stayed local. Nayax product matching (`NayaxProductMatcher`, previously `InventoryApi.Services.NayaxProductMatcher` only) is deterministic Domain business logic and moved to `Inventory.Domain.Reporting.ProductMatching.ProductMatcher`, operating on a Domain-owned `ProductMatchCandidate(Id, Name)` rather than the persistence `Product` entity; the product profitability use case calls it directly on its own catalogue projection, and the EF adapter never calls it (matching stays out of the persistence adapter). `InventoryApi.Services.NayaxProductMatcher` (used by machine service, sale costing, inventory cost rebuild, import, and site commissions — outside that migration's scope) first became a thin wrapper delegating to the same Domain implementation, so both stayed on one authoritative matching algorithm instead of two, and issue #301 then deleted the wrapper once its last callers (the uploaded sales import, `EfLatestNayaxSalesStore` and `EfInventoryCostLedgerStore`) called the Domain matcher on their own candidate projections. `ReportsController` calls `GetMachineProfitabilityReport`/`GetProductProfitabilityReport` directly for those endpoints; at that point in the migration, the legacy `ReportingService.GetMachineProfitabilityAsync`/`GetProductProfitabilityAsync` delegated to the same use cases so CSV/XLSX export and the dashboard report (which reuses product profitability's result) stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). GST, dashboard, and transactions have since moved too (see the reporting migration track below); every individual report family has migrated, and issue #92 completed the final shared-query audit: it found no further duplication to consolidate (every already-migrated adapter already shared what could be shared through `EfReportingSharedQueries`) and removed the legacy `InventoryApi.Services.ReportingService`/`IReportingService`. `Inventory.Application.Reporting.Export.GetReportExportRows` is now the one authoritative export-row-building step for every report, called directly by `ReportsController`'s single export endpoint; its CSV/XLSX byte encoding sits behind the Application-owned `Inventory.Application.Reporting.Export.IReportExportFileWriter` port, implemented by `Inventory.Infrastructure.Reporting.ReportExportFileWriter` since issue #306 and registered by `AddInfrastructureServices()`, so the controller injects the port and ClosedXML stays out of both `Inventory.Application` and `InventoryApi` (which no longer references the package at all). The Nayax Lynx HTTP client/configuration boundary (issue #49) also moved into this shape: `Inventory.Application.Nayax` holds the configuration-agnostic `INayaxLynxClient` port and its DTOs, and `Inventory.Infrastructure.Nayax` holds the concrete adapter — `NayaxLynxClient`, the one typed `NayaxLynxOptions` contract (`BaseUrl`, `OperatorId`, `AccessToken`), and `NayaxLynxConfiguration`, which validates the non-secret fields at startup and resolves `AccessToken` by preferring the consolidated `NayaxLynx:AccessToken` configuration key over the legacy `Nayax:Token` key so the already deployed Key Vault/App Service secret (`Nayax__Token`) keeps working without a coordinated rollout. `NayaxUpstreamException` (see [External integration errors](#external-integration-errors)) lives in `Inventory.Infrastructure.Nayax` rather than alongside the port, because it carries HTTP-specific diagnostics that `CleanArchitectureDependencyTests` forbids `Inventory.Application` from depending on. `Program.cs` binds `NayaxLynxOptions` from configuration, resolves `AccessToken`, and registers the client through `AddNayaxLynxClient()`, which also attaches the bounded timeout/retry/circuit-breaker policy (issue #48; see [HTTP resilience policy](#http-resilience-policy)). `NayaxCatalogSnapshotProvider` and the transaction sales report's fact provider (`EfTransactionSalesReportFactsProvider`, an InventoryApi resident until issue #308) depend only on the relocated `INayaxLynxClient` port and its DTOs, not on the concrete client or its configuration; the snapshot provider itself left `InventoryApi.Adapters.Nayax` for `Inventory.Infrastructure.Nayax` with issue #306, because reading the remote catalogue needs no `AppDbContext`. `ImportService` no longer appears in that list either: issue #300 moved its product catalogue import to `Inventory.Application.Imports.ImportNayaxProductCatalog` and removed its `INayaxLynxClient` dependency, and issue #301 moved its last endpoint, the uploaded Nayax sales import, to `Inventory.Application.Imports.ImportNayaxSales` and deleted the service outright. The migrated `Inventory.Application.Commissions.GetSiteCommissionReport` use case and the inventory-cost transition use cases (issue #298, which replaced `InventoryCostTransitionService`) also consume that port; the product, site and machine services that used to appear in this list no longer call Nayax at all, because issues #240/#241 moved their live reads into `Inventory.Application` use cases that depend on the same port. No EF adapter lives in `InventoryApi` any more: the reporting fact providers and their shared queries went to `Inventory.Infrastructure.Reporting.Persistence` in Persistence 7/8 (issue #308) with the completed-sale predicate `EfNayaxSalesQueries` to `Inventory.Infrastructure.Data`, and the remaining feature stores went to `Inventory.Infrastructure.Persistence` in Persistence 8/8 (issue #309), which removed `InventoryApi/Adapters/Persistence` altogether. `Program.cs` is the composition root, and it is also where the persistence *provider* is chosen: it holds the `UseSqlite` call and the connection string, while the model, the entities and the migration history are owned by `Inventory.Infrastructure` (issue #307). Startup delegates schema handling to `DatabaseSchemaStartup`, where Development, `Testing`, and Production all auto-migrate (issue #201; another non-Production environment may too, under an explicit override), and a database whose migration attempt fails does not complete startup rather than serving requests against a schema its code does not match. Migrations may also still be applied explicitly by a human with the `migrate-database` command (dry run first), for diagnostics or ahead of a deployment window.
+The API's production dependency skeleton (`Inventory.Domain`, `Inventory.Application`, `Inventory.Infrastructure`) is wired into the `InventoryApi` composition root through `AddApplicationServices()`/`AddInfrastructureServices()` extension methods. The Nayax fee-settings slice (GET/POST `api/settings/nayax-processing-fee-rates`) is the first feature moved into this shape: `Inventory.Domain.NayaxFeeSettings.NayaxFeeRate` validates the configured rate, `Inventory.Application.NayaxFeeSettings` holds the `ListNayaxFeeRates`/`SaveNayaxFeeRate` use cases and the `INayaxFeeRateStore` port (`SaveNayaxFeeRate` also takes the shared `Inventory.Application.Time.IClock` port, promoted out of this feature slice into a shared Application abstraction — see [Time](#time)), `Inventory.Infrastructure.Clock.SystemClock` implements `IClock`, and `SettingsController` only binds HTTP input and maps the use-case result. `INayaxFeeRateStore` is implemented by `Inventory.Infrastructure.Persistence.EfNayaxFeeRateStore`, registered by `AddInfrastructureServices()`. It was an API-owned adapter in `InventoryApi/Adapters/Persistence` for most of this migration, because `AppDbContext` and the EF entities were API-owned too; issue #307 moved those into `Inventory.Infrastructure`, issue #308 took the reporting half of the adapter family, and issue #309 (Persistence 8/8 of #153) took this one with the rest. The bookkeeping report (GET `api/reports/bookkeeping`) is the second feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Bookkeeping.BookkeepingProfitPolicy` computes profit/margin/GST/net-settlement from already-aggregated facts, `Inventory.Application.Reporting.Bookkeeping.GetBookkeepingReport` is the use case, `IBookkeepingReportFactsProvider` is its narrow port, and `Inventory.Infrastructure.Reporting.Persistence.EfBookkeepingReportFactsProvider` is its EF adapter (API-owned until issue #308 relocated it), now composing the Application-owned fee and commission use cases. `ReportsController` calls `GetBookkeepingReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetBookkeepingAsync` delegated to the same use case so CSV/XLSX export and the GST report (which reuses bookkeeping's result) stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The daily report (GET `api/reports/daily`) is the third feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Daily.DailyRowPolicy` computes each day's profit/margin/reconciliation status from already-aggregated facts, reusing the shared `Inventory.Domain.Reporting.ReconciliationStatusPolicy` (placed there, alongside `ReportingCalculations`, so the still-legacy reconciliation report can reuse the same policy once it migrates instead of reimplementing it), `Inventory.Application.Reporting.Daily.GetDailyReport` is the use case, `IDailyReportFactsProvider` is its narrow port, and `Inventory.Infrastructure.Reporting.Persistence.EfDailyReportFactsProvider` is its EF adapter (API-owned until issue #308 relocated it). Its completed-sale cost query and period-level imported-reimbursement summary are shared with `EfBookkeepingReportFactsProvider` through `Inventory.Infrastructure.Reporting.Persistence.EfReportingSharedQueries` rather than duplicated a third time; its per-date reimbursement grouping is specific to daily and has no bookkeeping equivalent. `ReportsController` calls `GetDailyReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetDailyAsync` delegated to the same use case so CSV/XLSX export stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The reconciliation report (GET `api/reports/reconciliation`) is the fourth feature moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Reconciliation.ReconciliationPeriodPolicy` computes each period's (and the totals row's) gross/settlement difference and status from already-aggregated facts, reusing the shared `Inventory.Domain.Reporting.ReconciliationStatusPolicy` daily also calls, `Inventory.Application.Reporting.Reconciliation.GetReconciliationReport` is the use case, `IReconciliationReportFactsProvider` is its narrow port, and `Inventory.Infrastructure.Reporting.Persistence.EfReconciliationReportFactsProvider` is its EF adapter (API-owned until issue #308 relocated it). Its completed and all-status sales queries are shared with `EfBookkeepingReportFactsProvider`/`EfDailyReportFactsProvider` through `EfReportingSharedQueries`; its per-reimbursement-period `Include` graph and card-gross fallback cascade are specific to reconciliation and have no bookkeeping or daily equivalent. `ReportsController` calls `GetReconciliationReport` directly for that endpoint; at that point in the migration, the legacy `ReportingService.GetReconciliationAsync` delegated to the same use case so CSV/XLSX export stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). The machine and product profitability reports (GET `api/reports/machine-profitability` and GET `api/reports/product-profitability`) are the fifth and sixth features moved into this shape, following the same pattern: `Inventory.Domain.Reporting.Profitability.ProfitabilityRowPolicy` computes the per-machine/per-product cost/gross-profit/margin gate shared by both reports, and `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy` computes machine profitability's direct-profit completeness rule (COGS complete, no missing Nayax fee rates, complete commission coverage), reusing the shared `ReportingCalculations`. `Inventory.Application.Reporting.MachineProfitability.GetMachineProfitabilityReport` and `Inventory.Application.Reporting.ProductProfitability.GetProductProfitabilityReport` are the use cases; `IMachineProfitabilityReportFactsProvider`/`IProductProfitabilityReportFactsProvider` are their narrow ports; `Inventory.Infrastructure.Reporting.Persistence.EfMachineProfitabilityReportFactsProvider`/`EfProductProfitabilityReportFactsProvider` are their EF adapters (API-owned until issue #308 relocated them), reusing `EfReportingSharedQueries`' completed-sale query. The machine profitability adapter also composes the migrated Application fee and commission use cases; its site-commission resolution is shared with `EfBookkeepingReportFactsProvider` through `EfReportingSharedQueries.GetMachineCommissionsAsync`/`GetSiteCommissionAsync` rather than duplicated a third time, while its per-machine operating-expense breakdown has no equivalent in the already-migrated adapters and stayed local. Nayax product matching (`NayaxProductMatcher`, previously `InventoryApi.Services.NayaxProductMatcher` only) is deterministic Domain business logic and moved to `Inventory.Domain.Reporting.ProductMatching.ProductMatcher`, operating on a Domain-owned `ProductMatchCandidate(Id, Name)` rather than the persistence `Product` entity; the product profitability use case calls it directly on its own catalogue projection, and the EF adapter never calls it (matching stays out of the persistence adapter). `InventoryApi.Services.NayaxProductMatcher` (used by machine service, sale costing, inventory cost rebuild, import, and site commissions — outside that migration's scope) first became a thin wrapper delegating to the same Domain implementation, so both stayed on one authoritative matching algorithm instead of two, and issue #301 then deleted the wrapper once its last callers (the uploaded sales import, `EfLatestNayaxSalesStore` and `EfInventoryCostLedgerStore`) called the Domain matcher on their own candidate projections. `ReportsController` calls `GetMachineProfitabilityReport`/`GetProductProfitabilityReport` directly for those endpoints; at that point in the migration, the legacy `ReportingService.GetMachineProfitabilityAsync`/`GetProductProfitabilityAsync` delegated to the same use cases so CSV/XLSX export and the dashboard report (which reuses product profitability's result) stayed on one authoritative implementation, until issue #92 removed `ReportingService` entirely (see below). GST, dashboard, and transactions have since moved too (see the reporting migration track below); every individual report family has migrated, and issue #92 completed the final shared-query audit: it found no further duplication to consolidate (every already-migrated adapter already shared what could be shared through `EfReportingSharedQueries`) and removed the legacy `InventoryApi.Services.ReportingService`/`IReportingService`. `Inventory.Application.Reporting.Export.GetReportExportRows` is now the one authoritative export-row-building step for every report, called directly by `ReportsController`'s single export endpoint; its CSV/XLSX byte encoding sits behind the Application-owned `Inventory.Application.Reporting.Export.IReportExportFileWriter` port, implemented by `Inventory.Infrastructure.Reporting.ReportExportFileWriter` since issue #306 and registered by `AddInfrastructureServices()`, so the controller injects the port and ClosedXML stays out of both `Inventory.Application` and `InventoryApi` (which no longer references the package at all). The Nayax Lynx HTTP client/configuration boundary (issue #49) also moved into this shape: `Inventory.Application.Nayax` holds the configuration-agnostic `INayaxLynxClient` port and its DTOs, and `Inventory.Infrastructure.Nayax` holds the concrete adapter — `NayaxLynxClient`, the one typed `NayaxLynxOptions` contract (`BaseUrl`, `OperatorId`, `AccessToken`), and `NayaxLynxConfiguration`, which validates the non-secret fields at startup and resolves `AccessToken` by preferring the consolidated `NayaxLynx:AccessToken` configuration key over the legacy `Nayax:Token` key so the already deployed Key Vault/App Service secret (`Nayax__Token`) keeps working without a coordinated rollout. `NayaxUpstreamException` (see [External integration errors](#external-integration-errors)) lives in `Inventory.Infrastructure.Nayax` rather than alongside the port, because it carries HTTP-specific diagnostics that `CleanArchitectureDependencyTests` forbids `Inventory.Application` from depending on. `Program.cs` binds `NayaxLynxOptions` from configuration, resolves `AccessToken`, and registers the client through `AddNayaxLynxClient()`, which also attaches the bounded timeout/retry/circuit-breaker policy (issue #48; see [HTTP resilience policy](#http-resilience-policy)). `NayaxCatalogSnapshotProvider` and the transaction sales report's fact provider (`EfTransactionSalesReportFactsProvider`, an InventoryApi resident until issue #308) depend only on the relocated `INayaxLynxClient` port and its DTOs, not on the concrete client or its configuration; the snapshot provider itself left `InventoryApi.Adapters.Nayax` for `Inventory.Infrastructure.Nayax` with issue #306, because reading the remote catalogue needs no `AppDbContext`. `ImportService` no longer appears in that list either: issue #300 moved its product catalogue import to `Inventory.Application.Imports.ImportNayaxProductCatalog` and removed its `INayaxLynxClient` dependency (issue #739 then replaced that use case outright with the catalogue review — see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)), and issue #301 moved its last endpoint, the uploaded Nayax sales import, to `Inventory.Application.Imports.ImportNayaxSales` and deleted the service outright. The migrated `Inventory.Application.Commissions.GetSiteCommissionReport` use case and the inventory-cost transition use cases (issue #298, which replaced `InventoryCostTransitionService`) also consume that port; the product, site and machine services that used to appear in this list no longer call Nayax at all, because issues #240/#241 moved their live reads into `Inventory.Application` use cases that depend on the same port. No EF adapter lives in `InventoryApi` any more: the reporting fact providers and their shared queries went to `Inventory.Infrastructure.Reporting.Persistence` in Persistence 7/8 (issue #308) with the completed-sale predicate `EfNayaxSalesQueries` to `Inventory.Infrastructure.Data`, and the remaining feature stores went to `Inventory.Infrastructure.Persistence` in Persistence 8/8 (issue #309), which removed `InventoryApi/Adapters/Persistence` altogether. `Program.cs` is the composition root, and it is also where the persistence *provider* is chosen: it holds the `UseSqlite` call and the connection string, while the model, the entities and the migration history are owned by `Inventory.Infrastructure` (issue #307). Startup delegates schema handling to `DatabaseSchemaStartup`, where Development, `Testing`, and Production all auto-migrate (issue #201; another non-Production environment may too, under an explicit override), and a database whose migration attempt fails does not complete startup rather than serving requests against a schema its code does not match. Migrations may also still be applied explicitly by a human with the `migrate-database` command (dry run first), for diagnostics or ahead of a deployment window.
 
 ```mermaid
 flowchart TD
@@ -1553,7 +1553,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Schema and data are separate steps, and only the data step is exclusively human-controlled.** `DatabaseSchemaStartup` decides per environment: Production, Development, and `Testing` all migrate automatically and fail closed if the attempt fails (issue #201); any other non-Production environment does so only under the `Database:AllowAutomaticMigrationUnsafeOutsideDevelopment` override. Migrations never assign ownership, automatically or otherwise. The backfill is exclusively `bootstrap-business`, run by a human: deterministic, idempotent (it touches only unassigned rows), restartable, transactional, dry-runnable, and verified by before/after counts and financial totals, with a `BusinessBackfillAudit` record of what it did. `TenantOwnershipReadiness` reports at startup whether ownership has actually been bootstrapped, so "all my data is gone" cannot be the first symptom of an unfinished rollout.
 
-**Known limits of this rollout.** One business is live. The Nayax **catalogue** is no longer part of that limit either: its products and categories used to be keyed by the Nayax `NayaxProductID`/`ProductGroupID`, which is one global identifier space, so two businesses could not both import the same Nayax product — issue #735 made a created row's key the database's own and left the provider's id as a per-business column, and `EfNayaxProductCatalogImportStoreTenancyTests` proves two businesses importing the same ids, see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735). The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Integrations, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
+**Known limits of this rollout.** One business is live. The Nayax **catalogue** is no longer part of that limit either: its products and categories used to be keyed by the Nayax `NayaxProductID`/`ProductGroupID`, which is one global identifier space, so two businesses could not both import the same Nayax product — issue #735 made a created row's key the database's own and left the provider's id as a per-business column, and `EfCatalogueReviewStoreTenancyTests` proves two businesses importing the same ids (`EfNayaxProductCatalogImportStoreTenancyTests` pinned the same thing for the direct import, until issue #739 replaced it), see [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735). The Nayax **credential** is no longer part of that limit: issue #518 added the per-business storage, issue #519 the human-run `migrate-nayax-connection` command that moves the existing credential into it, and issue #520 made the client read the current business's own operator id and token on every call with no global fallback — see [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520). Since issues #536 and #537 an Owner's own credential can also reach the database through the API: a test holds the pasted pair as an encrypted draft and a save promotes it, with a re-test for the stored one — see [Saving a tested connection and re-testing it](#saving-a-tested-connection-and-re-testing-it-issue-537). Since issue #538 an Owner can drive those endpoints from Admin → Integrations, through the connection wizard — see [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538). Since issue #539 every Nayax-dependent screen explains an unready connection instead of failing silently, and points an Owner at the wizard — see [Nayax connection status banners](#nayax-connection-status-banners-issue-539). What is still outstanding before a second business goes live is the rest of #328's self-service work; the business that is live today had its credential moved in by the human-run `migrate-nayax-connection` command, which is a human step described in `docs/tenant-rollout.md` § Migrating the Nayax connection into the business. The database foreign keys from `BusinessId` to `Businesses` are a deliberate, still-outstanding deferral — see `docs/tenant-rollout.md`. Issue #39 (document storage) consumes this ownership key and must not introduce blob storage before it.
 
 #### Membership roles and capabilities (issue #521)
 
@@ -1626,7 +1626,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
 | Reports (all of them, and their CSV/XLSX exports) | `api/reports/*`, `GET api/reports/{report}/export` | `Reports.View` | ✘ | ✔ | ✔ |
-| Admin → Imports | `api/imports/products`, `api/imports/nayax-sales`, `api/imports/pending-xml` | `Imports.Run` | ✘ | ✔ | ✔ |
+| Admin → Imports | `api/imports/nayax-sales`, `api/imports/pending-xml`, and the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
@@ -6308,18 +6308,23 @@ unchanged fee-rate editor — see
 **Admin Imports (issue #389, Admin split 2/3).** `/admin/imports` (`AdminImportsComponent`) is the
 authenticated UI entry point for the three supported import workflows, moved out of
 `AdminComponent`: the Nayax sales file upload (`.xlsx`, `.xls`, `.csv`) with its CSV template
-download, the product catalogue refresh, and the pending reimbursement XML import. The page is an
+download, the product catalogue import, and the pending reimbursement XML import. The page is an
 entry point only — it calls the same `ImportService` methods (`POST api/imports/nayax-sales`,
-`POST api/imports/products`, `POST api/imports/pending-xml`) with the same request shapes, keeps
+`POST api/imports/pending-xml`) with the same request shapes, keeps
 the same client-side extension validation, template columns/sample row, success and failure
 messages, and the same single `loading` flag that disables every import action while one is in
 flight. No import boundary or contract changed with the move: Nayax sales parsing and timestamp
 semantics, import deduplication, product matching, reimbursement parsing and persistence all stay
 exactly where they were (see [Uploaded transaction export import (issue
-#301)](#uploaded-transaction-export-import-issue-301), [Reimbursement import and
-reconciliation](#reimbursement-import-and-reconciliation) and [Nayax product catalogue import
-(issue #300)](#nayax-product-catalogue-import-issue-300)). `Imports` is one entry in the sidebar's
+#301)](#uploaded-transaction-export-import-issue-301) and [Reimbursement import and
+reconciliation](#reimbursement-import-and-reconciliation)). `Imports` is one entry in the sidebar's
 `Admin` group (issue #391).
+
+**Import products opens the catalogue review** (issue #739, parent #329 decision C2), and no longer
+calls a catalogue import of its own: `POST api/imports/products` does not exist any more. The button
+renders `CatalogueReviewComponent`, a dedicated feature component the page composes rather than
+grows inside itself (see [Page composition boundary](#page-composition-boundary-issue-191)) — see
+[The catalogue review screen](#the-catalogue-review-screen-issue-739).
 
 **Admin costing and maintenance pages (issue #390, Admin split 3/3).** The three remaining
 maintenance workflows now have their own authenticated routes, which completes the decomposition:
@@ -6761,7 +6766,7 @@ Reconciliation applies the same separation as bookkeeping, and adds a third cate
 
 ### Product selling price
 
-`Product.UnitPrice` is the catalog default/list selling price, synced one-way from the Nayax product catalog's `ProductDefaultRetailPrice` field by `Inventory.Application.Imports.ImportNayaxProductCatalog` (issue #57; the use case was `ImportService.ImportProductsAsync` until issue #300 migrated it — see [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300)). It is a display/default value, not a calculation input: no reporting, profit, or costing calculation in `Inventory.Application`/`Inventory.Domain` reads it. It is distinct from:
+`Product.UnitPrice` is the catalog default/list selling price, taken from the Nayax product catalog's `ProductDefaultRetailPrice` field by the catalogue review's apply, and only on an operator's explicit per-product decision (issue #57 for the field; the one-way sync was `ImportService.ImportProductsAsync`, then `Inventory.Application.Imports.ImportNayaxProductCatalog` from issue #300, until issue #739 replaced it with the review — see [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300) and [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)). It is a display/default value, not a calculation input: no reporting, profit, or costing calculation in `Inventory.Application`/`Inventory.Domain` reads it. It is distinct from:
 
 - `Product.AverageUnitCost` and the AVCO/historical-cost ledger — purchase cost, not selling price;
 - `Product.MachinePrice` (`[NotMapped]` on the entity, and a machine-slot value on `ProductResponse`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) by `ListMachineProducts`/`GetSiteProducts`;
@@ -6769,7 +6774,7 @@ Reconciliation applies the same separation as bookkeeping, and adds a third cate
 
 **The JSON field this value is imported from is confirmed (issue #363).** A human confirmed from a live `GET /v1/operators/{OperatorID}/products` response that the product selling price field is `ProductDefaultRetailPrice`, matching the Nayax developer portal, which documents that field on `GET /v1/operators/{OperatorID}/products` and `GET /v1/products/{NayaxProductID}` and documents no bare `RetailPrice` field on either endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` above correctly use. The operator-catalogue DTO `Inventory.Application.Nayax.NayaxProduct.ProductDefaultRetailPrice` binds that confirmed JSON name. Products already imported with `UnitPrice` of `0` under the previous, unconfirmed `RetailPrice` mapping are not backfilled by this change; whether to backfill them is a separate decision.
 
-The public property name `UnitPrice` is retained for API/contract compatibility. **Since issue #736 the business owns this value too** (parent #329 decision P2 and P3): `PUT /api/products/{id}` accepts it, `ProductUpdateFields` carries it, and the only bound on it is that it is not negative (`Inventory.Domain.Products.ProductCataloguePolicy`). It had to become editable, because a business with no sales provider has no import to set it. **Since issue #737 (B2) the product edit screen presents it editable for every product**, and presents the name and the category as read-only inputs only for a product carrying an external id, naming the provider in a note beside them. The Nayax catalogue import still overwrites it for a product the provider names, and a local price edit of such a product is accepted rather than refused — the price is deliberately *not* one of the provider-managed fields that are locked, which are the product's name and category only (see [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)). Choosing per field whether to keep the local price or take the provider's is the catalogue review of issue #738, which also remembers the provider value a skipped price was decided about so it is not proposed again until the provider changes it (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)); #739 is the screen for it. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
+The public property name `UnitPrice` is retained for API/contract compatibility. **Since issue #736 the business owns this value too** (parent #329 decision P2 and P3): `PUT /api/products/{id}` accepts it, `ProductUpdateFields` carries it, and the only bound on it is that it is not negative (`Inventory.Domain.Products.ProductCataloguePolicy`). It had to become editable, because a business with no sales provider has no import to set it. **Since issue #737 (B2) the product edit screen presents it editable for every product**, and presents the name and the category as read-only inputs only for a product carrying an external id, naming the provider in a note beside them. A local price edit of a provider-managed product is accepted rather than refused — the price is deliberately *not* one of the provider-managed fields that are locked, which are the product's name and category only (see [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)). **Nothing overwrites it from the provider without being asked.** Choosing per field whether to keep the local price or take the provider's is the catalogue review of issue #738, which also remembers the provider value a skipped price was decided about so it is not proposed again until the provider changes it (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)); issue #739 built its screen and, with it, removed the write-through import that used to overwrite the price on every run. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
 
 ### Purchase GST classification (issue #429)
 
@@ -9606,13 +9611,16 @@ code that reads the link tables is **not supported**: the tables stop being kept
 code would see a catalogue frozen at the moment of the release. A recovery goes forward with a fix.
 The migration's `Down` exists to undo the schema, not to make that rollback safe.
 
-**The import keeps the column true.** `EfNayaxProductCatalogImportStore` writes
-`ExternalProductId`/`ExternalCategoryId` on every product and category in the snapshot that carries
-none, and leaves an existing one exactly as it is — it is the same id, and rewriting it would be the
-one way the import could move an identifier between rows. It refuses to run at all for a business
+**The import keeps the column true.** The catalogue import writes
+`ExternalProductId`/`ExternalCategoryId` on the product or category each decided entry links or
+creates, and leaves an existing one exactly as it is — it is the same id, and rewriting it would be
+the one way the import could move an identifier between rows. It refuses to run at all for a business
 whose `SalesProvider` is not Nayax, rather than recording Nayax ids in a column another system's ids
-would be read from. Since #745 the same adapter also *reads* those ids as the identity of a snapshot
-entry (below), and since #735 it writes no `Id` at all.
+would be read from. It also *reads* those ids as the identity of a provider entry (below, issue
+#745), and writes no `Id` at all (issue #735). Since issue #739 the one adapter doing all of that is
+`EfCatalogueReviewStore`, and a link it records is always an explicit operator decision;
+`EfNayaxProductCatalogImportStore` did it before, and wrote every entry it recognised without
+asking.
 
 #### The local key is the database's own (issue #735)
 
@@ -9649,17 +9657,17 @@ EF writes the key the insert assigns into `Product.CategoryId`. A recorded categ
 its foreign key, and an unresolvable group still leaves the product uncategorised rather than
 pointing it at a local category that merely shares the number.
 
-`AssignCategory` writes **both** the navigation and the foreign key on every entry, including to
-clear them. A snapshot may name the same product twice, and its last occurrence decides the category
-as it decides the name and the price; writing one of the pair alone would leave the other holding
-what an earlier occurrence put there — a navigation to a category this import is creating beside a
-foreign key since cleared or pointed elsewhere — and `SaveChanges` would then write whichever of the
-two disagreeing values EF's change detection happens to prefer. So a recorded category is assigned to
-both, no resolvable group clears both, and a created one is assigned to the navigation with the
-foreign key left empty, which is the ordinary way to name a principal whose key does not exist yet.
-`EfNayaxProductCatalogImportStoreNayaxLinkTests` repeats one product across each pair of cases —
-created group then none, created group then an unknown one, created then recorded and recorded then
-created — and reads the category back from a reopened context.
+The import writes **both** the navigation and the foreign key on every entry, including to
+clear them. Writing one of the pair alone would leave the other holding what an earlier write put
+there — a navigation to a category this import is creating beside a foreign key since cleared or
+pointed elsewhere — and `SaveChanges` would then write whichever of the two disagreeing values EF's
+change detection happens to prefer. So a recorded category is assigned to both, no resolvable group
+clears both, and a created one is assigned to the navigation with the foreign key left empty, which
+is the ordinary way to name a principal whose key does not exist yet. `EfCatalogueReviewStore`'s
+`ApplyProviderOwnedProductFields` is where that happens since issue #739, and `CatalogueReviewTests`
+reads the category back from a reopened context for a created group, a linked one and a group no
+local category carries; the removed import's `AssignCategory` did the same for a snapshot that named
+one product twice, which a decided review cannot do.
 
 **No migration, and no re-keying.** Every id already stored stays exactly as it is — including the
 Nayax ids the #732 backfill and the #759 copy recorded on the rows that existed — and every foreign
@@ -9987,7 +9995,7 @@ Nayax id as the one it was keyed by and #759's migration copied that onto the ro
 | --- | --- | --- |
 | Latest-sales sync (`EfLatestNayaxSalesStore`) | each payload item's `NayaxProductID`, once per batch through `INayaxProductLinkStore`, before the per-sale work | an unknown product: the name fallback still runs, and a sale that matches nothing is still imported, stays visible, is left uncosted and replays no product's inventory cost — exactly as an unmatched id already was |
 | Uploaded sales export (`ImportNayaxSales`) | each row's `NayaxProductID`, once per import through the same port | the same: the row is imported and counted, stays visibly uncosted, and no inventory cost is replayed for it |
-| Catalogue import (`EfNayaxProductCatalogImportStore`) | each entry's `NayaxProductID` through `Product.ExternalProductId`, each group's and each product's `ProductGroupID` through `Category.ExternalCategoryId`, both read from the rows the import already has in hand | a new row, keyed by the database since #735, carrying that id; for a product's group, no local category at all, so the product is imported uncategorised |
+| Catalogue import (`EfCatalogueReviewStore` since #739, `EfNayaxProductCatalogImportStore` before it) | each entry's `NayaxProductID` through `Product.ExternalProductId`, each group's and each product's `ProductGroupID` through `Category.ExternalCategoryId`, both read from the rows the import already has in hand | an entry nothing is linked to: since #739 the operator decides it, and the row they create is keyed by the database (#735) and carries that id; for a product's group, no local category at all, so the product is imported uncategorised |
 | Catalogue reconciliation (`EfLocalCatalogSnapshotProvider`) | the local product snapshot is built *from* the recorded ids, so each product is reported under the Nayax id it carries | a local product with no recorded id has no provider identity and takes no part in the comparison: it is a product Nayax never named, not one Nayax stopped returning |
 
 Three things are worth stating explicitly.
@@ -10346,39 +10354,31 @@ reactivate; the Admin costing-repair and AVCO-transition tools and the stock-his
 still call the endpoint without it and show active products only - picking those three up is
 unrelated follow-up work, not part of #737. Nothing on the server depends on any of them.
 
-**The provider import is refused for a manual catalogue, for now.**
-`Inventory.Domain.Providers.ManualCatalogueImportPolicy`: while the business holds products with no
-external id, `POST api/imports/products` answers `409` with how many they are, before anything is
-written, because the import identifies a product only by the provider's own id and would create a
-duplicate of each of them. A business whose products all carry one imports exactly as before. The
-catalogue review is what replaces that refusal with a deliberate link-or-create per product: issue
-#738 built its API — see
+**The provider import was refused for a manual catalogue, and issue #739 removed that refusal by
+removing the import it protected against.** `Inventory.Domain.Providers.ManualCatalogueImportPolicy`
+answered `POST api/imports/products` with `409` and a count while the business held products with no
+external id, because that import identified a product only by the provider's own id and would have
+created a duplicate of each of them. Both the policy and the endpoint are gone: since #739 (decision
+C2) the catalogue import *is* the review, for every business, so the state the refusal existed for is
+the state the import now handles deliberately — the operator links each provider entry to a row they
+name, or creates one. See
 [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)
-below — and #739 is the screen that will send the operator there instead of to this refusal. **This
-refusal itself is unchanged by #738**: the direct import endpoint still answers `409` for a manual
-catalogue, because switching the import over to the review flow is explicitly #739's work.
-
-**That count is asked twice, and the second answer is the one the import is decided on.** The first
-read runs before the two remote catalogue reads, so a business the import would duplicate spends no
-Nayax call at all — an optimisation, not the guard. The remote reads take as long as Nayax takes,
-and a person can commit a `POST api/products` while they are in flight, so
-`ImportNayaxProductCatalog` opens the import's write transaction
-(`INayaxProductCatalogImportStore.BeginTransactionAsync`) once the snapshot is in hand and re-reads
-`CountProductsWithNoProviderIdAsync` inside it: the authoritative read, the comparison and the write
-are one operation, and a catalogue that became manual in between is refused with nothing committed
-rather than duplicated. The transaction is opened only after the remote reads, so no Nayax request
-is ever made while a database transaction is held open.
+and [The catalogue review screen](#the-catalogue-review-screen-issue-739) below. Nothing else about
+this section changed: the provider still owns a linked row's name and category, the price is still
+local and still editable, and a row with no external id is still the business's own in full.
 
 ### Provider catalogue review: link-or-create and change review (issue #738)
 
-The direct import of the section below writes straight through: it creates a product for every
-provider entry it does not recognise and overwrites four fields on every one it does. That is the
+The direct import of the section below wrote straight through: it created a product for every
+provider entry it did not recognise and overwrote four fields on every one it did. That is the
 right behaviour for a catalogue the provider has always owned, and the wrong behaviour for a business
-that kept its own — which is why issue #736 refuses it outright for a manual catalogue. Issue #738
-(parent #329 decision C1) adds the deliberate alternative: **a catalogue import that is previewed as
-a review, decided per entry, and then applied as one transaction.** The screen that will use it, and
-switching the import over to it, are #739 and explicitly out of scope here; the direct import keeps
-working exactly as it did.
+that kept its own — which is why issue #736 refused it outright for a manual catalogue. Issue #738
+(parent #329 decision C1) built the deliberate alternative: **a catalogue import that is previewed as
+a review, decided per entry, and then applied as one transaction.** **Issue #739 (decision C2) then
+made it the catalogue import**: it built the screen, pointed Admin → Imports → Import products at
+it, and removed the direct import — the endpoint, the use case, its port, its EF adapter and #736's
+refusal — for every business. There is one catalogue writer now, and every row it writes is a row
+somebody decided about.
 
 **Three endpoints, two capabilities.** `InventoryApi.Controllers.CatalogueReviewController`:
 
@@ -10397,9 +10397,9 @@ provider's live catalogue and records the review the apply is then authorised by
 would hand a caller a review id for a catalogue it never read.
 
 **What the review reports.** `Inventory.Application.CatalogueReview.StartCatalogueReview` reads the
-operator's products and groups through the existing `INayaxLynxClient` port, as the same concurrent
-fan-out of two independent calls the direct import uses, and reconciles them against the business's
-rows **through the provider id columns alone**:
+operator's products and groups through the existing `INayaxLynxClient` port, as one concurrent
+fan-out of two independent calls — the shape the direct import used — and reconciles them against the
+business's rows **through the provider id columns alone**:
 
 - A provider group or product that no local row carries the `ExternalCategoryId`/`ExternalProductId`
   of (issue #759) is reported **unlinked**, with the operator's two honest options: link it to a local
@@ -10424,7 +10424,7 @@ provider's group id — which the review links or creates first, in the same app
 category replaces its name with the provider's. From then on those fields are read-only locally and a
 later provider rename or group move is applied automatically and listed. A group no local category
 carries leaves the product uncategorised rather than pointing it at a category that merely shares a
-number, exactly as the direct import does.
+number, exactly as the direct import did.
 
 The negotiable fields are `Inventory.Domain.Providers.NegotiableCatalogueField`, and
 `CatalogueReviewPolicy` is the one rule about them:
@@ -10531,102 +10531,96 @@ table is tenant-owned in the ordinary way, so two businesses may review and link
 ids and neither can read, apply or resolve anything of the other's
 (`EfCatalogueReviewStoreTenancyTests`).
 
+### The catalogue review screen (issue #739)
+
+`frontend/inventory-app/src/app/components/admin/imports/catalogue-review/CatalogueReviewComponent`
+is what **Admin → Imports → Import products** opens, and it is the whole of the product catalogue
+import now: there is no direct import behind the button any more (decision C2). The page composes it
+and owns nothing of its workflow, because it is a distinct workflow with its own two-step state, its
+own actions and its own loading and error lifecycle — see
+[Page composition boundary](#page-composition-boundary-issue-191).
+
+**Two ordered steps, categories first, and the order is a data rule rather than a layout choice.** A
+provider product's category is the local category carrying its provider group id, resolved by the
+apply against the categories that same apply links or creates. So step one settles the groups —
+each unlinked provider group is linked to a local category the operator searches for and names, or
+created — and step two shows each product the category it will actually end up in, named as the
+provider names it (`categoryAfterImport`), or **none** when its group is linked to no category of
+theirs, which is exactly what the apply does with it.
+
+**What the screen states, and what it never offers.**
+
+- Linking a product states that *its name and category will be replaced by the provider's and become
+  read-only here*, and linking a category states the same about its name. That is the transition
+  `ProviderManagedCatalogueFields` describes, said at the moment the operator chooses it rather than
+  discovered afterwards on the edit form.
+- The one negotiable field is the **price**: keep mine or take the provider's when linking, accept or
+  skip when a linked product's provider price has moved. The screen notes that either answer is
+  remembered and that leaving both unanswered asks again next review, which is
+  `CatalogueReviewPolicy.IsProposed` in the operator's words.
+- A **unit/volume** is never offered. The provider publishes no unit or volume label, so the API
+  proposes none, and the screen renders a control for the price choice alone — issue #739's
+  out-of-scope note and the owner's decision of 20 October 2026 keep `Product.Unit` locally managed
+  until a human decides which Lynx field, if any, means it.
+- A provider-owned change on an already-linked row is listed as **applied automatically** with the
+  two values, and carries no control at all.
+- The link pickers offer only rows **this business maintains itself** (an empty `providerManagedFields`
+  on the product or category response): a row already carrying a provider id would be refused by the
+  server's own link rule, so offering it would only produce a refusal. Retired products are offered
+  and marked, because a deactivated product is still the provider's product and linking it is better
+  than creating a duplicate of it.
+
+**Every entry starts on Skip**, and an entry the operator answered nothing about is sent as nothing
+at all — a half-decided review must not link the other half by omission. The screen sends decisions
+and nothing else: no provider name, price or group id travels back from the browser, and a link that
+names no local row is refused locally with a message rather than sent, because the server refuses the
+whole apply over one such decision and would throw away every other answer on the screen. Both calls
+are disabled while a support session is active, for the reason every other write on this page is
+(issue #661): a session grants `Imports.Run` and the read-only rule refuses the `POST` itself.
+
 ### Nayax product catalogue import (issue #300)
 
-`POST api/imports/products` is a one-way sync of the Nayax operator catalogue into the local
-product and category tables. It is `Inventory.Application.Imports.ImportNayaxProductCatalog`
-(issue #300, child 2 of 3 of #151), moved unchanged in behaviour out of
-`InventoryApi.Services.ImportService.ImportProductsAsync`:
+**This import no longer exists** (the heading is kept because the sections above and below link to
+it). `POST api/imports/products`,
+`Inventory.Application.Imports.ImportNayaxProductCatalog`, its `INayaxProductCatalogImportStore`
+port, the `EfNayaxProductCatalogImportStore` adapter and `ManualCatalogueImportPolicy` were all
+removed by issue #739 (parent #329 decision C2), which replaced them with the catalogue review above
+for every business. The section is kept because much of the current design is described against it,
+and because what it did is still the right explanation of *why* the review exists:
 
-- The use case reads the operator's products and product groups through the existing
-  `Inventory.Application.Nayax.INayaxLynxClient` port, as one concurrent fan-out of two independent
-  remote calls, and projects them onto the catalogue fields the import owns. A failed Nayax read
-  propagates and nothing is applied, so a partial remote snapshot can never be persisted as a
-  complete catalogue. A product group with no `ProductGroupID`, or with a blank `ProductGroupName`,
-  becomes no category - the same two guards the legacy implementation applied.
-- `INayaxProductCatalogImportStore` is its narrow persistence port, implemented by
-  `Inventory.Infrastructure.Persistence.EfNayaxProductCatalogImportStore`, which moved there with
-  the rest of the adapter family in issue #309. The Products slice ports from
-  issue #240 are deliberately not reused or widened here: `IProductStore.CreateAsync` creates a
-  locally keyed product (with its initial stock adjustment and cost rebuild) from operator input,
-  and `IProductCatalogStore` reads the enriched catalogue graph an API response needs, while this
-  import upserts a product identified by the remote Nayax product id recorded on it and touches
-  only the Nayax-managed catalogue fields.
-- The read-decide-write sequence stays inside that adapter, step for step as the legacy method ran
-  it, rather than being decomposed into Application-level orchestration - the same ownership
-  precedent `EfPurchaseStore`'s multi-step writes follow. The two catalogue reads the legacy method
-  started concurrently on that shared context are now awaited one at a time (see
-  [Concurrency inside one request](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)).
-  That keeps the new-versus-existing decision and the write it feeds together *within one request*,
-  and nothing more: the adapter has no cross-request isolation of its own, and the single scoped
-  `AppDbContext` provides none. There is no lock, no expected-state comparison and no concurrency
-  token, so two overlapping imports can both decide the
-  same product is new (the later `SaveChanges` then fails on the filtered unique index over
-  `(BusinessId, ExternalProductId)`, which since #735 is what refuses a duplicated identity in place
-  of the primary key) and a local catalogue
-  edit to a provider-linked row committed between the read and the write is overwritten by whichever
-  writer commits last.
-  This is the legacy behaviour, carried over unchanged; making the import's upsert safe under
-  concurrent callers needs a concurrency token and is a behaviour change for its own issue.
-- The one cross-request window issue #736 did close is the manual-catalogue guard, because there the
-  stale answer is not a lost edit but a duplicated catalogue. `BeginTransactionAsync` on the same
-  port gives the use case a transaction it opens *after* the remote reads and holds across the
-  authoritative `CountProductsWithNoProviderIdAsync` and `ApplyAsync`, so a product created while
-  Nayax was being read refuses the whole import (`409`) with nothing committed — see
-  [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736).
-- Only four fields are Nayax-managed: `Name`, `Description`, `UnitPrice` (from the catalogue
-  `ProductDefaultRetailPrice`, never the Nayax `ProductCostPrice` - see
-  [Product selling price](#product-selling-price), including the confirmed field name recorded
-  there) and `CategoryId`, plus `UpdatedAt`. Stock,
-  costing, supplier and the operator's own catalogue edits are local state the import does not
-  write. A new product is created with `RestockTo` 0 and the import instant as its `CreatedAt`; an
-  existing category is never renamed, only a missing one is created; and a local product Nayax
-  stopped returning is never removed (that drift is reported by the catalog reconciliation report
-  below). Every row an import creates or updates now carries the same import instant, taken once
-  from the shared `Inventory.Application.Time.IClock` port instead of a per-row `DateTime.UtcNow`.
-- Since issue #732 the import also records the provider identity of every product and category in the
-  snapshot that does not already carry one — on the row itself since issue #759 — and leaves an
-  existing one untouched (see
-  [Provider identity on the local row](#provider-identity-on-the-local-row-issues-732-759-and-735)). It is
-  one of two writers of a Nayax id besides those issues' migrations — the catalogue review's apply
-  (issue #738) is the other, and it writes one only on an operator's explicit decision — and it
-  refuses to run at all for a
-  business whose `SalesProvider` is not Nayax. Since issue #735 (A4) it sets no `Id` at all: the row
-  it creates is keyed by the database and records the remote id beside that key — see
-  [The local key is the database's own](#the-local-key-is-the-databases-own-issue-735).
-- Since issue #745 those recorded ids are also what *identifies* a snapshot entry: the product an
-  entry updates is the one carrying its `NayaxProductID`, a group becomes a new category only when no
-  category of this business carries that group id, and a product's `CategoryId` is the local
-  category its Nayax `ProductGroupID` resolves to (null when the group is unknown) rather than the
-  group id written straight through. A local row with no recorded id whose key equals an incoming Nayax
-  id is never merged into — since #735 the entry creates its own row and leaves that one alone — and
-  an unresolvable group no longer leaves a
-  product pointing at a category that merely shares its number. See [Resolving Nayax ids in the sale paths,
-  the catalogue import and
-  reconciliation](#resolving-nayax-ids-in-the-sale-paths-the-catalogue-import-and-reconciliation-issue-745).
-- Reads and writes are scoped to the caller's business by the central `AppDbContext` query filters
-  and `BusinessOwnershipEnforcer` alone, with no business predicate of its own. Since issue #735 the
-  catalogue is also partitioned per business in fact: a created row's key is the database's own and
-  the provider's id is unique only within one business, so two operators importing the same Nayax
-  catalogue each get their own rows. That removes the known single-operator Nayax limit recorded in
-  [Tenant ownership](#tenant-ownership-issue-64) — `EfNayaxProductCatalogImportStoreTenancyTests`
-  pins both halves: two businesses importing the same product and group ids, and one business's
-  import never reading, rewriting or deleting another business's catalogue row.
-- Since issue #736 the use case refuses to run at all for a business that holds products with no
-  external id, before either remote read: the import would create a duplicate of every one of them,
-  because it identifies a product only by the provider's own id. See
-  [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736);
-  the catalogue review is what replaces the refusal, and issue #738 built its API beside this import
-  rather than inside it — see
-  [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738).
-  Sending the operator there instead of to this refusal is #739.
-- `ImportsController.ImportProducts` calls the use case directly; the route, the constant `true`
-  `200 OK` body and the status codes are unchanged, except for that refusal, which reaches the
-  caller as the centrally mapped `409` of a `DomainConflictException`. The action now also binds the request's
-  `CancellationToken` and passes it through the Nayax and persistence calls, which the legacy
-  signature did not. `ImportService.Products.cs` and `IImportService.ImportProductsAsync` are gone,
-  and `ImportService` no longer takes an `INayaxLynxClient` at all - the legacy service's last
-  Nayax dependency left with this import.
+- It was a one-way write-through sync of the Nayax operator catalogue into the local product and
+  category tables: it created a row for every snapshot entry no local row carried the provider id of,
+  and overwrote `Name`, `Description`, `UnitPrice` (from the catalogue `ProductDefaultRetailPrice`,
+  never the Nayax `ProductCostPrice` — see [Product selling price](#product-selling-price)) and
+  `CategoryId` on every row that did, plus `UpdatedAt`. Stock, costing, supplier and the operator's
+  own local fields were never written. A local product Nayax stopped returning was never removed —
+  that drift is reported by the catalogue reconciliation below.
+- **Two of those four fields are what the review still applies without asking** — the name and the
+  category, because the provider owns them (`ProviderManagedCatalogueFields`). The price became a
+  per-product decision in issue #738, and the **description is no longer taken from the provider at
+  all**: it is not one of the fields the review negotiates or applies, so a provider description
+  change now leaves the local description alone. That is a deliberate consequence of C1/C2 rather
+  than an oversight — the review's contract names exactly the fields it writes.
+- It had no concurrency token, so two overlapping imports could both decide the same product was new
+  and a local edit to a provider-linked row committed between its read and its write was simply
+  overwritten. The review's apply is the opposite shape: it re-reads every row it is about to write
+  inside its own transaction and decides each link there.
+- It refused to run at all for a business holding products with no external id (issue #736), because
+  it identified a product only by the provider's id and would have duplicated every manual row. That
+  refusal is what the review replaced, and removing both together is what issue #739 is.
+- Since issue #735 it set no `Id` at all — the row it created was keyed by the database, with the
+  remote id recorded beside it (see
+  [The local key is the database's own](#the-local-key-is-the-databases-own-issue-735)) — and since
+  issue #745 it identified an entry by that recorded id rather than by a key or a name. The review
+  carries both rules forward unchanged, and `ImportedProductGeneratedIdAttributionTests` now proves
+  the whole generated-key path end to end over the review instead.
+
+Its own migration history is unchanged by the removal: issue #300 moved it out of
+`InventoryApi.Services.ImportService.ImportProductsAsync` (child 2 of 3 of #151) and took
+`ImportService`'s last `INayaxLynxClient` dependency with it, and issue #309 moved its EF adapter
+into `Inventory.Infrastructure.Persistence` with the rest of the adapter family. Neither
+`ImportService.Products.cs` nor `IImportService.ImportProductsAsync` has existed since then. What
+issue #739 removed is the last of that line.
 
 ### Nayax catalog source-state reconciliation
 
@@ -11730,8 +11724,11 @@ files" as the historical record of that slice, not as a test to look for today.
       `Only_the_documented_legacy_services_remain_in_InventoryApi_Services` allow-list updated in the
       same change; `ImportsController`'s other two actions and the rest of `IImportService` were
       left untouched by that slice (both have since migrated, under issues #300 and #301 below).
-    - **Nayax product catalogue import done** (issue #300, child 2 of 3). `POST api/imports/products`
-      is now the `Inventory.Application.Imports.ImportNayaxProductCatalog` use case, over the
+    - **Nayax product catalogue import done** (issue #300, child 2 of 3; the whole path was later
+      removed by issue #739, which replaced it with the catalogue review — see
+      [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)).
+      `POST api/imports/products`
+      became the `Inventory.Application.Imports.ImportNayaxProductCatalog` use case, over the
       existing `Inventory.Application.Nayax.INayaxLynxClient` port and the new narrow
       `INayaxProductCatalogImportStore` persistence port, implemented by
       `Inventory.Infrastructure.Persistence.EfNayaxProductCatalogImportStore` (API-owned until issue #309); see
@@ -11794,7 +11791,7 @@ files" as the historical record of that slice, not as a test to look for today.
     - **The remaining EF adapters relocated, completing #153's persistence move** (issue #309, child 8 of 8 of #153). `InventoryApi/Adapters/Persistence` no longer exists: its last 29 `Ef<Feature>Store`/`Ef<Feature>Provider` adapters and the `NayaxSaleCosting` mapping are now `Inventory.Infrastructure/Persistence` (namespace `Inventory.Infrastructure.Persistence`), beside the `AppDbContext` they all read. `AddInfrastructureServices()` registers all 29 ports, each `Scoped` exactly as its former `Program.cs` registration was; `Program.cs` registers and names none of them, and dropped the 19 Application port namespaces it only imported for those registrations, keeping the `AddDbContext`/`UseSqlite` provider decision and the connection string.
       - **Nothing about behaviour changed.** Per relocated file the diff is the `namespace` directive, the `using` directives and the placement sentences in its doc comment: no query, predicate, projection, ordering, materialisation point, transaction boundary, `SaveChanges` call or `IsRelational()` branch moved with the files, and no schema, migration or API contract is touched. Tenant isolation moved as files, not as behaviour: reads are still scoped only by the `AppDbContext` global query filters and writes still stamped and enforced centrally by `BusinessOwnershipEnforcer` on `SaveChanges`, with no per-caller `BusinessId` predicate added or removed. `NayaxCostableSale` stayed `internal` - its only users are the two sale-importing adapters and `EfSaleCostingStore`, which moved with it.
       - **The `Bootstrap` commands stay thin host commands**, calling Infrastructure services rather than moving their persistence logic into one; see [InventoryApi](#inventoryapi) for the reasoning, including why the three commands that may pass `UnscopedBusinessScope.Instance` are better off outside the injectable adapter layer.
-      - **What pins it.** The existing relational SQLite adapter tests, the two-business isolation tests (`BusinessDataIsolationTests`, `FinancialAdapterTenancyTests`, `EfInventoryCostingAdaptersTenancyTests`, `EfSiteFactsStoreTenancyTests`, `EfProductCatalogStoreTenancyTests`, `EfProductStoreTenancyTests`, `EfNayaxProductCatalogImportStoreTenancyTests`, `NayaxImportTenantIsolationTests`, `ProtectedDocumentTenantIsolationTests`) and the Application/controller suites all cover the relocated adapters unchanged apart from the namespace they import - which is what shows queries, transactions and isolation are identical. The new `PersistenceAdapterOwnershipTests` pins the ownership itself: each of the 31 relocated types is declared in `Inventory.Infrastructure` and in no `InventoryApi` type, `AddInfrastructureServices()` registers each of the 29 ports once against the expected Infrastructure implementation and `Scoped` lifetime, `Program.cs` names none of them, `InventoryApi/Adapters/Persistence` holds no git-tracked file, and `Inventory.Infrastructure/Persistence` holds one file per adapter.
+      - **What pins it.** The existing relational SQLite adapter tests, the two-business isolation tests (`BusinessDataIsolationTests`, `FinancialAdapterTenancyTests`, `EfInventoryCostingAdaptersTenancyTests`, `EfSiteFactsStoreTenancyTests`, `EfProductCatalogStoreTenancyTests`, `EfProductStoreTenancyTests`, `EfNayaxProductCatalogImportStoreTenancyTests` (removed with that import by issue #739, where `EfCatalogueReviewStoreTenancyTests` carries the same isolation), `NayaxImportTenantIsolationTests`, `ProtectedDocumentTenantIsolationTests`) and the Application/controller suites all cover the relocated adapters unchanged apart from the namespace they import - which is what shows queries, transactions and isolation are identical. The new `PersistenceAdapterOwnershipTests` pins the ownership itself: each of the 31 relocated types is declared in `Inventory.Infrastructure` and in no `InventoryApi` type, `AddInfrastructureServices()` registers each of the 29 ports once against the expected Infrastructure implementation and `Scoped` lifetime, `Program.cs` names none of them, `InventoryApi/Adapters/Persistence` holds no git-tracked file, and `Inventory.Infrastructure/Persistence` holds one file per adapter.
       - **Not in this slice.** The adapters' tests keep their `InventoryApi.Tests/Adapters/Persistence` location, for the same reason issues #307 and #308 left `MigrationRelocationTests` and the reporting adapter tests where they were. `EfNayaxSalesQueries` kept the `public` modifier issue #308 gave it even though its callers were by then in the same assembly, and the final architecture rules stayed as they were - both belonged to #154, which has since done both (see the final enforcement bullet below).
     - **Final enforcement done** (issue #154, after every slice of #145-#153). No business service, use-case orchestration, financial/classification rule or persistence implementation is left in `InventoryApi`, and that is now enforced rather than documented: `ApiLayerOwnershipTests` replaced #145's legacy-services allow-list with eleven rules over the API project, the inner layers and the completed-sale predicate - see [InventoryApi](#inventoryapi) for the list and [Temporary API-owned exception](#temporary-api-owned-exception-and-its-enforcement-issue-145) for why an empty allow-list was not enough. `EfNayaxSalesQueries` is `internal` again, so an expression over the EF model cannot leave the layer that can translate it; nothing else about behaviour, routes, response shapes, the schema or financial semantics changed. Each rule was verified by introducing a deliberate violation of it, confirming the failure, and removing it.
     - Still pending for the remaining feature areas, now only on the persistence-model and published-contract side: the unreferenced `Machine` entity leftover above, and the `StockAdjustmentReason`/`StockAdjustmentSource` wire enums the stock DTOs still name because the Swagger compatibility boundary publishes those components (see [InventoryApi](#inventoryapi); retiring them is an API contract change #154 excluded and needs its own issue). No direct-access controller or service remains: every endpoint goes through an `Inventory.Application` use case, which `ApiLayerOwnershipTests` asserts per controller. Only after the two leftovers above are resolved and tests prove equivalent behavior does this step complete overall.
@@ -11950,7 +11947,7 @@ This is the inventory the decision was made against. "Request-driven" means a si
 | Backup retention, alerting and restore runbook | No compute at all. Retention is an Azure Blob lifecycle policy executed by the storage service, the two alerts are Azure Monitor log search rules, and restore stays a deliberate, human-run procedure with a non-production rehearsal; all of it is applied by a human, and the uploader's seam (`IBackupBlobContainer`) still exposes no delete and no overwrite, so retention cannot be performed by that code path even accidentally | Designed and documented (#334); human Azure setup outstanding — see [Backup retention, alerting and restore rehearsal](#backup-retention-alerting-and-restore-rehearsal-issue-334) | No, and no compute host either. Retention turned out to be a storage-lifecycle question, which is why it needs neither a WebJob nor a Function. |
 | Latest Nayax sales synchronization — `Inventory.Application.SalesSync.SyncLatestNayaxSales` | Request-driven: `POST /api/nayax-sales-sync`, called once by the home dashboard before it loads Sites and Machines (#187) | Implemented, request-driven | No. Its result is precisely what the operator is waiting to see; moving it onto a schedule would decouple the refresh from the screen that needs it, and would not remove the request-driven path. |
 | Machine stock event import and Sync Restock reconciliation — `Inventory.Application.MachineStockSync` | Request-driven from the machines feature (#183) | Implemented, request-driven | No. |
-| Nayax product catalogue import — `Inventory.Application.Imports.ImportNayaxProductCatalog` | Request-driven: `ImportsController` (#300) | Implemented, request-driven | No. |
+| Nayax product catalogue import — `Inventory.Application.CatalogueReview` (`ImportNayaxProductCatalog` until issue #739 replaced it) | Request-driven: `CatalogueReviewController`, over the decisions the operator took on the review screen (#739) | Implemented, request-driven | No. Less schedulable than before, not more: the apply exists to carry out one person's decisions. |
 | Pending reimbursement XML import — `Inventory.Application.Imports.ImportPendingReimbursementXmlFiles` | Request-driven: `ImportsController`, over files the operator has supplied | Implemented, request-driven | No. |
 | Historical inventory cost rebuild — `Inventory.Application.Costing.IRebuildProductCost` | In-process, invoked by the use case whose write invalidated a product's costs (for example an imported completed sale) | Implemented | No. |
 | Member display name and email refresh — `Inventory.Application.Tenancy.RefreshMemberProfile` | In-process, in the API's own single hosted drain: a request schedules it after its response is decided and the drain writes it in a new service scope, at most once an hour per membership | Implemented (#524); see [Member display name and email](#member-display-name-and-email-issue-524) | No, and nothing else could host it: it is triggered by a request, it is two display columns of that caller's own membership row, and it is worth nothing once stale (self-healing — the member's next request schedules another). An out-of-process writer is also outside the single-writer SQLite envelope. |
