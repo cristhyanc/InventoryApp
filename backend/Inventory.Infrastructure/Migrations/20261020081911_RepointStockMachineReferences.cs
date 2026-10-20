@@ -52,11 +52,8 @@ namespace Inventory.Infrastructure.Migrations
     /// </summary>
     public partial class RepointStockMachineReferences : Migration
     {
-        /// <summary>
-        /// The guard the refusals below are raised through: a one-column scratch table whose inserts
-        /// a trigger aborts whenever the count being inserted is not zero.
-        /// </summary>
-        private const string GuardTable = "StockMachineRepointGuard";
+        /// <summary>The scratch table and trigger the refusals below are raised through.</summary>
+        private static readonly SqliteRefusalGuard Guard = new("StockMachineRepointGuard");
 
         /// <summary>
         /// Whether the referencing row's stored provider machine number names a local machine of its
@@ -76,13 +73,13 @@ namespace Inventory.Infrastructure.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            CreateGuard(migrationBuilder);
+            Guard.Create(migrationBuilder);
 
             // Both tables are checked before either is written, so a refusal on the second leaves the
             // first untouched as well.
             foreach (var table in Tables)
             {
-                RefuseWhenNotZero(
+                Guard.RefuseWhenNotZero(
                     migrationBuilder,
                     $"A row of {table} names a machine number that has no local machine in its "
                         + "business, so repointing the stock machine references onto local machines was "
@@ -114,7 +111,7 @@ namespace Inventory.Infrastructure.Migrations
 
             foreach (var table in Tables)
             {
-                RefuseWhenNotZero(
+                Guard.RefuseWhenNotZero(
                     migrationBuilder,
                     $"Repointing {table} onto local machines did not leave every machine reference "
                         + "naming a machine of its own business, so it is refused and rolled back rather "
@@ -128,13 +125,13 @@ namespace Inventory.Infrastructure.Migrations
                     """);
             }
 
-            DropGuard(migrationBuilder);
+            Guard.Drop(migrationBuilder);
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            CreateGuard(migrationBuilder);
+            Guard.Create(migrationBuilder);
 
             // A machine somebody created locally carries no provider number, and the release this
             // returns to reads both columns as one, so there is nothing to write back and the
@@ -142,7 +139,7 @@ namespace Inventory.Infrastructure.Migrations
             // NayaxExternalId could have written: anything else is not a number these columns held.
             foreach (var table in Tables)
             {
-                RefuseWhenNotZero(
+                Guard.RefuseWhenNotZero(
                     migrationBuilder,
                     $"A row of {table} names a local machine that carries no provider machine number, "
                         + "so putting the provider's numbers back was refused and nothing was changed.",
@@ -170,52 +167,7 @@ namespace Inventory.Infrastructure.Migrations
                     """);
             }
 
-            DropGuard(migrationBuilder);
-        }
-
-        /// <summary>
-        /// Creates the scratch table every check above inserts its count into. It is dropped again
-        /// once the checks have passed, so this migration leaves nothing behind but the repointed
-        /// columns and their constraints.
-        /// </summary>
-        private static void CreateGuard(MigrationBuilder migrationBuilder) =>
-            migrationBuilder.Sql(
-                $"""
-                CREATE TABLE "{GuardTable}" ("Offending" INTEGER NOT NULL);
-                """);
-
-        private static void DropGuard(MigrationBuilder migrationBuilder) =>
-            migrationBuilder.Sql($"""DROP TABLE "{GuardTable}";""");
-
-        /// <summary>
-        /// Aborts the migration with <paramref name="message"/> when <paramref name="countingSql"/>
-        /// counts anything at all.
-        ///
-        /// <para>A trigger is the only way SQLite can raise an error with a message of its own, so
-        /// one is created, the count is inserted through it, and it is dropped again. The message is
-        /// a literal because <c>RAISE</c> takes no expression; it names the rule that was broken and
-        /// no row data, because it reaches the startup log.</para>
-        /// </summary>
-        private static void RefuseWhenNotZero(
-            MigrationBuilder migrationBuilder, string message, string countingSql)
-        {
-            var trigger = $"TR_{GuardTable}_Refuse";
-
-            migrationBuilder.Sql(
-                $"""
-                CREATE TRIGGER "{trigger}" BEFORE INSERT ON "{GuardTable}"
-                WHEN NEW."Offending" <> 0
-                BEGIN
-                    SELECT RAISE(ABORT, '{message.Replace("'", "''")}');
-                END;
-                """);
-
-            migrationBuilder.Sql(
-                $"""
-                INSERT INTO "{GuardTable}" ("Offending") {countingSql};
-                """);
-
-            migrationBuilder.Sql($"""DROP TRIGGER "{trigger}";""");
+            Guard.Drop(migrationBuilder);
         }
     }
 }
