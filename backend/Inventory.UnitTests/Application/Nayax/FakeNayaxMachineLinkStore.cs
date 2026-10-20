@@ -46,4 +46,19 @@ public sealed class FakeNayaxMachineLinkStore : INayaxMachineLinkStore
 
         return Task.FromResult<IReadOnlyDictionary<long, long>>(resolved);
     }
+
+    /// <summary>The local machine ids each reverse lookup was asked for, in call order.</summary>
+    public List<long> ReverseRequests { get; } = [];
+
+    public Task<long?> GetNayaxMachineIdAsync(long localMachineId, CancellationToken cancellationToken)
+    {
+        ReverseRequests.Add(localMachineId);
+
+        var nayaxMachineIds = _localMachineIdByNayaxId
+            .Where(link => link.Value == localMachineId)
+            .Select(link => (long?)link.Key)
+            .ToList();
+
+        return Task.FromResult(nayaxMachineIds.Count == 1 ? nayaxMachineIds[0] : null);
+    }
 }

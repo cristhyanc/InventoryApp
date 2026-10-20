@@ -15,8 +15,9 @@ namespace InventoryApi.Controllers;
 /// <para><strong>It works with no sales provider at all</strong>, which is the point of the issue. It
 /// is therefore a different resource from <c>/api/machines</c>, which is the live Nayax fleet with
 /// this business's sales and costs resolved onto it and needs working credentials for every one of
-/// its reads. Issue #741 (G2) is what repoints the stored machine references at these rows, and
-/// #742 (G3) is the provider machine review; neither is in this surface.</para>
+/// its reads. Since issue #741 (G2) the stored stock and count machine references point at these
+/// rows too, and <c>/api/machines/{id}</c> takes their ids; #742 (G3) is the provider machine
+/// review, which is not in this surface.</para>
 ///
 /// <para>Every action requires <c>Inventory.Operate</c> (issue #525), the same capability the fleet
 /// controller and the rest of day-to-day stock keeping declare: recording the machines you refill is

@@ -42,8 +42,8 @@
             <label for="adjustment-machine" class="field-label">Machine (optional)</label>
             <select id="adjustment-machine" [(ngModel)]="form.machineId" name="machineId">
               <option [ngValue]="null">— None —</option>
-              @for (m of machines; track m.machineID) {
-                <option [ngValue]="m.machineID">{{ m.machineName || m.machineID }}</option>
+              @for (m of attributableMachines; track m.machineID) {
+                <option [ngValue]="m.localMachineId">{{ m.machineName || m.machineID }}</option>
               }
             </select>
           </div>

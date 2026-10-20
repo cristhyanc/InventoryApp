@@ -228,6 +228,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateLocalMachine>();
         services.AddScoped<RenameLocalMachine>();
         services.AddScoped<SetLocalMachineActivation>();
+        // The route id of every api/machines/{id} endpoint is a local machine (issue #741); this is
+        // the one place it becomes the pair of ids the features behind those routes need.
+        services.AddScoped<ResolveMachineIdentity>();
         services.AddScoped<ListMachineDashboard>();
         services.AddScoped<GetMachineDashboard>();
         services.AddScoped<ListMachineProducts>();

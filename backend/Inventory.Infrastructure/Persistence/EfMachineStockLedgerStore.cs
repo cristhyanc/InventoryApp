@@ -1,3 +1,4 @@
+using Inventory.Application.Machines;
 using Inventory.Application.MachineStock;
 using Inventory.Domain.MachineStock;
 using Inventory.Domain.Nayax;
@@ -36,13 +37,21 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
     public EfMachineStockLedgerStore(AppDbContext db) => _db = db;
 
     public async Task<MachineStockLedgerFacts> GetLedgerFactsAsync(
-        long machineId, IReadOnlyCollection<long> observedProductIds, CancellationToken cancellationToken)
+        MachineIdentity machine, IReadOnlyCollection<long> observedProductIds, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(machine);
         ArgumentNullException.ThrowIfNull(observedProductIds);
+
+        // Two ids for one machine (issue #741): the refills and counts are this application's rows
+        // and name the local machine; the sales, the opening baseline and the Nayax stock events are
+        // the provider's and name its number. A machine with no Nayax number has none of the latter,
+        // and no predicate below may compare a provider column with the local id.
+        var localMachineId = machine.LocalMachineId;
+        var nayaxMachineId = machine.NayaxMachineId;
 
         var refills = await _db.StockAdjustments
             .AsNoTracking()
-            .Where(adjustment => adjustment.MachineId == machineId
+            .Where(adjustment => adjustment.MachineId == localMachineId
                 && adjustment.Reason == StockAdjustmentReason.MachineRefill)
             .Select(adjustment => new MachineRefillFact(
                 adjustment.Id, adjustment.ProductId, adjustment.QuantityChange, adjustment.EffectiveAt))
@@ -54,7 +63,7 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
         var attributedSales = await _db.NayaxSales
             .AsNoTracking()
             .Where(EfNayaxSalesQueries.CompletedSalePredicate)
-            .Where(sale => sale.MachineID == machineId)
+            .Where(sale => nayaxMachineId != null && sale.MachineID == nayaxMachineId)
             .Select(sale => new { sale.TransactionID, sale.ProductId, sale.MachineAuthorizationTime })
             .ToListAsync(cancellationToken);
 
@@ -67,7 +76,7 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
 
         var counts = await _db.MachineStockCounts
             .AsNoTracking()
-            .Where(count => count.MachineId == machineId)
+            .Where(count => count.MachineId == localMachineId)
             .Select(count => new MachineStockCountFact(
                 count.Id, count.ProductId, count.CountedQuantity, count.CountedAtUtc))
             .ToListAsync(cancellationToken);
@@ -77,7 +86,7 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
         // it is used only where no later count exists.
         var openingBaselines = await _db.InventoryCostTransitionMachineStocks
             .AsNoTracking()
-            .Where(machineStock => machineStock.MachineId == machineId)
+            .Where(machineStock => nayaxMachineId != null && machineStock.MachineId == nayaxMachineId)
             .Select(machineStock => new MachineStockOpeningBaselineFact(
                 machineStock.InventoryCostTransitionBaseline!.ProductId,
                 machineStock.StockQuantity,
@@ -86,7 +95,7 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
 
         var pendingEventCount = await _db.NayaxMachineStockEvents
             .AsNoTracking()
-            .Where(stockEvent => stockEvent.MachineId == machineId
+            .Where(stockEvent => nayaxMachineId != null && stockEvent.MachineId == nayaxMachineId
                 && stockEvent.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed)
             .CountAsync(cancellationToken);
 
@@ -108,7 +117,7 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
     }
 
     public async Task<MachineStockCountRecord?> RecordCountAsync(
-        long machineId,
+        long localMachineId,
         long productId,
         int countedQuantity,
         DateTime countedAtUtc,
@@ -125,7 +134,7 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
 
         var count = new MachineStockCount
         {
-            MachineId = machineId,
+            MachineId = localMachineId,
             ProductId = productId,
             CountedQuantity = countedQuantity,
             CountedAtUtc = countedAtUtc,
@@ -135,6 +144,6 @@ public sealed class EfMachineStockLedgerStore : IMachineStockLedgerStore
         await _db.SaveChangesAsync(cancellationToken);
 
         return new MachineStockCountRecord(
-            count.Id, machineId, productId, product.Name, countedQuantity, countedAtUtc, notes);
+            count.Id, localMachineId, productId, product.Name, countedQuantity, countedAtUtc, notes);
     }
 }

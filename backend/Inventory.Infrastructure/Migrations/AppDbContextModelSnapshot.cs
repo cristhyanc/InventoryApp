@@ -1919,6 +1919,8 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("ReceiptItemId");
 
+                    b.HasIndex("BusinessId", "MachineId");
+
                     b.ToTable("StockAdjustments");
                 });
 
@@ -2244,6 +2246,13 @@ namespace Inventory.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("Inventory.Infrastructure.Models.LocalMachine", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "MachineId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
                     b.Navigation("Product");
                 });
 
@@ -2400,6 +2409,12 @@ namespace Inventory.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("ReceiptItemId")
                         .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Inventory.Infrastructure.Models.LocalMachine", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "MachineId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Product");
 

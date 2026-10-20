@@ -284,7 +284,7 @@
                   <td class="table-cell">
                     <a
                       class="table-row-anchor"
-                      [routerLink]="['/machines', machine.machineID]"
+                      [routerLink]="machine.localMachineId != null ? ['/machines', machine.localMachineId] : null"
                       [attr.aria-label]="'View details for ' + (machine.machineName || 'Unnamed machine')">{{ machine.machineName || 'Unnamed machine' }}</a>
                   </td>
                   @if (canViewFinancials) {

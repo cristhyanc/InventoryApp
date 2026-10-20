@@ -109,6 +109,9 @@ function createComponent(
 
 const MACHINE: Machine = {
   machineID: 1,
+  // The local machine (issue #741), which the machine details route takes; deliberately not the
+  // provider's number above.
+  localMachineId: 501,
   machineName: 'Machine A',
   machineNumber: 'A1',
   todayGrossRevenue: 12,
@@ -635,7 +638,7 @@ describe('DashboardComponent Machines row navigation', () => {
     const link = table.querySelector('tbody tr td a') as HTMLAnchorElement;
 
     expect(link).not.toBeNull();
-    expect(link.getAttribute('href')).toBe('/machines/1');
+    expect(link.getAttribute('href')).toBe('/machines/501');
     expect(link.textContent?.trim()).toBe('Machine A');
     expect(link.getAttribute('aria-label')).toBe('View details for Machine A');
     expect(table.querySelector('.btn')).toBeNull();
@@ -657,7 +660,7 @@ describe('DashboardComponent Machines row navigation', () => {
     const row = machinesTable(host).querySelector('tbody tr') as HTMLElement;
     row.click();
 
-    expect(navigatedUrls(navigateByUrl)).toEqual(['/machines/1']);
+    expect(navigatedUrls(navigateByUrl)).toEqual(['/machines/501']);
   });
 
   it('navigates once, through the link, when the link itself is clicked', async () => {
@@ -667,7 +670,7 @@ describe('DashboardComponent Machines row navigation', () => {
     const link = machinesTable(host).querySelector('tbody tr td a') as HTMLAnchorElement;
     link.click();
 
-    expect(navigatedUrls(navigateByUrl)).toEqual(['/machines/1']);
+    expect(navigatedUrls(navigateByUrl)).toEqual(['/machines/501']);
   });
 
   it('leaves a ctrl-click on the row to the browser so the link can open in a new tab', async () => {
@@ -688,7 +691,7 @@ describe('DashboardComponent Machines row navigation', () => {
     link.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     link.click(); // the browser's own activation of a focused anchor on Enter
 
-    expect(navigatedUrls(navigateByUrl)).toEqual(['/machines/1']);
+    expect(navigatedUrls(navigateByUrl)).toEqual(['/machines/501']);
   });
 
 });

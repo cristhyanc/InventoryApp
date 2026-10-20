@@ -30,4 +30,14 @@ public interface INayaxMachineLinkStore
     /// </summary>
     Task<IReadOnlyDictionary<long, long>> GetLocalMachineIdsAsync(
         IReadOnlyCollection<long> nayaxMachineIds, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The Nayax machine number the current business has recorded for local machine
+    /// <paramref name="localMachineId"/>, or <c>null</c> when that machine carries none - a machine
+    /// the business created itself - when no such machine is visible, or when the business does not
+    /// sell through Nayax (issue #741). The reverse of <see cref="GetLocalMachineIdsAsync"/>, with
+    /// the same rules: a stored id this application could not have written is not a Nayax number
+    /// and resolves to nothing.
+    /// </summary>
+    Task<long?> GetNayaxMachineIdAsync(long localMachineId, CancellationToken cancellationToken);
 }

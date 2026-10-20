@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Nayax;
@@ -78,7 +79,7 @@ public class SyncRestockTimestampContractTests
         var useCase = new SyncMachineStockFromNayax(
             NoNewAlertsClient().Object, store, new EfNayaxProductLinkStore(db));
 
-        var preview = await useCase.Handle(MachineId, CancellationToken.None);
+        var preview = await useCase.Handle(new MachineIdentity(LocalMachineId: 31, NayaxMachineId: MachineId), CancellationToken.None);
         var evt = Assert.Single(preview.Events);
 
         // This is the actual boundary the frontend depends on: does a value freshly read back from

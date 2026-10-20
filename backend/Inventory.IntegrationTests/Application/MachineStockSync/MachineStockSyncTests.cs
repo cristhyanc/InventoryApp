@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Inventory.Application.Costing;
+using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Nayax;
 using Inventory.Application.Stock;
@@ -37,7 +38,17 @@ namespace InventoryApi.Tests.Application.MachineStockSync;
 /// </summary>
 public class MachineStockSyncTests
 {
+    /// <summary>The machine's Nayax number: what the provider's alerts and stock events carry.</summary>
     private const long MachineId = 900;
+
+    /// <summary>
+    /// The same machine's local id (issue #741), deliberately a different number from
+    /// <see cref="MachineId"/> so a test cannot pass by confusing the two: the movement a refill
+    /// writes records this one.
+    /// </summary>
+    private const long LocalMachineId = 31;
+
+    private static readonly MachineIdentity Machine = new(LocalMachineId, MachineId);
     private const long ProductId = 200;
     private static readonly DateTime EventTime = new(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
 
@@ -70,6 +81,13 @@ public class MachineStockSyncTests
             Status = BusinessStatus.Active,
             SalesProvider = ExternalProvider.Nayax,
             CreatedAtUtc = EventTime,
+        });
+        setup.Machines.Add(new LocalMachine
+        {
+            BusinessId = SellerBusinessId,
+            Id = LocalMachineId,
+            Name = "Machine 900",
+            ExternalMachineId = NayaxExternalId.From(MachineId),
         });
         setup.SaveChanges();
     }
@@ -118,12 +136,14 @@ public class MachineStockSyncTests
 
     /// <summary>The manual-fallback stock adjustment path a Nayax refill is compared/distinguished against, now routed through the issue #282 use case instead of the retired <c>StockService</c>.</summary>
     private static AdjustStock ManualAdjustUseCase(AppDbContext db, IRebuildProductCost? rebuild = null) =>
-        new(new EfStockAdjustmentStore(db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)));
+        new(
+            new EfStockAdjustmentStore(db, TestCostingUseCases.RecordMovement(db), rebuild ?? TestCostingUseCases.Rebuild(db)),
+            new EfLocalMachineStore(db));
 
     private static Task ApplyManualMachineRefillAsync(AppDbContext db, int quantityChange, string notes) =>
         ManualAdjustUseCase(db).Handle(
             ProductId,
-            new ManualStockAdjustmentInput(quantityChange, DomainStock.StockAdjustmentReason.MachineRefill, notes, MachineId, null, null),
+            new ManualStockAdjustmentInput(quantityChange, DomainStock.StockAdjustmentReason.MachineRefill, notes, LocalMachineId, null, null),
             CancellationToken.None);
 
     private static Product SeedCostedProduct(
@@ -198,7 +218,7 @@ public class MachineStockSyncTests
         ]);
         var (sync, _) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         Assert.Equal(1, preview.NewEventCount);
         var evt = Assert.Single(preview.Events);
@@ -228,7 +248,7 @@ public class MachineStockSyncTests
         ], machineProducts);
         var (sync, _) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         Assert.Equal(2, preview.Events.Count);
         var impact = Assert.Single(preview.ProductImpacts);
@@ -253,7 +273,7 @@ public class MachineStockSyncTests
         ], machineProducts);
         var (sync, _) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         var evt = Assert.Single(preview.Events);
         Assert.Equal(NayaxStockEventMatchStatus.Matched, evt.MatchStatus);
@@ -275,13 +295,13 @@ public class MachineStockSyncTests
         ], machineProducts);
         var (sync, apply) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         var evt = Assert.Single(preview.Events);
         Assert.Equal(NayaxStockEventMatchStatus.NeedsReview, evt.MatchStatus);
         Assert.Contains("mismatch", evt.NeedsReviewReason, StringComparison.OrdinalIgnoreCase);
 
-        var applyResult = await apply.Handle(MachineId, [evt.Id], CancellationToken.None);
+        var applyResult = await apply.Handle(Machine, [evt.Id], CancellationToken.None);
         Assert.Equal(NayaxStockEventApplyOutcome.NotMatched, applyResult.Results[0].Outcome);
         Assert.Equal(10, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
     }
@@ -298,7 +318,7 @@ public class MachineStockSyncTests
         ], []);
         var (sync, _) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         var evt = Assert.Single(preview.Events);
         Assert.Equal(NayaxStockEventMatchStatus.NeedsReview, evt.MatchStatus);
@@ -316,7 +336,7 @@ public class MachineStockSyncTests
         var nayax = NayaxClientReturning([StockAlert(1, "Nothing useful here")]);
         var (sync, _) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         var evt = Assert.Single(preview.Events);
         Assert.Equal(NayaxStockEventMatchStatus.NeedsReview, evt.MatchStatus);
@@ -340,15 +360,15 @@ public class MachineStockSyncTests
         ]);
         var (sync, apply) = UseCases(db, nayax.Object);
 
-        var first = await sync.Handle(MachineId, CancellationToken.None);
+        var first = await sync.Handle(Machine, CancellationToken.None);
         Assert.Equal(1, first.NewEventCount);
         var eventId = first.Events[0].Id;
 
-        var applied = await apply.Handle(MachineId, [eventId], CancellationToken.None);
+        var applied = await apply.Handle(Machine, [eventId], CancellationToken.None);
         Assert.Equal(NayaxStockEventApplyOutcome.Applied, applied.Results[0].Outcome);
 
         // Re-fetching the same alert must not create a second event or a second deduction.
-        var second = await sync.Handle(MachineId, CancellationToken.None);
+        var second = await sync.Handle(Machine, CancellationToken.None);
         Assert.Equal(0, second.NewEventCount);
         Assert.Empty(second.Events);
         Assert.Equal("No new Nayax stock-adjustment alerts to review.", second.Message);
@@ -375,7 +395,7 @@ public class MachineStockSyncTests
         ]);
         var (sync, _) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         Assert.Equal(2, preview.NewEventCount);
         Assert.Equal([1001L, 1002L], preview.Events.Select(e => e.NayaxEventLogId).Order());
@@ -402,7 +422,7 @@ public class MachineStockSyncTests
         alert.EntityTypeName = "Machine";
         var (sync, _) = UseCases(db, NayaxClientReturning([alert]).Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         var evt = Assert.Single(preview.Events);
         Assert.Equal(5550001, evt.NayaxEventLogId);
@@ -439,11 +459,11 @@ public class MachineStockSyncTests
         ]);
         var (sync, apply) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
         var eventId = preview.Events[0].Id;
-        var first = await apply.Handle(MachineId, [eventId], CancellationToken.None);
+        var first = await apply.Handle(Machine, [eventId], CancellationToken.None);
 
-        var second = await apply.Handle(MachineId, [eventId], CancellationToken.None);
+        var second = await apply.Handle(Machine, [eventId], CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Applied, second.Results[0].Outcome);
         Assert.Equal("Already applied.", second.Results[0].Message);
@@ -459,7 +479,7 @@ public class MachineStockSyncTests
         var nayax = NayaxClientReturning([]);
         var (sync, _) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         Assert.Empty(preview.Events);
         Assert.Equal("No new Nayax stock-adjustment alerts to review.", preview.Message);
@@ -481,8 +501,8 @@ public class MachineStockSyncTests
         ]);
         var (sync, apply) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
-        var result = await apply.Handle(MachineId, [preview.Events[0].Id], CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
+        var result = await apply.Handle(Machine, [preview.Events[0].Id], CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Results[0].Outcome);
         var product = await db.Products.FindAsync(ProductId);
@@ -493,7 +513,7 @@ public class MachineStockSyncTests
         var movement = await db.StockAdjustments.SingleAsync(x => x.Reason == StockAdjustmentReason.MachineRefill);
         Assert.Equal(StockAdjustmentSource.Nayax, movement.Source);
         Assert.Equal(-8, movement.QuantityChange);
-        Assert.Equal(MachineId, movement.MachineId);
+        Assert.Equal(LocalMachineId, movement.MachineId);
 
         var evt = await db.NayaxMachineStockEvents.SingleAsync();
         Assert.Equal(NayaxStockEventProcessingStatus.Applied, evt.ProcessingStatus);
@@ -517,13 +537,13 @@ public class MachineStockSyncTests
         ], [new() { NayaxProductID = ProductId, MDBCode = 13, ProductName = "Nu Pure Spring Water 600mL" }]);
         var (sync, apply) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
         var previewEvent = preview.Events[0];
         Assert.True(previewEvent.IsInsufficientStock);
         Assert.Equal(4, previewEvent.AvailableStorageQuantity);
         Assert.Equal(1, previewEvent.UnaccountedDifference);
 
-        var result = await apply.Handle(MachineId, [previewEvent.Id], CancellationToken.None);
+        var result = await apply.Handle(Machine, [previewEvent.Id], CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.InsufficientStock, result.Results[0].Outcome);
         Assert.Equal(4, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
@@ -547,12 +567,12 @@ public class MachineStockSyncTests
         ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
         var (sync, apply) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
         var previewEvent = preview.Events[0];
         Assert.True(previewEvent.IsDiscrepancy);
         Assert.Equal(-3, previewEvent.ParsedQuantity);
 
-        var result = await apply.Handle(MachineId, [previewEvent.Id], CancellationToken.None);
+        var result = await apply.Handle(Machine, [previewEvent.Id], CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.NotApplicable, result.Results[0].Outcome);
         Assert.Equal(10, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
@@ -576,11 +596,11 @@ public class MachineStockSyncTests
         ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
         var (sync, apply) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
         Assert.Equal(2, preview.Events.Count);
         var ids = preview.Events.Select(e => e.Id).ToArray();
 
-        var result = await apply.Handle(MachineId, ids, CancellationToken.None);
+        var result = await apply.Handle(Machine, ids, CancellationToken.None);
 
         var validResult = result.Results.Single(r => r.EventId == preview.Events.Single(e => e.MatchStatus == NayaxStockEventMatchStatus.Matched).Id);
         var invalidResult = result.Results.Single(r => r.EventId == preview.Events.Single(e => e.MatchStatus == NayaxStockEventMatchStatus.NeedsReview).Id);
@@ -602,9 +622,9 @@ public class MachineStockSyncTests
         ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
         var (sync, apply) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
-        var result = await apply.Handle(MachineId + 1, [preview.Events[0].Id], CancellationToken.None);
+        var result = await apply.Handle(new MachineIdentity(LocalMachineId, MachineId + 1), [preview.Events[0].Id], CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Error, result.Results[0].Outcome);
         Assert.Equal("Event not found for this machine.", result.Results[0].Message);
@@ -636,8 +656,8 @@ public class MachineStockSyncTests
 
         var (sync, apply) = UseCases(db, nayax.Object, failingRebuild.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
-        var result = await apply.Handle(MachineId, [preview.Events[0].Id], CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
+        var result = await apply.Handle(Machine, [preview.Events[0].Id], CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Error, result.Results[0].Outcome);
 
@@ -667,8 +687,8 @@ public class MachineStockSyncTests
         ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
         var (sync, apply) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
-        await apply.Handle(MachineId, [preview.Events[0].Id], CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
+        await apply.Handle(Machine, [preview.Events[0].Id], CancellationToken.None);
 
         var movements = await db.StockAdjustments
             .Where(x => x.Reason == StockAdjustmentReason.MachineRefill)
@@ -701,7 +721,7 @@ public class MachineStockSyncTests
         ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
         var (sync, _) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         var evt = Assert.Single(preview.Events);
         Assert.True(evt.IsPossibleDuplicate);
@@ -730,7 +750,7 @@ public class MachineStockSyncTests
         ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
         var (sync, _) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         var evt = Assert.Single(preview.Events);
         Assert.True(evt.IsPossibleDuplicate);
@@ -753,7 +773,7 @@ public class MachineStockSyncTests
         ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
         var (sync, _) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         var evt = Assert.Single(preview.Events);
         Assert.False(evt.IsPossibleDuplicate);
@@ -789,7 +809,7 @@ public class MachineStockSyncTests
         var (sync, apply) = UseCases(db, nayax.Object, rebuild);
         var resolve = ResolveUseCase(db, rebuild);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
         var evt = Assert.Single(preview.Events);
         Assert.True(evt.IsPossibleDuplicate);
 
@@ -802,7 +822,7 @@ public class MachineStockSyncTests
         using var db = CreateInMemoryDb(nameof(Ordinary_apply_refuses_a_flagged_possible_duplicate));
         var (_, apply, _, eventId, _) = await SeedDuplicateScenarioAsync(db);
 
-        var result = await apply.Handle(MachineId, [eventId], CancellationToken.None);
+        var result = await apply.Handle(Machine, [eventId], CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.DuplicateRequiresResolution, result.Results[0].Outcome);
         Assert.Equal(16, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
@@ -816,7 +836,7 @@ public class MachineStockSyncTests
         var (_, _, resolve, eventId, manualAdjustmentId) = await SeedDuplicateScenarioAsync(db);
 
         var result = await resolve.Handle(
-            MachineId, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+            Machine, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, result.Outcome);
         Assert.Null(result.StockAdjustmentId);
@@ -837,9 +857,9 @@ public class MachineStockSyncTests
         var (_, _, resolve, eventId, _) = await SeedDuplicateScenarioAsync(db);
 
         var first = await resolve.Handle(
-            MachineId, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+            Machine, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
         var second = await resolve.Handle(
-            MachineId, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+            Machine, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, first.Outcome);
         Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, second.Outcome);
@@ -854,11 +874,11 @@ public class MachineStockSyncTests
         var (_, apply, resolve, eventId, manualAdjustmentId) = await SeedDuplicateScenarioAsync(db);
 
         // The ordinary apply path still refuses it; only the explicit resolution may override it.
-        var ordinary = await apply.Handle(MachineId, [eventId], CancellationToken.None);
+        var ordinary = await apply.Handle(Machine, [eventId], CancellationToken.None);
         Assert.Equal(NayaxStockEventApplyOutcome.DuplicateRequiresResolution, ordinary.Results[0].Outcome);
 
         var result = await resolve.Handle(
-            MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+            Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Outcome);
         Assert.NotNull(result.StockAdjustmentId);
@@ -884,9 +904,9 @@ public class MachineStockSyncTests
         var (_, _, resolve, eventId, _) = await SeedDuplicateScenarioAsync(db);
 
         var first = await resolve.Handle(
-            MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+            Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
         var second = await resolve.Handle(
-            MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+            Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Applied, first.Outcome);
         Assert.Equal(NayaxStockEventApplyOutcome.Applied, second.Outcome);
@@ -908,12 +928,12 @@ public class MachineStockSyncTests
         var (sync, _) = UseCases(db, nayax.Object);
         var resolve = ResolveUseCase(db);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
         var eventId = preview.Events[0].Id;
         Assert.False(preview.Events[0].IsPossibleDuplicate);
 
         var result = await resolve.Handle(
-            MachineId, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+            Machine, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.NotApplicable, result.Outcome);
         Assert.Equal(20, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
@@ -945,11 +965,11 @@ public class MachineStockSyncTests
             manualAdjustmentId = seededManualId;
 
             // The ordinary apply path still refuses it; only the explicit resolution may override.
-            var ordinary = await apply.Handle(MachineId, [eventId], CancellationToken.None);
+            var ordinary = await apply.Handle(Machine, [eventId], CancellationToken.None);
             Assert.Equal(NayaxStockEventApplyOutcome.DuplicateRequiresResolution, ordinary.Results[0].Outcome);
 
             var result = await resolve.Handle(
-                MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+                Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
 
             Assert.Equal(NayaxStockEventApplyOutcome.Applied, result.Outcome);
             returnedAdjustmentId = result.StockAdjustmentId;
@@ -963,7 +983,7 @@ public class MachineStockSyncTests
             await verify.StockAdjustments.Where(x => x.Source == StockAdjustmentSource.Nayax).ToListAsync());
         Assert.Equal(StockAdjustmentReason.MachineRefill, nayaxMovement.Reason);
         Assert.Equal(-4, nayaxMovement.QuantityChange);
-        Assert.Equal(MachineId, nayaxMovement.MachineId);
+        Assert.Equal(LocalMachineId, nayaxMovement.MachineId);
         Assert.Equal(returnedAdjustmentId, nayaxMovement.Id);
 
         // Storage: 20 seeded, 4 taken by the manual refill, 4 by this Nayax event - deducted once.
@@ -1002,7 +1022,7 @@ public class MachineStockSyncTests
             eventId = seededEventId;
 
             var first = await resolve.Handle(
-                MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+                Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
             Assert.Equal(NayaxStockEventApplyOutcome.Applied, first.Outcome);
             firstAdjustmentId = first.StockAdjustmentId;
         }
@@ -1015,7 +1035,7 @@ public class MachineStockSyncTests
         await using (var db = TestAppDbContext.For(options, SellerBusinessId))
         {
             var second = await ResolveUseCase(db).Handle(
-                MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+                Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
 
             Assert.Equal(NayaxStockEventApplyOutcome.Applied, second.Outcome);
             Assert.Equal(firstAdjustmentId, second.StockAdjustmentId);
@@ -1049,7 +1069,7 @@ public class MachineStockSyncTests
             eventId = seededEventId;
 
             var result = await resolve.Handle(
-                MachineId, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
+                Machine, eventId, NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock, CancellationToken.None);
 
             Assert.Equal(NayaxStockEventApplyOutcome.Error, result.Outcome);
             Assert.Null(result.StockAdjustmentId);
@@ -1094,7 +1114,7 @@ public class MachineStockSyncTests
         ], [new() { NayaxProductID = ProductId, MDBCode = 7, ProductName = "Coke 375mL" }]);
         var (sync, _) = UseCases(db, nayax.Object);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
 
         Assert.Equal(2, preview.Events.Count);
         Assert.Equal(0, preview.HiddenReconciledCount);
@@ -1116,9 +1136,9 @@ public class MachineStockSyncTests
         var (sync, _) = UseCases(db, nayax.Object);
 
         // The unfiltered call imports both alerts as facts; only the previewed list is bounded by date.
-        await sync.Handle(MachineId, CancellationToken.None);
+        await sync.Handle(Machine, CancellationToken.None);
 
-        var filtered = await sync.Handle(MachineId, CancellationToken.None, EventTime.AddDays(-1));
+        var filtered = await sync.Handle(Machine, CancellationToken.None, EventTime.AddDays(-1));
 
         var evt = Assert.Single(filtered.Events);
         Assert.Equal(2, evt.NayaxEventLogId);
@@ -1134,15 +1154,15 @@ public class MachineStockSyncTests
         var (sync, _, resolve, eventId, _) = await SeedDuplicateScenarioAsync(db);
 
         var resolved = await resolve.Handle(
-            MachineId, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
+            Machine, eventId, NayaxDuplicateResolutionChoice.AlreadyRecordedManually, CancellationToken.None);
         Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, resolved.Outcome);
 
-        var hidden = await sync.Handle(MachineId, CancellationToken.None);
+        var hidden = await sync.Handle(Machine, CancellationToken.None);
         Assert.Empty(hidden.Events);
         Assert.Equal(1, hidden.HiddenReconciledCount);
         Assert.Equal("No new Nayax stock-adjustment alerts to review.", hidden.Message);
 
-        var shown = await sync.Handle(MachineId, CancellationToken.None, includeReconciled: true);
+        var shown = await sync.Handle(Machine, CancellationToken.None, includeReconciled: true);
         var evt = Assert.Single(shown.Events);
         Assert.Equal(NayaxDuplicateResolution.ReconciledManually, evt.DuplicateResolution);
         Assert.Equal(0, shown.HiddenReconciledCount);
@@ -1214,10 +1234,10 @@ public class MachineStockSyncTests
         var (sync, _) = UseCases(db, nayax.Object);
         var bulkResolve = BulkResolveUseCase(db);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
         var ids = preview.Events.Select(e => e.Id).ToArray();
 
-        var result = await bulkResolve.Handle(MachineId, ids, CancellationToken.None);
+        var result = await bulkResolve.Handle(Machine, ids, CancellationToken.None);
 
         Assert.All(result.Results, r => Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, r.Outcome));
         Assert.Equal(10, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
@@ -1245,13 +1265,13 @@ public class MachineStockSyncTests
         var (sync, _) = UseCases(db, nayax.Object);
         var bulkResolve = BulkResolveUseCase(db);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
         var eventId = preview.Events[0].Id;
 
-        var first = await bulkResolve.Handle(MachineId, [eventId], CancellationToken.None);
+        var first = await bulkResolve.Handle(Machine, [eventId], CancellationToken.None);
         var firstResolvedAt = (await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId)).DuplicateResolvedAt;
 
-        var second = await bulkResolve.Handle(MachineId, [eventId], CancellationToken.None);
+        var second = await bulkResolve.Handle(Machine, [eventId], CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, first.Results[0].Outcome);
         Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, second.Results[0].Outcome);
@@ -1274,11 +1294,11 @@ public class MachineStockSyncTests
         var (sync, _) = UseCases(db, nayax.Object);
         var bulkResolve = BulkResolveUseCase(db);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
         var validEventId = preview.Events[0].Id;
         const int missingEventId = 999_999;
 
-        var result = await bulkResolve.Handle(MachineId, [validEventId, missingEventId], CancellationToken.None);
+        var result = await bulkResolve.Handle(Machine, [validEventId, missingEventId], CancellationToken.None);
 
         var validResult = result.Results.Single(r => r.EventId == validEventId);
         var invalidResult = result.Results.Single(r => r.EventId == missingEventId);
@@ -1304,11 +1324,11 @@ public class MachineStockSyncTests
         var (sync, _) = UseCases(db, nayax.Object);
         var bulkResolve = BulkResolveUseCase(db);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
         var eventId = preview.Events[0].Id;
         Assert.False(preview.Events[0].IsPossibleDuplicate);
 
-        var result = await bulkResolve.Handle(MachineId, [eventId], CancellationToken.None);
+        var result = await bulkResolve.Handle(Machine, [eventId], CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, result.Results[0].Outcome);
         Assert.Equal(20, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
@@ -1325,7 +1345,7 @@ public class MachineStockSyncTests
         var (_, _, _, eventId, manualAdjustmentId) = await SeedDuplicateScenarioAsync(db);
         var bulkResolve = BulkResolveUseCase(db);
 
-        var result = await bulkResolve.Handle(MachineId, [eventId], CancellationToken.None);
+        var result = await bulkResolve.Handle(Machine, [eventId], CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.Reconciled, result.Results[0].Outcome);
         var stored = await db.NayaxMachineStockEvents.SingleAsync(e => e.Id == eventId);
@@ -1346,12 +1366,12 @@ public class MachineStockSyncTests
         var (sync, apply) = UseCases(db, nayax.Object);
         var bulkResolve = BulkResolveUseCase(db);
 
-        var preview = await sync.Handle(MachineId, CancellationToken.None);
+        var preview = await sync.Handle(Machine, CancellationToken.None);
         var eventId = preview.Events[0].Id;
-        var applied = await apply.Handle(MachineId, [eventId], CancellationToken.None);
+        var applied = await apply.Handle(Machine, [eventId], CancellationToken.None);
         Assert.Equal(NayaxStockEventApplyOutcome.Applied, applied.Results[0].Outcome);
 
-        var result = await bulkResolve.Handle(MachineId, [eventId], CancellationToken.None);
+        var result = await bulkResolve.Handle(Machine, [eventId], CancellationToken.None);
 
         Assert.Equal(NayaxStockEventApplyOutcome.NotApplicable, result.Results[0].Outcome);
         Assert.Equal(8, (await db.Products.FindAsync(ProductId))!.QuantityInStock);
@@ -1377,7 +1397,7 @@ public class MachineStockSyncTests
         var (sync, _) = UseCases(db, nayax.Object);
 
         await Assert.ThrowsAsync<Inventory.Infrastructure.Nayax.NayaxUpstreamException>(
-            () => sync.Handle(MachineId, CancellationToken.None));
+            () => sync.Handle(Machine, CancellationToken.None));
     }
 
     #endregion

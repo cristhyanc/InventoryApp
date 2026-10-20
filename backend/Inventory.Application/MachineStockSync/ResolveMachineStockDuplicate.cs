@@ -1,3 +1,4 @@
+using Inventory.Application.Machines;
 using Inventory.Domain.Nayax;
 
 namespace Inventory.Application.MachineStockSync;
@@ -21,9 +22,13 @@ public sealed class ResolveMachineStockDuplicate
     }
 
     public async Task<NayaxStockEventApplyResultDto> Handle(
-        long machineId, int eventId, NayaxDuplicateResolutionChoice choice, CancellationToken cancellationToken)
+        MachineIdentity machine, int eventId, NayaxDuplicateResolutionChoice choice, CancellationToken cancellationToken)
     {
-        var state = await _store.FindEventAsync(machineId, eventId, cancellationToken);
+        ArgumentNullException.ThrowIfNull(machine);
+
+        // The event is the provider's, found by the Nayax number; the manual refills it may duplicate
+        // are this application's movements and name the local machine (issue #741).
+        var state = await _store.FindEventAsync(machine.RequiredNayaxMachineId, eventId, cancellationToken);
         if (state is null)
             return new(eventId, NayaxStockEventApplyOutcome.Error, "Event not found for this machine.", null);
 
@@ -41,7 +46,7 @@ public sealed class ResolveMachineStockDuplicate
         if (state.ProcessingStatus == NayaxStockEventProcessingStatus.Applied)
             return new(eventId, NayaxStockEventApplyOutcome.Applied, "Already applied.", state.StockAdjustmentId);
 
-        var manualRefills = await _store.GetManualMachineRefillsAsync(machineId, cancellationToken);
+        var manualRefills = await _store.GetManualMachineRefillsAsync(machine.LocalMachineId, cancellationToken);
         var duplicate = state.MatchStatus == NayaxStockEventMatchStatus.Matched
             && state.MatchedProductId is long matchedProductId
             && state.ParsedQuantity is > 0
@@ -61,18 +66,18 @@ public sealed class ResolveMachineStockDuplicate
         return choice switch
         {
             NayaxDuplicateResolutionChoice.AlreadyRecordedManually =>
-                await ReconcileAsync(machineId, state, duplicate.Value, cancellationToken),
+                await ReconcileAsync(machine, state, duplicate.Value, cancellationToken),
             NayaxDuplicateResolutionChoice.ApplyAsSeparateRestock =>
-                await ApplyAsSeparateRestockAsync(machineId, state, duplicate.Value, cancellationToken),
+                await ApplyAsSeparateRestockAsync(machine, state, duplicate.Value, cancellationToken),
             _ => new(eventId, NayaxStockEventApplyOutcome.Error, "Unknown duplicate resolution.", null)
         };
     }
 
     private async Task<NayaxStockEventApplyResultDto> ReconcileAsync(
-        long machineId, MachineStockEventState state, ManualRefillEvidence duplicate, CancellationToken cancellationToken)
+        MachineIdentity machine, MachineStockEventState state, ManualRefillEvidence duplicate, CancellationToken cancellationToken)
     {
         await _store.ReconcileAsManualDuplicateAsync(
-            state.Id, machineId, duplicate.StockAdjustmentId, cancellationToken);
+            state.Id, machine.RequiredNayaxMachineId, duplicate.StockAdjustmentId, cancellationToken);
 
         return new(
             state.Id,
@@ -82,7 +87,7 @@ public sealed class ResolveMachineStockDuplicate
     }
 
     private async Task<NayaxStockEventApplyResultDto> ApplyAsSeparateRestockAsync(
-        long machineId, MachineStockEventState state, ManualRefillEvidence duplicate, CancellationToken cancellationToken)
+        MachineIdentity machine, MachineStockEventState state, ManualRefillEvidence duplicate, CancellationToken cancellationToken)
     {
         var product = state.MatchedProductId is long productId
             ? await _store.FindStorageProductAsync(productId, cancellationToken)
@@ -116,7 +121,7 @@ public sealed class ResolveMachineStockDuplicate
 
         var application = await _store.ApplyRefillAsync(
             state.Id,
-            machineId,
+            machine,
             state.NayaxEventLogId,
             state.MatchedProductId!.Value,
             state.ParsedQuantity!.Value,

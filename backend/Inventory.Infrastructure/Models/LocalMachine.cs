@@ -28,11 +28,12 @@ namespace Inventory.Infrastructure.Models;
 /// category columns.</para>
 ///
 /// <para>Issue #740 repointed nothing at this table. Since issue #780 (G2a)
-/// <c>OperatingExpense.MachineId</c> holds <see cref="Id"/>, with <c>(BusinessId, MachineId)</c> a
-/// foreign key on this row's <c>(BusinessId, Id)</c> key; every other stored machine reference - a
-/// sale's, a refill's, a machine count's, a stock event's, a timestamp repair's, an inventory-cost
-/// transition's - still holds the provider's number, and issue #741 (the stock half of G2) is what
-/// moves those.</para>
+/// <c>OperatingExpense.MachineId</c> holds <see cref="Id"/>, and since issue #741 (the stock half of
+/// G2) <c>StockAdjustment.MachineId</c> and <c>MachineStockCount.MachineId</c> do too, each with
+/// <c>(BusinessId, MachineId)</c> a foreign key on this row's <c>(BusinessId, Id)</c> key. The
+/// provider's own data - a sale's, a stock event's, a timestamp repair's and an inventory-cost
+/// transition's machine - still holds the provider's number, and a reader that needs both resolves
+/// one to the other through <see cref="ExternalMachineId"/>.</para>
 ///
 /// <para>The name <c>LocalMachine</c> rather than <c>Machine</c> is not a second concept: the
 /// retired response shape <see cref="Machine"/> still occupies that type name as the reference value

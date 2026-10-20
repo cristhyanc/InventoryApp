@@ -9799,9 +9799,9 @@ keeps working for a business with no provider — which is the whole point of th
 | `OperatingExpense.MachineId` | the raw Nayax machine number, no foreign key | `Machines.Id`, with `(BusinessId, MachineId)` a foreign key on the `(BusinessId, Id)` key of `Machines`, restricted on delete |
 | Expense create/update/read/filter | the provider's number | the local machine id, and a machine that is not one of this business's is refused |
 | `GET api/machines` | the provider's number only | adds `localMachineId` beside `machineID`; every existing field is unchanged |
-| `GET api/machines/{id}` | the provider's number only | **unchanged** — out of scope (issue #741); it resolves no local machine id and answers `null` in the field the shared wire shape carries |
+| `GET api/machines/{id}` | the provider's number only | **unchanged** — out of scope (issue #741); it resolves no local machine id and answers `null` in the field the shared wire shape carries. [#741](#stock-machine-references-issue-741) has since moved the route onto the local id |
 | Report machine filters and machine keys | the provider's number | **unchanged** — still the provider's number |
-| `StockAdjustment.MachineId`, `MachineStockCount.MachineId`, `NayaxSales.MachineID`, the provider event tables, `InventoryCostTransitionMachineStock` | the provider's number | **unchanged** — issue #741 |
+| `StockAdjustment.MachineId`, `MachineStockCount.MachineId`, `NayaxSales.MachineID`, the provider event tables, `InventoryCostTransitionMachineStock` | the provider's number | **unchanged** — issue #741, which [has since repointed](#stock-machine-references-issue-741) the first two |
 
 **The migration is two, and the second one refuses rather than guesses.**
 `AddMachineBusinessKey` declares the `(BusinessId, Id)` alternate key on `Machines` and changes no
@@ -9861,6 +9861,64 @@ was incurred, and retiring a machine must not make its historical expenses unedi
 changes; the provider event tables and `InventoryCostTransitionMachineStock`; changing any report
 filter to a local id; and the provider machine review (#742), machine dropdowns without a provider
 (#746) and provider switching (#761).
+
+### Stock machine references (issue #741)
+
+The second half of G2 (parent #329), after [the expense half](#expense-machine-references-issue-780).
+**A stock movement and a machine count now name the business's own machine row, and every
+`api/machines/{id}` route takes that row's id**, so the machine-stock ledger and its counts work for
+a machine the provider does not know.
+
+| | Before | After |
+| --- | --- | --- |
+| `StockAdjustment.MachineId`, `MachineStockCount.MachineId` | the raw Nayax machine number, no foreign key | `Machines.Id`, each with `(BusinessId, MachineId)` a foreign key on the `(BusinessId, Id)` key of `Machines`, restricted on delete |
+| `api/machines/{id}` (detail, products, latest-sales, sync-restock and its apply/resolve routes, stock-ledger, counts) | the provider's number | the local machine id; an id that is not a machine of this business — including a provider number an older client sends — is a `404` |
+| `GET api/machines/{id}` | `localMachineId` always `null` | answers the route's local id beside `machineID` |
+| Stock adjustment body, stock history filter | the provider's number | the local machine id; a machine that is not one of this business's is refused with `ManualStockAdjustmentPolicy.UnknownMachineMessage` |
+| `NayaxSales.MachineID`, `NayaxMachineStockEvent.MachineId`, `NayaxSaleTimestampRepair.MachineId`, `InventoryCostTransitionMachineStock.MachineId` | the provider's number | **unchanged** |
+| Pick list, report machine filters, admin cost-transition and timestamp-repair screens | the provider's number | **unchanged** |
+
+**The route id is resolved once, into both names.** `Inventory.Application.Machines.ResolveMachineIdentity`
+turns the route's local id into a `MachineIdentity(LocalMachineId, NayaxMachineId)`: the machine must
+be visible through `ILocalMachineStore` (the ordinary tenant filters), and its Nayax number comes
+from `INayaxMachineLinkStore.GetNayaxMachineIdAsync`, the reverse of the #780 lookup with the same
+rules — only while the business sells through Nayax, and only a value `NayaxExternalId` could have
+written. A provider number is never tried as a fallback: a local id equal to a Nayax number names a
+different machine. Features that touch both kinds of data carry the pair rather than one number, so
+a local id is never sent to the provider and a provider number is never stored as a local reference.
+
+**What each route does with a machine that has no Nayax number** — one the business created
+itself, or any machine of a business with no provider. The detail and products reads and Sync Restock
+answer `404`, because they read only the provider. Latest sales answers `200` with the
+`NoSalesProvider` state #768 already defined, without calling Nayax. The stock ledger and counts work
+normally: they are this application's own data, and the reconciliation reports the observation as
+unavailable rather than asking the provider about a machine it does not know.
+
+**The ledger reads by both ids.** `EfMachineStockLedgerStore` reads refills and counts by the local
+id and sales, opening baselines and pending stock events by the same machine's Nayax number (none,
+when it has none), and writes counts with the local id. Sync Restock finds the provider's stock events
+by the Nayax number and records the movement it writes, and the manual refills it compares against,
+by the local id, so a Nayax refill and a manual refill of the same machine still meet.
+
+**The migration is two, for SQLite's sake.** `RepointStockMachineReferences` refuses before it writes
+— both tables are checked before either is updated, and a non-null number with no local machine in
+its business, a stored `0` included, aborts the upgrade with nothing changed — then repoints both
+columns on `(BusinessId, ExternalMachineId = CAST(MachineId AS TEXT))` and verifies the result, the
+pattern #780 used. `AddStockMachineForeignKeys` then adds the index and the two foreign keys. They are
+separate because SQLite rebuilds a table to add or drop a foreign key, and EF Core runs that rebuild
+at the **end** of the migration that asks for it: in one migration, `Down` would write the provider's
+numbers back while the foreign key still stood and fail on every database with a machine reference.
+Split, the foreign keys' `Down` drops them first and the repoint's `Down` then restores the numbers,
+refusing if a referenced machine has none. Downgrade is therefore not unconditional: that refusal
+leaves the database at `RepointStockMachineReferences` (local ids, no foreign keys), because the
+foreign keys' `Down` has already committed. The code of the release that introduced both reads that
+state correctly, but no earlier release does, so a verified backup is the real rollback. `RepointOperatingExpenseMachines` (#780) keeps the
+combined shape and so has the same `Down` ordering; that is not changed here.
+
+**The frontend.** The machine list and the dashboard link to `/machines/{localMachineId}` and link
+nothing for a listed machine with no local record; the machine page passes the route id to its tabs;
+the restock, the stock adjustment form and the stock history filter submit and match `localMachineId`
+and offer only machines that have one.
 
 ### Resolving a Nayax product id to a local product (issue #733)
 

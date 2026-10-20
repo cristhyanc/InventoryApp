@@ -30,10 +30,10 @@ namespace Inventory.Application.Machines;
 /// issue #551) are outages or refusals, not a machine that has sold nothing, and this read never
 /// writes a connection status of its own.</para>
 ///
-/// <para>The machine is identified by the same <c>MachineID</c> the other
-/// <c>api/machines/{id}</c> endpoints use today, which is the provider's own machine id (issue #741
-/// repoints every one of them together). It is passed straight through, so this read cannot drift
-/// from <c>GET api/machines/{id}</c> onto a different machine.</para>
+/// <para>The machine is identified by its provider number. Since issue #741 the route takes the
+/// local machine id and resolves it to that number first, so this read and <c>GET
+/// api/machines/{id}</c> always read the same machine; a machine with no provider number never
+/// reaches it.</para>
 /// </summary>
 public sealed class GetMachineLatestSales
 {

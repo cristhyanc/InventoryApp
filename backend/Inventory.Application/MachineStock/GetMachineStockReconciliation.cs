@@ -1,3 +1,4 @@
+using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
 using Inventory.Application.Time;
 using Inventory.Domain.MachineStock;
@@ -35,13 +36,22 @@ public sealed class GetMachineStockReconciliation
         _clock = clock;
     }
 
-    public async Task<MachineStockReconciliationDto> Handle(long machineId, CancellationToken cancellationToken)
+    public async Task<MachineStockReconciliationDto> Handle(MachineIdentity machine, CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(machine);
+
         MachineStockObservation? observation;
         MachineStockDataQualityIssue? sourceIssue = null;
         try
         {
-            observation = await _observations.GetObservationAsync(machineId, cancellationToken);
+            // The machine's own stock report is the provider's, read by its Nayax number. A machine
+            // with none - one the business created itself (issue #741) - has no report to read, which
+            // is the same "nothing observed" state an unreachable provider is.
+            observation = machine.NayaxMachineId is { } nayaxMachineId
+                ? await _observations.GetObservationAsync(nayaxMachineId, cancellationToken)
+                : null;
+            if (observation is null)
+                sourceIssue = SourceUnavailable();
         }
         catch (NayaxNotConnectedException)
         {
@@ -56,7 +66,7 @@ public sealed class GetMachineStockReconciliation
 
         var observedSlots = observation?.Slots ?? [];
         var facts = await _store.GetLedgerFactsAsync(
-            machineId,
+            machine,
             observedSlots.Select(slot => slot.ProductId).Distinct().ToList(),
             cancellationToken);
 
@@ -82,7 +92,7 @@ public sealed class GetMachineStockReconciliation
             .ToList();
 
         return new MachineStockReconciliationDto(
-            machineId,
+            machine.LocalMachineId,
             _clock.UtcNow,
             observation?.ObservedAtUtc,
             rows,

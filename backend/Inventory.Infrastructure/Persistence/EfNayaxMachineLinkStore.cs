@@ -38,4 +38,7 @@ public sealed class EfNayaxMachineLinkStore : INayaxMachineLinkStore
         return await EfMachineLinkQueries.LocalMachineIdsByNayaxIdAsync(
             _db, nayaxMachineIds, cancellationToken);
     }
+
+    public Task<long?> GetNayaxMachineIdAsync(long localMachineId, CancellationToken cancellationToken) =>
+        EfMachineLinkQueries.NayaxMachineIdByLocalIdAsync(_db, localMachineId, cancellationToken);
 }

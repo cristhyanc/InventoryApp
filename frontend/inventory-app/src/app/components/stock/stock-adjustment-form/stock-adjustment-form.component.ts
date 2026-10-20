@@ -102,9 +102,17 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     }
   }
 
+  /**
+   * The machines an adjustment can name: those with a local machine record (issue #741), because
+   * a stock movement records the local machine and the API refuses a provider machine number.
+   */
+  get attributableMachines(): Machine[] {
+    return this.machines.filter((machine) => machine.localMachineId != null);
+  }
+
   /** Whether a machine may be attributed at all; see {@link machines}. */
   get machineFieldShown(): boolean {
-    return this.machines.length > 0;
+    return this.attributableMachines.length > 0;
   }
 
   get requiresRestockCost(): boolean {

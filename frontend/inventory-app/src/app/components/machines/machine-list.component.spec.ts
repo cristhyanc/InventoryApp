@@ -53,8 +53,8 @@ function machine(overrides: Partial<Machine>): Machine {
   };
 }
 
-const MACHINE_A = machine({ machineID: 10, machineName: 'Front Lobby Snacks', machineNumber: 'A-100', todayGrossRevenue: 12.5, todayDirectProfit: 5 });
-const MACHINE_B = machine({ machineID: 20, machineName: 'Gym Drinks', machineNumber: 'B-200', todayGrossRevenue: 30, todayDirectProfit: null });
+const MACHINE_A = machine({ machineID: 10, localMachineId: 110, machineName: 'Front Lobby Snacks', machineNumber: 'A-100', todayGrossRevenue: 12.5, todayDirectProfit: 5 });
+const MACHINE_B = machine({ machineID: 20, localMachineId: 120, machineName: 'Gym Drinks', machineNumber: 'B-200', todayGrossRevenue: 30, todayDirectProfit: null });
 
 describe('MachineListComponent loading', () => {
   it('loads machines from MachineService.getAll on init', () => {
@@ -202,9 +202,20 @@ describe('MachineListComponent rendering', () => {
     const fixture = await renderList([MACHINE_A]);
     const host = fixture.nativeElement as HTMLElement;
 
-    const link = host.querySelector('a[href="/machines/10"]');
+    const link = host.querySelector('a[href="/machines/110"]');
     expect(link).not.toBeNull();
     expect(link?.textContent).toContain('Front Lobby Snacks');
+  });
+
+  it('links a machine by its local id, and does not link one the business has no local record for (issue #741)', async () => {
+    const unrecorded = machine({ machineID: 30, localMachineId: null, machineName: 'Not yet recorded' });
+    const fixture = await renderList([MACHINE_A, unrecorded]);
+    const host = fixture.nativeElement as HTMLElement;
+
+    expect(host.querySelector('a[href="/machines/10"]')).toBeNull();
+    const cards = Array.from(host.querySelectorAll('a')).filter((a) => a.textContent?.includes('Not yet recorded'));
+    expect(cards).toHaveLength(1);
+    expect(cards[0].getAttribute('href')).toBeNull();
   });
 
   it('shows the Nayax status banner when the connection is not Ready (issue #539)', async () => {

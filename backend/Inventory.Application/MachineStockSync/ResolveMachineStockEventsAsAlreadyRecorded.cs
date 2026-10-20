@@ -1,3 +1,4 @@
+using Inventory.Application.Machines;
 using Inventory.Domain.Nayax;
 
 namespace Inventory.Application.MachineStockSync;
@@ -28,26 +29,29 @@ public sealed class ResolveMachineStockEventsAsAlreadyRecorded
     }
 
     public async Task<NayaxMachineStockApplyResponseDto> Handle(
-        long machineId, IReadOnlyList<int> eventIds, CancellationToken cancellationToken)
+        MachineIdentity machine, IReadOnlyList<int> eventIds, CancellationToken cancellationToken)
     {
-        var manualRefills = await _store.GetManualMachineRefillsAsync(machineId, cancellationToken);
+        ArgumentNullException.ThrowIfNull(machine);
+
+        // Events by the provider's number, manual refills by the local machine (issue #741).
+        var manualRefills = await _store.GetManualMachineRefillsAsync(machine.LocalMachineId, cancellationToken);
         var results = new List<NayaxStockEventApplyResultDto>();
 
         foreach (var eventId in eventIds.Distinct())
         {
-            results.Add(await ResolveOneAsync(machineId, eventId, manualRefills, cancellationToken));
+            results.Add(await ResolveOneAsync(machine.RequiredNayaxMachineId, eventId, manualRefills, cancellationToken));
         }
 
         return new NayaxMachineStockApplyResponseDto(results);
     }
 
     private async Task<NayaxStockEventApplyResultDto> ResolveOneAsync(
-        long machineId,
+        long nayaxMachineId,
         int eventId,
         IReadOnlyList<ManualRefillEvidence> manualRefills,
         CancellationToken cancellationToken)
     {
-        var state = await _store.FindEventAsync(machineId, eventId, cancellationToken);
+        var state = await _store.FindEventAsync(nayaxMachineId, eventId, cancellationToken);
         if (state is null)
             return new(eventId, NayaxStockEventApplyOutcome.Error, "Event not found for this machine.", null);
 
@@ -82,7 +86,7 @@ public sealed class ResolveMachineStockEventsAsAlreadyRecorded
                 : null;
 
         await _store.ReconcileAsManualDuplicateAsync(
-            state.Id, machineId, duplicate?.StockAdjustmentId, cancellationToken);
+            state.Id, nayaxMachineId, duplicate?.StockAdjustmentId, cancellationToken);
 
         return new(
             state.Id,
