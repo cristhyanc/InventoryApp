@@ -18,6 +18,7 @@ using Inventory.Application.Reporting.Shared;
 using Inventory.Application.Reporting.Transactions;
 using Inventory.Domain.Gst;
 using Inventory.Domain.Providers;
+using Inventory.Domain.Tenancy;
 using Inventory.Domain.Reporting;
 using Inventory.Domain.Reporting.Availability;
 using Inventory.Domain.FinancialConfiguration;
@@ -1221,8 +1222,23 @@ public class ReportingRegressionTests
     {
         using var db = CreateDbContext();
         var date = new DateTime(2025, 8, 1);
+        // The machine the expense below is attributed to, as issue #780 records it: the local
+        // machine row the AddMachines backfill created for provider machine 10, whose own key is
+        // deliberately not that number. The reports' machine keys and filters stay the provider's
+        // number, so every total here is the same as before the repoint.
+        db.Businesses.Add(new Business
+        {
+            Id = 1,
+            Name = "Vending A",
+            Status = BusinessStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+            SalesProvider = ExternalProvider.Nayax,
+        });
+        var machine10 = new LocalMachine { Id = 55, BusinessId = 1, Name = "Alpha One", ExternalMachineId = "10" };
+        db.Machines.Add(machine10);
         db.NayaxSales.Add(new NayaxSales
         {
+            BusinessId = 1,
             TransactionID = 300,
             MachineID = 10,
             MachineName = "Alpha One",
@@ -1242,8 +1258,8 @@ public class ReportingRegressionTests
             Basis = CommissionBasis.GrossSales
         });
         db.OperatingExpenses.AddRange(
-            new OperatingExpense { ExpenseDate = date, MachineId = 10, TotalAmount = 5m },
-            new OperatingExpense { ExpenseDate = date, TotalAmount = 20m });
+            new OperatingExpense { BusinessId = 1, ExpenseDate = date, MachineId = machine10.Id, TotalAmount = 5m },
+            new OperatingExpense { BusinessId = 1, ExpenseDate = date, TotalAmount = 20m });
         db.Receipts.Add(new Purchase { Title = "Delivery", PurchaseDate = date, DeliveryCost = 5m });
         await db.SaveChangesAsync();
 

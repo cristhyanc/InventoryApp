@@ -46,15 +46,17 @@ public class MachinesControllerTests
         IMachineDashboardFactsStore? dashboardFacts = null,
         IProductCatalogStore? catalog = null,
         IMachineStockLedgerStore? ledger = null,
-        IMachineStockObservationSource? observations = null)
+        IMachineStockObservationSource? observations = null,
+        INayaxMachineLinkStore? machineLinks = null)
     {
         var nayaxClient = nayax ?? Mock.Of<INayaxLynxClient>();
         var facts = dashboardFacts ?? Mock.Of<IMachineDashboardFactsStore>();
         var ledgerStore = ledger ?? EmptyLedger();
         var observationSource = observations ?? NoObservedSlots();
+        var machines = machineLinks ?? FakeNayaxMachineLinkStore.NothingLinked();
         return new(
-            new GetMachineDashboard(nayaxClient, facts, Time.Clock, Time.Calendar),
-            new ListMachineDashboard(nayaxClient, facts, Time.Clock, Time.Calendar),
+            new GetMachineDashboard(nayaxClient, facts, machines, Time.Clock, Time.Calendar),
+            new ListMachineDashboard(nayaxClient, facts, machines, Time.Clock, Time.Calendar),
             new ListMachineProducts(
                 nayaxClient,
                 catalog ?? Mock.Of<IProductCatalogStore>(),
@@ -278,6 +280,37 @@ public class MachinesControllerTests
 
         var machines = Assert.IsType<List<MachineResponse>>(Assert.IsType<OkObjectResult>(result.Result).Value);
         Assert.Equal(MachineId, Assert.Single(machines).MachineID);
+    }
+
+    /// <summary>
+    /// Issue #780: the machine list the expense form reads carries this business's own machine row
+    /// for each machine, alongside - never instead of - the provider's number. A machine the
+    /// business has recorded none for carries <c>null</c>, which is "no local machine", so the form
+    /// cannot offer it rather than attributing a cost to a machine nothing recorded.
+    /// </summary>
+    [Fact]
+    public async Task GetAll_carries_the_local_machine_id_beside_the_providers_machine_number()
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+            [
+                new NayaxMachine { MachineID = MachineId, MachineName = "Pavillion Left", CustomerID = 91 },
+                new NayaxMachine { MachineID = 99, MachineName = "Brand new", CustomerID = 91 },
+            ]);
+
+        var result = await Controller(
+                Mock.Of<IMachineStockEventStore>(),
+                nayax.Object,
+                EmptyCostedFacts(),
+                machineLinks: FakeNayaxMachineLinkStore.Linking((MachineId, 4321)))
+            .GetAll();
+
+        var machines = Assert.IsType<List<MachineResponse>>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        var known = Assert.Single(machines, machine => machine.MachineID == MachineId);
+        Assert.Equal(4321, known.LocalMachineId);
+        Assert.Equal(MachineId, known.MachineID);
+        Assert.Null(Assert.Single(machines, machine => machine.MachineID == 99).LocalMachineId);
     }
 
     /// <summary>

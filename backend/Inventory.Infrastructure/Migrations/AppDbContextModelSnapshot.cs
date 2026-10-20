@@ -1415,6 +1415,8 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("SupplierId");
 
+                    b.HasIndex("BusinessId", "MachineId");
+
                     b.ToTable("OperatingExpenses");
                 });
 
@@ -2285,6 +2287,12 @@ namespace Inventory.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("SupplierId")
                         .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Inventory.Infrastructure.Models.LocalMachine", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "MachineId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Supplier");
                 });

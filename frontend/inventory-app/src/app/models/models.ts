@@ -377,6 +377,14 @@ export interface LocalMachine {
  */
 export interface Machine {
   machineID: number;
+  /**
+   * This business's own machine record for the same machine (issue #780), or `null`/absent when it
+   * has recorded none. It is what a form that stores a reference to a machine must submit - the
+   * operating expense does - while `machineID` stays the provider's own number, which the machine
+   * pages, the stock workflows and the report filters still speak. The two are never
+   * interchangeable: a local id equal to a provider number is a coincidence.
+   */
+  localMachineId?: number | null;
   machineName?: string | null;
   machineNumber?: string | null;
   todayGrossRevenue?: number | null;

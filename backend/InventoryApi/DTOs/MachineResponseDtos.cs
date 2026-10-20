@@ -57,4 +57,16 @@ public sealed record MachineResponse
     public decimal? MonthToDateDirectProfit { get; init; }
 
     public string? ProfitabilityStatus { get; init; }
+
+    /// <summary>
+    /// This business's own machine row for the machine (<c>Machines.Id</c>, issue #740), or
+    /// <c>null</c> when it has recorded none - added by issue #780 and appended so every key that
+    /// came before it keeps its name, order and value.
+    ///
+    /// <para>It is <b>not</b> a second spelling of <see cref="MachineID"/>, which is and stays the
+    /// provider's own number: this is the id a feature that stores a reference to a machine records,
+    /// and the expense form submits it. It carries no financial figure, so it survives the redacted
+    /// projection with the rest of the machine's identity.</para>
+    /// </summary>
+    public long? LocalMachineId { get; init; }
 }

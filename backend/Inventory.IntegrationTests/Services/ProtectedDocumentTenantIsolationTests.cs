@@ -238,8 +238,8 @@ public sealed class ProtectedDocumentTenantIsolationTests : IDisposable
             new ListOperatingExpenses(store),
             new GetOperatingExpense(store),
             new GetOperatingExpenseAttachment(store, documents),
-            new CreateOperatingExpense(store, documents),
-            new UpdateOperatingExpense(store, documents),
+            new CreateOperatingExpense(store, documents, new EfLocalMachineStore(db)),
+            new UpdateOperatingExpense(store, documents, new EfLocalMachineStore(db)),
             new DeleteOperatingExpense(store, documents));
     }
 

@@ -1,5 +1,6 @@
 using Inventory.Application.Expenses;
 using Inventory.Domain.Expenses;
+using InventoryApi.Tests.Application.Machines;
 using Xunit;
 
 namespace InventoryApi.Tests.Application.Expenses;
@@ -24,7 +25,7 @@ public class GetOperatingExpenseTests
         var fields = new OperatingExpenseFields(
             new DateTime(2026, 3, 1), ExpenseCategory.Insurance, "Insurance", 10m, 1m, 11m,
             null, null, null, null, null, null);
-        var created = await new CreateOperatingExpense(store, documents).Handle(fields, null, CancellationToken.None);
+        var created = await new CreateOperatingExpense(store, documents, new FakeLocalMachineStore()).Handle(fields, null, CancellationToken.None);
 
         var result = await new GetOperatingExpense(store).Handle(created.Record!.Id, CancellationToken.None);
 

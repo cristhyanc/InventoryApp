@@ -12,7 +12,15 @@ namespace Inventory.Application.Machines;
 /// </summary>
 internal static class MachineDashboardAssembler
 {
-    public static MachineSummary Build(NayaxMachine machine, MachineDashboardFacts facts)
+    /// <summary>
+    /// Assembles one machine's summary. <paramref name="localMachineId"/> is this business's own
+    /// machine row for <paramref name="machine"/>, already resolved from the provider's number
+    /// through <c>INayaxMachineLinkStore</c> (issue #780), or <c>null</c> when it has recorded
+    /// none - resolved by the caller rather than here, because one lookup serves the whole fleet.
+    /// <paramref name="facts"/> carries the period aggregates the policies below are applied to.
+    /// </summary>
+    public static MachineSummary Build(
+        NayaxMachine machine, MachineDashboardFacts facts, long? localMachineId)
     {
         var today = Resolve(facts.Today);
         var currentWeek = Resolve(facts.CurrentWeek);
@@ -33,6 +41,7 @@ internal static class MachineDashboardAssembler
 
         return new MachineSummary(
             machine.MachineID,
+            localMachineId,
             machine.MachineName,
             machine.MachineNumber,
             machine.ActorID,

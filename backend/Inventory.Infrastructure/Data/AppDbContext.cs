@@ -703,6 +703,21 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.Category);
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.SupplierId);
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.MachineId);
+        // The machine an expense is attributed to is a local machine (issue #780), and the foreign
+        // key is the pair (BusinessId, MachineId) against the (BusinessId, Id) alternate key on
+        // Machines, for the reason NayaxSales.ProductId uses one: it makes "an expense names a
+        // machine of its own business" something SQLite enforces on every insert and update rather
+        // than a rule only BusinessOwnershipEnforcer applies. Restrict, never cascade and never
+        // set-null: an expense is financial data, so deleting the machine it belongs to must fail
+        // loudly - and there is no machine delete path at all, a machine is deactivated instead.
+        // No navigation property: an expense carries the id, and a reader that wants the machine
+        // reads it through the machine queries.
+        modelBuilder.Entity<OperatingExpense>()
+            .HasOne<LocalMachine>()
+            .WithMany()
+            .HasForeignKey(e => new { e.BusinessId, e.MachineId })
+            .HasPrincipalKey(machine => new { machine.BusinessId, machine.Id })
+            .OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<NayaxProcessingFeeRate>().Property(r => r.FeeExGst).HasColumnType("decimal(18,4)");
         // Each business configures its own effective-dated fee rates.
         modelBuilder.Entity<NayaxProcessingFeeRate>().HasIndex(r => new { r.BusinessId, r.EffectiveFrom }).IsUnique();
@@ -1035,6 +1050,13 @@ public class AppDbContext : DbContext
     /// <para>A machine is ordinary tenant-owned data, so <see cref="ConfigureBusinessOwnership"/>
     /// gives it its required business key, its <c>BusinessId</c> index and its global query filter;
     /// what is declared here is everything specific to a machine.</para>
+    ///
+    /// <para><strong>The <c>(BusinessId, Id)</c> alternate key is the principal side of every
+    /// reference to a machine</strong> (issue #780). It is declared here rather than left for
+    /// <c>HasPrincipalKey</c> to infer, for the reason the product and category ones are
+    /// (<see cref="ConfigureProviderLinks"/>): "(business, local id) identifies one machine" is a
+    /// constraint on <c>Machines</c> in its own right, and the migration that added it rebuilt the
+    /// table to state it.</para>
     /// </summary>
     private static void ConfigureMachines(ModelBuilder modelBuilder)
     {
@@ -1051,6 +1073,8 @@ public class AppDbContext : DbContext
             .HasIndex(x => new { x.BusinessId, x.ExternalMachineId })
             .IsUnique()
             .HasFilter(@"""ExternalMachineId"" IS NOT NULL");
+
+        machine.HasAlternateKey(x => new { x.BusinessId, x.Id });
     }
 
     /// <summary>

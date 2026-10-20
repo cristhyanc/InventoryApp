@@ -21,7 +21,9 @@ import { SupportSessionService } from '../../support-session/support-session.ser
  * - The **machine** field attributes an expense to one machine, so it needs a machine list. It is
  *   loaded through `loadProviderList`, which keeps "the provider cannot list machines", "the
  *   machine read failed" and "this business has no machines" apart; the field is hidden for the
- *   first and the third, and the second reports itself where the field was.
+ *   first and the third, and the second reports itself where the field was. What it submits is the
+ *   machine's **local** id (`localMachineId`, issue #780) and not the provider's number, so a
+ *   listed machine this business has recorded none of is not offered - see `machineOptions`.
  * - The **"Nayax monthly fee"** category and the Nayax wording in the page subtitle need only Nayax
  *   to be part of this business. Without it the category is not offered for a **new** expense and
  *   the subtitle drops the Nayax sentence - but an expense already recorded under it keeps it, in
@@ -137,8 +139,8 @@ import { SupportSessionService } from '../../support-session/support-session.ser
                   <span class="field-label">Machine (optional)</span>
                   <select [(ngModel)]="form.machineId">
                     <option [ngValue]="null">None</option>
-                    @for (machine of machines; track machine.machineID) {
-                      <option [ngValue]="machine.machineID">{{ machine.machineName || machine.machineNumber || machine.machineID }}</option>
+                    @for (machine of machineOptions; track machine.machineID) {
+                      <option [ngValue]="machine.localMachineId">{{ machine.machineName || machine.machineNumber || machine.machineID }}</option>
                     }
                   </select>
                 </label>
@@ -296,9 +298,22 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
     return this.categories.filter(category => category !== OperatingExpenseCategory.NayaxMonthlyFee);
   }
 
-  /** Whether an expense may be attributed to a machine at all: only when machines can be listed. */
+  /**
+   * The machines an expense may be attributed to: the listed ones this business has its own record
+   * of (issue #780). An expense stores the **local** machine id, so a machine the provider reports
+   * that nothing here has recorded yet cannot be chosen - there is no id to store. The option's
+   * label is unchanged.
+   */
+  get machineOptions(): Machine[] {
+    return this.machines.filter(machine => machine.localMachineId != null);
+  }
+
+  /**
+   * Whether an expense may be attributed to a machine at all: only when a listed machine has a
+   * local record to attribute it to.
+   */
   get machineFieldShown(): boolean {
-    return this.machines.length > 0;
+    return this.machineOptions.length > 0;
   }
   ngOnDestroy(): void { this.objectUrls.releaseAll(); this.sessionActiveSubscription.unsubscribe(); }
   viewAttachment(expense: OperatingExpense): void {

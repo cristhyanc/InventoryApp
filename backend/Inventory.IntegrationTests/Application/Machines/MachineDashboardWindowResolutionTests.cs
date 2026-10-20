@@ -1,6 +1,7 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Machines;
+using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Time;
 using Moq;
 using Xunit;
@@ -24,7 +25,8 @@ public class MachineDashboardWindowResolutionTests
     public async Task GetMachineDashboard_PassesTheSydneyBusinessDayWindowToTheFactsStore()
     {
         var facts = new RecordingMachineDashboardFactsStore();
-        var useCase = new GetMachineDashboard(Nayax(10), facts, Time.Clock, Time.Calendar);
+        var useCase = new GetMachineDashboard(
+            Nayax(10), facts, FakeNayaxMachineLinkStore.NothingLinked(), Time.Clock, Time.Calendar);
 
         var summary = await useCase.Handle(10, CancellationToken.None);
 
@@ -40,7 +42,8 @@ public class MachineDashboardWindowResolutionTests
     public async Task GetMachineDashboard_ReadsNoFactsForAnUnknownMachine()
     {
         var facts = new RecordingMachineDashboardFactsStore();
-        var useCase = new GetMachineDashboard(Nayax(10), facts, Time.Clock, Time.Calendar);
+        var useCase = new GetMachineDashboard(
+            Nayax(10), facts, FakeNayaxMachineLinkStore.NothingLinked(), Time.Clock, Time.Calendar);
 
         Assert.Null(await useCase.Handle(404, CancellationToken.None));
         Assert.Empty(facts.Windows);
@@ -54,7 +57,8 @@ public class MachineDashboardWindowResolutionTests
     public async Task ListMachineDashboard_UsesOneWindowForEveryMachine()
     {
         var facts = new RecordingMachineDashboardFactsStore();
-        var useCase = new ListMachineDashboard(Nayax(10, 11, 12), facts, Time.Clock, Time.Calendar);
+        var useCase = new ListMachineDashboard(
+            Nayax(10, 11, 12), facts, FakeNayaxMachineLinkStore.NothingLinked(), Time.Clock, Time.Calendar);
 
         var summaries = await useCase.Handle(CancellationToken.None);
 

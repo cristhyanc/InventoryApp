@@ -27,8 +27,12 @@ namespace Inventory.Infrastructure.Models;
 /// (issue #742) may set it afterwards. It is deliberately off the wire, like the product and
 /// category columns.</para>
 ///
-/// <para>Nothing is repointed at this table by this issue: the stored machine references still hold
-/// the provider's number, and issue #741 (G2) is what moves them onto <see cref="Id"/>.</para>
+/// <para>Issue #740 repointed nothing at this table. Since issue #780 (G2a)
+/// <c>OperatingExpense.MachineId</c> holds <see cref="Id"/>, with <c>(BusinessId, MachineId)</c> a
+/// foreign key on this row's <c>(BusinessId, Id)</c> key; every other stored machine reference - a
+/// sale's, a refill's, a machine count's, a stock event's, a timestamp repair's, an inventory-cost
+/// transition's - still holds the provider's number, and issue #741 (the stock half of G2) is what
+/// moves those.</para>
 ///
 /// <para>The name <c>LocalMachine</c> rather than <c>Machine</c> is not a second concept: the
 /// retired response shape <see cref="Machine"/> still occupies that type name as the reference value

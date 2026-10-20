@@ -1,6 +1,8 @@
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;
@@ -225,5 +227,84 @@ public class EfBookkeepingReportFactsProviderTests
         Assert.Equal(0m, facts.ReceiptPackageCost);
         Assert.Equal(0m, facts.GrossSales);
         Assert.True(facts.IsCogsComplete);
+    }
+
+    /// <summary>
+    /// The machine filter is still the <em>provider's</em> machine number (issue #780 deliberately
+    /// left the report filters alone), but an expense now records the local machine row. So the
+    /// number has to be resolved through <c>LocalMachine.ExternalMachineId</c> before the expenses
+    /// are narrowed, and the whole-business and machine-filtered totals have to be exactly what
+    /// they were before the repoint: 36 and 11.
+    /// </summary>
+    [Fact]
+    public async Task Operating_expenses_are_filtered_by_the_providers_machine_number_through_the_local_machine()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var date = new DateTime(2025, 8, 1);
+        db.Businesses.Add(new Business
+        {
+            Id = 1,
+            Name = "Vending A",
+            Status = BusinessStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+            SalesProvider = ExternalProvider.Nayax,
+        });
+        var machine10 = new LocalMachine { BusinessId = 1, Name = "Machine 10", ExternalMachineId = "10" };
+        var machine11 = new LocalMachine { BusinessId = 1, Name = "Machine 11", ExternalMachineId = "11" };
+        db.Machines.AddRange(machine10, machine11);
+        db.NayaxSales.AddRange(
+            Sale(1, NayaxTransactionStatusIds.Completed, 10m, machineId: 10, authorizationTime: date, costOfGoodsSold: 4m),
+            Sale(2, NayaxTransactionStatusIds.Completed, 20m, machineId: 11, authorizationTime: date, costOfGoodsSold: 8m));
+        await db.SaveChangesAsync();
+        db.OperatingExpenses.AddRange(
+            new OperatingExpense { BusinessId = 1, ExpenseDate = date, MachineId = machine10.Id, TotalAmount = 11m, GstAmount = 1m },
+            new OperatingExpense { BusinessId = 1, ExpenseDate = date, MachineId = machine11.Id, TotalAmount = 22m, GstAmount = 2m },
+            new OperatingExpense { BusinessId = 1, ExpenseDate = date, TotalAmount = 3m, GstAmount = 0m });
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var wholeBusiness = await provider.GetFactsAsync(date, date, null, CancellationToken.None);
+        var machineTen = await provider.GetFactsAsync(date, date, 10, CancellationToken.None);
+
+        Assert.Equal(36m, wholeBusiness.OperatingExpensesTotal);
+        Assert.Equal(11m, machineTen.OperatingExpensesTotal);
+        Assert.Equal(1m, machineTen.OperatingExpensesGst);
+    }
+
+    /// <summary>
+    /// A provider machine this business has recorded no machine for narrows the report to no
+    /// expenses at all. Falling back to the whole business's would report another machine's costs,
+    /// and a shared sales row set, against the one machine that was asked about.
+    /// </summary>
+    [Fact]
+    public async Task A_machine_filter_with_no_local_machine_reports_no_operating_expenses()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var date = new DateTime(2025, 8, 1);
+        db.Businesses.Add(new Business
+        {
+            Id = 1,
+            Name = "Vending A",
+            Status = BusinessStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+            SalesProvider = ExternalProvider.Nayax,
+        });
+        var machine10 = new LocalMachine { BusinessId = 1, Name = "Machine 10", ExternalMachineId = "10" };
+        db.Machines.Add(machine10);
+        db.NayaxSales.Add(
+            Sale(1, NayaxTransactionStatusIds.Completed, 10m, machineId: 99, authorizationTime: date, costOfGoodsSold: 4m));
+        await db.SaveChangesAsync();
+        db.OperatingExpenses.Add(
+            new OperatingExpense { BusinessId = 1, ExpenseDate = date, MachineId = machine10.Id, TotalAmount = 11m, GstAmount = 1m });
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var facts = await provider.GetFactsAsync(date, date, 99, CancellationToken.None);
+
+        Assert.Equal(0m, facts.OperatingExpensesTotal);
+        Assert.Equal(0m, facts.OperatingExpensesGst);
+        Assert.Empty(facts.OperatingExpensesByCategory);
     }
 }

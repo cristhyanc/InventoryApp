@@ -34,6 +34,7 @@ public class MachineProfitabilityTests
         new(
             nayax,
             new EfMachineDashboardFactsStore(db, TestFinancialUseCases.ProcessingFees(db, Time.Calendar)),
+            new EfNayaxMachineLinkStore(db),
             Time.Clock,
             Time.Calendar);
 
