@@ -222,6 +222,31 @@ export class CatalogueReviewComponent implements OnInit, OnDestroy {
   }
 
   /**
+   * The price the comparison calls "mine", for the one screen on which an operator authorises
+   * replacing a real price.
+   *
+   * For a row the provider is already linked to, that is the review's own local value, because the
+   * server compared it when it started the review. For a row that is not linked yet, the started
+   * review reports no local value at all - at that moment there is no local row, since naming one is
+   * what the operator is doing here - so the price of the product they named is the only truthful
+   * answer. The apply negotiates against exactly that product's price, so showing "none yet" opposite
+   * the provider's would tell an operator with a $3.20 product that they have no price to lose.
+   *
+   * Rendered with the two decimals `ProviderCatalogueFieldValue.FromPrice` writes, so both sides of
+   * the comparison read alike. `null` is a row the operator has not named yet, which genuinely has
+   * no price to show.
+   */
+  localPrice(entry: CatalogueReviewProduct, price: CatalogueReviewField): string | null {
+    if (entry.isLinked) return price.localValue;
+
+    const answer = this.answer(entry.itemId);
+    if (answer.action !== CatalogueReviewAction.LinkExisting || answer.localRowId == null) return null;
+
+    const local = this.localProducts.find((product) => product.id === answer.localRowId);
+    return local ? local.unitPrice.toFixed(2) : null;
+  }
+
+  /**
    * The category this product ends up in once the decisions of step one are applied, named as the
    * provider names it (the provider owns a linked category's name). `null` means the provider's
    * group is linked to no local category and the product is left uncategorised - exactly what the

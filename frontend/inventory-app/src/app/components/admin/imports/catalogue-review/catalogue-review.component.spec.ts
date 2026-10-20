@@ -21,8 +21,9 @@ import { Category, Product } from '../../../../models/models';
  * The catalogue review screen (issue #739, parent #329 decision C2). What these tests hold is the
  * contract between the operator's decisions and the apply request: a link only ever names a row the
  * operator chose, a deferred entry is sent as nothing at all, and the one field the screen
- * negotiates is the price. Every provider name, price and category in the UI is the API's own - the
- * screen computes no catalogue value, so there is nothing else here to assert about one.
+ * negotiates is the price. Every provider name, price and category in the UI is the API's own, and
+ * the only local value the screen renders beside them is the price of the product the operator
+ * chose to link - which is the price the apply will negotiate against.
  */
 
 const UNLINKED_CATEGORY_ITEM = 101;
@@ -235,6 +236,13 @@ function row(host: HTMLElement, itemId: number): HTMLElement {
   return element;
 }
 
+/** The "Mine … Nayax …" line one product entry compares the two prices on. */
+function priceComparison(host: HTMLElement, itemId: number): string {
+  const element = row(host, itemId).querySelector<HTMLElement>('[data-testid="price-comparison"]');
+  if (!element) throw new Error(`No price comparison rendered for entry ${itemId}.`);
+  return text(element);
+}
+
 function button(host: HTMLElement, label: string): HTMLButtonElement {
   const found = Array.from(host.querySelectorAll('button')).find((x) => x.textContent?.includes(label));
   if (!found) throw new Error(`No "${label}" button rendered.`);
@@ -413,6 +421,39 @@ describe('CatalogueReviewComponent products step (issue #739)', () => {
       localRowId: 9,
       fields: [{ field: NegotiableCatalogueField.UnitPrice, decision: ProviderFieldDecision.TakeProvider }]
     });
+  });
+
+  it("compares the Nayax price against the price of the product the operator chose to link", async () => {
+    const { fixture, host, component } = await onProducts();
+
+    component.setAction(UNLINKED_PRODUCT_ITEM, CatalogueReviewAction.LinkExisting);
+    fixture.detectChanges();
+
+    // Nothing is named yet, so there is no local price to lose - and the review carries none for an
+    // unlinked entry either, because the local row did not exist when it was read.
+    expect(priceComparison(host, UNLINKED_PRODUCT_ITEM)).toContain('Mine: none yet');
+
+    component.setLocalRow(UNLINKED_PRODUCT_ITEM, 9);
+    fixture.detectChanges();
+
+    // Product 9 is priced 3.2 locally. That is the price this apply would replace, so that is the
+    // price the operator authorising the replacement must be shown.
+    expect(priceComparison(host, UNLINKED_PRODUCT_ITEM)).toContain('Mine: 3.20');
+    expect(priceComparison(host, UNLINKED_PRODUCT_ITEM)).toContain('Nayax: 3.50');
+
+    component.setLocalRow(UNLINKED_PRODUCT_ITEM, 11);
+    fixture.detectChanges();
+
+    expect(priceComparison(host, UNLINKED_PRODUCT_ITEM)).toContain('Mine: 2.50');
+    // The provider side never moves: it is the stored review's value, not the browser's.
+    expect(priceComparison(host, UNLINKED_PRODUCT_ITEM)).toContain('Nayax: 3.50');
+  });
+
+  it("keeps the review's own local price for a product the provider already manages", async () => {
+    const { host } = await onProducts();
+
+    expect(priceComparison(host, LINKED_PRODUCT_ITEM)).toContain('Mine: 3.00');
+    expect(priceComparison(host, LINKED_PRODUCT_ITEM)).toContain('Nayax: 3.50');
   });
 
   it('offers no choice about a unit or volume, even if one were ever proposed', async () => {

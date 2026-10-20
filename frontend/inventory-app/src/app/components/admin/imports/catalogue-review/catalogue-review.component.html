@@ -322,8 +322,14 @@
                       The price for the product you link
                     }
                   </legend>
-                  <p class="mt-1 text-sm text-md-gray-800">
-                    Mine: <strong>{{ price.localValue ?? 'none yet' }}</strong> &middot; Nayax:
+                  <!--
+                    "Mine" is the price of the row this decision is actually about: the linked row's
+                    for a linked entry, and the product the operator just named for one they are
+                    linking now. The review reports no local value for the latter, because the local
+                    row did not exist when it was read.
+                  -->
+                  <p class="mt-1 text-sm text-md-gray-800" data-testid="price-comparison">
+                    Mine: <strong>{{ localPrice(entry, price) ?? 'none yet' }}</strong> &middot; Nayax:
                     <strong>{{ price.providerValue }}</strong>
                   </p>
                   <div class="mt-1 grid gap-1">

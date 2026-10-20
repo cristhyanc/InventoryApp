@@ -10558,6 +10558,15 @@ theirs, which is exactly what the apply does with it.
   skip when a linked product's provider price has moved. The screen notes that either answer is
   remembered and that leaving both unanswered asks again next review, which is
   `CatalogueReviewPolicy.IsProposed` in the operator's words.
+- **Which price "mine" is, in that comparison** (`localPrice`). For an already-linked row it is the
+  review's own local value, because the server compared it when it read the catalogue. For a row the
+  operator is linking now the review reports **no** local value at all — `StartCatalogueReview`
+  cannot report one, since the local row is what the operator is naming on this screen — so the
+  screen shows the price of the product they named, rendered with the two decimals
+  `ProviderCatalogueFieldValue.FromPrice` writes so both sides read alike. That is the price the
+  apply itself negotiates against (`ApplyNegotiableFields` re-reads the named product's `UnitPrice`),
+  and it is the single local catalogue value this screen renders beside the provider's: showing
+  nothing there would tell an operator authorising a replacement that they have no price to lose.
 - A **unit/volume** is never offered. The provider publishes no unit or volume label, so the API
   proposes none, and the screen renders a control for the price choice alone — issue #739's
   out-of-scope note and the owner's decision of 20 October 2026 keep `Product.Unit` locally managed

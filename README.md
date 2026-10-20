@@ -1297,7 +1297,9 @@ the product is imported with no category rather than being put in one that merel
 The same three choices apply, and linking states plainly that **the product's name and category will
 be replaced by Nayax's and become read-only here**; only its price is yours to decide:
 
-- **Linking** offers **take the Nayax price** or **keep my own price**.
+- **Linking** offers **take the Nayax price** or **keep my own price**, with both prices shown: once
+  you choose which of your products to link, the comparison shows that product's own price, because
+  that is the price taking Nayax's would replace.
 - A **product already linked** whose Nayax price has since moved offers **accept the Nayax price** or
   **skip it and keep my price**, with both prices shown. Its name and category changes are listed as
   applied automatically — Nayax owns those.
