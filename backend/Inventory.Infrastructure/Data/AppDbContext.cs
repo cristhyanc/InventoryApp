@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.MachineStock;
 using Inventory.Domain.Providers;
+using Inventory.Domain.Stock;
 using Inventory.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Inventory.Infrastructure.Models;
@@ -101,6 +102,16 @@ public class AppDbContext : DbContext
     /// </summary>
     public DbSet<ProviderDataCoverage> ProviderDataCoverages => Set<ProviderDataCoverage>();
     public DbSet<StockAdjustment> StockAdjustments => Set<StockAdjustment>();
+
+    /// <summary>
+    /// The identity of each batch refill recorded from the pick list (issue #743): which submission
+    /// recorded which movements, so a retry is answered with the original result instead of
+    /// deducting storage twice. The movements themselves are ordinary
+    /// <see cref="StockAdjustment"/> rows; see <see cref="PickListRefill"/>.
+    /// </summary>
+    public DbSet<PickListRefill> PickListRefills => Set<PickListRefill>();
+
+    public DbSet<PickListRefillLine> PickListRefillLines => Set<PickListRefillLine>();
     public DbSet<Purchase> Receipts => Set<Purchase>();
     public DbSet<NayaxSales> NayaxSales => Set<NayaxSales>();
 
@@ -571,6 +582,59 @@ public class AppDbContext : DbContext
             .HasForeignKey(adjustment => new { adjustment.BusinessId, adjustment.MachineId })
             .HasPrincipalKey(machine => new { machine.BusinessId, machine.Id })
             .OnDelete(DeleteBehavior.Restrict);
+
+        // The batch refill of issue #743. Its machine is the same local machine reference, with the
+        // same composite key and the same Restrict, for the same reasons as above.
+        modelBuilder.Entity<PickListRefill>()
+            .HasOne<LocalMachine>()
+            .WithMany()
+            .HasForeignKey(refill => new { refill.BusinessId, refill.MachineId })
+            .HasPrincipalKey(machine => new { machine.BusinessId, machine.Id })
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // What makes the key idempotent: one refill per key per business, enforced by the database
+        // rather than only by the claim the use case makes inside its write transaction. Per
+        // business, because two businesses may legitimately choose the same string (AGENTS.md §
+        // Tenant ownership and data isolation).
+        modelBuilder.Entity<PickListRefill>()
+            .HasIndex(refill => new { refill.BusinessId, refill.IdempotencyKey })
+            .IsUnique();
+
+        modelBuilder.Entity<PickListRefill>()
+            .Property(refill => refill.IdempotencyKey)
+            .IsRequired()
+            .HasMaxLength(PickListRefillPolicy.MaximumIdempotencyKeyLength);
+
+        // Lowercase hexadecimal SHA-256, so the column is exactly as long as the rendering it holds.
+        modelBuilder.Entity<PickListRefill>()
+            .Property(refill => refill.RequestFingerprint)
+            .IsRequired()
+            .HasMaxLength(64);
+
+        modelBuilder.Entity<PickListRefill>()
+            .Property(refill => refill.Notes)
+            .HasMaxLength(PickListRefillPolicy.MaximumNotesLength);
+
+        // RecordedAtUtc is written from the IClock port as a UTC instant, and the SQLite provider
+        // does not round-trip DateTimeKind - see the StockAdjustment.CreatedAt comment below for the
+        // complete explanation - so it is marked UTC on every read. Without this a replayed refill's
+        // instant serialises with no "Z" and a client would read it as its own local time.
+        modelBuilder.Entity<PickListRefill>()
+            .Property(refill => refill.RecordedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        modelBuilder.Entity<PickListRefillLine>()
+            .HasOne(line => line.Refill)
+            .WithMany(refill => refill.Lines)
+            .HasForeignKey(line => line.RefillId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Read by batch, in the order the operator submitted them, which is the row order a replay
+        // has to answer in.
+        modelBuilder.Entity<PickListRefillLine>()
+            .HasIndex(line => new { line.BusinessId, line.RefillId, line.Id });
 
         modelBuilder.Entity<Product>()
             .HasOne(p => p.Category)

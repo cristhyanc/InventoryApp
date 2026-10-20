@@ -274,6 +274,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<SetProductGstRule>();
         services.AddScoped<ResolveMachineProductPricing>();
         services.AddScoped<GetPickList>();
+        // The pick list's batch refill (issue #743): one request, one write-locked transaction, all
+        // rows or none.
+        services.AddScoped<RecordPickListRefill>();
         services.AddScoped<RecordInventoryMovement>();
         services.AddScoped<IRecordInventoryMovement>(sp => sp.GetRequiredService<RecordInventoryMovement>());
         services.AddScoped<RebuildProductCost>();

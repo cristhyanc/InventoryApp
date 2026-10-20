@@ -1621,6 +1621,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` **and** `Inventory.Operate` (issue #681) | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
+| Pick List → record a refill (issue #743) | `POST api/pick-list/refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/local-machines` (the business's own machine records, issue #740: list, read, create, rename, deactivate, reactivate), `api/sites` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Purchases, Supplier Orders, Suppliers | `api/purchases`, `api/supplierorders`, `api/suppliers` | `Purchasing.Operate` | ✔ | ✔ | ✔ |
 | Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
@@ -1753,6 +1754,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | `Dashboard.View` | `GET api/business/current`, `GET api/settings/nayax-connection/status` | none | Already safe |
 | `Dashboard.View` + `Inventory.Operate` | `POST api/nayax-sales-sync` | none — `204`, or `429` with `Retry-After` | Already safe |
 | `PickList.View` | `GET api/pick-list` | none — storage quantity, target, quantity to pick and MDB codes | Already safe |
+| `PickList.View` + `Inventory.Operate` | `POST api/pick-list/refills` (issue #743) | none — the submitted quantities, the recorded movement ids and the per-row refusal sentences | Already safe |
 | `Inventory.Operate` | `GET api/products`, `GET api/products/{id}`, `GET api/products/alerts/low-stock`, `GET api/machines/{id}/products`, `POST api/products` (issue #736, which answers the created product in the same shape) | `inventoryValue`; and, nested in `stockAdjustments`, each movement's `inventoryValueAfter` | `inventoryValue` withheld by [#698](#machine-and-product-financial-redaction-issue-698); `inventoryValueAfter` **redacted here** |
 | `Inventory.Operate` | `GET api/machines`, `GET api/machines/{id}` | six periods' gross revenue, six direct-profit figures, `profitabilityStatus` | Withheld by [#698](#machine-and-product-financial-redaction-issue-698) |
 | `Inventory.Operate` | `GET api/sites`, `GET api/sites/{id}/products` | `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`; `estimatedCardProfit` | Withheld by [#697](#site-financial-redaction-issue-697) |
@@ -8395,10 +8397,12 @@ QuantityInStock)`) projected when the combined pick quantity would exceed what i
 shelf; and per selected machine: current quantity, target/capacity, and quantity to pick (the same
 clamped-to-zero `MissingStockByMDB` value, so a machine already at or above its target always
 contributes zero). Executing the query performs no EF/database mutation and creates no
-`MachineRefill`, costing, or inventory movement; actual restocking remains the existing refill/restock
-workflows, and Nayax remains the read-only source for the machine-stock facts this projection reuses.
-The Pick List Angular page, its machine chips/filter controls, and any persisted
-picked/unpicked completion state are out of scope for this projection and remain frontend-phase work.
+`MachineRefill`, costing, or inventory movement; recording what was actually taken is the separate
+write action of [Batch refill from the pick list](#batch-refill-from-the-pick-list-issue-743) below
+(before issue #743 it was the per-product stock action alone), and Nayax remains the read-only source
+for the machine-stock facts this projection reuses. The Pick List Angular page, its machine
+chips/filter controls, and any persisted picked/unpicked completion state are out of scope for this
+projection and remain frontend-phase work.
 
 **MDB code and default ordering (issue #496).** Each selected machine's `PickListMachineQuantity`
 also carries that machine's own `MDBCode` (the same `NayaxMachineProduct.MDBCode`
@@ -8411,6 +8415,136 @@ machine quantities has a code - and the products are returned ordered ascending 
 so `2` sorts before `10`), with missing codes ordered deterministically before any code and
 `ProductName` (ordinal) as the tie-break for repeated or missing codes, replacing the projection's
 previous `ProductName`-only default order.
+
+#### Batch refill from the pick list (issue #743)
+
+`POST /api/pick-list/refills` records **everything a worker took out of storage in one request**, as
+one `MachineRefill` stock movement per row, in one transaction: all rows or none. It is parent #329's
+child H1, and the frontend that calls it is #744 (H2).
+
+**The problem it replaces.** A refill was recorded one product per request
+(`POST /api/products/{id}/stock` with reason `MachineRefill`), so a worker who entered eight products
+made eight writes, and a failure part-way left part of a refill recorded with nothing to say which
+part. Retrying was worse than the failure: the rows that had succeeded were deducted again.
+
+**The contract.** The request carries a client-chosen `idempotencyKey`, an optional `machineId` (a
+local machine of the caller's business, `Machines.Id` — see
+[Stock machine references](#stock-machine-references-issue-741) — never a provider machine number),
+an optional `notes`, and `rows` of `(productId, quantityTaken)`. `quantityTaken` is the operator's own
+positive number; the movement it becomes is negative, because `StockAdjustment.QuantityChange` is
+signed from storage's point of view throughout the application. The response is the recorded refill —
+the key, the machine, the note, the server's instant and, per row, the product, the quantity and the
+id of the `StockAdjustment` that recorded it — plus `replayed`, which is `true` when the key had
+already recorded it and nothing new was written. There is no business id anywhere in either
+direction.
+
+**It records exactly the movement the single-product action records.** Each row goes through the same
+`IRecordInventoryMovement`/`IRebuildProductCost` pair (issue #296) that `EfStockAdjustmentStore` and
+`EfInventoryCountAdjustmentStore` use, with reason `MachineRefill` and source `Manual`. So a refill
+entered from the pick list is indistinguishable in the audit trail from one entered product by
+product, which is what lets the [machine stock
+ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56), the costing replay and Sync
+Restock's duplicate handling work without learning about this endpoint at all. Costing is unchanged
+and unchangeable here: a refill is an internal transfer from storage to a machine, so it reduces
+`QuantityInStock` and leaves `CostingQuantity`, `InventoryValue`, `AverageUnitCost` and COGS exactly
+as they were (AGENTS.md § Inventory and historical costing invariants).
+
+**The storage check and the deductions are one operation.** `Inventory.Application.PickList.RecordPickListRefill`
+runs the whole request inside the write transaction
+`Inventory.Infrastructure.Persistence.EfPickListRefillStore.BeginWriteTransactionAsync` opens, which
+on SQLite is `BEGIN IMMEDIATE` — the write lock is taken when the transaction opens, before any stock
+is read. That is the point rather than a detail: two workers picking from one storeroom is not a
+theoretical race, and a stock read taken outside the lock is a read both of them pass, after which
+both deduct and storage reports units that are not there. Under the lock the second request waits
+(within `Default Timeout`), re-reads the quantities the first one committed, and is refused with the
+established not-enough-stock sentence against the quantity actually left, having written nothing. The
+transaction is the same shape and the same reasoning as [One active membership per
+identity](#one-active-membership-per-identity-issue-522)'s and [Saving a tested
+connection](#saving-a-tested-connection-and-re-testing-it-issue-537)'s; a non-SQLite relational
+provider falls back to its default transaction and the EF InMemory provider some tests use has no
+transaction at all, neither of which is a supported production configuration (§ SQLite operating
+assumptions).
+
+**The idempotency key is claimed in the same lock, and it means one submission.** A new submission
+gets a new key; a retry of the same submission reuses its key. `PickListRefills` stores the key with
+`Inventory.Domain.Stock.PickListRefillFingerprint` of the request it recorded — lowercase hexadecimal
+SHA-256 over the machine, the note and the rows in product-id order, so the same pick typed in another
+order is the same pick. Inside the transaction:
+
+- the same key and the same fingerprint is answered with the original result and writes nothing;
+- the same key and a *different* fingerprint is `409 Conflict` with
+  `PickListRefillPolicy.IdempotencyKeyReusedMessage`, because recording it would be exactly the double
+  deduction the key exists to prevent;
+- two copies of one submission arriving at once record it once — the loser waits on the write lock and
+  then finds the winner's committed row.
+
+The key is unique **per business** (`(BusinessId, IdempotencyKey)`, a unique index), because two
+businesses may legitimately choose the same string, and the adapter translates that index's violation
+into the same `409` so a database this process did not serialise with cannot produce a `500` for a
+refusal the contract answers with `409`. The fingerprint never leaves the server, which is why — unlike
+[the historical GST classification's](#historical-gst-classification-preview-and-apply-issue-433) — it
+does not render the business id: it is only ever compared with a value recomputed for a request already
+scoped to that business.
+
+**The validation, and why a refusal is a return value.** `Inventory.Domain.Stock.PickListRefillPolicy`
+is in two halves. `ValidateRequestShape` judges the request alone — the key is present and bounded, the
+note is bounded, there is at least one row and at most `MaximumRows` (500), every quantity is greater
+than zero, and no product appears twice — and runs **before** the transaction is opened, so a malformed
+request does not make every other picker wait on it. A product submitted twice is refused rather than
+summed: two rows for one product are two statements about one storage balance, and adding them up would
+invent a quantity nobody typed. `ValidateAgainstState` judges the same request against what the
+transaction read — the product is in the caller's catalogue, is not retired, and the quantity is not
+above its storage stock; the machine, when one is named, is an **active** machine of the business.
+That last rule is deliberately stricter than
+`ManualStockAdjustmentPolicy.UnknownMachineMessage`, which accepts a deactivated machine because a
+single movement may be recorded against a machine the business used to operate: a pick is work being
+done now. Any refusal refuses the whole batch, and every refusal is reported rather than only the
+first, so `400` carries a `ValidationProblemDetails` whose keys are `idempotencyKey`, `machineId`,
+`notes`, `rows` and `rows[i]` — the row index the caller sent, so the manual pick-list screen can put
+each message back on the line the operator typed. That is why a rejection is a return value from the
+use case and not an exception: the per-row structure cannot travel in one sentence, while the key
+conflict can and so stays a `DomainConflictException` mapped centrally (§ Domain and application error
+mapping).
+
+**What it persists, and what it does not.** Two additive tables. `PickListRefills` holds the key, the
+fingerprint, the machine, the note and the recorded instant; `PickListRefillLines` holds each row's
+product, its submitted quantity and the `StockAdjustment` it created. Neither is a second stock ledger
+— nothing reads them to decide a quantity, a cost or a machine-stock level. They are the *request's*
+identity, which is the one fact `StockAdjustments` cannot carry: which submission recorded which
+movements. The row's submitted quantity is stored rather than derived because the row is the recorded
+**answer** to an idempotent request, which a retry must be given whatever has happened to the catalogue
+since. The line's `StockAdjustmentId` is a plain reference and not a foreign key, deliberately: a
+movement is cascade-deleted with its product, and a restricting key here would make a product that was
+once picked undeletable — a rule about deleting a product that this table has no business inventing.
+Both tables are tenant-owned in the ordinary way, so the stamp and the query filters are the whole of
+the boundary. The migration `AddPickListRefills` creates the two tables and rebuilds nothing, which
+matters because Production applies migrations at startup: the code already running there reads neither
+table.
+
+**Authorization.** The action declares `Inventory.Operate` beside `PickListController`'s own
+`PickList.View`. Recording a stock movement is the day-to-day inventory work every other stock write
+declares, and requirements accumulate down an endpoint, so the refill needs both while the read's rule
+is unchanged; every role that holds `Inventory.Operate` today also holds `PickList.View`, so no role's
+access changes. Being a write, it is refused in a read-only support session by the central `GET`/`HEAD`
+rule of issue #551, with no rule of its own.
+
+**Not in this slice.** There is no UI (#744), and no par levels or suggested quantities for a business
+without a provider. There is no update or delete of a recorded refill: a correction is its own
+movement.
+
+**What proves it.** `PickListRefillPolicyTests` and `PickListRefillFingerprintTests` (the rules and the
+canonical rendering, including the reordered-rows retry and a note that cannot impersonate the
+rendering), `RecordPickListRefillTests` (the orchestration over a fake store: the claim and the stock
+read inside the transaction, nothing committed on any refusal, the index violation becoming the same
+conflict, and another database failure not becoming one), `EfPickListRefillStoreTests` (the whole use
+case over SQLite: multi-row save with and without a machine, costing untouched, a retry answering the
+original rows after other movements, the `409`, two businesses sharing one key, and a bad row leaving
+the earlier rows unwritten), `PickListRefillConcurrencyTests` (a real SQLite file, two connections and
+a barrier: one key submitted twice recording once, two requests that together exceed stock leaving
+exactly one, and two that both fit both recorded), `AddPickListRefillsMigrationTests` (the two tables,
+the per-business unique index refusing a second row, and the inventory tables byte-identical before and
+after) and `PickListControllerTests` (the `200`, the replayed `200`, the per-row `400` and the key
+conflict propagating).
 
 #### Pick List frontend page (issue #222)
 
@@ -8846,13 +8980,19 @@ change needing its own issue, ideally combined with the rest of the Purchasing a
 1. A refill moves units out of storage.
 2. The movement is linked to the machine when known.
 3. It does not create an expense or COGS and does not reduce costing inventory/value.
-4. Two sources exist: an operator-entered manual restock (`StockAdjustmentSource.Manual`, the
-   long-standing per-product Restock action on the machine-detail page) and an imported Nayax
-   Sync Restock event (`StockAdjustmentSource.Nayax`, issue #183, described below). Both use
-   `StockAdjustmentReason.MachineRefill` and the same movement logic; `StockAdjustment.Source`
-   is what keeps them distinguishable in the audit trail. Manual restocking remains the supported
-   fallback for when Nayax is unavailable or a machine/MDB is not yet mapped; Sync Restock is the
-   preferred path when a Nayax stock-adjustment alert already reports the physical event.
+4. Two sources exist: an operator-entered manual restock (`StockAdjustmentSource.Manual`) and an
+   imported Nayax Sync Restock event (`StockAdjustmentSource.Nayax`, issue #183, described below).
+   Both use `StockAdjustmentReason.MachineRefill` and the same movement logic;
+   `StockAdjustment.Source` is what keeps them distinguishable in the audit trail. Manual restocking
+   remains the supported fallback for when Nayax is unavailable or a machine/MDB is not yet mapped;
+   Sync Restock is the preferred path when a Nayax stock-adjustment alert already reports the
+   physical event.
+4a. The manual source has **two entry points and one movement**: the long-standing per-product
+   Restock action on the machine-detail page (`POST api/products/{id}/stock`), and since issue #743
+   the pick list's batch refill (`POST api/pick-list/refills`), which records a whole pick in one
+   transaction under an idempotency key. They produce the same row - same reason, same `Manual`
+   source - so everything downstream reads one kind of fact; see [Batch refill from the pick
+   list](#batch-refill-from-the-pick-list-issue-743).
 5. The reverse transfer - units taken back **out of** a machine and returned to storage - is the
    same `MachineRefill` movement with a **positive** quantity change and the machine recorded on it.
    `StockAdjustment.QuantityChange` is signed from storage's point of view throughout the
