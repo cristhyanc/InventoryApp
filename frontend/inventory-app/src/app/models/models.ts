@@ -69,6 +69,22 @@ export interface Product {
    * own live price, `machinePrice` below; what it costs is `averageUnitCost`.
    */
   averageUnitCost: number;
+  /**
+   * The unit cost a screen may actually **display** (issue #788, B of #786): the persisted
+   * {@link averageUnitCost} once a cost rebuild has established it, and **absent** while none has.
+   *
+   * The two keys say different things and both are needed. `averageUnitCost` is a non-nullable
+   * column, so an uncosted product still carries a number in it; this one is the server's
+   * authoritative statement of whether that number means anything, from the same evidence the
+   * Dashboard's unknown-cost count uses (a product with no inventory value has had no rebuild). A
+   * value of `0` is a measured cost and must be shown as `$0.00`; **absent must be shown as unknown
+   * (e.g. `—`) and never converted to `0`**, per AGENTS.md § Frontend rules.
+   *
+   * Published only by the `/api/products` reads. It is deliberately absent from a machine slot's
+   * product and from the product snapshot nested in a purchase or supplier-order line, where its
+   * absence says nothing about the cost - exactly like {@link canDelete}.
+   */
+  averageUnitCostForDisplay?: number | null;
   costingQuantity?: number | null;
   inventoryValue?: number | null;
   machinePrice: number | null;

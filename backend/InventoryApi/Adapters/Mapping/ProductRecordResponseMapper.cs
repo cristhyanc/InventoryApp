@@ -1,6 +1,7 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Products;
 using Inventory.Domain.Providers;
+using Inventory.Domain.Reporting.Dashboard;
 using InventoryApi.DTOs;
 using Inventory.Infrastructure.Models;
 
@@ -76,6 +77,15 @@ public static class ProductRecordResponseMapper
             // so neither is given a default here.
             CanDelete = record.DeletionEligibility?.Allowed,
             DeletionRefusal = record.DeletionEligibility?.Refusal,
+
+            // The unit cost a screen may display, and whether it has been established at all
+            // (issue #788), from the one Domain statement of that evidence rather than a second
+            // completeness rule here. It reads the record's own inventory value, not the withheld
+            // one above: unit cost is visible to every role that may operate inventory, so this
+            // availability answer is too, and reading the withheld figure would report every
+            // product's cost as unknown to an Operator.
+            AverageUnitCostForDisplay =
+                InventoryValuationPolicy.DisplayUnitCost(record.InventoryValue, record.AverageUnitCost),
         };
 
     /// <summary>
@@ -103,6 +113,12 @@ public static class ProductRecordResponseMapper
             // payload whose reader cannot act on it.
             CanDelete = null,
             DeletionRefusal = null,
+
+            // Issue #788 publishes its availability projection on the catalogue reads, and a
+            // machine slot's product is a pinned payload of its own rather than one of them, so it
+            // is left unsaid here for the same reason as the two keys above. The slot's stored
+            // `averageUnitCost` is unchanged.
+            AverageUnitCostForDisplay = null,
             MachineSlot = new MachineSlotOverlay(
                 record.MachinePrice,
                 record.CommissionValue,

@@ -1,6 +1,7 @@
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Domain.Purchases;
 using Inventory.Infrastructure.Data;
+using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace Inventory.Infrastructure.Persistence;
@@ -29,9 +30,24 @@ public sealed class EfProductPurchaseCostFactsProvider : IProductPurchaseCostFac
         if (productIds.Count == 0)
             return new Dictionary<long, IReadOnlyList<SupplierPriceHistoryEntry>>();
 
-        var rows = await _db.ReceiptItems
+        return await GroupedHistoryAsync(
+            _db.ReceiptItems.Where(item => productIds.Contains(item.ProductId)), cancellationToken);
+    }
+
+    /// <summary>
+    /// The same projection over the whole business's purchase history (issue #788). The query is the
+    /// one above without the id predicate, so the two reads cannot project different facts; the
+    /// context's global business query filter is what scopes it, exactly as it scopes the other.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<long, IReadOnlyList<SupplierPriceHistoryEntry>>> GetForAllProductsAsync(
+        CancellationToken cancellationToken) =>
+        await GroupedHistoryAsync(_db.ReceiptItems, cancellationToken);
+
+    private static async Task<IReadOnlyDictionary<long, IReadOnlyList<SupplierPriceHistoryEntry>>> GroupedHistoryAsync(
+        IQueryable<PurchaseItem> items, CancellationToken cancellationToken)
+    {
+        var rows = await items
             .AsNoTracking()
-            .Where(item => productIds.Contains(item.ProductId))
             .Select(item => new
             {
                 item.ProductId,

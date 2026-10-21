@@ -172,6 +172,38 @@ public sealed record ProductResponse
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DeletionRefusal { get; init; }
+
+    /// <summary>
+    /// The unit cost this product may be <strong>displayed</strong> at (issue #788, B of #786): the
+    /// persisted <see cref="AverageUnitCost"/> once a cost rebuild has established it, and
+    /// <strong>absent</strong> while none has.
+    ///
+    /// <para>The evidence is the same one the Dashboard's unknown-cost count uses -
+    /// <c>Inventory.Domain.Reporting.Dashboard.InventoryValuationPolicy</c>: a product's inventory
+    /// value is <see langword="null"/> only when no rebuild has ever run for it, which is a genuinely
+    /// unknown cost rather than a zero one. <see cref="AverageUnitCost"/> is a non-nullable column, so
+    /// an uncosted product can still carry a number in it, and this is the authoritative statement of
+    /// whether that number means anything. A rebuilt cost of <c>0</c> is a measured answer and is
+    /// published as <c>0</c>.</para>
+    ///
+    /// <para><strong>Additive, and available to exactly the roles that already read
+    /// <see cref="AverageUnitCost"/></strong> - every role that may operate inventory. It is decided
+    /// from the product's own recorded facts, not from <see cref="InventoryValue"/> as this response
+    /// carries it, because that one is withheld from a caller without
+    /// <c>Dashboard.ViewFinancials</c> (issue #698) and reading the withheld value would tell an
+    /// Operator every cost is unknown. It carries no revenue, profit, valuation or supplier fact:
+    /// the gated last/cheapest purchase cost and its supplier stay on
+    /// <c>GET api/products/purchase-cost-summary</c>, behind that capability.</para>
+    ///
+    /// <para>Published only on the catalogue reads - the <c>/api/products</c> endpoints. It is
+    /// deliberately absent from the product snapshot nested in a purchase line or a supplier-order
+    /// line and from a machine slot's product, which are pinned contracts of their own and are not
+    /// surfaces a product's cost is presented from; those payloads keep every key they had.
+    /// An absent key on one of them says nothing about the cost, exactly as an absent
+    /// <see cref="CanDelete"/> says nothing about deletion.</para>
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? AverageUnitCostForDisplay { get; init; }
 }
 
 /// <summary>
