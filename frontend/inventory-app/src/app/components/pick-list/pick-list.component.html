@@ -59,6 +59,9 @@
     <app-manual-pick-list
       [hidden]="mode !== 'manual'"
       [products]="allProducts"
+      [catalogueState]="catalogueState"
+      [catalogueRefreshFailed]="catalogueRefreshFailed"
+      (retryCatalogue)="loadProducts()"
       (refillRecorded)="refreshProductsAfterManualRefill()"
       (saveInFlightChange)="onManualSaveInFlightChange($event)"></app-manual-pick-list>
   }

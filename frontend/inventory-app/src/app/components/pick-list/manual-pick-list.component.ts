@@ -1,10 +1,12 @@
 import { CommonModule } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
-import { Component, EventEmitter, Input, Output } from '@angular/core';
+import { Component, EventEmitter, Input, OnDestroy, Output } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { Subscription } from 'rxjs';
 import { Category, PickListRefillRowRequest, Product } from '../../models/models';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
 import { generateIdempotencyKey } from './idempotency-key';
 import { parsePickListRefillRejection, pickListRefillRowsEqual } from './pick-list-refill-errors';
 
@@ -17,6 +19,23 @@ export const REFILL_CONFLICT_MESSAGE = 'This refill could not be recorded. Revie
 
 export const REFILL_UNCERTAIN_MESSAGE =
   "Couldn't confirm whether this refill was recorded. Review your entries and click Save to retry.";
+
+export const REFILL_FORBIDDEN_MESSAGE = 'This refill was refused, so nothing was recorded.';
+
+export const SUPPORT_SESSION_READ_ONLY_MESSAGE =
+  'A support session is active, so quantities taken cannot be recorded here. End the session to record a pick.';
+
+export const CATALOGUE_LOAD_FAILED_MESSAGE = 'The product list could not be loaded, so quantities taken cannot be entered.';
+
+export const CATALOGUE_REFRESH_FAILED_MESSAGE =
+  'Storage quantities could not be refreshed after the last save, so the numbers shown may be out of date.';
+
+/**
+ * Where the page's read of the active catalogue stands. Only `'loaded'` means {@link
+ * ManualPickListComponent.products} is a real answer, so only then may an empty list be described
+ * as "no products".
+ */
+export type ManualPickListCatalogueState = 'loading' | 'failed' | 'loaded';
 
 /**
  * A blank "Taken" box is zero - the operator typed nothing for that product - and an explicit `0`
@@ -65,6 +84,18 @@ function parseTakenQuantity(raw: string): number | null {
  * `PickListComponent` keeps this component alive (hidden) rather than destroying it when the other
  * view is shown, so neither the typed quantities nor the key can be lost by a mode switch; see
  * docs/architecture.md § Manual pick-list entry and mode selection.
+ *
+ * **A support session is read-only here too.** A session grants `Inventory.Operate`, so the backend
+ * refuses this write only by its read-only method rule; like `MachineDetailComponent`'s Restock, the
+ * "Taken" boxes and Save are hidden while {@link sessionActive} is set, and {@link save} refuses on
+ * its own as well, so a session that starts after the page opened cannot send a refill either. A
+ * `403` that does reach here is a definite refusal - nothing was recorded - and is reported as one,
+ * never as the uncertain outcome that asks for a retry.
+ *
+ * **The catalogue's own state is the page's.** {@link catalogueState} says whether `products` is a
+ * real answer yet, so a slow or failed read is never shown as an empty catalogue, and
+ * {@link catalogueRefreshFailed} says the refresh after a save failed, so stale storage quantities
+ * are labelled as such; both offer {@link retryCatalogue}.
  */
 @Component({
   selector: 'app-manual-pick-list',
@@ -72,8 +103,17 @@ function parseTakenQuantity(raw: string): number | null {
   imports: [CommonModule, FormsModule],
   templateUrl: './manual-pick-list.component.html'
 })
-export class ManualPickListComponent {
+export class ManualPickListComponent implements OnDestroy {
   @Input() products: Product[] = [];
+
+  /** Whether {@link products} is a real answer yet; see {@link ManualPickListCatalogueState}. */
+  @Input() catalogueState: ManualPickListCatalogueState = 'loaded';
+
+  /** Set when the catalogue refresh after a recorded refill failed, so the storage quantities shown may be stale. */
+  @Input() catalogueRefreshFailed = false;
+
+  /** Emitted when the operator asks to read the catalogue again after a failed load or refresh. */
+  @Output() readonly retryCatalogue = new EventEmitter<void>();
 
   /** Emitted once a save recorded a refill, so the page can refresh storage quantities. */
   @Output() readonly refillRecorded = new EventEmitter<void>();
@@ -84,6 +124,12 @@ export class ManualPickListComponent {
   search = '';
   categoryId: number | '' = '';
   saving = false;
+
+  /**
+   * Whether a support session is active (issue #658). While it is, the inventory-writing controls
+   * are hidden and {@link save} refuses; see the class doc.
+   */
+  sessionActive = false;
 
   /**
    * Set when a save ended without the server's answer - a network failure or a `5xx` - so it is not
@@ -107,7 +153,23 @@ export class ManualPickListComponent {
   /** The exact rows and key of the last attempted save, kept so an unchanged retry reuses both. */
   private lastSubmission: { key: string; rows: PickListRefillRowRequest[] } | null = null;
 
-  constructor(private readonly pickListService: PickListService, private readonly toastService: ToastService) {}
+  readonly supportSessionMessage = SUPPORT_SESSION_READ_ONLY_MESSAGE;
+  readonly catalogueLoadFailedMessage = CATALOGUE_LOAD_FAILED_MESSAGE;
+  readonly catalogueRefreshFailedMessage = CATALOGUE_REFRESH_FAILED_MESSAGE;
+
+  private readonly sessionActiveSubscription: Subscription;
+
+  constructor(
+    private readonly pickListService: PickListService,
+    private readonly toastService: ToastService,
+    supportSession: SupportSessionService
+  ) {
+    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
+
+  ngOnDestroy(): void {
+    this.sessionActiveSubscription.unsubscribe();
+  }
 
   categories(): Category[] {
     const byId = new Map<number, Category>();
@@ -148,7 +210,7 @@ export class ManualPickListComponent {
   }
 
   get canSave(): boolean {
-    if (this.saving) {
+    if (this.saving || this.sessionActive) {
       return false;
     }
     const rows = this.buildRows();
@@ -157,7 +219,9 @@ export class ManualPickListComponent {
 
   save(): void {
     const rows = this.buildRows();
-    if (this.saving || rows === null || rows.length === 0) {
+    // Checked here as well as hidden in the template, so the write is actually unavailable during a
+    // support session rather than merely invisible - the endpoint refuses it either way.
+    if (this.saving || this.sessionActive || rows === null || rows.length === 0) {
       return;
     }
 
@@ -215,10 +279,19 @@ export class ManualPickListComponent {
       return;
     }
 
+    if (error instanceof HttpErrorResponse && error.status === 403) {
+      // A definite refusal (a support session's read-only rule, or a capability this member lacks):
+      // the request was refused before anything was recorded, so there is nothing to retry and no
+      // uncertain write to warn about. The key is dropped so a later, permitted save mints its own.
+      this.lastSubmission = null;
+      this.toastService.error(this.problemDetail(error, REFILL_FORBIDDEN_MESSAGE));
+      return;
+    }
+
     if (error instanceof HttpErrorResponse && error.status === 409) {
       // The key is spent on a different request; reusing it would only be refused again.
       this.lastSubmission = null;
-      this.toastService.error(this.conflictMessage(error));
+      this.toastService.error(this.problemDetail(error, REFILL_CONFLICT_MESSAGE));
       return;
     }
 
@@ -230,10 +303,10 @@ export class ManualPickListComponent {
     this.toastService.error(REFILL_UNCERTAIN_MESSAGE);
   }
 
-  /** The 409's own detail sentence (`DomainExceptionHandler`'s ProblemDetails), falling back to a generic one. */
-  private conflictMessage(error: HttpErrorResponse): string {
+  /** The response's own ProblemDetails detail sentence, falling back to the given generic one. */
+  private problemDetail(error: HttpErrorResponse, fallback: string): string {
     const body = error.error as { detail?: unknown } | null;
     const detail = body && typeof body === 'object' ? body.detail : null;
-    return typeof detail === 'string' && detail.trim().length > 0 ? detail : REFILL_CONFLICT_MESSAGE;
+    return typeof detail === 'string' && detail.trim().length > 0 ? detail : fallback;
   }
 }

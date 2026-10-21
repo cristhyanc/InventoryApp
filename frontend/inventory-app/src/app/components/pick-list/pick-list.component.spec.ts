@@ -1,6 +1,7 @@
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
+import { SupportSessionService } from '../../support-session/support-session.service';
 import { PickListComponent } from './pick-list.component';
 import { MachineService } from '../../services/machine.service';
 import { ProductService } from '../../services/product.service';
@@ -644,7 +645,8 @@ describe('PickListComponent rendered structure', () => {
         { provide: PickListService, useValue: { get: pickList } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
-        { provide: AccessService, useValue: { allows: () => of(true) } }
+        { provide: AccessService, useValue: { allows: () => of(true) } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } }
       ]
     }).compileComponents();
 

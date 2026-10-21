@@ -14,7 +14,7 @@ import { ProviderAvailabilityService } from '../../provider/provider-availabilit
 import { loadProviderList } from '../../provider/provider-list-load';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 import { SortDirection, compareSortValues, nextSortState, sortAriaState, sortColumnLabel } from '../shared/sortable-column';
-import { ManualPickListComponent } from './manual-pick-list.component';
+import { ManualPickListCatalogueState, ManualPickListComponent } from './manual-pick-list.component';
 
 type PickListSortColumn = 'name' | 'mdbCode';
 
@@ -59,6 +59,12 @@ export type PickListMode = 'calculated' | 'manual';
  * ({@link manualSaveInFlight}) switching away is refused outright, so no response can land on a view
  * the operator has already left. The calculated matrix is a read-only projection, so it has nothing
  * comparable to lose; its own state survives because nothing clears it.
+ *
+ * **The active catalogue has its own load state** ({@link productsLoadState}), because manual entry
+ * is built entirely from it: until the first read succeeds, an empty {@link allProducts} is "not
+ * known yet" or "could not be read", never "this business has no products", and a failed refresh
+ * after a recorded refill is reported rather than leaving stale storage quantities unlabelled. Both
+ * failures are retried through {@link loadProducts}.
  */
 @Component({
   selector: 'app-pick-list',
@@ -69,6 +75,12 @@ export type PickListMode = 'calculated' | 'manual';
 export class PickListComponent implements OnInit {
   allMachines: Machine[] = [];
   allProducts: Product[] = [];
+
+  /** The active catalogue reads: the first one, its retries, and the refresh after each manual refill. */
+  readonly productsLoadState = new ListLoadState();
+
+  /** Whether a catalogue read has ever succeeded, so a later failure is a failed refresh of real data rather than no data at all. */
+  private productsEverLoaded = false;
 
   /** Which view is showing; see the class doc for when it is forced to `'manual'`. */
   mode: PickListMode = 'calculated';
@@ -141,12 +153,47 @@ export class PickListComponent implements OnInit {
         this.setMode('manual');
       }
     });
-    this.productService.getAll().subscribe((products) => {
-      this.allProducts = products;
-      const allProductIds = products.map((p) => p.id);
-      this.stagedProductIds = allProductIds;
-      this.appliedProductIds = allProductIds;
+    this.loadProducts();
+  }
+
+  /**
+   * Reads the active catalogue: on arrival, after each manual refill, and whenever the operator
+   * retries a failed read. Only the first successful read seeds the Products filter's selection; a
+   * later one only replaces the products, so a refresh never resets what the operator selected.
+   */
+  loadProducts(): void {
+    const token = this.productsLoadState.start();
+    this.productService.getAll().subscribe({
+      next: (products) => {
+        if (this.productsLoadState.isCurrent(token)) {
+          this.allProducts = products;
+          if (!this.productsEverLoaded) {
+            const allProductIds = products.map((p) => p.id);
+            this.stagedProductIds = allProductIds;
+            this.appliedProductIds = allProductIds;
+          }
+          this.productsEverLoaded = true;
+        }
+        this.productsLoadState.succeed(token);
+      },
+      error: () => {
+        this.productsLoadState.fail(token);
+        this.toastService.error(this.productsEverLoaded ? 'Failed to refresh the product list.' : 'Failed to load the product list.');
+      }
     });
+  }
+
+  /** What manual entry may say about {@link allProducts}; see `ManualPickListCatalogueState`. */
+  get catalogueState(): ManualPickListCatalogueState {
+    if (this.productsEverLoaded) {
+      return 'loaded';
+    }
+    return this.productsLoadState.loadFailed ? 'failed' : 'loading';
+  }
+
+  /** Whether the last catalogue read failed after an earlier one succeeded, so the storage quantities shown may be stale. */
+  get catalogueRefreshFailed(): boolean {
+    return this.productsEverLoaded && this.productsLoadState.loadFailed;
   }
 
   /**
@@ -173,7 +220,7 @@ export class PickListComponent implements OnInit {
 
   /** Refreshes the active catalogue `ManualPickListComponent` reads, after it records a refill. */
   refreshProductsAfterManualRefill(): void {
-    this.productService.getAll().subscribe((products) => (this.allProducts = products));
+    this.loadProducts();
   }
 
   /** Records whether manual entry has a save outstanding; see {@link switchMode}. */

@@ -1,15 +1,21 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { Subject, of, throwError } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, of, throwError } from 'rxjs';
 import { Category, PickListRefillRequest, PickListRefillResponse, Product } from '../../models/models';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
 import {
   INVALID_TAKEN_QUANTITY_MESSAGE,
   REFILL_CONFLICT_MESSAGE,
+  REFILL_FORBIDDEN_MESSAGE,
   REFILL_RECORDED_MESSAGE,
   REFILL_UNCERTAIN_MESSAGE,
   ManualPickListComponent
 } from './manual-pick-list.component';
+
+function supportSessionStub(active: Observable<boolean>): SupportSessionService {
+  return { active$: active } as unknown as SupportSessionService;
+}
 
 function category(id: number, name: string): Category {
   return { id, name };
@@ -65,12 +71,13 @@ interface Harness {
 
 function createHarness(
   products: Product[] = [product({ id: 1, name: 'Coke', quantityInStock: 20 }), product({ id: 2, name: 'Chips', quantityInStock: 5 })],
-  recordRefill: jest.Mock = jest.fn((request: PickListRefillRequest) => of(recordedResponse(request)))
+  recordRefill: jest.Mock = jest.fn((request: PickListRefillRequest) => of(recordedResponse(request))),
+  sessionActive: Observable<boolean> = of(false)
 ): Harness {
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
   const pickListService = { recordRefill } as unknown as PickListService;
 
-  const component = new ManualPickListComponent(pickListService, toast as unknown as ToastService);
+  const component = new ManualPickListComponent(pickListService, toast as unknown as ToastService, supportSessionStub(sessionActive));
   component.products = products;
 
   return { component, recordRefill, toast };
@@ -391,5 +398,71 @@ describe('ManualPickListComponent save', () => {
 
       expect(inFlight).toEqual([true, false]);
     });
+  });
+});
+
+describe('ManualPickListComponent during a read-only support session (issue #744)', () => {
+  it('refuses to save while a support session is active, sending nothing', () => {
+    const { component, recordRefill, toast } = createHarness(undefined, undefined, of(true));
+    component.onTakenChange(1, '3');
+
+    expect(component.canSave).toBe(false);
+    component.save();
+
+    expect(recordRefill).not.toHaveBeenCalled();
+    expect(component.unresolvedSubmission).toBe(false);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('stops saving once a support session starts after the page opened', () => {
+    const session = new BehaviorSubject(false);
+    const { component, recordRefill } = createHarness(undefined, undefined, session);
+    component.onTakenChange(1, '3');
+    expect(component.canSave).toBe(true);
+
+    session.next(true);
+    component.save();
+
+    expect(component.canSave).toBe(false);
+    expect(recordRefill).not.toHaveBeenCalled();
+  });
+
+  it('reports a 403 as a definite refusal, never as an uncertain write to retry', () => {
+    const refused = new HttpErrorResponse({ status: 403, error: { title: 'Forbidden', status: 403 } });
+    const recordRefill = jest.fn(() => throwError(() => refused));
+    const { component, toast } = createHarness(undefined, recordRefill);
+    component.onTakenChange(1, '3');
+
+    component.save();
+
+    expect(component.unresolvedSubmission).toBe(false);
+    expect(toast.error).toHaveBeenCalledWith(REFILL_FORBIDDEN_MESSAGE);
+    expect(toast.error).not.toHaveBeenCalledWith(REFILL_UNCERTAIN_MESSAGE);
+  });
+
+  it('mints a fresh key for a later save after a 403, because nothing was recorded under the refused one', () => {
+    const refused = new HttpErrorResponse({ status: 403, error: { title: 'Forbidden', status: 403 } });
+    const recordRefill = jest
+      .fn()
+      .mockImplementationOnce(() => throwError(() => refused))
+      .mockImplementation((request: PickListRefillRequest) => of(recordedResponse(request)));
+    const { component } = createHarness(undefined, recordRefill);
+    component.onTakenChange(1, '3');
+
+    component.save();
+    component.save();
+
+    const firstKey = (recordRefill.mock.calls[0][0] as PickListRefillRequest).idempotencyKey;
+    const secondKey = (recordRefill.mock.calls[1][0] as PickListRefillRequest).idempotencyKey;
+    expect(secondKey).not.toBe(firstKey);
+  });
+
+  it('unsubscribes from the support session when destroyed', () => {
+    const session = new BehaviorSubject(false);
+    const { component } = createHarness(undefined, undefined, session);
+
+    component.ngOnDestroy();
+
+    expect(session.observed).toBe(false);
   });
 });

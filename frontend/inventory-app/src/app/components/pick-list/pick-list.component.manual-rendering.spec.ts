@@ -1,7 +1,7 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
-import { Subject, of, throwError } from 'rxjs';
+import { BehaviorSubject, Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService } from '../../access/access.service';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { PickListRefillRequest, PickListRefillResponse, Product } from '../../models/models';
@@ -10,6 +10,7 @@ import { PickListService } from '../../services/pick-list.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
 import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
 import { PickListComponent } from './pick-list.component';
 
 function product(overrides: Partial<Product>): Product {
@@ -42,18 +43,22 @@ function product(overrides: Partial<Product>): Product {
 async function render(
   products: Product[] = [product({ id: 1, name: 'Coke', quantityInStock: 20 }), product({ id: 2, name: 'Chips', quantityInStock: 3 })],
   nayaxStatus: NayaxConnectionStatusName = 'Ready',
-  recordRefill: jest.Mock = jest.fn()
+  recordRefill: jest.Mock = jest.fn(),
+  options: { sessionActive?: Observable<boolean>; getAllProducts?: jest.Mock } = {}
 ) {
+  const getAllProducts = options.getAllProducts ?? jest.fn(() => of(products));
+  const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
   await TestBed.configureTestingModule({
     imports: [PickListComponent],
     providers: [
       provideRouter([]),
       { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
-      { provide: ProductService, useValue: { getAll: jest.fn(() => of(products)) } },
+      { provide: ProductService, useValue: { getAll: getAllProducts } },
       { provide: PickListService, useValue: { get: jest.fn(() => of({ products: [] })), recordRefill } },
-      { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
+      { provide: ToastService, useValue: toast },
       { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
-      { provide: AccessService, useValue: { allows: () => of(true) } }
+      { provide: AccessService, useValue: { allows: () => of(true) } },
+      { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } }
     ]
   }).compileComponents();
 
@@ -82,7 +87,7 @@ async function render(
     return found;
   };
 
-  return { fixture, host, click, type, button, requireButton, recordRefill };
+  return { fixture, host, click, type, button, requireButton, recordRefill, getAllProducts, toast };
 }
 
 function refillResponse(): PickListRefillResponse {
@@ -277,5 +282,108 @@ describe('PickListComponent keeps an unresolved manual submission across mode sw
 
     expect(requireButton('Calculated').disabled).toBe(false);
     expect(host.querySelector('[data-testid="pick-list-save-in-flight"]')).toBeNull();
+  });
+});
+
+describe('PickListComponent manual entry during a read-only support session (issue #744)', () => {
+  it('offers no Taken boxes and no Save, and sends no refill, while a support session is active', async () => {
+    const recordRefill = jest.fn(() => of(refillResponse()));
+    const { host, requireButton, click, button, toast } = await render(undefined, 'Ready', recordRefill, { sessionActive: of(true) });
+
+    click(requireButton('Enter quantities taken'));
+
+    expect(host.querySelector('[data-testid="manual-pick-list-support-session"]')?.textContent).toContain('A support session is active');
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(host.querySelector('input[aria-label^="Taken:"]')).toBeNull();
+    expect(button('Save')).toBeUndefined();
+    expect(recordRefill).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-testid="manual-pick-list-unresolved"]')).toBeNull();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('withdraws the Taken boxes and Save when a support session starts after the page opened', async () => {
+    const session = new BehaviorSubject(false);
+    const recordRefill = jest.fn(() => of(refillResponse()));
+    const { host, requireButton, click, type, button, fixture } = await render(undefined, 'Ready', recordRefill, { sessionActive: session });
+    click(requireButton('Enter quantities taken'));
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!, '2');
+    expect(requireButton('Save').disabled).toBe(false);
+
+    session.next(true);
+    fixture.detectChanges();
+
+    expect(host.querySelector('input[aria-label^="Taken:"]')).toBeNull();
+    expect(button('Save')).toBeUndefined();
+    expect(recordRefill).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-testid="manual-pick-list-unresolved"]')).toBeNull();
+  });
+});
+
+describe('PickListComponent manual entry catalogue load state (issue #744)', () => {
+  const emptyMessage = 'No active products match your filters.';
+
+  it('says the products are loading, not that there are none, while the first read is outstanding', async () => {
+    const pending = new Subject<Product[]>();
+    const { host, requireButton, click, fixture } = await render(undefined, 'Ready', undefined, { getAllProducts: jest.fn(() => pending) });
+    click(requireButton('Enter quantities taken'));
+
+    expect(host.querySelector('[data-testid="manual-pick-list-catalogue-loading"]')).not.toBeNull();
+    expect(host.textContent).not.toContain(emptyMessage);
+
+    pending.next([product({ id: 1, name: 'Coke' })]);
+    pending.complete();
+    fixture.detectChanges();
+
+    expect(host.querySelector('[data-testid="manual-pick-list-catalogue-loading"]')).toBeNull();
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(1);
+  });
+
+  it('reports a failed first read with a retry, never as an empty catalogue, and loads on retry', async () => {
+    const getAllProducts = jest
+      .fn()
+      .mockImplementationOnce(() => throwError(() => new HttpErrorResponse({ status: 500 })))
+      .mockImplementation(() => of([product({ id: 1, name: 'Coke' })]));
+    const { host, requireButton, click } = await render(undefined, 'Ready', undefined, { getAllProducts });
+    click(requireButton('Enter quantities taken'));
+
+    expect(host.querySelector('[data-testid="manual-pick-list-catalogue-failed"]')?.textContent).toContain('could not be loaded');
+    expect(host.textContent).not.toContain(emptyMessage);
+
+    click(requireButton('Retry'));
+
+    expect(getAllProducts).toHaveBeenCalledTimes(2);
+    expect(host.querySelector('[data-testid="manual-pick-list-catalogue-failed"]')).toBeNull();
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(1);
+  });
+
+  it('keeps the empty-catalogue message for a successful read that returned no products', async () => {
+    const { host, requireButton, click } = await render([], 'Ready');
+    click(requireButton('Enter quantities taken'));
+
+    expect(host.textContent).toContain(emptyMessage);
+    expect(host.querySelector('[data-testid="manual-pick-list-catalogue-failed"]')).toBeNull();
+  });
+
+  it('says storage quantities may be stale when the refresh after a recorded refill fails, and refreshes on request', async () => {
+    const getAllProducts = jest
+      .fn()
+      .mockImplementationOnce(() => of([product({ id: 1, name: 'Coke', quantityInStock: 20 })]))
+      .mockImplementationOnce(() => throwError(() => new HttpErrorResponse({ status: 0 })))
+      .mockImplementation(() => of([product({ id: 1, name: 'Coke', quantityInStock: 18 })]));
+    const recordRefill = jest.fn(() => of(refillResponse()));
+    const { host, requireButton, click, type, toast } = await render(undefined, 'Ready', recordRefill, { getAllProducts });
+    click(requireButton('Enter quantities taken'));
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke"]')!, '2');
+
+    click(requireButton('Save'));
+
+    expect(host.querySelector('[data-testid="manual-pick-list-refresh-failed"]')?.textContent).toContain('may be out of date');
+    expect(toast.error).toHaveBeenCalledWith('Failed to refresh the product list.');
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(1);
+
+    click(requireButton('Refresh'));
+
+    expect(host.querySelector('[data-testid="manual-pick-list-refresh-failed"]')).toBeNull();
+    expect(host.querySelector('[data-testid="manual-pick-list-storage-qty"]')?.textContent?.trim()).toBe('18');
   });
 });

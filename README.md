@@ -1466,6 +1466,15 @@ that cannot be used.
   back keeps every quantity you typed — so the retry is still the same request under the same key, not
   a second pick. While a save is actually being sent, the Calculated button is disabled until it
   finishes, so an outstanding write always lands where you can see what it did.
+- **Read-only during a support session.** While a support session is active, manual entry still
+  lists the products and their storage quantities, but the "Taken" boxes and Save are hidden and the
+  screen says why, so nothing can be recorded on the business's behalf. A refusal the server returns
+  is reported as a refusal, not as a save that might need retrying.
+- **A product list that could not be read is never shown as empty.** While the product list is still
+  loading the screen says so, a failed read says the list could not be loaded and offers **Retry**,
+  and "No active products match your filters." appears only after a successful read. If refreshing
+  storage quantities after a save fails, the screen keeps the last list, says the quantities may be
+  out of date and offers **Refresh**.
 - **No machine selector yet.** Issue #746 is what lets an operator attribute a manual pick to one of
   the business's own machines; until it ships, every manual save omits a machine and is recorded as a
   whole-business pick, exactly as the batch refill endpoint already allows.

@@ -8788,8 +8788,36 @@ client side).** `ManualPickListComponent` keeps the exact row set and key of its
   recorded, the retry is answered as a replay and writes nothing a second time; if it had not, the
   retry records it. Either way the operator never has to decide which happened. This is the one
   outcome that sets `unresolvedSubmission`, so the attempt stays reported on screen until a later
-  Save resolves it, and it is why the component survives a mode switch at all; a `400` and a `409`
-  are definite answers and leave it clear.
+  Save resolves it, and it is why the component survives a mode switch at all; a `400`, a `403` and a
+  `409` are definite answers and leave it clear.
+- **A `403` is a definite refusal too** - a read-only support session, or a capability the member
+  lacks, refused the request before anything was recorded - so it is reported as a refusal ("This
+  refill was refused, so nothing was recorded.", or the response's own `detail`), never as the
+  uncertain outcome that asks for a retry, and `lastSubmission` is cleared so a later, permitted Save
+  mints its own key.
+
+**A support session is read-only here too (issue #658's rule).** A support session grants
+`Inventory.Operate`, so the backend refuses this write only by its read-only method rule. Like
+`MachineDetailComponent`'s Restock, `ManualPickListComponent` subscribes to `SupportSessionService.
+active$` (`sessionActive`) and, while it is set, **hides** the "Taken" column and Save and says why
+(`data-testid="manual-pick-list-support-session"`); the product list and storage quantities stay
+readable. `canSave` is false and `save()` returns before sending, so a session that starts after the
+page opened cannot send a refill either. An already-raised uncertain-save notice stays visible.
+
+**The catalogue's own load state.** Manual entry is built entirely from `allProducts`, so an empty
+array cannot be read as "no products" until a read has succeeded. `PickListComponent.loadProducts()`
+is the one catalogue read - on arrival, after each recorded refill, and on retry - tracked by a
+`ListLoadState` (`productsLoadState`) so a superseded response never overwrites a newer one; only the
+first successful read seeds the Products filter's selection. It hands manual entry `catalogueState`
+(`'loading' | 'failed' | 'loaded'`): while the first read is outstanding the table says "Loading
+products…", a failed first read says the list could not be loaded with a **Retry** button, and "No
+active products match your filters." is shown only after a successful read. A failed refresh after a
+recorded refill (`catalogueRefreshFailed`) keeps the last list, says the storage quantities may be out
+of date (`data-testid="manual-pick-list-refresh-failed"`) and offers **Refresh**; either failure also
+toasts. `pick-list.component.manual-rendering.spec.ts` covers a delayed first read, a failed first
+read and its retry, a successful empty read, and a failed refresh, plus the support-session cases
+(no Taken boxes, no Save, no POST and no uncertain-write notice, including a session that starts after
+the page opened); `manual-pick-list.component.spec.ts` covers the `save()` guard and the `403` outcome.
 
 **What proves it.** `idempotency-key.spec.ts` (the generator's uniqueness and the 128-character
 contract bound), `pick-list-refill-errors.spec.ts` (`rows[i]` mapped back to the submitted row's
