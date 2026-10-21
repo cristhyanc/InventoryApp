@@ -4,7 +4,11 @@ import { Observable, of, throwError } from 'rxjs';
 import { StockAdjustmentFormComponent } from './stock-adjustment-form.component';
 import { StockService } from '../../../services/stock.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
-import { Machine, RestockCostSuggestion, StockAdjustment, StockAdjustmentReason } from '../../../models/models';
+import { LocalMachine, RestockCostSuggestion, StockAdjustment, StockAdjustmentReason } from '../../../models/models';
+
+function localMachine(id: number, name: string, isActive = true): LocalMachine {
+  return { id, name, isActive, isProviderNamed: false };
+}
 
 interface Harness {
   component: StockAdjustmentFormComponent;
@@ -256,12 +260,16 @@ describe('StockAdjustmentFormComponent write control during a support session (i
 });
 
 /**
- * The machine field depends on the page having a machine list at all (issue #728): without a
- * provider, or after a machine read the page could not complete, there is nothing to attribute an
- * adjustment to and "— None —" alone is not a choice.
+ * The machine field offers the business's **own** active machines (issue #746, G2b of #329), which
+ * the page reads from `/api/local-machines` and hands over. It depends on no provider: what it
+ * follows is whether that read produced an active machine, failed, or is still outstanding.
  */
-describe('StockAdjustmentFormComponent machine field (issue #728)', () => {
-  async function render(machines: Machine[]): Promise<HTMLElement> {
+describe('StockAdjustmentFormComponent machine field (issue #746)', () => {
+  async function render(inputs: {
+    machines: LocalMachine[];
+    machinesFailed?: boolean;
+    machinesLoading?: boolean;
+  }): Promise<HTMLElement> {
     await TestBed.configureTestingModule({
       imports: [StockAdjustmentFormComponent],
       providers: [
@@ -272,45 +280,93 @@ describe('StockAdjustmentFormComponent machine field (issue #728)', () => {
 
     const fixture = TestBed.createComponent(StockAdjustmentFormComponent);
     fixture.componentRef.setInput('productId', 7);
-    fixture.componentRef.setInput('machines', machines);
+    fixture.componentRef.setInput('machines', inputs.machines);
+    fixture.componentRef.setInput('machinesFailed', inputs.machinesFailed ?? false);
+    fixture.componentRef.setInput('machinesLoading', inputs.machinesLoading ?? false);
     fixture.detectChanges();
 
     return fixture.nativeElement as HTMLElement;
   }
 
+  const optionLabels = (host: HTMLElement) =>
+    Array.from(host.querySelectorAll('#adjustment-machine option')).map((option) => option.textContent?.trim());
+
   afterEach(() => TestBed.resetTestingModule());
 
-  it('offers the machine field while the page has machines to offer', async () => {
-    const host = await render([{ machineID: 9, localMachineId: 109, machineName: 'Lobby' } as Machine]);
+  it('offers every active local machine under its own name', async () => {
+    const host = await render({ machines: [localMachine(41, 'Lobby'), localMachine(42, 'Level 3')] });
 
     expect(host.querySelector('#adjustment-machine')).not.toBeNull();
+    expect(optionLabels(host)).toEqual(['— None —', 'Lobby', 'Level 3']);
   });
 
-  it('hides the machine field when no machine list is available', async () => {
-    const host = await render([]);
+  it('does not offer a deactivated machine beside the active ones', async () => {
+    const host = await render({ machines: [localMachine(41, 'Lobby'), localMachine(42, 'Retired', false)] });
+
+    expect(optionLabels(host)).toEqual(['— None —', 'Lobby']);
+  });
+
+  it('hides the field when every recorded machine is deactivated, with no error', async () => {
+    const host = await render({ machines: [localMachine(42, 'Retired', false)] });
 
     expect(host.querySelector('#adjustment-machine')).toBeNull();
+    expect(host.querySelector('[data-testid="adjustment-machine-error"]')).toBeNull();
+  });
+
+  it('hides the machine field when the business has recorded no machine', async () => {
+    const host = await render({ machines: [] });
+
+    expect(host.querySelector('#adjustment-machine')).toBeNull();
+    expect(host.querySelector('[data-testid="adjustment-machine-error"]')).toBeNull();
+  });
+
+  it('shows an explicit error in place of the field when the machine read failed', async () => {
+    const host = await render({ machines: [], machinesFailed: true });
+
+    expect(host.querySelector('#adjustment-machine')).toBeNull();
+    expect(host.querySelector('[data-testid="adjustment-machine-error"]')?.textContent).toContain(
+      'The machine list could not be loaded'
+    );
+  });
+
+  it('says the machines are still loading rather than hiding the field as if there were none', async () => {
+    const host = await render({ machines: [], machinesLoading: true });
+
+    expect(host.querySelector('#adjustment-machine')).toBeNull();
+    expect(host.querySelector('[data-testid="adjustment-machine-loading"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="adjustment-machine-error"]')).toBeNull();
   });
 
   it('drops a staged machine when the list it came from goes away', () => {
     const { component } = createHarness();
-    component.machines = [{ machineID: 9, localMachineId: 109, machineName: 'Lobby' } as Machine];
-    component.form.machineId = 109;
+    component.machines = [localMachine(41, 'Lobby')];
+    component.form.machineId = 41;
 
     component.machines = [];
-    component.ngOnChanges({ machines: new SimpleChange([{ machineID: 9, localMachineId: 109 }], [], false) });
+    component.ngOnChanges({ machines: new SimpleChange([localMachine(41, 'Lobby')], [], false) });
 
     expect(component.form.machineId).toBeNull();
   });
 
-  it('keeps a staged machine while the list still holds it', () => {
+  it('drops a staged machine that has since been deactivated', () => {
     const { component } = createHarness();
-    component.machines = [{ machineID: 9, localMachineId: 109, machineName: 'Lobby' } as Machine];
-    component.form.machineId = 109;
+    component.machines = [localMachine(41, 'Lobby')];
+    component.form.machineId = 41;
 
-    component.ngOnChanges({ machines: new SimpleChange([], [{ machineID: 9, localMachineId: 109 }], false) });
+    component.machines = [localMachine(41, 'Lobby', false)];
+    component.ngOnChanges({ machines: new SimpleChange([localMachine(41, 'Lobby')], component.machines, false) });
 
-    expect(component.form.machineId).toBe(109);
+    expect(component.form.machineId).toBeNull();
+  });
+
+  it('keeps a staged machine while the list still offers it', () => {
+    const { component } = createHarness();
+    component.machines = [localMachine(41, 'Lobby')];
+    component.form.machineId = 41;
+
+    component.ngOnChanges({ machines: new SimpleChange([], component.machines, false) });
+
+    expect(component.form.machineId).toBe(41);
   });
 });
 
