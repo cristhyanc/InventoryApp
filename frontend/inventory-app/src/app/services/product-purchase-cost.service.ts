@@ -18,9 +18,11 @@ import { ConfigService } from './config.service';
  *
  * The endpoint requires `Dashboard.ViewFinancials` and answers `403` without it, so a caller that
  * may be an Operator must handle that refusal rather than treating an error as "no purchases".
+ * Products → Needs Ordering (issue #790, D of #786) does not ask at all without the capability,
+ * and reports a failed request as "Unavailable" with a Retry rather than as "no purchases".
  *
- * The home Dashboard's Reorder Alerts table is its first caller (issue #789, C of #786); the Needs
- * Ordering and All Products screens are issues #790 and #791.
+ * The home Dashboard's Reorder Alerts table is its first caller (issue #789, C of #786); the All
+ * Products screen is issue #791.
  */
 @Injectable({ providedIn: 'root' })
 export class ProductPurchaseCostService {

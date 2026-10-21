@@ -31,6 +31,17 @@
     @if (loadState.loaded && storageOnlyNote) {
       <p class="border-b border-md-gray-200 p-4 text-md-body value-muted">{{ storageOnlyNote }}</p>
     }
+    <!--
+      The purchase-cost columns failed, not the list (issue #790). The rows beside them are the
+      business's own reorder figures and stay usable, so this reports the one thing that is
+      unavailable and offers the one action that can fix it.
+    -->
+    @if (loadState.loaded && canViewFinancials && purchaseCostState === 'unavailable') {
+      <div class="flex flex-wrap items-center gap-3 border-b border-md-gray-200 p-4" role="alert">
+        <p class="text-md-body value-negative">Purchase costs could not be loaded.</p>
+        <button type="button" class="btn btn-sm btn-secondary" (click)="retryPurchaseCosts()">Retry</button>
+      </div>
+    }
     @if (loadState.loadFailed) {
       <p class="p-4 text-md-body value-negative">Failed to load products needing ordering. Change a filter or reload the page to try again.</p>
     } @else if (loadState.loaded && products.length === 0) {
@@ -67,9 +78,14 @@
               <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('needToOrder')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('needToOrder')">{{ sortLabel('Need to Order', 'needToOrder') }}</button>
               </th>
-              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('status')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('status')">{{ sortLabel('Status', 'status') }}</button>
-              </th>
+              @if (canViewFinancials) {
+                <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('lastPurchaseCost')">
+                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lastPurchaseCost')">{{ sortLabel('Last purchase', 'lastPurchaseCost') }}</button>
+                </th>
+                <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('cheapestPurchaseCost')">
+                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('cheapestPurchaseCost')">{{ sortLabel('Cheapest purchase', 'cheapestPurchaseCost') }}</button>
+                </th>
+              }
               <th scope="col" class="table-cell"></th>
             </tr>
           </thead>
@@ -77,11 +93,19 @@
             @for (p of sortedProducts; track p.id) {
               <tr class="table-row table-row-link" (click)="onRowActivate(p, $event)" (keydown.enter)="onRowActivate(p, $event)">
                 <td class="table-cell"><input type="checkbox" [attr.aria-label]="'Select ' + p.name" [checked]="selectedProductIds.has(p.id)" (change)="toggleSelection(p.id, $any($event.target).checked)" /></td>
+                <!--
+                  The name looks the product up on Google in a new tab (issue #790, D of #786).
+                  The row's own click handler treats an anchor as the row's control and defers to
+                  it, so this never also opens the editor in the current tab; clicking anywhere
+                  else on the row still does.
+                -->
                 <td class="table-cell">
                   <a
                     class="table-row-anchor"
-                    [routerLink]="['/products', p.id, 'edit']"
-                    [attr.aria-label]="'Edit product ' + p.name">{{ p.name }}</a>
+                    [href]="googleSearchUrl(p.name)"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    [attr.aria-label]="'Search Google for ' + p.name">{{ p.name }}</a>
                 </td>
                 <td class="table-cell">{{ p.category?.name }}</td>
                 <td class="table-cell">
@@ -96,13 +120,56 @@
                 <td class="table-cell table-num">{{ p.restockTo }}</td>
                 <td class="table-cell table-num">{{ p.onOrderQuantity }}</td>
                 <td class="table-cell table-num font-semibold value-negative">{{ p.needToOrder }}</td>
+                <!--
+                  What was last paid and the cheapest ever paid, from issue #788's bulk endpoint.
+                  "Still loading", "no purchase history" and "the request failed" stay three
+                  separate answers: a dash is published only once a successful response established
+                  that this product has never been bought, and a recorded $0.00 is a real cost.
+                -->
+                @if (canViewFinancials) {
+                  <td class="table-cell table-num">
+                    @if (purchaseCostState === 'unavailable') {
+                      <span class="value-negative">Unavailable</span>
+                    } @else if (purchaseCostState === 'loaded') {
+                      @if (purchaseCost(p); as cost) {
+                        <span class="font-semibold">{{ cost.lastUnitCost | currency }}</span>
+                        <span class="block text-md-body value-muted">{{ cost.lastSupplierName ?? 'None' }}</span>
+                      } @else {
+                        <span class="value-muted">—</span>
+                      }
+                    } @else {
+                      <span class="value-muted">Loading…</span>
+                    }
+                  </td>
+                  <td class="table-cell table-num">
+                    @if (purchaseCostState === 'unavailable') {
+                      <span class="value-negative">Unavailable</span>
+                    } @else if (purchaseCostState === 'loaded') {
+                      @if (purchaseCost(p); as cost) {
+                        <span class="font-semibold">{{ cost.lowestUnitCost | currency }}</span>
+                        <span class="block text-md-body value-muted">{{ cost.lowestSupplierName ?? 'None' }}</span>
+                      } @else {
+                        <span class="value-muted">—</span>
+                      }
+                    } @else {
+                      <span class="value-muted">Loading…</span>
+                    }
+                  </td>
+                }
+                <!--
+                  Stock, and the row's own link to the product editor. The editor used to be
+                  reachable through the Name anchor; issue #790 pointed that anchor at Google, which
+                  left the row click as the only way in - and a row click is not something a
+                  keyboard can perform, because the `<tr>` takes no focus and `onRowActivate`
+                  defers to every focusable child. This anchor is that focusable child: it gives
+                  the editor keyboard focus, Enter activation and ctrl/cmd/middle-click natively,
+                  the same way the Products list's Name anchor does.
+                -->
                 <td class="table-cell">
-                  <button type="button" class="badge" [ngClass]="p.isActive ? 'badge-success' : 'badge-neutral'" [disabled]="sessionActive" (click)="toggleActive(p)">
-                    {{ p.isActive ? 'Active' : 'Inactive' }}
-                  </button>
-                </td>
-                <td class="table-cell">
-                  <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
+                  <div class="flex flex-wrap gap-2">
+                    <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
+                    <a [routerLink]="['/products', p.id, 'edit']" class="btn btn-sm btn-secondary" [attr.aria-label]="'Edit product ' + p.name">Edit</a>
+                  </div>
                 </td>
               </tr>
             }

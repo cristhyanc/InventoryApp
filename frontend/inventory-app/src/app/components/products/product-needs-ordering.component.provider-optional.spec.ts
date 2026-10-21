@@ -3,11 +3,13 @@ import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { Observable, of, throwError } from 'rxjs';
 import { ProductNeedsOrderingComponent } from './product-needs-ordering.component';
+import { AccessService } from '../../access/access.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
+import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { ToastService } from '../../services/toast.service';
 import { Product, ReorderAlertListing } from '../../models/models';
 
@@ -63,8 +65,28 @@ async function render(listing$: Observable<ReorderAlertListing>) {
       { provide: CategoryService, useValue: { getAll: () => of([]) } },
       { provide: SupplierService, useValue: { getAll: () => of([]) } },
       { provide: SupplierOrderService, useValue: { create: jest.fn(() => of(undefined)) } },
+      // The purchase-cost columns (issue #790) are local purchase history and have nothing to do
+      // with the provider, so they are granted and answered here and stay present in both modes.
+      {
+        provide: ProductPurchaseCostService,
+        useValue: {
+          getSummaries: () =>
+            of([
+              {
+                productId: 1,
+                lastUnitCost: 1.5,
+                lastSupplierName: 'Acme',
+                lastPurchaseDate: '2026-10-01',
+                lowestUnitCost: 1.2,
+                lowestSupplierName: 'Acme',
+                lowestPurchaseDate: '2026-03-01'
+              }
+            ])
+        }
+      },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
-      { provide: SupportSessionService, useValue: { active$: of(false) } }
+      { provide: SupportSessionService, useValue: { active$: of(false) } },
+      { provide: AccessService, useValue: { allows: () => of(true) } }
     ]
   }).compileComponents();
 
@@ -128,6 +150,21 @@ describe('Needs Ordering in storage-only mode (issue #727)', () => {
     expect(host.textContent).toContain('Cola 375mL');
     const cells = Array.from(host.querySelectorAll('tbody td')).map((td) => td.textContent?.trim());
     expect(cells).toContain('13');
+  });
+
+  /**
+   * The purchase-cost columns (issue #790) are recorded purchase history, so a business with no
+   * usable provider has them in full: nothing about them is read from Nayax.
+   */
+  it('keeps the purchase-cost columns and their values without a provider', async () => {
+    const { host } = await render(
+      of({ products: [product()], mode: 'StorageOnly', machineNeedUnavailableReason: 'NayaxNotConnected' })
+    );
+
+    expect(headers(host)).toContain('Last purchase');
+    expect(headers(host)).toContain('Cheapest purchase');
+    expect(host.textContent).toContain('$1.50');
+    expect(host.textContent).toContain('$1.20');
   });
 
   it('still lets the alerts be marked as ordered, which needs no provider', async () => {
