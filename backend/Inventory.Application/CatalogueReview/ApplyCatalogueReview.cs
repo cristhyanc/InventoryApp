@@ -141,52 +141,14 @@ public sealed class ApplyCatalogueReview
 
         foreach (var decision in submitted)
         {
-            if (!itemsByKey.TryGetValue(decision.ItemId, out var item))
+            var refusal = RefuseDecision(decision, itemsByKey, seen, out var accepted);
+            if (refusal is not null)
             {
-                refusals.Add($"Entry {decision.ItemId} is not part of this review.");
+                refusals.Add(refusal);
                 continue;
             }
 
-            if (!seen.Add(decision.ItemId))
-            {
-                refusals.Add($"Entry {decision.ItemId} was decided more than once.");
-                continue;
-            }
-
-            var alreadyLinked = item.Entry.LinkedProductId.HasValue || item.Entry.LinkedCategoryId.HasValue;
-            if (CatalogueReviewPolicy.DecisionRefusal(decision.Action, decision.LocalRowId, alreadyLinked)
-                is { } refusal)
-            {
-                refusals.Add($"Entry {decision.ItemId}: {refusal}");
-                continue;
-            }
-
-            var fields = decision.Fields ?? [];
-            if (fields.Select(field => field.Field).Distinct().Count() != fields.Count)
-            {
-                refusals.Add($"Entry {decision.ItemId}: a field was decided more than once.");
-                continue;
-            }
-
-            if (item.Entry.Kind == ProviderCatalogueEntryKind.Category && fields.Count > 0)
-            {
-                refusals.Add(
-                    $"Entry {decision.ItemId}: a category has no negotiable fields - the provider owns "
-                        + "its name and nothing else of it is imported.");
-                continue;
-            }
-
-            if (fields.Any(field => field.Field == NegotiableCatalogueField.UnitPrice))
-            {
-                refusals.Add($"Entry {decision.ItemId}: {RetiredSellingPriceDecisionMessage}");
-                continue;
-            }
-
-            decisions.Add(new CatalogueReviewApplyDecision(
-                decision.ItemId,
-                decision.Action,
-                decision.LocalRowId,
-                FieldDecision(fields, NegotiableCatalogueField.UnitVolume)));
+            decisions.Add(accepted!);
         }
 
         if (refusals.Count > 0)
@@ -194,6 +156,49 @@ public sealed class ApplyCatalogueReview
                 "Nothing was applied. " + string.Join(" ", refusals));
 
         return decisions;
+    }
+
+    /// <summary>
+    /// Validates one submitted decision against the stored review's items and this apply's
+    /// already-seen set. Returns the caller-safe refusal text with <paramref name="accepted"/> left
+    /// null, or null with <paramref name="accepted"/> set to the plan entry.
+    /// </summary>
+    private static string? RefuseDecision(
+        CatalogueReviewDecisionRequest decision,
+        IReadOnlyDictionary<long, PersistedCatalogueReviewItem> itemsByKey,
+        HashSet<long> seen,
+        out CatalogueReviewApplyDecision? accepted)
+    {
+        accepted = null;
+
+        if (!itemsByKey.TryGetValue(decision.ItemId, out var item))
+            return $"Entry {decision.ItemId} is not part of this review.";
+
+        if (!seen.Add(decision.ItemId))
+            return $"Entry {decision.ItemId} was decided more than once.";
+
+        var alreadyLinked = item.Entry.LinkedProductId.HasValue || item.Entry.LinkedCategoryId.HasValue;
+        if (CatalogueReviewPolicy.DecisionRefusal(decision.Action, decision.LocalRowId, alreadyLinked)
+            is { } refusal)
+            return $"Entry {decision.ItemId}: {refusal}";
+
+        var fields = decision.Fields ?? [];
+        if (fields.Select(field => field.Field).Distinct().Count() != fields.Count)
+            return $"Entry {decision.ItemId}: a field was decided more than once.";
+
+        if (item.Entry.Kind == ProviderCatalogueEntryKind.Category && fields.Count > 0)
+            return $"Entry {decision.ItemId}: a category has no negotiable fields - the provider owns "
+                + "its name and nothing else of it is imported.";
+
+        if (fields.Any(field => field.Field == NegotiableCatalogueField.UnitPrice))
+            return $"Entry {decision.ItemId}: {RetiredSellingPriceDecisionMessage}";
+
+        accepted = new CatalogueReviewApplyDecision(
+            decision.ItemId,
+            decision.Action,
+            decision.LocalRowId,
+            FieldDecision(fields, NegotiableCatalogueField.UnitVolume));
+        return null;
     }
 
     private static ProviderFieldDecision? FieldDecision(
