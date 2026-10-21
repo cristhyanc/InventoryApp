@@ -175,7 +175,6 @@ public class LinkedProviderSaleResolutionTests : CatalogueReviewTestBase
             Id = ProductId,
             Name = "Chips",
             ExternalProductId = NayaxExternalId.From(ProviderProductId),
-            UnitPrice = 3m,
             RestockTo = 0,
             QuantityInStock = 10,
         });

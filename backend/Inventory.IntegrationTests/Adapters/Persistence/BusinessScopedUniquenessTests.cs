@@ -282,7 +282,7 @@ public class BusinessScopedUniquenessTests : IDisposable
         long productId = 0;
         SaveAs(BusinessA, db =>
         {
-            var product = new Product { Name = "Chips", UnitPrice = 2m };
+            var product = new Product { Name = "Chips" };
             db.Products.Add(product);
             db.SaveChanges();
             productId = product.Id;

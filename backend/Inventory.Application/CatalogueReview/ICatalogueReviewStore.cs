@@ -13,12 +13,14 @@ public interface ICatalogueReviewTransaction : IAsyncDisposable
     Task CommitAsync(CancellationToken cancellationToken);
 }
 
-/// <summary>One of the business's products, as the review reads it.</summary>
+/// <summary>
+/// One of the business's products, as the review reads it. It carries no selling price since issue
+/// #792 (A2 of #786): the product has none, so there is nothing to compare a provider price with.
+/// </summary>
 public sealed record LocalCatalogueProduct(
     long ProductId,
     string Name,
     string? ProviderId,
-    decimal UnitPrice,
     string? Unit,
     long? CategoryId);
 
@@ -51,13 +53,18 @@ public sealed record LocalCatalogueSnapshot(
 /// <summary>
 /// One provider entry as the review records it: the provider's side exactly as it was read, plus the
 /// local row its id already resolves to, if any.
+///
+/// <para>It carries no provider selling price since issue #792 (A2 of #786). The stored column it
+/// was written to, <c>ProviderCatalogueReviewItems.ProviderUnitPrice</c>, is deliberately kept with
+/// the values earlier releases wrote - it is a record of what the provider said, not a product
+/// field - and a stored review that still holds one is refused by the apply as stale rather than
+/// read back into this contract.</para>
 /// </summary>
 public sealed record CatalogueReviewEntry(
     ProviderCatalogueEntryKind Kind,
     string ExternalId,
     string ProviderName,
     string? ProviderGroupExternalId,
-    string? ProviderUnitPrice,
     string? ProviderUnitVolume,
     long? LinkedProductId,
     long? LinkedCategoryId,
@@ -75,15 +82,15 @@ public sealed record PersistedCatalogueReview(
 
 /// <summary>
 /// One decision the apply carries out, already checked for shape by
-/// <see cref="CatalogueReviewPolicy.DecisionRefusal"/>. The two field answers are <c>null</c> when
-/// the operator said nothing about that field, which is not the same as keeping the local value: a
-/// field nobody decided is left alone and is proposed again next time.
+/// <see cref="CatalogueReviewPolicy.DecisionRefusal"/>. The field answer is <c>null</c> when the
+/// operator said nothing about that field, which is not the same as keeping the local value: a
+/// field nobody decided is left alone and is proposed again next time. There is no selling-price
+/// answer since issue #792 (A2 of #786) - one submitted anyway is refused outright.
 /// </summary>
 public sealed record CatalogueReviewApplyDecision(
     long ItemId,
     CatalogueReviewAction Action,
     long? LocalRowId,
-    ProviderFieldDecision? UnitPrice,
     ProviderFieldDecision? UnitVolume);
 
 /// <summary>

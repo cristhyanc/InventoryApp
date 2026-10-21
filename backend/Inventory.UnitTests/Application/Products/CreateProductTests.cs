@@ -9,9 +9,8 @@ public class CreateProductTests
         int lowStockThreshold = 5,
         int restockTo = 10,
         decimal? initialUnitCost = null,
-        string name = "Coke",
-        decimal unitPrice = 1.5m) =>
-        new(name, "SKU-1", null, unitPrice, 0, lowStockThreshold, restockTo, "unit", null, true,
+        string name = "Coke") =>
+        new(name, "SKU-1", null, 0, lowStockThreshold, restockTo, "unit", null, true,
             initialUnitCost);
 
     [Fact]
@@ -41,8 +40,9 @@ public class CreateProductTests
     }
 
     /// <summary>
-    /// Issue #736 gave the create use case its first route, and with it the two catalogue
-    /// invariants a manually created product needs.
+    /// Issue #736 gave the create use case its first route, and with it the catalogue invariants a
+    /// manually created product needs - which since issue #792 removed the selling price is this
+    /// one.
     /// </summary>
     [Theory]
     [InlineData("")]
@@ -55,21 +55,6 @@ public class CreateProductTests
 
         Assert.False(result.IsValid);
         Assert.Equal(Inventory.Domain.Products.ProductCataloguePolicy.NameRequiredMessage, result.ValidationError);
-        Assert.Null(store.LastCreated);
-    }
-
-    [Fact]
-    public async Task Handle_RejectsANegativeUnitPrice_WithoutPersisting()
-    {
-        var store = new FakeProductStore();
-
-        var result = await new CreateProduct(store).Handle(
-            ValidFields(unitPrice: -0.01m), CancellationToken.None);
-
-        Assert.False(result.IsValid);
-        Assert.Equal(
-            Inventory.Domain.Products.ProductCataloguePolicy.NegativeUnitPriceMessage,
-            result.ValidationError);
         Assert.Null(store.LastCreated);
     }
 

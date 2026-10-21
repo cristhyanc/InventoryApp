@@ -48,7 +48,13 @@ public class Product : IBusinessOwned
     public string Name { get; set; } = string.Empty;
     public string? Sku { get; set; }
     public string? Description { get; set; }
-    public decimal UnitPrice { get; set; }
+
+    // A product carries no selling price (issue #792, A2 of #786). `UnitPrice` was the catalogue
+    // default/list price: a display value no calculation ever read, which made it a second, stale
+    // answer to "what does this sell for?" beside the machine's own live price. The prices that
+    // remain are the ones a real event recorded - `MachinePrice` from the per-machine Nayax
+    // RetailPrice below, a purchase item's UnitCost, a supplier order line's agreed UnitPrice and
+    // the amount on a recorded sale (docs/architecture.md § A product carries no selling price).
     public decimal AverageUnitCost { get; set; }
     public int? CostingQuantity { get; set; }
     public decimal? InventoryValue { get; set; }

@@ -174,6 +174,10 @@ public sealed partial class EfCatalogueReviewStore
         /// to keep, so it takes the provider's; an existing row is asked only while the provider value
         /// differs from both its own and the value this field was last decided about, and a field
         /// nobody answered is left alone and proposed again next time.
+        ///
+        /// <para>The selling price is not one of them since issue #792 (A2 of #786): a product
+        /// carries none, so nothing here writes one - not for a linked row and not for a created
+        /// one, whose price this used to initialise from the provider.</para>
         /// </summary>
         public void ApplyNegotiableFields(
             Product product,
@@ -181,7 +185,7 @@ public sealed partial class EfCatalogueReviewStore
             CatalogueReviewApplyDecision? decision,
             bool created)
         {
-            foreach (var field in new[] { NegotiableCatalogueField.UnitPrice, NegotiableCatalogueField.UnitVolume })
+            foreach (var field in new[] { NegotiableCatalogueField.UnitVolume })
             {
                 var providerValue = ProviderValue(field, item);
                 if (providerValue is null)
@@ -204,9 +208,7 @@ public sealed partial class EfCatalogueReviewStore
                 if (!CatalogueReviewPolicy.IsProposed(localValue, providerValue, lastDecided))
                     continue;
 
-                var answer = field == NegotiableCatalogueField.UnitPrice
-                    ? decision?.UnitPrice
-                    : decision?.UnitVolume;
+                var answer = decision?.UnitVolume;
                 if (answer is null)
                     continue;
 
@@ -261,28 +263,24 @@ public sealed partial class EfCatalogueReviewStore
             product.Category?.Name
             ?? (product.CategoryId is { } categoryId ? LocalCategory(categoryId)?.Name : null);
 
+        // One negotiable field is left since issue #792 removed the selling price, so each of these
+        // is a single answer rather than a switch. The field argument stays, because what makes this
+        // a mechanism rather than a special case is that the next field slots in beside the
+        // unit/volume - and because a field with no answer here must write nothing at all.
         private static void Write(Product product, NegotiableCatalogueField field, string providerValue)
         {
-            if (field == NegotiableCatalogueField.UnitPrice)
-            {
-                // Only text this renderer could have written is accepted; anything else leaves the
-                // local price exactly as it is rather than writing a nearby number onto a product.
-                if (ProviderCatalogueFieldValue.TryParsePrice(providerValue, out var price))
-                    product.UnitPrice = price;
-                return;
-            }
-
-            product.Unit = providerValue;
+            if (field == NegotiableCatalogueField.UnitVolume)
+                product.Unit = providerValue;
         }
 
         private static string? LocalValue(NegotiableCatalogueField field, Product product) =>
-            field == NegotiableCatalogueField.UnitPrice
-                ? ProviderCatalogueFieldValue.FromPrice(product.UnitPrice)
-                : ProviderCatalogueFieldValue.FromLabel(product.Unit);
+            field == NegotiableCatalogueField.UnitVolume
+                ? ProviderCatalogueFieldValue.FromLabel(product.Unit)
+                : null;
 
         private static string? ProviderValue(
             NegotiableCatalogueField field, ProviderCatalogueReviewItem item) =>
-            field == NegotiableCatalogueField.UnitPrice ? item.ProviderUnitPrice : item.ProviderUnitVolume;
+            field == NegotiableCatalogueField.UnitVolume ? item.ProviderUnitVolume : null;
 
         private static string Noun(ProviderCatalogueEntryKind kind) =>
             kind == ProviderCatalogueEntryKind.Category ? "category" : "product";

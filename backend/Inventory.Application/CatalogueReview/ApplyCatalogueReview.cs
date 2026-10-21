@@ -28,8 +28,16 @@ namespace Inventory.Application.CatalogueReview;
 /// answer honest at the row level too.</para>
 ///
 /// <para><strong>Nothing a caller submits is written.</strong> The request carries item keys, three
-/// actions and two field answers. Every provider name, price and group id comes from the stored
+/// actions and the negotiable field answers. Every provider name and group id comes from the stored
 /// review's own items, and every local value from the rows read inside the transaction.</para>
+///
+/// <para><strong>A pre-#792 review is refused outright.</strong> A review stored before the product
+/// selling price was removed still carries the provider prices it meant to negotiate, so applying
+/// it would carry out only part of the plan the operator was answering. The adapter refuses it on
+/// the authoritative row, inside this transaction and before anything is staged, with
+/// <see cref="StaleSellingPriceReviewMessage"/>; a decision that still names the retired price
+/// field is refused here, with <see cref="RetiredSellingPriceDecisionMessage"/>. Both leave the
+/// catalogue exactly as it was.</para>
 ///
 /// <para><strong>It touches no sale and recosts nothing.</strong> Linking a provider product id to a
 /// local product changes no stored sale's <c>ProductId</c> and replays no costing: sales already
@@ -43,6 +51,28 @@ public sealed class ApplyCatalogueReview
     /// <summary>The caller-safe refusal when the named review is not one this business holds.</summary>
     public const string UnknownReviewMessage =
         "This catalogue review does not exist. Start the review again.";
+
+    /// <summary>
+    /// The refusal for a review stored before issue #792 removed the product selling price.
+    ///
+    /// <para>Such a review was read against a catalogue field that no longer exists, and its entries
+    /// still carry the provider prices it was going to negotiate. Applying it would mean carrying
+    /// out half a plan - the links and the provider-owned names and categories, but not the price
+    /// decisions the operator was answering - so the whole apply is refused before anything is
+    /// written, and the operator is asked for a reading of the catalogue as it is now.</para>
+    /// </summary>
+    public const string StaleSellingPriceReviewMessage =
+        "This catalogue review was started before product prices were removed, so it cannot be "
+            + "applied. Nothing was changed. Start the review again.";
+
+    /// <summary>
+    /// The refusal for a decision about the retired selling-price field. A product carries no price
+    /// since issue #792, so there is nothing to keep or take; an older client that still sends one
+    /// is refused outright rather than having it silently dropped, because an apply that reported
+    /// success would say the operator's price answer had been carried out.
+    /// </summary>
+    public const string RetiredSellingPriceDecisionMessage =
+        "a product's price is no longer part of the catalogue, so it cannot be decided here.";
 
     private readonly ICatalogueReviewStore _store;
     private readonly IAuthenticatedActorAccessor _actors;
@@ -146,11 +176,16 @@ public sealed class ApplyCatalogueReview
                 continue;
             }
 
+            if (fields.Any(field => field.Field == NegotiableCatalogueField.UnitPrice))
+            {
+                refusals.Add($"Entry {decision.ItemId}: {RetiredSellingPriceDecisionMessage}");
+                continue;
+            }
+
             decisions.Add(new CatalogueReviewApplyDecision(
                 decision.ItemId,
                 decision.Action,
                 decision.LocalRowId,
-                FieldDecision(fields, NegotiableCatalogueField.UnitPrice),
                 FieldDecision(fields, NegotiableCatalogueField.UnitVolume)));
         }
 

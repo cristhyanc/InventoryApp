@@ -15,7 +15,6 @@ function product(overrides: Partial<Product> = {}): Product {
     name: 'Product',
     sku: null,
     description: null,
-    unitPrice: 2.5,
     averageUnitCost: 1,
     costingQuantity: null,
     inventoryValue: null,
@@ -117,7 +116,6 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
         id: 7,
         name: 'Widget',
         category: { id: 1, name: 'Snacks' },
-        unitPrice: 3.5,
         quantityInStock: 8,
         unit: 'ea',
         isActive: true,
@@ -127,9 +125,18 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
 
     expect(host.textContent).toContain('Widget');
     expect(host.textContent).toContain('Snacks');
-    expect(host.textContent).toContain('$3.50');
     expect(host.textContent).toContain('8 ea');
     expect(host.textContent).toContain('Active');
+  });
+
+  /**
+   * Issue #792 (A2 of #786): a product carries no selling price, so no row renders a money value
+   * at all on this page. The other columns are untouched.
+   */
+  it('renders no price for a product anywhere in the listing', async () => {
+    const { host } = await render([product({ id: 7, name: 'Widget', category: { id: 1, name: 'Snacks' } })]);
+
+    expect(host.querySelector('tbody')?.textContent).not.toContain('$');
   });
 });
 
@@ -278,13 +285,13 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
 
   it('sorts numeric columns numerically rather than lexicographically', async () => {
     const { fixture, host } = await render([
-      product({ id: 1, name: 'A', unitPrice: 9 }),
-      product({ id: 2, name: 'B', unitPrice: 10 }),
-      product({ id: 3, name: 'C', unitPrice: 2 })
+      product({ id: 1, name: 'A', quantityInStock: 9 }),
+      product({ id: 2, name: 'B', quantityInStock: 10 }),
+      product({ id: 3, name: 'C', quantityInStock: 2 })
     ]);
 
-    const priceHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Price')) as HTMLTableCellElement;
-    (priceHeader.querySelector('button') as HTMLButtonElement).click();
+    const stockHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Stock')) as HTMLTableCellElement;
+    (stockHeader.querySelector('button') as HTMLButtonElement).click();
     fixture.detectChanges();
 
     const rows = Array.from(host.querySelectorAll('tbody tr'));
@@ -670,13 +677,16 @@ describe('ProductListComponent "Show retired" (issue #737)', () => {
    * filter, the Supplier column and its sort button. A product carries no supplier, so none of them
    * can exist - and nothing on the page loads the supplier list either, which is why the TestBed
    * above provides no `SupplierService`.
+   *
+   * The Price column and its sort went the same way in issue #792 (A2): a product carries no
+   * selling price either, so the header row is exactly these four columns and the Actions cell.
    */
-  it('offers no supplier filter, column or sort', async () => {
+  it('offers no supplier or price filter, column or sort', async () => {
     const { host } = await render(jest.fn(() => of([product({ id: 7, name: 'Widget' })])));
 
     expect(host.textContent).not.toContain('All Suppliers');
     expect(
       Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim())
-    ).toEqual(['Name', 'Category', 'Price', 'Stock', 'Status', '']);
+    ).toEqual(['Name', 'Category', 'Stock', 'Status', '']);
   });
 });

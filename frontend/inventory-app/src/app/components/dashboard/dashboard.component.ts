@@ -522,7 +522,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   /**
    * The "Inventory" card's primary value: the authoritative cost-basis inventory value from the
-   * Dashboard summary, never calculated from `Product.unitPrice`/`quantityInStock` on the frontend.
+   * Dashboard summary, never calculated from a product's own fields on the frontend.
    * Incomplete costing is shown as unavailable, never as a real `$0.00`.
    */
   inventoryValueDisplay(inventory: DashboardInventorySummary): string {

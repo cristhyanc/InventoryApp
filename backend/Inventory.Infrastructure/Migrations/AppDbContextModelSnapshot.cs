@@ -1549,9 +1549,6 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("Unit")
                         .HasColumnType("TEXT");
 
-                    b.Property<decimal>("UnitPrice")
-                        .HasColumnType("decimal(18,2)");
-
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
 

@@ -25,12 +25,15 @@ namespace InventoryApi.DTOs;
 /// <para><strong>And no supplier since issue #787</strong> (A1 of #786): a product carries no
 /// supplier metadata, so <c>supplierId</c> is gone from this request. A submitted
 /// <c>supplierId</c> is simply not bound - the create succeeds and nothing is stored for it.</para>
+///
+/// <para><strong>And no selling price since issue #792</strong> (A2 of #786), on the same terms: a
+/// submitted <c>unitPrice</c> is not bound and nothing is stored for it.
+/// <see cref="InitialUnitCost"/> is a cost, not a price, and is unaffected.</para>
 /// </summary>
 public record ProductCreateDto(
     string Name,
     string? Sku,
     string? Description,
-    decimal UnitPrice,
     int QuantityInStock,
     int LowStockThreshold,
     int RestockTo,
@@ -43,20 +46,20 @@ public record ProductCreateDto(
 /// <summary>
 /// The product a client puts to <c>PUT /api/products/{id}</c>.
 ///
-/// <para>Since issue #736 the action binds <c>Name</c>, <c>UnitPrice</c> and <c>CategoryId</c> as
-/// well, which this record always carried and the action ignored. For a product the business's sales
-/// provider names, a <em>change</em> to the name or the category is refused with <c>400</c> and a
-/// message naming that provider; sending the stored values back is not a change, and the price and
-/// every other field here stay editable for every product.</para>
+/// <para>Since issue #736 the action binds <c>Name</c> and <c>CategoryId</c> as well, which this
+/// record always carried and the action ignored. For a product the business's sales provider names,
+/// a <em>change</em> to the name or the category is refused with <c>400</c> and a message naming
+/// that provider; sending the stored values back is not a change, and every other field here stays
+/// editable for every product.</para>
 ///
-/// <para><c>supplierId</c> is gone since issue #787 (A1 of #786), for the same reason it left
-/// <see cref="ProductCreateDto"/>: a product has no supplier to change.</para>
+/// <para><c>supplierId</c> is gone since issue #787 (A1 of #786), and <c>unitPrice</c> since issue
+/// #792 (A2 of #786), for the same reason each left <see cref="ProductCreateDto"/>: a product has
+/// neither to change.</para>
 /// </summary>
 public record ProductUpdateDto(
     string Name,
     string? Sku,
     string? Description,
-    decimal UnitPrice,
     int LowStockThreshold,
     int RestockTo,
     string? Unit,

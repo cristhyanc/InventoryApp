@@ -60,33 +60,38 @@ public class EfCatalogueReviewStoreTenancyTests : IDisposable
 
     /// <summary>
     /// Two businesses review and link the same provider product and group ids. Each ends up with its
-    /// own rows, its own recorded ids and its own field decisions, and neither touches the other's -
-    /// which is the per-business uniqueness the filtered index expresses.
+    /// own rows and its own recorded ids, and neither touches the other's - which is the
+    /// per-business uniqueness the filtered index expresses.
     /// </summary>
     [Fact]
     public async Task Two_businesses_may_link_the_same_provider_ids_to_their_own_rows()
     {
-        await SeedProductAsync(BusinessA, 50, "A chips", 3.00m);
-        await SeedProductAsync(BusinessB, 60, "B chips", 4.00m);
+        await SeedProductAsync(BusinessA, 50, "A chips", 1.00m);
+        await SeedProductAsync(BusinessB, 60, "B chips", 2.00m);
 
         await LinkAsync(BusinessA, 50, providerPrice: 3.50m);
         await LinkAsync(BusinessB, 60, providerPrice: 3.50m);
 
         await using var verify = TestAppDbContext.Unrestricted(_options);
         Assert.Equal(
-            [(BusinessA, 50L, NayaxExternalId.From(100), 3.50m), (BusinessB, 60L, NayaxExternalId.From(100), 3.50m)],
+            [(BusinessA, 50L, NayaxExternalId.From(100), 1.00m), (BusinessB, 60L, NayaxExternalId.From(100), 2.00m)],
             await verify.Products.AsNoTracking()
                 .OrderBy(product => product.BusinessId)
                 .Select(product => ValueTuple.Create(
-                    product.BusinessId, product.Id, product.ExternalProductId, product.UnitPrice))
+                    product.BusinessId, product.Id, product.ExternalProductId, product.AverageUnitCost))
                 .ToListAsync());
 
+        // Each business's own category, created by its own apply and carrying the same group id.
         Assert.Equal(
-            [(BusinessA, 50L), (BusinessB, 60L)],
-            await verify.ProviderCatalogueFieldDecisions.AsNoTracking()
-                .OrderBy(decision => decision.BusinessId)
-                .Select(decision => ValueTuple.Create(decision.BusinessId, decision.ProductId))
+            [(BusinessA, NayaxExternalId.From(10)), (BusinessB, NayaxExternalId.From(10))],
+            await verify.Categories.AsNoTracking()
+                .OrderBy(category => category.BusinessId)
+                .Select(category => ValueTuple.Create(category.BusinessId, category.ExternalCategoryId))
                 .ToListAsync());
+
+        // The provider's price reached neither business: there is no product field for it to write
+        // to since issue #792, so no field decision was recorded about it either.
+        Assert.Empty(await verify.ProviderCatalogueFieldDecisions.AsNoTracking().ToListAsync());
     }
 
     /// <summary>
@@ -236,26 +241,20 @@ public class EfCatalogueReviewStoreTenancyTests : IDisposable
                     [
                         new CatalogueReviewDecisionRequest(category.ItemId, CatalogueReviewAction.CreateNew),
                         new CatalogueReviewDecisionRequest(
-                            product.ItemId,
-                            CatalogueReviewAction.LinkExisting,
-                            localRowId,
-                            [
-                                new CatalogueReviewFieldDecisionRequest(
-                                    NegotiableCatalogueField.UnitPrice, ProviderFieldDecision.TakeProvider),
-                            ]),
+                            product.ItemId, CatalogueReviewAction.LinkExisting, localRowId),
                     ]),
                 CancellationToken.None);
     }
 
     private async Task SeedProductAsync(
-        int businessId, long localRowId, string name, decimal price, long? providerProductId = null)
+        int businessId, long localRowId, string name, decimal averageUnitCost, long? providerProductId = null)
     {
         await using var setup = TestAppDbContext.For(_options, businessId);
         setup.Products.Add(new Product
         {
             Id = localRowId,
             Name = name,
-            UnitPrice = price,
+            AverageUnitCost = averageUnitCost,
             RestockTo = 0,
             ExternalProductId = providerProductId is { } provider
                 ? NayaxExternalId.From(provider)

@@ -905,7 +905,6 @@ public class SupportSessionRequestApiTests
             BusinessId = businessId,
             Name = name,
             Sku = $"{name}-SKU",
-            UnitPrice = 2.50m,
             QuantityInStock = 5,
         };
     }

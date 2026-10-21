@@ -64,11 +64,9 @@ public class ManualCatalogueImportThroughReviewTests : CatalogueReviewTestBase
                     [
                         // The group is the operator's own "Soft drinks" category.
                         LinkTo(CategoryEntry(review, NayaxBeveragesGroup).ItemId, await CategoryIdAsync("Soft drinks")),
-                        // Their own cola is the provider's cola, and they keep their own price.
-                        Price(
+                        // Their own cola is the provider's cola.
+                        LinkTo(
                             ProductEntry(review, NayaxColaId).ItemId,
-                            ProviderFieldDecision.KeepLocal,
-                            CatalogueReviewAction.LinkExisting,
                             await ProductIdAsync("Coca-Cola 600ml")),
                         // The provider's Mars Bar is a product they do not keep: a new row.
                         Create(ProductEntry(review, NayaxMarsId).ItemId),
@@ -87,8 +85,8 @@ public class ManualCatalogueImportThroughReviewTests : CatalogueReviewTestBase
         var beverages = await verify.Categories.AsNoTracking()
             .SingleAsync(category => category.ExternalCategoryId == NayaxExternalId.From(NayaxBeveragesGroup));
         Assert.Equal(
-            ("Nayax Coke Zero 600ml", (long?)beverages.Id, 12, 3.00m),
-            (cola.Name, cola.CategoryId, cola.QuantityInStock, cola.UnitPrice));
+            ("Nayax Coke Zero 600ml", (long?)beverages.Id, 12, 1.80m),
+            (cola.Name, cola.CategoryId, cola.QuantityInStock, cola.AverageUnitCost));
 
         // The category is the operator's own row, renamed by the provider that now owns its name.
         Assert.Equal("Beverages", beverages.Name);
@@ -97,14 +95,14 @@ public class ManualCatalogueImportThroughReviewTests : CatalogueReviewTestBase
         var mars = await verify.Products.AsNoTracking()
             .SingleAsync(product => product.ExternalProductId == NayaxExternalId.From(NayaxMarsId));
         Assert.NotEqual(NayaxMarsId, mars.Id);
-        Assert.Equal(("Nayax Mars Bar 53g", (long?)beverages.Id, 2.80m), (mars.Name, mars.CategoryId, mars.UnitPrice));
+        Assert.Equal(("Nayax Mars Bar 53g", (long?)beverages.Id), (mars.Name, mars.CategoryId));
 
         // And the manual product no provider entry was about is exactly as it was: no provider id,
-        // its own name, its own price. Duplicating or claiming it is what the refusal existed to
+        // its own name, its own cost. Duplicating or claiming it is what the refusal existed to
         // prevent, and the review does neither.
         var chocolate = await verify.Products.AsNoTracking().SingleAsync(product => product.Name == "Choc Block");
         Assert.Null(chocolate.ExternalProductId);
-        Assert.Equal(4.00m, chocolate.UnitPrice);
+        Assert.Equal(2.40m, chocolate.AverageUnitCost);
 
         // Three products and one category: nothing was duplicated by the import.
         Assert.Equal(3, await verify.Products.CountAsync());
@@ -146,7 +144,7 @@ public class ManualCatalogueImportThroughReviewTests : CatalogueReviewTestBase
 
     /// <summary>
     /// A catalogue the business built itself: two products and one category, none of them carrying a
-    /// provider id, with stock and a price of their own.
+    /// provider id, with stock and a recorded cost of their own.
     /// </summary>
     private async Task SeedManualCatalogueAsync()
     {
@@ -156,7 +154,7 @@ public class ManualCatalogueImportThroughReviewTests : CatalogueReviewTestBase
         db.Products.Add(new Product
         {
             Name = "Coca-Cola 600ml",
-            UnitPrice = 3.00m,
+            AverageUnitCost = 1.80m,
             QuantityInStock = 12,
             RestockTo = 0,
             Category = softDrinks,
@@ -165,7 +163,7 @@ public class ManualCatalogueImportThroughReviewTests : CatalogueReviewTestBase
         db.Products.Add(new Product
         {
             Name = "Choc Block",
-            UnitPrice = 4.00m,
+            AverageUnitCost = 2.40m,
             QuantityInStock = 5,
             RestockTo = 0,
             CreatedAt = StartedAt,

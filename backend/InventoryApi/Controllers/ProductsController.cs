@@ -228,7 +228,6 @@ public class ProductsController : ControllerBase
             dto.Name,
             dto.Sku,
             dto.Description,
-            dto.UnitPrice,
             dto.LowStockThreshold,
             dto.RestockTo,
             dto.Unit,
@@ -253,8 +252,8 @@ public class ProductsController : ControllerBase
     /// </summary>
     /// <response code="201">The created product, with its database-assigned id.</response>
     /// <response code="400">
-    /// A validation refusal with its message: no name, a negative price or negative restock
-    /// settings, or a category this business does not own.
+    /// A validation refusal with its message: no name, negative restock settings, or a category
+    /// this business does not own.
     /// </response>
     [HttpPost]
     [ProducesResponseType(StatusCodes.Status201Created)]
@@ -268,7 +267,6 @@ public class ProductsController : ControllerBase
                 dto.Name,
                 dto.Sku,
                 dto.Description,
-                dto.UnitPrice,
                 dto.QuantityInStock,
                 dto.LowStockThreshold,
                 dto.RestockTo,

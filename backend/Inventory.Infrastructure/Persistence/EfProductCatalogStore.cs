@@ -210,7 +210,6 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
         Name = product.Name,
         Sku = product.Sku,
         Description = product.Description,
-        UnitPrice = product.UnitPrice,
         AverageUnitCost = product.AverageUnitCost,
         CostingQuantity = product.CostingQuantity,
         InventoryValue = product.InventoryValue,

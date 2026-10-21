@@ -78,7 +78,12 @@
   </form>
 
   @if (selectedProduct) {
-    <div class="grid gap-4 md:grid-cols-4" data-testid="selected-product-summary">
+    <!--
+      Three tiles since issue #792 (A2 of #786): the product's selling price was the fourth, and a
+      product carries none. The stock movement table below keeps its own unit-cost and cost-impact
+      columns - those are costs, not a price.
+    -->
+    <div class="grid gap-4 md:grid-cols-3" data-testid="selected-product-summary">
       <div class="card">
         <div class="card-body text-center">
           <span class="block text-md-card-title font-semibold text-md-gray-800">{{ selectedProduct.name }}</span>
@@ -95,12 +100,6 @@
         <div class="card-body text-center">
           <span class="block text-md-stat-value font-semibold text-md-info-text">{{ selectedProduct.lowStockThreshold }}</span>
           <span class="mt-2 block text-md-body value-muted">Low Stock Threshold</span>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-body text-center">
-          <span class="block text-md-stat-value font-semibold text-md-info-text">${{ selectedProduct.unitPrice.toFixed(2) }}</span>
-          <span class="mt-2 block text-md-body value-muted">Unit Price</span>
         </div>
       </div>
     </div>

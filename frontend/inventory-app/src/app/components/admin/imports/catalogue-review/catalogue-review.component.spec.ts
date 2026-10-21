@@ -7,9 +7,7 @@ import {
   CatalogueReview,
   CatalogueReviewAction,
   CatalogueReviewApplied,
-  CatalogueReviewService,
-  NegotiableCatalogueField,
-  ProviderFieldDecision
+  CatalogueReviewService
 } from '../../../../services/catalogue-review.service';
 import { CategoryService } from '../../../../services/category.service';
 import { ProductService } from '../../../../services/product.service';
@@ -20,10 +18,12 @@ import { Category, Product } from '../../../../models/models';
 /**
  * The catalogue review screen (issue #739, parent #329 decision C2). What these tests hold is the
  * contract between the operator's decisions and the apply request: a link only ever names a row the
- * operator chose, a deferred entry is sent as nothing at all, and the one field the screen
- * negotiates is the price. Every provider name, price and category in the UI is the API's own, and
- * the only local value the screen renders beside them is the price of the product the operator
- * chose to link - which is the price the apply will negotiate against.
+ * operator chose, and a deferred entry is sent as nothing at all. Every provider name and category
+ * in the UI is the API's own.
+ *
+ * <p>Since issue #792 (A2 of #786) the screen negotiates nothing: a product carries no selling
+ * price, so no price is proposed, rendered or sent - the tests below pin that, including for a
+ * stale API response that still carries a `UnitPrice` choice.</p>
  */
 
 const UNLINKED_CATEGORY_ITEM = 101;
@@ -69,7 +69,7 @@ function review(): CatalogueReview {
         localName: null,
         unresolvedSaleCount: 4,
         automaticChanges: [],
-        choices: [{ field: 'UnitPrice', localValue: null, providerValue: '3.50' }],
+        choices: [],
         isLinked: false
       },
       {
@@ -84,7 +84,7 @@ function review(): CatalogueReview {
           { field: 'name', localValue: 'Mars Bar', providerValue: 'Mars Bar 53g' },
           { field: 'categoryId', localValue: 'Snack food', providerValue: 'Snacks' }
         ],
-        choices: [{ field: 'UnitPrice', localValue: '3.00', providerValue: '3.50' }],
+        choices: [],
         isLinked: true
       }
     ]
@@ -113,7 +113,6 @@ const LOCAL_PRODUCTS: Product[] = [
   {
     id: 5,
     name: 'Mars Bar',
-    unitPrice: 3,
     averageUnitCost: 1,
     machinePrice: null,
     commissionValue: null,
@@ -135,7 +134,6 @@ const LOCAL_PRODUCTS: Product[] = [
   {
     id: 9,
     name: 'Coca-Cola No Sugar 600ml',
-    unitPrice: 3.2,
     averageUnitCost: 1,
     machinePrice: null,
     commissionValue: null,
@@ -157,7 +155,6 @@ const LOCAL_PRODUCTS: Product[] = [
   {
     id: 11,
     name: 'Spring Water 600ml',
-    unitPrice: 2.5,
     averageUnitCost: 1,
     machinePrice: null,
     commissionValue: null,
@@ -234,13 +231,6 @@ function row(host: HTMLElement, itemId: number): HTMLElement {
   const element = host.querySelector<HTMLElement>(`[data-testid="review-entry-${itemId}"]`);
   if (!element) throw new Error(`No review row rendered for entry ${itemId}.`);
   return element;
-}
-
-/** The "Mine … Nayax …" line one product entry compares the two prices on. */
-function priceComparison(host: HTMLElement, itemId: number): string {
-  const element = row(host, itemId).querySelector<HTMLElement>('[data-testid="price-comparison"]');
-  if (!element) throw new Error(`No price comparison rendered for entry ${itemId}.`);
-  return text(element);
 }
 
 function button(host: HTMLElement, label: string): HTMLButtonElement {
@@ -400,7 +390,11 @@ describe('CatalogueReviewComponent products step (issue #739)', () => {
     );
   });
 
-  it('offers a keep-or-take price choice when linking, and nothing about unit or volume', async () => {
+  /**
+   * Issue #792 (A2 of #786): a product carries no selling price, so linking offers no keep-or-take
+   * choice, renders no price comparison, and the decision the apply carries is the link alone.
+   */
+  it('offers no price choice when linking, and sends the link alone', async () => {
     const { fixture, host, component, apply } = await onProducts();
 
     component.setAction(UNLINKED_PRODUCT_ITEM, CatalogueReviewAction.LinkExisting);
@@ -408,72 +402,50 @@ describe('CatalogueReviewComponent products step (issue #739)', () => {
     fixture.detectChanges();
 
     const entry = row(host, UNLINKED_PRODUCT_ITEM);
-    expect(text(entry)).toContain('3.50');
+    expect(entry.querySelector('[data-testid="price-choice"]')).toBeNull();
+    expect(entry.querySelector('[data-testid="price-comparison"]')).toBeNull();
     expect(text(entry)).not.toContain('Unit/volume');
-    expect(entry.querySelector('[data-testid="price-choice"]')).toBeTruthy();
 
-    component.setPrice(UNLINKED_PRODUCT_ITEM, ProviderFieldDecision.TakeProvider);
     component.applyDecisions();
 
     expect(decisionFor(apply, UNLINKED_PRODUCT_ITEM)).toEqual({
       itemId: UNLINKED_PRODUCT_ITEM,
       action: CatalogueReviewAction.LinkExisting,
-      localRowId: 9,
-      fields: [{ field: NegotiableCatalogueField.UnitPrice, decision: ProviderFieldDecision.TakeProvider }]
+      localRowId: 9
     });
   });
 
-  it("compares the Nayax price against the price of the product the operator chose to link", async () => {
-    const { fixture, host, component } = await onProducts();
-
-    component.setAction(UNLINKED_PRODUCT_ITEM, CatalogueReviewAction.LinkExisting);
-    fixture.detectChanges();
-
-    // Nothing is named yet, so there is no local price to lose - and the review carries none for an
-    // unlinked entry either, because the local row did not exist when it was read.
-    expect(priceComparison(host, UNLINKED_PRODUCT_ITEM)).toContain('Mine: none yet');
-
-    component.setLocalRow(UNLINKED_PRODUCT_ITEM, 9);
-    fixture.detectChanges();
-
-    // Product 9 is priced 3.2 locally. That is the price this apply would replace, so that is the
-    // price the operator authorising the replacement must be shown.
-    expect(priceComparison(host, UNLINKED_PRODUCT_ITEM)).toContain('Mine: 3.20');
-    expect(priceComparison(host, UNLINKED_PRODUCT_ITEM)).toContain('Nayax: 3.50');
-
-    component.setLocalRow(UNLINKED_PRODUCT_ITEM, 11);
-    fixture.detectChanges();
-
-    expect(priceComparison(host, UNLINKED_PRODUCT_ITEM)).toContain('Mine: 2.50');
-    // The provider side never moves: it is the stored review's value, not the browser's.
-    expect(priceComparison(host, UNLINKED_PRODUCT_ITEM)).toContain('Nayax: 3.50');
-  });
-
-  it("keeps the review's own local price for a product the provider already manages", async () => {
+  it('offers no price choice for a product the provider already manages either', async () => {
     const { host } = await onProducts();
 
-    expect(priceComparison(host, LINKED_PRODUCT_ITEM)).toContain('Mine: 3.00');
-    expect(priceComparison(host, LINKED_PRODUCT_ITEM)).toContain('Nayax: 3.50');
+    const entry = row(host, LINKED_PRODUCT_ITEM);
+    expect(entry.querySelector('[data-testid="price-choice"]')).toBeNull();
+    expect(entry.querySelector('[data-testid="price-comparison"]')).toBeNull();
   });
 
-  it('offers no choice about a unit or volume, even if one were ever proposed', async () => {
-    const withUnitVolume = review();
-    withUnitVolume.products[1].choices = [
+  /**
+   * A stale server - one still running the previous release - could answer with `UnitPrice` and
+   * `UnitVolume` choices. Neither is rendered and neither is sent back: the screen never offers a
+   * field it cannot write, and the apply would refuse a price decision anyway.
+   */
+  it('renders and sends nothing for a choice an older API still proposes', async () => {
+    const withLegacyChoices = review();
+    withLegacyChoices.products[1].choices = [
       { field: 'UnitPrice', localValue: '3.00', providerValue: '3.50' },
       { field: 'UnitVolume', localValue: 'can', providerValue: 'bottle' }
     ];
-    const { host, component, apply } = await onProducts({ start: jest.fn(() => of(withUnitVolume)) });
+    const { host, component, apply } = await onProducts({ start: jest.fn(() => of(withLegacyChoices)) });
 
-    // The provider publishes no unit/volume label, so the API proposes none; a screen that
-    // rendered one anyway would be offering the operator a value nobody confirmed the meaning of.
-    expect(text(row(host, LINKED_PRODUCT_ITEM))).not.toContain('bottle');
+    const entry = row(host, LINKED_PRODUCT_ITEM);
+    expect(text(entry)).not.toContain('bottle');
+    expect(text(entry)).not.toContain('3.50');
+    expect(entry.querySelector('[data-testid="price-choice"]')).toBeNull();
 
-    component.setPrice(LINKED_PRODUCT_ITEM, ProviderFieldDecision.TakeProvider);
     component.applyDecisions();
 
-    expect(decisionFor(apply, LINKED_PRODUCT_ITEM)?.fields).toEqual([
-      { field: NegotiableCatalogueField.UnitPrice, decision: ProviderFieldDecision.TakeProvider }
-    ]);
+    // The entry carries no action of its own, so it is deferred - sent as nothing at all, with no
+    // field answer that could reach the removed product field.
+    expect(decisionFor(apply, LINKED_PRODUCT_ITEM)).toBeUndefined();
   });
 
   it('refuses to apply while a link names no local row, rather than losing every other answer', async () => {
@@ -488,30 +460,17 @@ describe('CatalogueReviewComponent products step (issue #739)', () => {
     );
   });
 
-  it('accepts a price change on an already-linked product', async () => {
+  /**
+   * An already-linked product has nothing left to decide since issue #792: its name and category
+   * are the provider's and applied automatically, and there is no price to accept or skip. So it
+   * contributes no decision to the apply at all.
+   */
+  it('sends no decision for an already-linked product the operator left alone', async () => {
     const { component, apply } = await onProducts();
 
-    component.setPrice(LINKED_PRODUCT_ITEM, ProviderFieldDecision.TakeProvider);
     component.applyDecisions();
 
-    expect(decisionFor(apply, LINKED_PRODUCT_ITEM)).toEqual({
-      itemId: LINKED_PRODUCT_ITEM,
-      action: CatalogueReviewAction.Defer,
-      fields: [{ field: NegotiableCatalogueField.UnitPrice, decision: ProviderFieldDecision.TakeProvider }]
-    });
-  });
-
-  it('skips a price change on an already-linked product, keeping the local price', async () => {
-    const { component, apply } = await onProducts();
-
-    component.setPrice(LINKED_PRODUCT_ITEM, ProviderFieldDecision.KeepLocal);
-    component.applyDecisions();
-
-    expect(decisionFor(apply, LINKED_PRODUCT_ITEM)).toEqual({
-      itemId: LINKED_PRODUCT_ITEM,
-      action: CatalogueReviewAction.Defer,
-      fields: [{ field: NegotiableCatalogueField.UnitPrice, decision: ProviderFieldDecision.KeepLocal }]
-    });
+    expect(decisionFor(apply, LINKED_PRODUCT_ITEM)).toBeUndefined();
   });
 
   it("lists an already-linked product's provider name and category changes as applied automatically", async () => {

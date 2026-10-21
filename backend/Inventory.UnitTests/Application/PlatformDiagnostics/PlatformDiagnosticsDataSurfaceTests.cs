@@ -56,7 +56,6 @@ public class PlatformDiagnosticsDataSurfaceTests
     /// </summary>
     [Theory]
     [InlineData("Products", "Name")]
-    [InlineData("Products", "UnitPrice")]
     [InlineData("Products", "AverageUnitCost")]
     [InlineData("Products", "InventoryValue")]
     [InlineData("Products", "Sku")]

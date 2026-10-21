@@ -51,9 +51,10 @@ public sealed record ProductResponse
     public string? Sku { get; init; }
     public string? Description { get; init; }
 
-    /// <summary>The catalog default/list selling price, synced one-way from Nayax; never a cost.</summary>
-    public required decimal UnitPrice { get; init; }
-
+    // No `unitPrice` since issue #792 (A2 of #786): a product carries no selling price, so the
+    // field is removed from this response and from every nested product snapshot rather than being
+    // sent as `0`. What a product sells for is the machine's own live price, published separately
+    // as `machinePrice` below.
     public required decimal AverageUnitCost { get; init; }
     public int? CostingQuantity { get; init; }
     public decimal? InventoryValue { get; init; }

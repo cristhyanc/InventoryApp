@@ -569,7 +569,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
         item.Product is null ? null : ToProductSummary(item.Product));
 
     private static PurchaseProductSummaryRecord ToProductSummary(Product product) => new(
-        product.Id, product.Name, product.Sku, product.Description, product.UnitPrice, product.AverageUnitCost,
+        product.Id, product.Name, product.Sku, product.Description, product.AverageUnitCost,
         product.CostingQuantity, product.InventoryValue, product.QuantityInStock, product.LowStockThreshold,
         product.RestockTo, product.Unit, product.IsActive, product.CreatedAt, product.UpdatedAt,
         product.CategoryId);

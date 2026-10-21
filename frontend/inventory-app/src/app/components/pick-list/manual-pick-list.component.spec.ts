@@ -25,7 +25,6 @@ function product(overrides: Partial<Product>): Product {
   return {
     id: 1,
     name: 'Product',
-    unitPrice: 2,
     averageUnitCost: 1,
     machinePrice: null,
     commissionValue: null,

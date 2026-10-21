@@ -17,7 +17,6 @@ function product(overrides: Partial<Product> = {}): Product {
   return {
     id: 1,
     name: 'Coke Zero',
-    unitPrice: 4,
     averageUnitCost: 1.5,
     machinePrice: 4,
     commissionValue: 0,

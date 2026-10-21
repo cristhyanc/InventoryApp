@@ -20,7 +20,6 @@ function product(): Product {
     name: 'Cola 375mL',
     sku: null,
     description: null,
-    unitPrice: 3,
     averageUnitCost: 1,
     costingQuantity: null,
     inventoryValue: null,

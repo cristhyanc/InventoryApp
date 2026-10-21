@@ -16,10 +16,10 @@ namespace InventoryApi.Tests.DTOs;
 /// (<c>/api/machines/{id}/products</c>, issue #302) are compared against it, so the two endpoints
 /// cannot drift from the one shape they have always shared either.
 ///
-/// <para><strong>The reference moved once, by deletion</strong>: issue #787 (A1 of #786) dropped the
-/// product's <c>supplierId</c>/<c>supplier</c> from the entity and from this shape with it, which is
-/// the one approved breaking change in the product contract. Every other key keeps its name, type,
-/// value and position.</para>
+/// <para><strong>The reference has moved only by deletion</strong>: issue #787 (A1 of #786) dropped
+/// the product's <c>supplierId</c>/<c>supplier</c> from the entity and from this shape with it, and
+/// issue #792 (A2) dropped its <c>unitPrice</c> the same way. Both are approved breaking changes in
+/// the product contract. Every other key keeps its name, type, value and position.</para>
 /// </summary>
 internal static class LegacyProductEntityShape
 {
@@ -33,7 +33,6 @@ internal static class LegacyProductEntityShape
         Name = record.Name,
         Sku = record.Sku,
         Description = record.Description,
-        UnitPrice = record.UnitPrice,
         AverageUnitCost = record.AverageUnitCost,
         CostingQuantity = record.CostingQuantity,
         InventoryValue = record.InventoryValue,

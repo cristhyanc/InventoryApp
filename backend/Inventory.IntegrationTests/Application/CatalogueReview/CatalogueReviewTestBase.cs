@@ -121,7 +121,12 @@ public abstract class CatalogueReviewTestBase : IDisposable
     protected static CatalogueReviewDecisionRequest Create(long itemId) =>
         new(itemId, CatalogueReviewAction.CreateNew);
 
-    protected static CatalogueReviewDecisionRequest Price(
+    /// <summary>
+    /// A decision that still names the retired selling-price field (issue #792, A2 of #786), as an
+    /// older client would send it. There is no product price to write any more, so the apply refuses
+    /// it; this helper exists to prove that, not to express a supported decision.
+    /// </summary>
+    protected static CatalogueReviewDecisionRequest RetiredPriceDecision(
         long itemId, ProviderFieldDecision decision, CatalogueReviewAction action = CatalogueReviewAction.Defer,
         long? localRowId = null) =>
         new(

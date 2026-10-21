@@ -72,7 +72,6 @@ public sealed class FakeProductCatalogStore : IProductCatalogStore
             Id = id,
             Name = name,
             Sku = sku,
-            UnitPrice = 0m,
             AverageUnitCost = averageUnitCost,
             QuantityInStock = quantityInStock,
             LowStockThreshold = lowStockThreshold,

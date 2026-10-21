@@ -386,7 +386,6 @@
                   <th scope="col" class="table-cell">Stock after machine need</th>
                 }
                 <th scope="col" class="table-cell">Need to Order</th>
-                <th scope="col" class="table-cell">Unit Price</th>
               </tr>
             </thead>
             <tbody>
@@ -404,7 +403,6 @@
                     <td class="table-cell" [ngClass]="stockAfterMachineNeedClass(p)">{{ stockAfterMachineNeed(p) }}</td>
                   }
                   <td class="table-cell value-negative font-semibold">{{ p.needToOrder }}</td>
-                  <td class="table-cell">${{ p.unitPrice.toFixed(2) }}</td>
                 </tr>
               }
             </tbody>

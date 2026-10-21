@@ -67,7 +67,6 @@ public class BusinessDataIsolationTests : IDisposable
         BusinessId = businessId,
         Name = name,
         Sku = $"{name}-SKU",
-        UnitPrice = 2.50m,
         QuantityInStock = 5,
     };
 
@@ -209,7 +208,7 @@ public class BusinessDataIsolationTests : IDisposable
         await using (var a = AsBusiness(BusinessA))
         {
             // Note: BusinessId is deliberately not set by the caller.
-            a.Products.Add(new Product { Name = "A Product", Sku = "A-1", UnitPrice = 1m });
+            a.Products.Add(new Product { Name = "A Product", Sku = "A-1" });
             await a.SaveChangesAsync();
         }
 
@@ -246,7 +245,7 @@ public class BusinessDataIsolationTests : IDisposable
         }
 
         await using var a = AsBusiness(BusinessA);
-        var detached = new Product { Id = bProductId, BusinessId = BusinessB, Name = "Hijacked", UnitPrice = 999m };
+        var detached = new Product { Id = bProductId, BusinessId = BusinessB, Name = "Hijacked" };
         a.Products.Attach(detached);
         a.Entry(detached).State = EntityState.Modified;
 
@@ -320,7 +319,7 @@ public class BusinessDataIsolationTests : IDisposable
     public async Task A_caller_without_a_resolved_business_cannot_write()
     {
         await using var denied = AsDeniedCaller();
-        denied.Products.Add(new Product { Name = "Orphan", UnitPrice = 1m });
+        denied.Products.Add(new Product { Name = "Orphan" });
 
         await Assert.ThrowsAsync<CrossBusinessAccessException>(() => denied.SaveChangesAsync());
     }
@@ -370,7 +369,7 @@ public class BusinessDataIsolationTests : IDisposable
         }
 
         await using var a = AsBusiness(BusinessA);
-        a.Products.Add(new Product { Name = "A Product", UnitPrice = 1m, CategoryId = bCategoryId });
+        a.Products.Add(new Product { Name = "A Product", CategoryId = bCategoryId });
 
         await Assert.ThrowsAsync<CrossBusinessAccessException>(() => a.SaveChangesAsync());
     }
@@ -480,7 +479,7 @@ public class BusinessDataIsolationTests : IDisposable
             a.Categories.Add(category);
             await a.SaveChangesAsync();
 
-            a.Products.Add(new Product { Name = "A Product", UnitPrice = 1m, CategoryId = category.Id });
+            a.Products.Add(new Product { Name = "A Product", CategoryId = category.Id });
             await a.SaveChangesAsync();
         }
 
@@ -500,7 +499,7 @@ public class BusinessDataIsolationTests : IDisposable
     {
         await using (var a = AsBusiness(BusinessA))
         {
-            var product = new Product { Name = "A Product", UnitPrice = 1m };
+            var product = new Product { Name = "A Product" };
             a.Products.Add(product);
 
             var purchase = new Purchase { Title = "A Purchase" };
