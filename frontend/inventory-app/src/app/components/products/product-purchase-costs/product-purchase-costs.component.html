@@ -1,0 +1,12 @@
+<!--
+  The only UI this component renders itself: the failure message and the Retry control that
+  re-enters the read. The costs themselves are laid out by the page in its own table cells, through
+  this component's display helpers. A role without `Dashboard.ViewFinancials` never reaches 'failed'
+  - no request is made at all - so there is no capability check to repeat here.
+-->
+@if (state === 'failed') {
+  <p class="p-4 text-md-body value-negative">
+    {{ failedMessage }}
+    <button type="button" class="btn btn-sm btn-secondary" (click)="retry()">Retry</button>
+  </p>
+}

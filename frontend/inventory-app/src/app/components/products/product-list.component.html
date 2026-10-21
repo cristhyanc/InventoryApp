@@ -23,17 +23,20 @@
 
 <div class="card">
   <div class="card-body p-0">
+    <!--
+      The purchase-cost read behind the Last and Cheapest purchase columns is its own feature
+      component (issue #191's page composition boundary): this page hands it the product ids it is
+      displaying and lays out the answer it publishes, while the read, its capability gate, its
+      failure message and its Retry control stay inside it.
+    -->
+    <app-product-purchase-costs
+      [productIds]="productIds"
+      (costsChange)="onPurchaseCostsChange($event)"></app-product-purchase-costs>
     @if (loadState.loadFailed) {
       <p class="p-4 text-md-body value-negative">Failed to load products. Change a filter or reload the page to try again.</p>
     } @else if (loadState.loaded && products.length === 0) {
       <p class="p-4 text-md-body value-muted">No products match your filters.</p>
     } @else if (loadState.loaded) {
-      @if (canViewFinancials && costsState === 'failed') {
-        <p class="p-4 text-md-body value-negative">
-          The Last and Cheapest purchase cost columns could not be loaded.
-          <button type="button" class="btn btn-sm btn-secondary" (click)="retryPurchaseCosts()">Retry</button>
-        </p>
-      }
       <!--
         The Actions column is pinned to the right edge of this scroll area (rather than the whole
         table) so Edit/Stock/Delete stay visible and usable without scrolling to discover them when

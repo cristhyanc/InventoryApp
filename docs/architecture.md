@@ -10805,7 +10805,8 @@ unrelated follow-up work, not part of #737. Nothing on the server depends on any
 #### Average cost and purchase cost columns, and the retired-product filter, on All Products (issue #791)
 
 Issue #791 — E of parent #786 — is the first of the three product screens (issues #789-#791) to
-use `ProductPurchaseCostService` and changes `ProductListComponent`'s filters and columns, with no
+use `ProductPurchaseCostService`; it changes `ProductListComponent`'s filters and columns and adds
+the `ProductPurchaseCostsComponent` feature component the page composes for that read, with no
 backend change: `includeRetired` already existed, and #788 already owns the average-cost
 availability projection this issue only displays.
 
@@ -10830,15 +10831,34 @@ availability projection this issue only displays.
   (`compareSortValuesDirectionalNulls`) every other column here uses; Average cost sorts on
   `averageUnitCostForDisplay`, and Last/Cheapest purchase sort on their cost figure, never their
   supplier.
+- **The purchase-cost read is its own feature component, not a second workflow inside the page.**
+  `ProductPurchaseCostsComponent`
+  (`components/products/product-purchase-costs/product-purchase-costs.component.ts`) owns the whole
+  lifecycle of that read — when it starts, the capability that permits it, its
+  loading/loaded/failed state, its failure message and the Retry control that re-enters it — and
+  `ProductListComponent` composes it through `@Input`/`@Output` only: it passes `productIds` (the
+  ids it is displaying) and records what `costsChange` publishes, which is one
+  `{ state, summaries }` answer. That is [Page composition boundary (issue
+  #191)](#page-composition-boundary-issue-191) applied to this screen: the routed page keeps its
+  own filters, fetch, load state, sorting and layout, and nothing of the second read beyond laying
+  its answer out. The two cost columns stay as cells in the page's own `<table>` — this codebase
+  has no pattern for a child component contributing cells to a parent's table, and inventing one
+  was not in this issue's scope — but the *rules* those cells follow are stated once, in that
+  component's exported `purchaseCostDisplay`/`purchaseCostSupplierDisplay`/`purchaseCostSortValue`
+  helpers, which the page calls rather than restates. Issues #789 and #790 (the other two product
+  screens) can compose the same component instead of repeating the workflow.
 - **Average cost is shown to every role**, matching `averageUnitCostForDisplay`'s own availability
   (issue #788). **Last purchase and Cheapest purchase, and the request behind them, require
   `Dashboard.ViewFinancials`** — `ProductListComponent.canViewFinancials` (the same fail-open-until-read
   field every other capability-gated control here starts from) hides both columns and their header
-  cells for a role without it, and the bulk request is gated a second time, independently, by a
-  fresh one-shot read of `AccessService.allows('Dashboard.ViewFinancials')` taken before the request is
-  ever issued — so no request reaches the endpoint for a role that may not see its answer, even
-  during the fail-open window before the first capability read settles.
-- **Three distinct states, decided in this order: failed, then loading, then the data.** A
+  cells for a role without it, and the bulk request is gated a second time, independently, inside
+  `ProductPurchaseCostsComponent`, by a fresh one-shot read of
+  `AccessService.allows('Dashboard.ViewFinancials')` taken before the request is ever issued — so no
+  request reaches the endpoint for a role that may not see its answer, even during the fail-open
+  window before the page's own capability read settles. The two reads are deliberately separate:
+  one decides what is rendered and lives with the page's columns, the other decides whether a
+  request may leave at all and lives with the request.
+- **Three distinct states, decided in this order: loading, then failed, then the data.** A
   product set change (a new search, a new category, the Status filter, Reset) clears the previous
   purchase-cost results immediately and starts a fresh read; "Loading" shows while that read is in
   flight, "Unavailable" shows once it has failed (with a Retry control next to the table), and only
@@ -10848,9 +10868,10 @@ availability projection this issue only displays.
   `None` independently of the cost.
 - **Retry re-enters the same read for the same product ids**, and a stale or failed response can
   never overwrite a newer product/filter selection's results: the read for one product set is one
-  switchable RxJS stream per set (`productIdsChanged$` outer, `retryCosts$`/the initial request
-  inner), so a new product set arriving — from a filter change, not from Retry — unsubscribes
-  whatever the previous set's stream was still waiting on, Retry included.
+  switchable RxJS stream per set inside `ProductPurchaseCostsComponent` (the `productIds` input
+  outer, `retry$`/the initial request inner), so a new product set arriving — from a filter change,
+  not from Retry — unsubscribes whatever the previous set's stream was still waiting on, Retry
+  included.
 
 **The provider import was refused for a manual catalogue, and issue #739 removed that refusal by
 removing the import it protected against.** `Inventory.Domain.Providers.ManualCatalogueImportPolicy`

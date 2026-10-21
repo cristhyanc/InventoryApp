@@ -852,6 +852,24 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
     expect(Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Retry')).toBeUndefined();
   });
 
+  /**
+   * Issue #191's page composition boundary: the purchase-cost read is a workflow of its own, so the
+   * page hands the ids it displays to `<app-product-purchase-costs>` and lays out what that
+   * component publishes, instead of owning the read, its state, its capability gate and its Retry
+   * control itself.
+   */
+  it('composes the purchase-cost read as a feature component, which owns the failure message and Retry', async () => {
+    const getSummaries = jest.fn().mockReturnValueOnce(throwError(() => new Error('boom')));
+    const { host } = await render([product({ id: 1, name: 'Widget' })], { getSummaries });
+
+    const costs = host.querySelector('app-product-purchase-costs');
+    expect(costs).not.toBeNull();
+    expect(costs!.textContent).toContain('could not be loaded');
+    expect(Array.from(costs!.querySelectorAll('button')).map((b) => b.textContent?.trim())).toContain('Retry');
+    // The page's own markup carries neither of them - it only renders the cells.
+    expect(host.querySelector('table')?.textContent).not.toContain('Retry');
+  });
+
   it('shows Loading while the read is in flight, distinct from a successful no-history answer', async () => {
     const pending = new Subject<ProductPurchaseCostSummary[]>();
     const { fixture, host } = await render([product({ id: 1, name: 'Widget' })], {

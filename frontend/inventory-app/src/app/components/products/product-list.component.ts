@@ -2,8 +2,8 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { EMPTY, Subject, Subscription, merge, of } from 'rxjs';
-import { catchError, switchMap, take, takeUntil, tap } from 'rxjs/operators';
+import { EMPTY, Subject, Subscription } from 'rxjs';
+import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { Product, Category } from '../../models/models';
@@ -22,8 +22,15 @@ import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 import { AccessService } from '../../access/access.service';
-import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
-import { ProductPurchaseCostSummary } from '../../models/product-purchase-cost-summary';
+import {
+  PURCHASE_COSTS_NOT_READ_YET,
+  ProductPurchaseCostColumn,
+  ProductPurchaseCosts,
+  ProductPurchaseCostsComponent,
+  purchaseCostDisplay,
+  purchaseCostSortValue,
+  purchaseCostSupplierDisplay
+} from './product-purchase-costs/product-purchase-costs.component';
 
 // No 'supplier' column since issue #787 (A1 of #786): a product carries no supplier to sort by.
 // No `price` column since issue #792 (A2 of #786): a product carries no selling price, so there is
@@ -41,17 +48,10 @@ type ProductSortColumn =
 /** `GET api/products`'s working-catalogue/whole-catalogue choice (issue #737), as a page filter. */
 type ProductStatusFilter = 'active' | 'all';
 
-/**
- * The state of the bulk purchase-cost read behind the Last/Cheapest purchase columns (issue #791,
- * E of #786): distinct from "no value", because an in-flight or failed read says nothing about
- * whether a product has purchase history, and only a successful read may answer `—`.
- */
-type PurchaseCostsState = 'loading' | 'loaded' | 'failed';
-
 @Component({
   selector: 'app-product-list',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, ConfirmationDialogComponent],
+  imports: [CommonModule, FormsModule, RouterLink, ConfirmationDialogComponent, ProductPurchaseCostsComponent],
   templateUrl: './product-list.component.html'
 })
 export class ProductListComponent implements OnInit, OnDestroy {
@@ -84,26 +84,32 @@ export class ProductListComponent implements OnInit, OnDestroy {
 
   /**
    * Whether the signed-in member's role grants `Dashboard.ViewFinancials` (issue #791, E of #786):
-   * the Last/Cheapest purchase columns and their request are hidden without it, on the same
-   * fail-open default every other capability-gated control in this codebase starts from while the
-   * capability has not been read yet. Average cost is unaffected and always shown.
+   * the Last/Cheapest purchase columns are hidden without it, on the same fail-open default every
+   * other capability-gated control in this codebase starts from while the capability has not been
+   * read yet. Average cost is unaffected and always shown. The *request* behind those two columns
+   * is gated separately and independently, by `ProductPurchaseCostsComponent`'s own fresh read of
+   * the same capability, so this page's fail-open window can never issue one.
    */
   canViewFinancials = true;
 
-  /** The state of the current purchase-cost read; see {@link PurchaseCostsState}. */
-  costsState: PurchaseCostsState = 'loading';
+  /**
+   * The ids of the products currently displayed, handed to `<app-product-purchase-costs>` as the
+   * one piece of context that read needs. They change only once a new fetch actually succeeds (a
+   * failed refetch leaves the previous rows on screen), which is the one moment the previous
+   * purchase-cost results stop describing what is on screen.
+   */
+  productIds: readonly number[] = [];
 
   /**
-   * The current product set's purchase-cost summaries, keyed by product id. A product with no
-   * entry has either not been asked about yet or has no recorded purchase history - which one is
-   * told apart by {@link costsState}, never by this map alone.
+   * What `<app-product-purchase-costs>` has published about {@link productIds}: the state of its
+   * read and the summaries it found. This page only lays that answer out in its cost cells and
+   * sorts on it; the read itself, its capability gate, its failure message and its Retry control
+   * belong to that component (issue #191's page composition boundary).
    */
-  purchaseCosts = new Map<number, ProductPurchaseCostSummary>();
+  purchaseCosts: ProductPurchaseCosts = PURCHASE_COSTS_NOT_READ_YET;
 
   private readonly search$ = new Subject<string>();
   private readonly immediateFilter$ = new Subject<void>();
-  private readonly productIdsChanged$ = new Subject<readonly number[]>();
-  private readonly retryCosts$ = new Subject<void>();
   private readonly destroy$ = new Subject<void>();
   private readonly sessionActiveSubscription: Subscription;
   private readonly financialsAccessSubscription: Subscription;
@@ -111,11 +117,10 @@ export class ProductListComponent implements OnInit, OnDestroy {
   constructor(
     private productService: ProductService,
     private categoryService: CategoryService,
-    private purchaseCostService: ProductPurchaseCostService,
     private toastService: ToastService,
     private router: Router,
     supportSession: SupportSessionService,
-    private access: AccessService
+    access: AccessService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
     this.financialsAccessSubscription = access
@@ -131,18 +136,6 @@ export class ProductListComponent implements OnInit, OnDestroy {
     createFilterTrigger$(this.search$, this.immediateFilter$)
       .pipe(
         switchMap(() => this.fetchProducts()),
-        takeUntil(this.destroy$)
-      )
-      .subscribe();
-
-    // The displayed product set changes only once a new fetch actually succeeds (a failed refetch
-    // leaves the previous rows on screen), which is the one moment stale purchase-cost results must
-    // be dropped. The outer switchMap cancels an in-flight read - and any pending Retry on it - the
-    // moment a newer product set arrives, so a slow or failed response can never land under a set
-    // it no longer describes.
-    this.productIdsChanged$
-      .pipe(
-        switchMap((productIds) => this.loadPurchaseCosts(productIds)),
         takeUntil(this.destroy$)
       )
       .subscribe();
@@ -169,7 +162,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
       tap((products) => {
         if (this.loadState.isCurrent(token)) {
           this.products = products;
-          this.productIdsChanged$.next(products.map((product) => product.id));
+          this.productIds = products.map((product) => product.id);
         }
         this.loadState.succeed(token);
       }),
@@ -181,52 +174,9 @@ export class ProductListComponent implements OnInit, OnDestroy {
     );
   }
 
-  /**
-   * Starts (or restarts) the purchase-cost read for the given product ids: the old results are
-   * cleared immediately, because they describe a product set that is no longer on screen, and no
-   * request is made at all without `Dashboard.ViewFinancials` - asked for fresh every time, so a
-   * capability change since the last read is honoured rather than cached past it. Retry re-enters
-   * the same read for the same ids.
-   */
-  private loadPurchaseCosts(productIds: readonly number[]) {
-    this.purchaseCosts = new Map();
-
-    if (productIds.length === 0) {
-      this.costsState = 'loaded';
-      return EMPTY;
-    }
-
-    this.costsState = 'loading';
-    return this.access.allows('Dashboard.ViewFinancials').pipe(
-      take(1),
-      switchMap((allowed) => {
-        if (!allowed) {
-          this.costsState = 'loaded';
-          return EMPTY;
-        }
-
-        return merge(of(undefined), this.retryCosts$).pipe(switchMap(() => this.requestPurchaseCosts(productIds)));
-      })
-    );
-  }
-
-  private requestPurchaseCosts(productIds: readonly number[]) {
-    this.costsState = 'loading';
-    return this.purchaseCostService.getSummaries(productIds).pipe(
-      tap((summaries) => {
-        this.purchaseCosts = new Map(summaries.map((summary) => [summary.productId, summary]));
-        this.costsState = 'loaded';
-      }),
-      catchError(() => {
-        this.costsState = 'failed';
-        return EMPTY;
-      })
-    );
-  }
-
-  /** Re-enters the purchase-cost read for the currently displayed products, after a failure. */
-  retryPurchaseCosts(): void {
-    this.retryCosts$.next();
+  /** Records what `<app-product-purchase-costs>` has published, for the cost cells and their sort. */
+  onPurchaseCostsChange(costs: ProductPurchaseCosts): void {
+    this.purchaseCosts = costs;
   }
 
   onSearchChange(value: string): void {
@@ -390,9 +340,8 @@ export class ProductListComponent implements OnInit, OnDestroy {
       case 'averageCost':
         return product.averageUnitCostForDisplay ?? null;
       case 'lastPurchase':
-        return this.purchaseCosts.get(product.id)?.lastUnitCost ?? null;
       case 'cheapestPurchase':
-        return this.purchaseCosts.get(product.id)?.lowestUnitCost ?? null;
+        return purchaseCostSortValue(this.purchaseCosts, product.id, column);
     }
   }
 
@@ -402,37 +351,14 @@ export class ProductListComponent implements OnInit, OnDestroy {
     return value == null ? '—' : this.money(value);
   }
 
-  /**
-   * The Last/Cheapest purchase cost cell's text: `Loading` while the bulk read for the current
-   * product set is in flight, `Unavailable` once it has failed, `—` once it has succeeded and
-   * found no recorded purchase for this product, and the cost itself - a genuine `0` included -
-   * once it has found one. The order matters: only a successful response may answer `—`.
-   */
-  purchaseCostDisplay(product: Product, column: 'lastPurchase' | 'cheapestPurchase'): string {
-    if (this.costsState === 'loading') {
-      return 'Loading';
-    }
-    if (this.costsState === 'failed') {
-      return 'Unavailable';
-    }
-
-    const summary = this.purchaseCosts.get(product.id);
-    if (!summary) {
-      return '—';
-    }
-
-    return this.money(column === 'lastPurchase' ? summary.lastUnitCost : summary.lowestUnitCost);
+  /** The Last/Cheapest purchase cost cell's text, as the feature component's own display rule states it. */
+  purchaseCostDisplay(product: Product, column: ProductPurchaseCostColumn): string {
+    return purchaseCostDisplay(this.purchaseCosts, product.id, column);
   }
 
   /** The supplier beside a found Last/Cheapest cost, or `null` while there is no cost to show one beside. */
-  purchaseCostSupplierDisplay(product: Product, column: 'lastPurchase' | 'cheapestPurchase'): string | null {
-    const summary = this.purchaseCosts.get(product.id);
-    if (this.costsState !== 'loaded' || !summary) {
-      return null;
-    }
-
-    const supplierName = column === 'lastPurchase' ? summary.lastSupplierName : summary.lowestSupplierName;
-    return supplierName ?? 'None';
+  purchaseCostSupplierDisplay(product: Product, column: ProductPurchaseCostColumn): string | null {
+    return purchaseCostSupplierDisplay(this.purchaseCosts, product.id, column);
   }
 
   private money(value: number): string {
