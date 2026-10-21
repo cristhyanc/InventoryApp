@@ -57,7 +57,7 @@ for (const provider of ['claude']) {
     assert.equal(low.tier, 'low');
     assert.equal(high.tier, 'high');
     assert.equal(low.maxTurns, 300);
-    assert.equal(high.maxTurns, 400);
+    assert.equal(high.maxTurns, 500);
     assert.notEqual(low.model, high.model);
   });
   test(`${provider}: default triage selects low, standard or high and stops only for clarification`, () => {
@@ -66,11 +66,11 @@ for (const provider of ['claude']) {
     assert.equal(resolveSelection(selection, { tier: 'low', reason: 'One local change' }).tier, 'low');
     const standard = resolveSelection(selection, { tier: 'standard', reason: 'Several related components' });
     assert.equal(standard.tier, 'standard');
-    assert.equal(standard.maxTurns, 250);
+    assert.equal(standard.maxTurns, 400);
     const high = resolveSelection(selection, { tier: 'high', reason: 'Broad structural change' });
     assert.equal(high.tier, 'high');
     assert.equal(high.model, resolveSelection(prepare(provider, '-high')).model);
-    assert.equal(high.maxTurns, 400);
+    assert.equal(high.maxTurns, 500);
     assert.throws(() => resolveSelection(selection, { tier: 'clarification-required', reason: 'Acceptance criteria contradict' }), /clarification required/i);
     assert.throws(() => resolveSelection(selection, { tier: 'high-required', reason: 'Old tier' }), /Invalid triage/);
     assert.throws(() => resolveSelection(selection, { tier: 'opus', reason: 'Model ID instead of tier' }), /Invalid triage/);
