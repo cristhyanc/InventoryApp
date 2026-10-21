@@ -90,7 +90,6 @@ public class AddProductAndSupplierGstRulesMigrationTests
                     row.GstRule,
                     row.Name,
                     row.Sku,
-                    row.UnitPrice,
                     row.AverageUnitCost,
                     row.QuantityInStock,
                     row.CostingQuantity,
@@ -105,8 +104,8 @@ public class AddProductAndSupplierGstRulesMigrationTests
 
             // The product's and the supplier's own data survived unchanged.
             Assert.Equal(
-                ("Chips", "CHIP-1", 3.50m, 1.10m, 12, 12, 13.20m),
-                (product.Name, product.Sku, product.UnitPrice, product.AverageUnitCost,
+                ("Chips", "CHIP-1", 1.10m, 12, 12, 13.20m),
+                (product.Name, product.Sku, product.AverageUnitCost,
                     product.QuantityInStock, product.CostingQuantity, product.InventoryValue));
             Assert.Equal(("Wholesale Co", "Pat", "1 Road"), (supplier.Name, supplier.ContactName, supplier.Address));
 

@@ -39,7 +39,6 @@ public class PurchaseResponseJsonContractTests
         "Coke",
         "SKU-1",
         "A can",
-        3.50m,
         1.25m,
         7,
         8.75m,
@@ -50,8 +49,7 @@ public class PurchaseResponseJsonContractTests
         true,
         new DateTime(2026, 1, 1, 8, 30, 0, DateTimeKind.Utc),
         new DateTime(2026, 2, 2, 9, 45, 0, DateTimeKind.Utc),
-        5,
-        4);
+        5);
 
     private static PurchaseRecord FullyPopulatedRecord() => new(
         7,
@@ -127,7 +125,6 @@ public class PurchaseResponseJsonContractTests
                     Name = item.Product.Name,
                     Sku = item.Product.Sku,
                     Description = item.Product.Description,
-                    UnitPrice = item.Product.UnitPrice,
                     AverageUnitCost = item.Product.AverageUnitCost,
                     CostingQuantity = item.Product.CostingQuantity,
                     InventoryValue = item.Product.InventoryValue,
@@ -139,7 +136,6 @@ public class PurchaseResponseJsonContractTests
                     CreatedAt = item.Product.CreatedAt,
                     UpdatedAt = item.Product.UpdatedAt,
                     CategoryId = item.Product.CategoryId,
-                    SupplierId = item.Product.SupplierId,
                 },
         }).ToList(),
         FileName = record.FileName,
@@ -230,6 +226,39 @@ public class PurchaseResponseJsonContractTests
                 "gstClassification", "gstClassificationSource", "lineTotal",
             },
             document.RootElement.GetProperty("items")[0].EnumerateObject().Select(property => property.Name));
+    }
+
+    /// <summary>
+    /// The nested product snapshot carries no supplier of its own (issue #787, A1 of #786), while
+    /// the purchase's own supplier - the one the invoice came from - is reported in full with its
+    /// complete nested shape. Those are two different suppliers, and only the product's is gone.
+    /// </summary>
+    [Fact]
+    public void Response_drops_the_supplier_from_the_nested_product_and_keeps_the_purchases_own()
+    {
+        var json = JsonSerializer.Serialize(
+            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord(), Visible), WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        var item = document.RootElement.GetProperty("items")[0];
+        var product = item.GetProperty("product");
+        Assert.False(product.TryGetProperty("supplierId", out _));
+        Assert.False(product.TryGetProperty("supplier", out _));
+        // And no selling price since issue #792 (A2 of #786) - while the line's own recorded
+        // `unitCost`, which is a cost, is untouched.
+        Assert.False(product.TryGetProperty("unitPrice", out _));
+        Assert.True(item.TryGetProperty("unitCost", out _));
+        // Issue #788's availability projection is not here either: it belongs to the catalogue
+        // reads, and this snapshot is a pinned contract of its own. The stored `averageUnitCost`
+        // below is unchanged, so nothing a client already read from this payload has moved.
+        Assert.False(product.TryGetProperty("averageUnitCostForDisplay", out _));
+        Assert.Equal("Coke", product.GetProperty("name").GetString());
+        Assert.Equal(1.25m, product.GetProperty("averageUnitCost").GetDecimal());
+        Assert.Equal((long?)5, product.GetProperty("categoryId").GetInt64());
+
+        Assert.Equal(
+            new[] { "id", "name", "contactName", "phone", "email", "address" },
+            document.RootElement.GetProperty("supplier").EnumerateObject().Select(property => property.Name));
     }
 
     /// <summary>

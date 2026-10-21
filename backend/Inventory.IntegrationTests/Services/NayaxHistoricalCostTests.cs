@@ -39,7 +39,7 @@ public class NayaxHistoricalCostTests
     public async Task Import_maps_supported_transaction_cost_headers(string header)
     {
         await using var db = CreateDb();
-        db.Products.Add(new Product { Id = 10, Name = "Snack", UnitPrice = 3m, AverageUnitCost = 2m });
+        db.Products.Add(new Product { Id = 10, Name = "Snack", AverageUnitCost = 2m });
         await db.SaveChangesAsync();
 
         var result = await CreateSalesImport(db).Handle(Csv(
@@ -54,7 +54,6 @@ public class NayaxHistoricalCostTests
         Assert.Equal(SaleCostingStatus.Costed, sale.CostingStatus);
         Assert.Equal(SaleCostSource.NayaxTransactionExport, sale.CostSource);
         var product = await db.Products.SingleAsync();
-        Assert.Equal(3m, product.UnitPrice);
         Assert.Equal(2m, product.AverageUnitCost);
     }
 

@@ -5,8 +5,7 @@ import { Router, ActivatedRoute, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
-import { SupplierService } from '../../services/supplier.service';
-import { Category, Supplier } from '../../models/models';
+import { Category } from '../../models/models';
 import { ProductPriceHistoryComponent } from './product-price-history/product-price-history.component';
 import { ProductGstRuleComponent } from './product-gst-rule/product-gst-rule.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -21,7 +20,6 @@ import { apiErrorMessage } from '../shared/api-error-message';
 export class ProductFormComponent implements OnInit, OnDestroy {
   productId: number | null = null;
   categories: Category[] = [];
-  suppliers: Supplier[] = [];
   saving = false;
   error = '';
 
@@ -46,21 +44,18 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     name: '',
     sku: '',
     description: '',
-    unitPrice: 0,
     quantityInStock: 0,
     initialUnitCost: null as number | null,
     lowStockThreshold: 5,
     restockTo: 5,
     unit: 'unit',
     categoryId: '' as number | '',
-    supplierId: '' as number | '',
     isActive: true
   };
 
   constructor(
     private readonly productService: ProductService,
     private readonly categoryService: CategoryService,
-    private readonly supplierService: SupplierService,
     private readonly router: Router,
     private readonly route: ActivatedRoute,
     supportSession: SupportSessionService
@@ -73,8 +68,9 @@ export class ProductFormComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    // No supplier list is loaded (issue #787, A1 of #786): nothing on this page needs one now that
+    // a product carries no supplier.
     this.categoryService.getAll().subscribe((c) => (this.categories = c));
-    this.supplierService.getAll().subscribe((s) => (this.suppliers = s));
 
     const idParam = this.route.snapshot.paramMap.get('id');
     if (idParam) {
@@ -85,14 +81,12 @@ export class ProductFormComponent implements OnInit, OnDestroy {
           name: p.name,
           sku: p.sku ?? '',
           description: p.description ?? '',
-          unitPrice: p.unitPrice,
           quantityInStock: p.quantityInStock,
           initialUnitCost: null,
           lowStockThreshold: p.lowStockThreshold,
           restockTo: p.restockTo,
           unit: p.unit ?? 'unit',
           categoryId: p.categoryId ?? '',
-          supplierId: p.supplierId ?? '',
           isActive: p.isActive
         };
       });
@@ -133,10 +127,6 @@ export class ProductFormComponent implements OnInit, OnDestroy {
       this.error = 'Product name is required.';
       return;
     }
-    if (this.form.unitPrice < 0) {
-      this.error = 'Unit price cannot be negative.';
-      return;
-    }
     if (!this.productId && this.form.initialUnitCost !== null && this.form.initialUnitCost < 0) {
       this.error = 'Initial unit cost cannot be negative.';
       return;
@@ -160,12 +150,10 @@ export class ProductFormComponent implements OnInit, OnDestroy {
       name: this.form.name.trim(),
       sku: this.form.sku || null,
       description: this.form.description || null,
-      unitPrice: this.form.unitPrice,
       lowStockThreshold: this.form.lowStockThreshold,
       restockTo: this.form.restockTo,
       unit: this.form.unit || null,
       categoryId: this.form.categoryId === '' ? null : this.form.categoryId,
-      supplierId: this.form.supplierId === '' ? null : this.form.supplierId,
       isActive: this.form.isActive
     };
 

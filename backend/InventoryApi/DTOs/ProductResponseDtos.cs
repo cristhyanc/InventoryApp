@@ -51,9 +51,10 @@ public sealed record ProductResponse
     public string? Sku { get; init; }
     public string? Description { get; init; }
 
-    /// <summary>The catalog default/list selling price, synced one-way from Nayax; never a cost.</summary>
-    public required decimal UnitPrice { get; init; }
-
+    // No `unitPrice` since issue #792 (A2 of #786): a product carries no selling price, so the
+    // field is removed from this response and from every nested product snapshot rather than being
+    // sent as `0`. What a product sells for is the machine's own live price, published separately
+    // as `machinePrice` below.
     public required decimal AverageUnitCost { get; init; }
     public int? CostingQuantity { get; init; }
     public decimal? InventoryValue { get; init; }
@@ -109,9 +110,10 @@ public sealed record ProductResponse
     public long? CategoryId { get; init; }
     public CategoryResponse? Category { get; init; }
 
-    public int? SupplierId { get; init; }
-    public SupplierResponse? Supplier { get; init; }
-
+    // The two keys issue #787 (A1 of #786) removed, and the only breaking change in this response:
+    // a product no longer carries `supplierId`/`supplier`, here or in the product snapshot nested in
+    // a purchase line, a supplier-order line or a machine slot. A supplier is still published on the
+    // purchase and the supplier order themselves, where one is actually recorded.
     public IReadOnlyList<ProductStockAdjustmentResponse> StockAdjustments { get; init; } = [];
 
     public bool IsLowStock => ProductReorderPolicy.IsLowStock(QuantityInStock, LowStockThreshold);
@@ -170,6 +172,38 @@ public sealed record ProductResponse
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DeletionRefusal { get; init; }
+
+    /// <summary>
+    /// The unit cost this product may be <strong>displayed</strong> at (issue #788, B of #786): the
+    /// persisted <see cref="AverageUnitCost"/> once a cost rebuild has established it, and
+    /// <strong>absent</strong> while none has.
+    ///
+    /// <para>The evidence is the same one the Dashboard's unknown-cost count uses -
+    /// <c>Inventory.Domain.Reporting.Dashboard.InventoryValuationPolicy</c>: a product's inventory
+    /// value is <see langword="null"/> only when no rebuild has ever run for it, which is a genuinely
+    /// unknown cost rather than a zero one. <see cref="AverageUnitCost"/> is a non-nullable column, so
+    /// an uncosted product can still carry a number in it, and this is the authoritative statement of
+    /// whether that number means anything. A rebuilt cost of <c>0</c> is a measured answer and is
+    /// published as <c>0</c>.</para>
+    ///
+    /// <para><strong>Additive, and available to exactly the roles that already read
+    /// <see cref="AverageUnitCost"/></strong> - every role that may operate inventory. It is decided
+    /// from the product's own recorded facts, not from <see cref="InventoryValue"/> as this response
+    /// carries it, because that one is withheld from a caller without
+    /// <c>Dashboard.ViewFinancials</c> (issue #698) and reading the withheld value would tell an
+    /// Operator every cost is unknown. It carries no revenue, profit, valuation or supplier fact:
+    /// the gated last/cheapest purchase cost and its supplier stay on
+    /// <c>GET api/products/purchase-cost-summary</c>, behind that capability.</para>
+    ///
+    /// <para>Published only on the catalogue reads - the <c>/api/products</c> endpoints. It is
+    /// deliberately absent from the product snapshot nested in a purchase line or a supplier-order
+    /// line and from a machine slot's product, which are pinned contracts of their own and are not
+    /// surfaces a product's cost is presented from; those payloads keep every key they had.
+    /// An absent key on one of them says nothing about the cost, exactly as an absent
+    /// <see cref="CanDelete"/> says nothing about deletion.</para>
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public decimal? AverageUnitCostForDisplay { get; init; }
 }
 
 /// <summary>

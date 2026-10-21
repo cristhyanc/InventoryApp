@@ -142,8 +142,16 @@ public class PublishedResponseSchemaContractTests
         Assert.Equal(BaseProductPropertyNames, product.Properties.Keys.ToArray());
         Assert.Empty(product.Required);
         Assert.Equal("Category", product.Properties["category"].Reference?.Id);
-        Assert.Equal("Supplier", product.Properties["supplier"].Reference?.Id);
         Assert.Equal("StockAdjustment", product.Properties["stockAdjustments"].Items.Reference?.Id);
+
+        // The nested product describes no supplier since issue #787 (A1 of #786). The `Supplier`
+        // component stays published and byte-identical, because the purchase and the supplier order
+        // reference it - which `Nested_supplier_component_matches_the_base_contract` above asserts.
+        Assert.DoesNotContain("supplier", product.Properties.Keys, StringComparer.OrdinalIgnoreCase);
+
+        // And no selling price since issue #792 (A2). The supplier-order line's own `unitPrice` is
+        // a different property on a different component and is pinned by the line baseline below.
+        Assert.DoesNotContain("unitPrice", product.Properties.Keys, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -197,14 +205,21 @@ public class PublishedResponseSchemaContractTests
             new[]
             {
                 "averageUnitCost", "createdAt", "id", "isActive", "lowStockThreshold",
-                "name", "quantityInStock", "restockTo", "unitPrice", "updatedAt",
+                "name", "quantityInStock", "restockTo", "updatedAt",
             },
             productResponse.Required.Order(StringComparer.Ordinal).ToArray());
         Assert.Equal("CategoryResponse", productResponse.Properties["category"].Reference?.Id);
-        Assert.Equal("SupplierResponse", productResponse.Properties["supplier"].Reference?.Id);
         Assert.Equal(
             "ProductStockAdjustmentResponse",
             productResponse.Properties["stockAdjustments"].Items.Reference?.Id);
+
+        // The product no longer describes a supplier at all (issue #787); the supplier component
+        // itself is unchanged above, because the purchase and the supplier order still reference it.
+        Assert.DoesNotContain("supplier", productResponse.Properties.Keys, StringComparer.OrdinalIgnoreCase);
+
+        // Nor a selling price (issue #792): the key is gone from the description, not published as
+        // a nullable one.
+        Assert.DoesNotContain("unitPrice", productResponse.Properties.Keys, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -415,15 +430,24 @@ public class PublishedResponseSchemaContractTests
     /// in requiredness, <c>readOnly</c> flags and their own nested references - the difference the
     /// nested purchase/supplier-order <c>product</c> reference would otherwise have handed
     /// clients.</para>
+    ///
+    /// <para><strong>The list has lost keys only by approved deletion, twice</strong>: issue #787
+    /// (A1 of #786) dropped the product's <c>supplierId</c>/<c>supplier</c> from the entity this
+    /// component is regenerated from, and issue #792 (A2) dropped its <c>unitPrice</c> the same
+    /// way, so each left the published description with the column itself. Those are the approved
+    /// breaking changes here; the purchase's and supplier order's <em>own</em> <c>supplier</c>
+    /// reference and the supplier-order line's own <c>unitPrice</c> are untouched - which is what
+    /// the nested-reference assertions above and the pinned supplier-order baseline still
+    /// prove.</para>
     /// </summary>
     private static readonly string[] BaseProductPropertyNames =
     [
-        "id", "name", "sku", "description", "unitPrice", "averageUnitCost", "costingQuantity",
+        "id", "name", "sku", "description", "averageUnitCost", "costingQuantity",
         "inventoryValue", "machinePrice", "commissionValue", "suggestedNetValue",
         "suggestedPriceValue", "mdbCode", "maxStockInMachine", "machineReplenishmentNeed",
         "onOrderQuantity", "projectedStockForReorder", "quantityInStock", "lowStockThreshold",
         "restockTo", "needToOrder", "unit", "isActive", "lastEatBefore1", "lastEatBefore2",
-        "createdAt", "updatedAt", "categoryId", "category", "supplierId", "supplier",
+        "createdAt", "updatedAt", "categoryId", "category",
         "stockAdjustments", "isLowStock", "isReorderAlert",
     ];
 
@@ -431,15 +455,22 @@ public class PublishedResponseSchemaContractTests
     /// What the API-owned <c>ProductResponse</c> publishes: the legacy component's list with
     /// <c>providerManagedFields</c> appended, which issue #736's acceptance criteria require of the
     /// catalogue response ("product and category responses say which fields are provider-managed, so
-    /// the UI can lock them"), and then <c>canDelete</c>/<c>deletionRefusal</c>, which issue #737's
-    /// criterion that Delete is offered only where the API allows it requires of the same response.
-    /// Additive and last in both cases, so no published key is renamed, reordered, retyped or
-    /// dropped - and the legacy <c>Product</c> component the pinned purchase/supplier-order schemas
-    /// reference is deliberately not given any of the three, because those nested snapshots do not
-    /// carry them at runtime either.
+    /// the UI can lock them"), then <c>canDelete</c>/<c>deletionRefusal</c>, which issue #737's
+    /// criterion that Delete is offered only where the API allows it requires of the same response,
+    /// and then <c>averageUnitCostForDisplay</c>, issue #788's authoritative statement of whether a
+    /// product's stored average cost has been established at all. Additive and last in every case,
+    /// so no published key is renamed, reordered, retyped or dropped - and the legacy <c>Product</c>
+    /// component the pinned purchase/supplier-order schemas reference is deliberately not given any
+    /// of the four, because those nested snapshots do not carry them at runtime either.
     /// </summary>
     private static readonly string[] PublishedProductResponsePropertyNames =
-        [.. BaseProductPropertyNames, "providerManagedFields", "canDelete", "deletionRefusal"];
+    [
+        .. BaseProductPropertyNames,
+        "providerManagedFields",
+        "canDelete",
+        "deletionRefusal",
+        "averageUnitCostForDisplay",
+    ];
 
     private static string Normalize(string json) =>
         JsonNode.Parse(json)!.ToJsonString(new JsonSerializerOptions { WriteIndented = true });

@@ -1,9 +1,12 @@
 namespace Inventory.Application.Products;
 
 /// <summary>
-/// The optional search/category/supplier narrowing a product listing request carries, plus whether
+/// The optional search/category narrowing a product listing request carries, plus whether
 /// retired products belong in the answer. A null member means "do not narrow on this", exactly as
 /// the former <c>InventoryApi.Services.ProductService.GetAll</c>/<c>LowStock</c> query building did.
+///
+/// <para>Narrowing by supplier is gone (issue #787, A1 of #786): a product has no supplier to
+/// narrow on, so the filter cannot offer one.</para>
 ///
 /// <para><paramref name="IncludeRetired"/> is deliberately not that kind of narrowing and has no
 /// "unset" value (issue #736): a product whose <c>IsActive</c> is false has been retired, which is
@@ -13,7 +16,7 @@ namespace Inventory.Application.Products;
 /// return.</para>
 /// </summary>
 public sealed record ProductCatalogFilter(
-    string? Search, long? CategoryId, int? SupplierId, bool IncludeRetired)
+    string? Search, long? CategoryId, bool IncludeRetired)
 {
     /// <summary>
     /// The unnarrowed catalogue, <strong>retired products included</strong>: every product the
@@ -22,7 +25,7 @@ public sealed record ProductCatalogFilter(
     /// catalogue and then apply their own Domain rule to it, and a machine slot or a refill alert
     /// naming a retired product must still be able to describe it.
     /// </summary>
-    public static ProductCatalogFilter None { get; } = new(null, null, null, IncludeRetired: true);
+    public static ProductCatalogFilter None { get; } = new(null, null, IncludeRetired: true);
 }
 
 /// <summary>

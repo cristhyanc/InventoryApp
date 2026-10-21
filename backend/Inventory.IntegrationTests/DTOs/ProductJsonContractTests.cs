@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Inventory.Application.Machines;
 using Inventory.Application.Products;
 using Inventory.Domain.Products;
 using InventoryApi.Adapters.Mapping;
@@ -19,16 +20,23 @@ namespace InventoryApi.Tests.DTOs;
 /// here rather than in a client. The explicit key list is asserted as well, so a future change to
 /// <em>both</em> sides at once still has to be a conscious one.
 ///
-/// <para><strong>The contract has moved exactly twice, and only by appending.</strong> Issue #736,
+/// <para><strong>The contract has been appended to twice, and broken once.</strong> Issue #736,
 /// whose acceptance criteria require the catalogue response to say which fields the business's sales
 /// provider manages so the UI can lock them, added <c>providerManagedFields</c>. Issue #737, whose
 /// criterion is that Delete is offered only where the API allows it, added <c>canDelete</c> and
 /// <c>deletionRefusal</c> after it - and only on a read that resolved the question, so they are
 /// absent from the byte-for-byte comparisons below, which still run against a record that did not.
-/// Every key a client already read keeps its name, type, value and position. Nothing else may move
-/// this reference without its own issue. The nested product snapshots on a purchase, a supplier
-/// order and a machine slot carry none of the three - they are <c>null</c> there and omitted - so
-/// their own contract tests are untouched.</para>
+/// Every key a client already read keeps its name, type, value and position. The nested product
+/// snapshots on a purchase, a supplier order and a machine slot carry none of the three - they are
+/// <c>null</c> there and omitted.</para>
+///
+/// <para><strong>The one break is issue #787</strong> (A1 of #786), the destructive product-supplier
+/// deletion the owner approved on 21 October 2026: <c>supplierId</c> and <c>supplier</c> are gone
+/// from this response and from every nested product snapshot with it. They are <strong>removed, not
+/// nulled</strong>, which is the honest shape - a product has no supplier to report, so reporting
+/// one as empty would be a different statement. The purchase's and the supplier order's own
+/// <c>supplier</c> is unaffected and their contract tests still assert it. Nothing else may move
+/// this reference without its own issue.</para>
 /// </summary>
 public class ProductJsonContractTests
 {
@@ -40,7 +48,6 @@ public class ProductJsonContractTests
         Name = "Coke",
         Sku = "SKU-1",
         Description = "A can",
-        UnitPrice = 3.50m,
         AverageUnitCost = 1.25m,
         CostingQuantity = 7,
         InventoryValue = 8.75m,
@@ -53,8 +60,6 @@ public class ProductJsonContractTests
         UpdatedAt = new DateTime(2026, 2, 2, 9, 45, 0, DateTimeKind.Utc),
         CategoryId = 3,
         Category = new ProductCategoryRecord(3, "Drinks", "Cold"),
-        SupplierId = 4,
-        Supplier = new ProductSupplierRecord(4, "Acme", "Pat", "123", "a@b.c", "1 Road"),
         StockAdjustments =
         [
             new ProductStockAdjustmentRecord(
@@ -92,7 +97,6 @@ public class ProductJsonContractTests
         Name = record.Name,
         Sku = record.Sku,
         Description = record.Description,
-        UnitPrice = record.UnitPrice,
         AverageUnitCost = record.AverageUnitCost,
         CostingQuantity = record.CostingQuantity,
         InventoryValue = record.InventoryValue,
@@ -111,18 +115,6 @@ public class ProductJsonContractTests
                 Id = record.Category.Id,
                 Name = record.Category.Name,
                 Description = record.Category.Description,
-            },
-        SupplierId = record.SupplierId,
-        Supplier = record.Supplier is null
-            ? null
-            : new Supplier
-            {
-                Id = record.Supplier.Id,
-                Name = record.Supplier.Name,
-                ContactName = record.Supplier.ContactName,
-                Phone = record.Supplier.Phone,
-                Email = record.Supplier.Email,
-                Address = record.Supplier.Address,
             },
         StockAdjustments = record.StockAdjustments.Select(adjustment => new StockAdjustment
         {
@@ -149,16 +141,24 @@ public class ProductJsonContractTests
     };
 
     /// <summary>
-    /// The entity's JSON with issue #736's one appended key, which is the whole of the catalogue
-    /// response's current contract. Written as an append to the reference value rather than as a
-    /// second literal, so the test still fails if any legacy key moves by a single byte.
+    /// The entity's JSON with issue #736's appended key and issue #788's, which together are the
+    /// whole of the catalogue response's current contract. Written as an append to the reference
+    /// value rather than as a second literal, so the test still fails if any legacy key moves by a
+    /// single byte.
+    ///
+    /// <para><c>averageUnitCostForDisplay</c> is appended only when the record carries an inventory
+    /// value, which is the evidence a cost rebuild has run for the product; with none, the key is
+    /// absent and the sparse comparison below asserts exactly that.</para>
     /// </summary>
     private static string ExpectedJson(ProductRecord record, string providerManagedFields)
     {
         var entity = JsonSerializer.Serialize(EquivalentEntity(record), WebDefaults);
+        var displayUnitCost = record.InventoryValue is null
+            ? string.Empty
+            : $",\"averageUnitCostForDisplay\":{JsonSerializer.Serialize(record.AverageUnitCost, WebDefaults)}";
         return string.Concat(
             entity.AsSpan(0, entity.Length - 1),
-            $",\"providerManagedFields\":{providerManagedFields}}}");
+            $",\"providerManagedFields\":{providerManagedFields}{displayUnitCost}}}");
     }
 
     [Fact]
@@ -201,7 +201,6 @@ public class ProductJsonContractTests
         {
             Id = 1,
             Name = "Bare",
-            UnitPrice = 0m,
             AverageUnitCost = 0m,
             QuantityInStock = 0,
             LowStockThreshold = 0,
@@ -216,8 +215,16 @@ public class ProductJsonContractTests
 
         Assert.Equal(ExpectedJson(record, "[]"), response);
         Assert.Contains("\"category\":null", response, StringComparison.Ordinal);
-        Assert.Contains("\"supplier\":null", response, StringComparison.Ordinal);
         Assert.Contains("\"stockAdjustments\":[]", response, StringComparison.Ordinal);
+
+        // The supplier keys are not null here - they are gone (issue #787). A client that still
+        // reads `supplier` must find nothing rather than an explicit null that looks like
+        // "no supplier recorded".
+        Assert.DoesNotContain("supplier", response, StringComparison.OrdinalIgnoreCase);
+
+        // The selling price went the same way (issue #792): `unitPrice` is absent, not `0`. A zero
+        // would read as "this product is free" rather than "this product has no price".
+        Assert.DoesNotContain("\"unitPrice\"", response, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -231,18 +238,26 @@ public class ProductJsonContractTests
         Assert.Equal(
             new[]
             {
-                "id", "name", "sku", "description", "unitPrice", "averageUnitCost", "costingQuantity",
+                // "supplierId"/"supplier" (issue #787, A1 of #786) and "unitPrice" (issue #792, A2)
+                // are the only keys this contract has ever lost, both by approved deletion of the
+                // column behind them. "machinePrice" stays: the machine's live price is a different
+                // value, and it is what a product now sells for.
+                "id", "name", "sku", "description", "averageUnitCost", "costingQuantity",
                 "inventoryValue", "machinePrice", "commissionValue", "suggestedNetValue",
                 "suggestedPriceValue", "mdbCode", "maxStockInMachine", "machineReplenishmentNeed",
                 "onOrderQuantity", "projectedStockForReorder", "quantityInStock", "lowStockThreshold",
                 "restockTo", "needToOrder", "unit", "isActive", "lastEatBefore1", "lastEatBefore2",
-                "createdAt", "updatedAt", "categoryId", "category", "supplierId", "supplier",
+                "createdAt", "updatedAt", "categoryId", "category",
                 "stockAdjustments", "isLowStock", "isReorderAlert",
 
                 // Issue #736's one appended key, last so every key above keeps its position. Issue
                 // #737's canDelete/deletionRefusal follow it only on a read that resolved the
                 // deletion question, which this record did not.
                 "providerManagedFields",
+
+                // Issue #788's availability projection, appended after all three so every key a
+                // client already read keeps its name, type, value and position again.
+                "averageUnitCostForDisplay",
             },
             document.RootElement.EnumerateObject().Select(property => property.Name));
 
@@ -251,10 +266,6 @@ public class ProductJsonContractTests
         Assert.Equal(
             new[] { "id", "name", "description" },
             document.RootElement.GetProperty("category").EnumerateObject().Select(property => property.Name));
-
-        Assert.Equal(
-            new[] { "id", "name", "contactName", "phone", "email", "address" },
-            document.RootElement.GetProperty("supplier").EnumerateObject().Select(property => property.Name));
 
         Assert.Equal(
             new[]
@@ -314,8 +325,8 @@ public class ProductJsonContractTests
             ProductDeletionPolicy.Refusal(isProviderManaged: false, provider: null, references),
             document.RootElement.GetProperty("deletionRefusal").GetString());
         Assert.Equal(
-            ["providerManagedFields", "canDelete", "deletionRefusal"],
-            document.RootElement.EnumerateObject().Select(property => property.Name).TakeLast(3));
+            ["providerManagedFields", "canDelete", "deletionRefusal", "averageUnitCostForDisplay"],
+            document.RootElement.EnumerateObject().Select(property => property.Name).TakeLast(4));
     }
 
     /// <summary>
@@ -354,6 +365,110 @@ public class ProductJsonContractTests
         using var document = JsonDocument.Parse(json);
         Assert.False(document.RootElement.TryGetProperty("canDelete", out _));
         Assert.False(document.RootElement.TryGetProperty("deletionRefusal", out _));
+    }
+
+    /// <summary>
+    /// Issue #788's availability projection: the unit cost a screen may actually display, which is
+    /// the persisted <c>averageUnitCost</c> for a product whose cost has been rebuilt. It is
+    /// additive and gated by nothing beyond the catalogue's own capability, because
+    /// <c>averageUnitCost</c> beside it is already readable by every role that may operate inventory
+    /// (<c>OperatorReadableFinancialFigureTests</c>); it carries no revenue, profit, valuation or
+    /// supplier fact, and the gated last/cheapest supplier figures stay on
+    /// <c>GET api/products/purchase-cost-summary</c> behind <c>Dashboard.ViewFinancials</c>.
+    /// </summary>
+    [Fact]
+    public void Response_publishes_the_display_unit_cost_of_a_product_whose_cost_was_rebuilt()
+    {
+        var json = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(FullyPopulatedRecord(), FinancialFigureVisibility.Visible),
+            WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(1.25m, document.RootElement.GetProperty("averageUnitCostForDisplay").GetDecimal());
+        Assert.Equal(1.25m, document.RootElement.GetProperty("averageUnitCost").GetDecimal());
+    }
+
+    /// <summary>
+    /// A rebuilt cost of exactly zero is a measured answer - the rebuild found no cost-bearing
+    /// stock - and is published as <c>0</c>. Reporting it as absent would make a known figure look
+    /// unknown, which is the mirror image of the mistake the test below prevents.
+    /// </summary>
+    [Fact]
+    public void Response_publishes_a_genuine_zero_display_unit_cost()
+    {
+        var record = FullyPopulatedRecord() with { AverageUnitCost = 0m, InventoryValue = 0m };
+
+        var json = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(record, FinancialFigureVisibility.Visible), WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(0m, document.RootElement.GetProperty("averageUnitCostForDisplay").GetDecimal());
+    }
+
+    /// <summary>
+    /// A product no cost rebuild has run for has no display cost at all, and the key is absent
+    /// rather than <c>0</c>. The stored <c>averageUnitCost</c> is still published unchanged - the
+    /// legacy figure is preserved exactly as it was - which is the whole point of the separate
+    /// projection: one key says what is stored and the other says whether it has been established.
+    /// </summary>
+    [Fact]
+    public void Response_omits_the_display_unit_cost_when_no_cost_rebuild_has_run()
+    {
+        var record = FullyPopulatedRecord() with { AverageUnitCost = 1.25m, InventoryValue = null };
+
+        var json = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(record, FinancialFigureVisibility.Visible), WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.False(document.RootElement.TryGetProperty("averageUnitCostForDisplay", out _));
+        Assert.Equal(1.25m, document.RootElement.GetProperty("averageUnitCost").GetDecimal());
+    }
+
+    /// <summary>
+    /// The projection is decided from the product's own recorded evidence, not from what the caller
+    /// may be shown: <c>inventoryValue</c> is withheld from a role without
+    /// <c>Dashboard.ViewFinancials</c> (issue #698), and reading the withheld value would have told
+    /// an Operator that every product's cost is unknown. Unit cost is visible to every role that may
+    /// operate inventory, and so is this.
+    /// </summary>
+    [Fact]
+    public void Response_publishes_the_display_unit_cost_even_where_the_inventory_value_is_withheld()
+    {
+        var json = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(FullyPopulatedRecord(), FinancialFigureVisibility.Redacted),
+            WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("inventoryValue").ValueKind);
+        Assert.Equal(1.25m, document.RootElement.GetProperty("averageUnitCostForDisplay").GetDecimal());
+    }
+
+    /// <summary>
+    /// The machine-slot product view is not a catalogue response: issue #788 scopes the projection
+    /// to the <c>/api/products</c> reads, and this payload is a pinned contract of its own
+    /// (<c>InventoryApi.Tests.DTOs.MachineJsonContractTests</c>), so it says nothing rather than
+    /// carrying an availability answer its reader cannot act on - the same treatment issues #736 and
+    /// #737 gave their keys here.
+    /// </summary>
+    [Fact]
+    public void A_machine_slots_product_carries_no_display_unit_cost()
+    {
+        var json = JsonSerializer.Serialize(
+            ProductRecordResponseMapper.ToResponse(
+                new MachineProductRecord
+                {
+                    Product = FullyPopulatedRecord(),
+                    QuantityInStock = 3,
+                    MachinePrice = 2.50m,
+                    CommissionValue = 0m,
+                    MdbCode = 11,
+                },
+                FinancialFigureVisibility.Visible),
+            WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        Assert.False(document.RootElement.TryGetProperty("averageUnitCostForDisplay", out _));
+        Assert.Equal(1.25m, document.RootElement.GetProperty("averageUnitCost").GetDecimal());
     }
 
     [Fact]

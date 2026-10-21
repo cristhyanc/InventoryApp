@@ -207,8 +207,9 @@ public class MachineJsonContractTests
 
     /// <summary>
     /// The redacted product projection (issue #698): <c>inventoryValue</c> alone is withheld, and
-    /// unit cost, the catalogue selling price and the machine slot's own price - which the recorded
-    /// decision keeps visible to every role - are untouched.
+    /// unit cost and the machine slot's own price - which the recorded decision keeps visible to
+    /// every role - are untouched. The catalogue selling price this used to check alongside them
+    /// is not published at all since issue #792 (A2 of #786).
     /// </summary>
     [Fact]
     public void Redacted_machine_product_response_withholds_only_the_inventory_value()
@@ -221,7 +222,10 @@ public class MachineJsonContractTests
         using var document = JsonDocument.Parse(json);
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("inventoryValue").ValueKind);
         Assert.Equal(1.25m, document.RootElement.GetProperty("averageUnitCost").GetDecimal());
-        Assert.Equal(3.50m, document.RootElement.GetProperty("unitPrice").GetDecimal());
+        Assert.False(document.RootElement.TryGetProperty("unitPrice", out _));
+        // Nor is issue #788's availability projection published on a machine slot's product: it
+        // belongs to the catalogue reads, and this payload is a pinned contract of its own.
+        Assert.False(document.RootElement.TryGetProperty("averageUnitCostForDisplay", out _));
         Assert.Equal(5m, document.RootElement.GetProperty("machinePrice").GetDecimal());
         Assert.Equal(7, document.RootElement.GetProperty("costingQuantity").GetInt32());
 
@@ -241,7 +245,6 @@ public class MachineJsonContractTests
             Name = "Coke",
             Sku = "SKU-1",
             Description = "A can",
-            UnitPrice = 3.50m,
             AverageUnitCost = 1.25m,
             CostingQuantity = 7,
             InventoryValue = 8.75m,
@@ -254,8 +257,6 @@ public class MachineJsonContractTests
             UpdatedAt = new DateTime(2026, 2, 2, 9, 45, 0, DateTimeKind.Utc),
             CategoryId = 3,
             Category = new ProductCategoryRecord(3, "Drinks", "Cold"),
-            SupplierId = 4,
-            Supplier = new ProductSupplierRecord(4, "Acme", "Pat", "123", "a@b.c", "1 Road"),
             StockAdjustments =
             [
                 new ProductStockAdjustmentRecord(
@@ -314,7 +315,6 @@ public class MachineJsonContractTests
             {
                 Id = 201,
                 Name = "Bare",
-                UnitPrice = 0m,
                 AverageUnitCost = 0m,
                 QuantityInStock = 9,
                 LowStockThreshold = 0,
@@ -356,12 +356,17 @@ public class MachineJsonContractTests
         Assert.Equal(
             new[]
             {
-                "id", "name", "sku", "description", "unitPrice", "averageUnitCost", "costingQuantity",
+                "id", "name", "sku", "description", "averageUnitCost", "costingQuantity",
                 "inventoryValue", "machinePrice", "commissionValue", "suggestedNetValue",
                 "suggestedPriceValue", "mdbCode", "maxStockInMachine", "machineReplenishmentNeed",
                 "onOrderQuantity", "projectedStockForReorder", "quantityInStock", "lowStockThreshold",
                 "restockTo", "needToOrder", "unit", "isActive", "lastEatBefore1", "lastEatBefore2",
-                "createdAt", "updatedAt", "categoryId", "category", "supplierId", "supplier",
+                // "supplierId"/"supplier" left this snapshot with the product's supplier column
+                // itself (issue #787, A1 of #786), and "unitPrice" with its selling-price column
+                // (issue #792, A2) - the only keys the machine-slot product contract has ever lost,
+                // both by approved deletion. Every other key keeps its name, type, value and
+                // position, "machinePrice" among them: the slot's live price is a different value.
+                "createdAt", "updatedAt", "categoryId", "category",
                 "stockAdjustments", "isLowStock", "isReorderAlert",
             },
             document.RootElement.EnumerateObject().Select(property => property.Name));

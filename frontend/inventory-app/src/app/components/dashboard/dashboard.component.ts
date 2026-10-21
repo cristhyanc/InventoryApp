@@ -8,6 +8,8 @@ import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
+import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { ProductPurchaseCostSummary } from '../../models/product-purchase-cost-summary';
 import { AccessService } from '../../access/access.service';
 import {
   DashboardInventorySummary,
@@ -57,6 +59,17 @@ export type DashboardProviderAvailability =
   | 'notConnected'
   | 'permissionNotGranted'
   | 'supportView';
+
+/**
+ * Where the Reorder Alerts purchase-cost read has got to (issue #789). The four are answers to
+ * different questions and must never stand in for one another: nothing has been asked (`idle` -
+ * the capability is unanswered or refused, or there is no alert product to ask about), the answer
+ * is outstanding (`loading`), the answer arrived (`loaded`, where a product it carries no entry for
+ * has never been bought), and the request failed (`failed`, where nothing is known about any
+ * product). Only `loaded` may present `—`: "never bought" is a fact about the purchase history,
+ * and a request nobody answered is not evidence of it.
+ */
+export type PurchaseCostLoadState = 'idle' | 'loading' | 'loaded' | 'failed';
 
 @Component({
   selector: 'app-dashboard',
@@ -141,6 +154,42 @@ export class DashboardComponent implements OnInit, OnDestroy {
    */
   canViewFinancials = true;
 
+  /** See {@link PurchaseCostLoadState}. */
+  purchaseCostState: PurchaseCostLoadState = 'idle';
+
+  /** The sentence shown in place of the two purchase-cost columns' figures when the read failed. */
+  readonly purchaseCostUnavailableMessage = 'The last and cheapest purchase costs could not be loaded.';
+
+  /**
+   * The last and cheapest purchase cost of each alert product that has a purchase history, by
+   * product id (issue #789), exactly as `GET /api/products/purchase-cost-summary` published it.
+   * Nothing here picks a cheapest, sorts a history or derives a saving: those are decided once, by
+   * the backend's `SupplierPriceComparisonPolicy` (issue #788).
+   *
+   * It only ever holds the answer for the product set currently displayed - it is emptied before
+   * every request, and an answer from a superseded request is discarded; see
+   * {@link refreshPurchaseCosts}.
+   */
+  private purchaseCosts = new Map<number, ProductPurchaseCostSummary>();
+
+  /**
+   * Bumped by every purchase-cost request, so a slower earlier one - for a product set that is no
+   * longer displayed, or the failure a Retry has already replaced - cannot publish its answer over
+   * the current one.
+   */
+  private purchaseCostRequest = 0;
+
+  /** Whether a reorder-alert listing has been read: its products are what there is to cost. */
+  private hasReorderAlerts = false;
+
+  /**
+   * Whether `Dashboard.ViewFinancials` has been *answered*. {@link canViewFinancials} starts `true`
+   * so a figure is never hidden from the role it belongs to while the answer is outstanding, which
+   * is the right default for hiding, but not for *asking*: the purchase-cost request is only ever
+   * sent once the capability is known to be granted.
+   */
+  private isFinancialsAccessAnswered = false;
+
   private readonly sessionActiveSubscription: Subscription;
   private readonly financialsAccessSubscription: Subscription;
 
@@ -150,13 +199,18 @@ export class DashboardComponent implements OnInit, OnDestroy {
     private readonly siteService: SiteService,
     private readonly nayaxSalesSyncService: NayaxSalesSyncService,
     private readonly dashboardService: DashboardService,
+    private readonly productPurchaseCostService: ProductPurchaseCostService,
     supportSession: SupportSessionService,
     access: AccessService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
-    this.financialsAccessSubscription = access
-      .allows('Dashboard.ViewFinancials')
-      .subscribe((allowed) => (this.canViewFinancials = allowed));
+    this.financialsAccessSubscription = access.allows('Dashboard.ViewFinancials').subscribe((allowed) => {
+      this.canViewFinancials = allowed;
+      this.isFinancialsAccessAnswered = true;
+      // The answer can arrive after the reorder-alert list, which carries the products to ask
+      // about; the read is deferred until both are known, and re-evaluated if the answer changes.
+      if (this.hasReorderAlerts) this.refreshPurchaseCosts();
+    });
   }
 
   ngOnInit(): void {
@@ -281,6 +335,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
         this.reorderMode = listing.mode;
         this.reorderMachineNeedUnavailableReason = listing.machineNeedUnavailableReason;
         this.isLoadingLowStock = false;
+        this.hasReorderAlerts = true;
+        this.refreshPurchaseCosts();
       },
       error: (error: unknown) => {
         this.lowStock = [];
@@ -289,6 +345,48 @@ export class DashboardComponent implements OnInit, OnDestroy {
         this.reorderMachineNeedUnavailableReason = null;
         this.reorderAlertsError = sectionUnavailableText(error, 'The reorder-alert list');
         this.isLoadingLowStock = false;
+        this.hasReorderAlerts = false;
+        // Costs read for a list that is no longer displayed are dropped with it.
+        this.refreshPurchaseCosts();
+      }
+    });
+  }
+
+  /**
+   * Reads the last and cheapest recorded purchase cost of every product the Reorder Alerts table is
+   * about, in one request (issue #789, over issue #788's bulk endpoint), and is also what the Retry
+   * control calls.
+   *
+   * It is the one place the three preconditions live, because each of them has to leave the columns
+   * saying something different. Without `Dashboard.ViewFinancials` the request is never sent at all
+   * - these are supplier purchasing figures, and a role that may not see them must not cause them
+   * to be fetched - and the same holds while the capability is still unanswered. An **empty** alert
+   * list is asked nothing either: `getSummaries([])` deliberately means "every product of the
+   * business" (issue #788), and this table is only ever about the products in front of the reader.
+   *
+   * Every call supersedes the previous one and clears what it read, so a changed product set never
+   * renders the previous set's costs, and a response that arrives for a superseded request - a
+   * slower first read, or the failure a Retry has already replaced - is discarded instead of being
+   * published over the current answer.
+   */
+  refreshPurchaseCosts(): void {
+    const request = ++this.purchaseCostRequest;
+    this.purchaseCosts = new Map();
+    this.purchaseCostState = 'idle';
+
+    const productIds = this.lowStock.map((product) => product.id);
+    if (!this.arePurchaseCostColumnsShown || !this.isFinancialsAccessAnswered || productIds.length === 0) return;
+
+    this.purchaseCostState = 'loading';
+    this.productPurchaseCostService.getSummaries(productIds).subscribe({
+      next: (summaries) => {
+        if (request !== this.purchaseCostRequest) return;
+        this.purchaseCosts = new Map(summaries.map((summary) => [summary.productId, summary]));
+        this.purchaseCostState = 'loaded';
+      },
+      error: () => {
+        if (request !== this.purchaseCostRequest) return;
+        this.purchaseCostState = 'failed';
       }
     });
   }
@@ -492,13 +590,59 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Whether the Reorder Alerts table may show the machines' replenishment need and the storage
-   * stock left after it. In storage-only mode it may not: `machineReplenishmentNeed` is `0` there
-   * because nobody read the machines, and a column of zeroes - with a "Stock after machine need"
-   * equal to the stock beside it - would state that the machines need nothing.
+   * Whether the Reorder Alerts table may show the machines' replenishment need. In storage-only
+   * mode it may not: `machineReplenishmentNeed` is `0` there because nobody read the machines, and
+   * a column of zeroes would state that the machines need nothing.
    */
   get isMachineNeedShownInReorderAlerts(): boolean {
     return this.reorderMode !== 'StorageOnly';
+  }
+
+  /**
+   * Whether the Reorder Alerts table carries the "Last purchase" and "Cheapest purchase" columns at
+   * all (issue #789). They are supplier purchasing figures, so they belong to
+   * `Dashboard.ViewFinancials` exactly as the endpoint behind them does: a role without it is shown
+   * no column rather than a column of refusals, and nothing is requested on its behalf.
+   */
+  get arePurchaseCostColumnsShown(): boolean {
+    return this.canViewFinancials;
+  }
+
+  /** Whether to offer Retry: only for a failed read of columns that are actually shown. */
+  get isPurchaseCostRetryShown(): boolean {
+    return this.arePurchaseCostColumnsShown && this.purchaseCostState === 'failed';
+  }
+
+  /** The "Last purchase" cell: who the product was last bought from, and what was paid. */
+  lastPurchaseDisplay(product: Product): string {
+    return this.purchaseCostDisplay(product, (summary) =>
+      purchaseCostText(summary.lastSupplierName, summary.lastUnitCost)
+    );
+  }
+
+  /** The "Cheapest purchase" cell: the cheapest unit cost ever paid, and who it was paid to. */
+  cheapestPurchaseDisplay(product: Product): string {
+    return this.purchaseCostDisplay(product, (summary) =>
+      purchaseCostText(summary.lowestSupplierName, summary.lowestUnitCost)
+    );
+  }
+
+  /** Muted presentation for a cell that carries a state rather than a recorded cost. */
+  purchaseCostCellClass(product: Product): string {
+    return this.purchaseCostState === 'loaded' && this.purchaseCosts.has(product.id) ? '' : 'value-muted';
+  }
+
+  /**
+   * One purchase-cost cell, from the state of the one request behind both columns. The three
+   * substitutes are deliberately distinct: a read that is outstanding or has not been issued says
+   * `Loading`, a failed one says `Unavailable`, and `—` is said only after a successful response
+   * that carried no entry for this product - the one of the three that means "never bought".
+   */
+  private purchaseCostDisplay(product: Product, text: (summary: ProductPurchaseCostSummary) => string): string {
+    if (this.purchaseCostState === 'failed') return PURCHASE_COST_UNAVAILABLE;
+    if (this.purchaseCostState !== 'loaded') return PURCHASE_COST_LOADING;
+    const summary = this.purchaseCosts.get(product.id);
+    return summary === undefined ? NO_PURCHASE_HISTORY : text(summary);
   }
 
   /**
@@ -522,7 +666,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
   /**
    * The "Inventory" card's primary value: the authoritative cost-basis inventory value from the
-   * Dashboard summary, never calculated from `Product.unitPrice`/`quantityInStock` on the frontend.
+   * Dashboard summary, never calculated from a product's own fields on the frontend.
    * Incomplete costing is shown as unavailable, never as a real `$0.00`.
    */
   inventoryValueDisplay(inventory: DashboardInventorySummary): string {
@@ -639,20 +783,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * "After I fill the machines to their current required level, how much storage stock will I
-   * have left?" (issue #243). A pure display derivation of the already-authoritative
-   * `quantityInStock`/`machineReplenishmentNeed` the Reorder Alerts row already carries; it never
-   * feeds back into `needToOrder` or any other reorder calculation.
-   */
-  stockAfterMachineNeed(product: Product): number {
-    return product.quantityInStock - product.machineReplenishmentNeed;
-  }
-
-  stockAfterMachineNeedClass(product: Product): string {
-    return this.stockAfterMachineNeed(product) < 0 ? 'value-negative font-semibold' : '';
-  }
-
-  /**
    * Extends the Machines row's real anchor link to the rest of the row (issue #494), the same
    * pattern `SiteListComponent.followRowLink` already uses: the anchor - not the row - owns
    * focus, Enter activation, and ctrl/cmd/middle-click, so this only activates it for a click or
@@ -675,6 +805,26 @@ export class DashboardComponent implements OnInit, OnDestroy {
 
     (event.currentTarget as Element).querySelector<HTMLAnchorElement>('a.table-row-anchor')?.click();
   }
+}
+
+/** What a purchase-cost cell says while its one request is outstanding or has not been issued. */
+const PURCHASE_COST_LOADING = 'Loading';
+
+/** What it says when that request failed: nothing is known, which is not "never bought". */
+const PURCHASE_COST_UNAVAILABLE = 'Unavailable';
+
+/** What it says for a product a successful answer carried no purchase history for. */
+const NO_PURCHASE_HISTORY = '—';
+
+/**
+ * One purchase-cost cell's text: the supplier that purchase was made from - or `None` when the
+ * purchase recorded no supplier, which is a fact about the purchase and never another purchase's
+ * supplier - and the cost, formatted to two decimals through the shared `money`. A `0` here is a
+ * real recorded cost (a free sample, a replacement delivery) and is shown as `$0.00`; the costs
+ * themselves are the backend's, formatted only for display.
+ */
+function purchaseCostText(supplierName: string | null, unitCost: number): string {
+  return `${supplierName ?? 'None'} · ${money(unitCost)}`;
 }
 
 /**

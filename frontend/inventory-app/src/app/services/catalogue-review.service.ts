@@ -19,13 +19,16 @@ export enum CatalogueReviewAction {
 
 /**
  * One field whose provider value the operator negotiates rather than inherits, matching
- * `Inventory.Domain.Providers.NegotiableCatalogueField`. `UnitVolume` is declared by the API and
- * never carries a provider value: the Lynx product contract publishes no unit/volume label, so
- * none is proposed and this screen offers no choice about it (issue #739's out-of-scope note and
- * the owner's decision of 20 October 2026).
+ * `Inventory.Domain.Providers.NegotiableCatalogueField`.
+ *
+ * `UnitPrice` is retired since issue #792 (A2 of #786): a product carries no selling price, the API
+ * proposes none, and a decision naming it is refused. `UnitVolume` is declared by the API and never
+ * carries a provider value: the Lynx product contract publishes no unit/volume label, so none is
+ * proposed and this screen offers no choice about it (issue #739's out-of-scope note and the
+ * owner's decision of 20 October 2026). So the review offers no choices at all today, and this enum
+ * exists to keep the wire numbers in step with the backend's.
  */
 export enum NegotiableCatalogueField {
-  UnitPrice = 1,
   UnitVolume = 2
 }
 
@@ -39,9 +42,6 @@ export enum ProviderFieldDecision {
   KeepLocal = 1,
   TakeProvider = 2
 }
-
-/** The `field` name a negotiable choice carries, as the API spells the enum. */
-export const UNIT_PRICE_FIELD = 'UnitPrice';
 
 /** The `field` names a provider-owned automatic change carries (`ProviderManagedCatalogueFields`). */
 export const PROVIDER_MANAGED_NAME_FIELD = 'name';
@@ -170,8 +170,8 @@ export interface CatalogueReviewApplied {
  * provider's live catalogue and records the review the apply is authorised by, so it must never be
  * served from a cache. `Imports.Run` is the capability behind both.
  *
- * The service decides nothing. Every provider name, price, group and link comes from the API, and
- * the apply carries decisions alone - no provider value is ever sent back from the browser.
+ * The service decides nothing. Every provider name, group and link comes from the API, and the
+ * apply carries decisions alone - no provider value is ever sent back from the browser.
  */
 @Injectable({ providedIn: 'root' })
 export class CatalogueReviewService {

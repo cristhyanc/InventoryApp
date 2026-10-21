@@ -556,7 +556,7 @@ export const PREFLIGHT_JOB_CONTRACT = Object.freeze({
 
 export const IMPLEMENT_JOB_DOCUMENTATION_CONTRACT = Object.freeze({
   needs: '    needs: [preflight, model]\n',
-  condition: "if: needs.preflight.result == 'success' && needs.model.result == 'success' && (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'",
+  condition: "if: needs.preflight.result == 'success' && needs.model.result == 'success' && (github.event.label.name == 'agent-ready-claude' || github.event.label.name == 'agent-ready-claude-low' || github.event.label.name == 'agent-ready-claude-high' || github.event.label.name == 'agent-ready-full-claude') && github.event.issue.pull_request == null && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')",
   prompt: [
     'Restate its acceptance criteria, its explicit exclusions, and its Documentation impact decision and Documentation impact details.',
     "Follow the issue's Documentation impact decision exactly.",
@@ -786,7 +786,7 @@ export const REVIEW_JOB_CONTRACT = Object.freeze({
 
 export const REVIEW_PUBLISH_CONTRACT = Object.freeze({
   required: [
-    "if: always() && needs.context.result == 'success' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n",
+    "if: always() && needs.context.result == 'success' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')\n",
     '      - context\n      - review\n',
     'pull-requests: write',
     'statuses: write',
@@ -1385,7 +1385,7 @@ function verifyArchitectureClaudeCheck(architectureWorkflow) {
   // Every Claude route: a separate read-only Claude invocation, labelled a same-provider check.
   const source = 'agent-architecture.yml same-provider Claude check';
   const claudeCheck = section(architectureWorkflow, '  claude-check:\n', '  sonar:\n', source);
-  requireText(claudeCheck, "    if: needs.context.outputs.checker == 'claude' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n", source);
+  requireText(claudeCheck, "    if: needs.context.outputs.checker == 'claude' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')\n", source);
   verifyReadOnlyClaudeCheck(claudeCheck, source);
   for (const required of [
     'This is a same-provider check, not an independent one', 'claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}',
@@ -1414,7 +1414,7 @@ function verifyArchitectureFixJob(architectureWorkflow) {
   requireText(architectureJob, '      - context\n      - claude-check\n      - sonar\n', 'agent-architecture.yml architecture job');
   requireText(
     architectureJob,
-    "if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' }}",
+    "if: ${{ !cancelled() && needs.context.result == 'success' && needs.claude-check.result == 'success' && (needs.claude-check.outputs.verdict == 'findings' || fromJSON(needs.sonar.outputs.count || '0') > 0) && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true') }}",
     'agent-architecture.yml architecture job',
   );
   requireText(architectureJob, 'node "$transport" fetch-findings .git/architecture-findings.md', 'agent-architecture.yml architecture job');
@@ -1465,7 +1465,7 @@ function verifyArchitectureFinalizer(architectureWorkflow) {
   verifyAgentPrGuards(finalize, 'agent-architecture.yml finalize', { sha: '$FINAL_SHA', issue: true });
   requireOrder(finalize, 'node "$guard" check', 'gh workflow run validate.yml', 'agent-architecture.yml finalize', 'the final head must be re-verified before validation is dispatched.');
   for (const required of [
-    "    if: always() && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'\n", '      - context\n      - claude-check\n      - sonar\n      - architecture\n',
+    "    if: always() && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')\n", '      - context\n      - claude-check\n      - sonar\n      - architecture\n',
     'SONAR_COUNT: ${{ needs.sonar.outputs.count }}', '[[ "$sonar_count" =~ ^[0-9]+$ ]] || sonar_count=0', 'actions: write', 'pull-requests: write', 'issues: write', 'statuses: read',
     'ISSUE_NUMBER: ${{ inputs.issue_number }}', 'CONTEXT_JOB_RESULT: ${{ needs.context.result }}',
     '[ "$CONTEXT_JOB_RESULT" = "success" ]', 'trap block_undispatched EXIT', 'dispatched=true',

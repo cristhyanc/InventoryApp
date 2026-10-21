@@ -67,18 +67,17 @@ public class EfProductCatalogueWriteTests : IDisposable
 
     private static ProductCreateFields CreateFields(
         string name = "Coke",
-        decimal unitPrice = 3.50m,
         int quantityInStock = 0,
         long? categoryId = null,
         decimal? initialUnitCost = null) =>
-        new(name, "SKU-1", "A can", unitPrice, quantityInStock, 5, 10, "can", categoryId, null, true, initialUnitCost);
+        new(name, "SKU-1", "A can", quantityInStock, 5, 10, "can", categoryId, true, initialUnitCost);
 
     private static ProductUpdateFields UpdateFields(
         string name = "Coke",
-        decimal unitPrice = 3.50m,
+        string? unit = "can",
         long? categoryId = null,
         bool isActive = true) =>
-        new(name, "SKU-1", "A can", unitPrice, 5, 10, "can", categoryId, null, isActive);
+        new(name, "SKU-1", "A can", 5, 10, unit, categoryId, isActive);
 
     private EfProductStore StoreFor(AppDbContext db) => new(db, TestCostingUseCases.Rebuild(db));
 
@@ -112,7 +111,7 @@ public class EfProductCatalogueWriteTests : IDisposable
         {
             var updated = await StoreFor(db).UpdateAsync(
                 productId,
-                UpdateFields(name: "Coke Zero", unitPrice: 4.25m, categoryId: categoryId),
+                UpdateFields(name: "Coke Zero", unit: "bottle", categoryId: categoryId),
                 CancellationToken.None);
 
             Assert.Equal(ProductWriteOutcome.Succeeded, updated.Outcome);
@@ -121,7 +120,7 @@ public class EfProductCatalogueWriteTests : IDisposable
         await using (var verify = TestAppDbContext.For(_options, BusinessA))
         {
             var product = await verify.Products.AsNoTracking().SingleAsync(p => p.Id == productId);
-            Assert.Equal(("Coke Zero", 4.25m, (long?)categoryId), (product.Name, product.UnitPrice, product.CategoryId));
+            Assert.Equal(("Coke Zero", "bottle", (long?)categoryId), (product.Name, product.Unit, product.CategoryId));
         }
 
         await using (var db = TestAppDbContext.For(_options, BusinessA))
@@ -214,14 +213,14 @@ public class EfProductCatalogueWriteTests : IDisposable
         await using (var db = TestAppDbContext.For(_options, BusinessA))
         {
             var accepted = await StoreFor(db).UpdateAsync(
-                productId, UpdateFields(name: "Nayax Coke", unitPrice: 9.99m), CancellationToken.None);
+                productId, UpdateFields(name: "Nayax Coke", unit: "bottle"), CancellationToken.None);
 
             Assert.Equal(ProductWriteOutcome.Succeeded, accepted.Outcome);
         }
 
         await using var verify = TestAppDbContext.For(_options, BusinessA);
         var product = await verify.Products.AsNoTracking().SingleAsync(p => p.Id == productId);
-        Assert.Equal(("Nayax Coke", 9.99m), (product.Name, product.UnitPrice));
+        Assert.Equal(("Nayax Coke", "bottle"), (product.Name, product.Unit));
     }
 
     [Fact]

@@ -15,6 +15,11 @@ namespace InventoryApi.Tests.DTOs;
 /// (<c>/api/products</c>, issue #303) and the machine-slot response
 /// (<c>/api/machines/{id}/products</c>, issue #302) are compared against it, so the two endpoints
 /// cannot drift from the one shape they have always shared either.
+///
+/// <para><strong>The reference has moved only by deletion</strong>: issue #787 (A1 of #786) dropped
+/// the product's <c>supplierId</c>/<c>supplier</c> from the entity and from this shape with it, and
+/// issue #792 (A2) dropped its <c>unitPrice</c> the same way. Both are approved breaking changes in
+/// the product contract. Every other key keeps its name, type, value and position.</para>
 /// </summary>
 internal static class LegacyProductEntityShape
 {
@@ -28,7 +33,6 @@ internal static class LegacyProductEntityShape
         Name = record.Name,
         Sku = record.Sku,
         Description = record.Description,
-        UnitPrice = record.UnitPrice,
         AverageUnitCost = record.AverageUnitCost,
         CostingQuantity = record.CostingQuantity,
         InventoryValue = record.InventoryValue,
@@ -47,18 +51,6 @@ internal static class LegacyProductEntityShape
                 Id = record.Category.Id,
                 Name = record.Category.Name,
                 Description = record.Category.Description,
-            },
-        SupplierId = record.SupplierId,
-        Supplier = record.Supplier is null
-            ? null
-            : new Supplier
-            {
-                Id = record.Supplier.Id,
-                Name = record.Supplier.Name,
-                ContactName = record.Supplier.ContactName,
-                Phone = record.Supplier.Phone,
-                Email = record.Supplier.Email,
-                Address = record.Supplier.Address,
             },
         StockAdjustments = record.StockAdjustments.Select(adjustment => new StockAdjustment
         {

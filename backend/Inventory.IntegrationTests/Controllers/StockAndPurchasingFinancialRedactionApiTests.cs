@@ -410,7 +410,6 @@ public sealed class StockAndPurchasingFinancialRedactionApiTests
         /// <summary>The figures the recorded decision keeps visible.</summary>
         public const decimal AverageUnitCost = 1.47m;
 
-        public const decimal UnitPrice = 3.95m;
         public const decimal MovementUnitCost = 1.52m;
         public const decimal MovementTotalCost = 18.24m;
         public const decimal AverageUnitCostAfter = 1.49m;
@@ -555,7 +554,6 @@ public sealed class StockAndPurchasingFinancialRedactionApiTests
             Id = id,
             BusinessId = BusinessId,
             Name = name,
-            UnitPrice = UnitPrice,
             AverageUnitCost = AverageUnitCost,
             CostingQuantity = 400,
             InventoryValue = InventoryValue,

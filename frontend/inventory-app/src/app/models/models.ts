@@ -63,8 +63,28 @@ export interface Product {
   name: string;
   sku?: string | null;
   description?: string | null;
-  unitPrice: number;
+  /**
+   * No `unitPrice` since issue #792 (A2 of #786): a product carries no catalogue selling price at
+   * all, and the API sends none rather than sending `0`. What a product sells for is the machine's
+   * own live price, `machinePrice` below; what it costs is `averageUnitCost`.
+   */
   averageUnitCost: number;
+  /**
+   * The unit cost a screen may actually **display** (issue #788, B of #786): the persisted
+   * {@link averageUnitCost} once a cost rebuild has established it, and **absent** while none has.
+   *
+   * The two keys say different things and both are needed. `averageUnitCost` is a non-nullable
+   * column, so an uncosted product still carries a number in it; this one is the server's
+   * authoritative statement of whether that number means anything, from the same evidence the
+   * Dashboard's unknown-cost count uses (a product with no inventory value has had no rebuild). A
+   * value of `0` is a measured cost and must be shown as `$0.00`; **absent must be shown as unknown
+   * (e.g. `—`) and never converted to `0`**, per AGENTS.md § Frontend rules.
+   *
+   * Published only by the `/api/products` reads. It is deliberately absent from a machine slot's
+   * product and from the product snapshot nested in a purchase or supplier-order line, where its
+   * absence says nothing about the cost - exactly like {@link canDelete}.
+   */
+  averageUnitCostForDisplay?: number | null;
   costingQuantity?: number | null;
   inventoryValue?: number | null;
   machinePrice: number | null;
@@ -92,8 +112,10 @@ export interface Product {
   updatedAt: string;
   categoryId?: number | null;
   category?: Category | null;
-  supplierId?: number | null;
-  supplier?: Supplier | null;
+  // No `supplierId`/`supplier` (issue #787, A1 of #786): a product carries no supplier. The
+  // supplier of a {@link Purchase} and of a {@link SupplierOrder} is unaffected, and the per-product
+  // supplier price comparison still derives every supplier a product was really bought from out of
+  // the purchase history.
   isActive: boolean;
   isLowStock: boolean;
   isReorderAlert: boolean;
@@ -123,18 +145,19 @@ export interface Product {
   deletionRefusal?: string | null;
 }
 
-/** The product a client posts to `POST /api/products` (issue #737). */
+/**
+ * The product a client posts to `POST /api/products` (issue #737). It carries no `unitPrice` since
+ * issue #792 (A2 of #786): a product has no selling price. `initialUnitCost` is a cost and stays.
+ */
 export interface ProductCreateDto {
   name: string;
   sku?: string | null;
   description?: string | null;
-  unitPrice: number;
   quantityInStock: number;
   lowStockThreshold: number;
   restockTo: number;
   unit?: string | null;
   categoryId?: number | null;
-  supplierId?: number | null;
   isActive: boolean;
   initialUnitCost?: number | null;
 }
@@ -159,7 +182,7 @@ export interface ReorderAlertListing {
 
 /**
  * The Dashboard "Inventory Value" tile's authoritative source: the business-owned perpetual
- * inventory value (cost basis), never retail UnitPrice. `totalInventoryValue` is `null` whenever
+ * inventory value (cost basis), never a retail price. `totalInventoryValue` is `null` whenever
  * `isComplete` is `false` - a product with unknown cost must never be presented as a real `$0.00`.
  */
 export interface InventoryValuationSummary {
@@ -447,16 +470,15 @@ export interface SiteProduct {
   machineMdbCodes: SiteProductMachineMdbCode[];
 }
 
+/** The product a client puts to `PUT /api/products/{id}`. No `unitPrice` since issue #792. */
 export interface ProductUpdateDto {
   name: string;
   sku?: string | null;
   description?: string | null;
-  unitPrice: number;
   lowStockThreshold: number;
   restockTo: number;
   unit?: string | null;
   categoryId?: number | null;
-  supplierId?: number | null;
   isActive: boolean;
 }
 

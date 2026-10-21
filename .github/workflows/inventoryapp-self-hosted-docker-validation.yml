@@ -1,6 +1,9 @@
 name: InventoryApp self-hosted Docker validation
 
 # Pilot only: dispatch from main, check out reviewed main code, no PR heads, no AI credentials.
+# It follows INVENTORY_AGENT_SELF_HOSTED_ALL like every job (issue #807), but the image it validates
+# in exists only on the owner's self-hosted VM, so on a GitHub-hosted runner it stops and says so
+# rather than reporting a result for a host it did not check.
 on:
   workflow_dispatch:
 
@@ -15,12 +18,39 @@ jobs:
   validate:
     name: Validate trusted main inside local development image
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
     defaults:
       run:
         shell: bash
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Require the self-hosted VM that holds the development image
+        env:
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          if [ "$RUNNER_KIND" != "self-hosted" ]; then
+            echo "::error::This validation runs inside the runner-local inventoryapp-dev:local image, which exists only on the owner's self-hosted VM. INVENTORY_AGENT_SELF_HOSTED_ALL is false or unset, so this run is on GitHub-hosted runner $RUNNER_NAME and validated nothing. Set the variable to true and start the VM to run it there. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+          echo "Validating on self-hosted runner $RUNNER_NAME."
+
       - name: Checkout trusted main
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:

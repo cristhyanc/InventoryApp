@@ -314,11 +314,17 @@ public class NayaxProduct
 
     /// <summary>
     /// The catalogue default/list selling price (issue #363; confirmed against a live
-    /// <c>GET /v1/operators/{OperatorID}/products</c> response), proposed for <c>Product.UnitPrice</c>
-    /// by the catalogue review (<c>StartCatalogueReview</c>, issue #738, which replaced the direct
-    /// catalogue import in issue #739). Do not confuse it with the per-machine
+    /// <c>GET /v1/operators/{OperatorID}/products</c> response, and declared by the published Lynx
+    /// product contract). Do not confuse it with the per-machine
     /// <c>NayaxMachineProduct.RetailPrice</c>, which is a distinct, correctly-named field on a
     /// different endpoint.
+    ///
+    /// <para><strong>Nothing consumes it since issue #792 (A2 of #786).</strong> It was proposed
+    /// for <c>Product.UnitPrice</c> by the catalogue review, and that product field no longer
+    /// exists, so the review reads this one no more. It stays declared because this record mirrors
+    /// the provider's published contract rather than the subset the application happens to read -
+    /// the same reason <c>CashPrice</c>, <c>CreditCardPrice</c> and the other unread members stay.
+    /// </para>
     /// </summary>
     [JsonPropertyName("ProductDefaultRetailPrice")]
     public decimal? ProductDefaultRetailPrice { get; set; }

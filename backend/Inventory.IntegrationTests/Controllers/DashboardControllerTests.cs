@@ -67,7 +67,6 @@ public class DashboardControllerTests
     {
         Id = id,
         Name = name,
-        UnitPrice = 0m,
         AverageUnitCost = 0m,
         InventoryValue = inventoryValue,
         QuantityInStock = quantityInStock,

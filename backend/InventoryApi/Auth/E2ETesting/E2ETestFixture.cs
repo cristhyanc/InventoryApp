@@ -205,12 +205,12 @@ public static class E2ETestFixture
         // Quantities, thresholds and restock targets are chosen so the reorder page has exactly
         // one alerting product on a fresh database: 2 in stock at a threshold of 10 needs
         // 30 - 2 = 28 ordered, while the other two products need nothing.
-        var reorderProduct = NewProduct(ReorderProductName, "E2E-REORDER", category, supplier,
-            new ProductStocking(QuantityInStock: 2, LowStockThreshold: 10, RestockTo: 30, UnitPrice: 3.50m, OpeningUnitCost: 1.20m));
-        var correctionProduct = NewProduct(CorrectionProductName, "E2E-CORRECTION", category, supplier,
-            new ProductStocking(QuantityInStock: 20, LowStockThreshold: 5, RestockTo: 24, UnitPrice: 4.00m, OpeningUnitCost: 2.00m));
-        var purchaseProduct = NewProduct(PurchaseProductName, "E2E-PURCHASE", category, supplier,
-            new ProductStocking(QuantityInStock: 0, LowStockThreshold: 0, RestockTo: 0, UnitPrice: 2.50m, OpeningUnitCost: null));
+        var reorderProduct = NewProduct(ReorderProductName, "E2E-REORDER", category,
+            new ProductStocking(QuantityInStock: 2, LowStockThreshold: 10, RestockTo: 30, OpeningUnitCost: 1.20m));
+        var correctionProduct = NewProduct(CorrectionProductName, "E2E-CORRECTION", category,
+            new ProductStocking(QuantityInStock: 20, LowStockThreshold: 5, RestockTo: 24, OpeningUnitCost: 2.00m));
+        var purchaseProduct = NewProduct(PurchaseProductName, "E2E-PURCHASE", category,
+            new ProductStocking(QuantityInStock: 0, LowStockThreshold: 0, RestockTo: 0, OpeningUnitCost: null));
         db.Products.AddRange(reorderProduct, correctionProduct, purchaseProduct);
         await db.SaveChangesAsync(cancellationToken);
 
@@ -266,8 +266,8 @@ public static class E2ETestFixture
         db.Suppliers.Add(supplier);
         await db.SaveChangesAsync(cancellationToken);
 
-        var product = NewProduct(BusinessBProductName, "E2E-OTHER", category, supplier,
-            new ProductStocking(QuantityInStock: 50, LowStockThreshold: 5, RestockTo: 60, UnitPrice: 5.00m, OpeningUnitCost: 2.50m));
+        var product = NewProduct(BusinessBProductName, "E2E-OTHER", category,
+            new ProductStocking(QuantityInStock: 50, LowStockThreshold: 5, RestockTo: 60, OpeningUnitCost: 2.50m));
         db.Products.Add(product);
         await db.SaveChangesAsync(cancellationToken);
 
@@ -294,12 +294,14 @@ public static class E2ETestFixture
     /// cost, and <see cref="OpeningStock"/> records the movement it came from. A product with no
     /// opening stock passes <c>null</c> and starts with nothing: no quantity, no costing quantity,
     /// and no average cost to be mistaken for one.
+    ///
+    /// <para>There is no selling price here since issue #792 (A2 of #786): a product carries none,
+    /// and every cost on this record stays a cost.</para>
     /// </summary>
     private readonly record struct ProductStocking(
         int QuantityInStock,
         int LowStockThreshold,
         int RestockTo,
-        decimal UnitPrice,
         decimal? OpeningUnitCost);
 
     /// <summary>One seeded product, at the stock position <paramref name="stocking"/> describes.</summary>
@@ -307,7 +309,6 @@ public static class E2ETestFixture
         string name,
         string sku,
         Category category,
-        Supplier supplier,
         ProductStocking stocking) =>
         new()
         {
@@ -315,11 +316,9 @@ public static class E2ETestFixture
             Sku = sku,
             Description = "Seeded E2E product",
             Category = category,
-            Supplier = supplier,
             QuantityInStock = stocking.QuantityInStock,
             LowStockThreshold = stocking.LowStockThreshold,
             RestockTo = stocking.RestockTo,
-            UnitPrice = stocking.UnitPrice,
             Unit = "unit",
             IsActive = true,
             AverageUnitCost = stocking.OpeningUnitCost ?? 0m,

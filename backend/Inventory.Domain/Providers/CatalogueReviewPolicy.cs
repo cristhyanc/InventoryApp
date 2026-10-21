@@ -33,12 +33,25 @@ public enum CatalogueReviewAction
 /// One field whose provider value the operator negotiates rather than inherits (issue #738, parent
 /// #329 decision C1). The provider owns a linked row's name and category outright
 /// (<see cref="ProviderManagedCatalogueFields"/>); these are the ones where the local value may win.
+///
+/// <para>Since issue #792 the selling price is not one of them any more, and
+/// <see cref="UnitVolume"/> is the only field the review negotiates at all - it carries no provider
+/// value today, so in practice a review proposes nothing and the mechanism stands as the extension
+/// point for the first field that does.</para>
 /// </summary>
 public enum NegotiableCatalogueField
 {
     /// <summary>
-    /// The catalogue selling price: <c>Product.UnitPrice</c> against the Nayax
-    /// <c>ProductDefaultRetailPrice</c>.
+    /// <strong>Retired (issue #792, A2 of #786).</strong> It was the catalogue selling price -
+    /// <c>Product.UnitPrice</c> against the Nayax <c>ProductDefaultRetailPrice</c> - and the product
+    /// field behind it no longer exists, so nothing is proposed, decided or written for it: a review
+    /// never offers it, a submitted decision naming it is refused, and a stored review that still
+    /// carries provider prices is refused outright as stale.
+    ///
+    /// <para>The member stays declared only because it is <em>stored data</em>: the
+    /// <c>ProviderCatalogueFieldDecisions</c> rows an earlier release wrote hold this number, and a
+    /// value a column holds may not be deleted from the vocabulary that reads it. Nothing consumes
+    /// those rows any more. Do not reuse the number for a new field.</para>
     /// </summary>
     UnitPrice = 1,
 

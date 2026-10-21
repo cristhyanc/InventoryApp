@@ -4,9 +4,9 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { StockService } from '../../services/stock.service';
 import { ProductService } from '../../services/product.service';
-import { MachineService } from '../../services/machine.service';
+import { LocalMachineService } from '../../services/local-machine.service';
 import {
-  Machine,
+  LocalMachine,
   Product,
   StockAdjustmentReason,
   StockAdjustmentSource,
@@ -14,7 +14,6 @@ import {
 } from '../../models/models';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
-import { loadProviderList } from '../../provider/provider-list-load';
 import { StockAdjustmentFormComponent } from './stock-adjustment-form/stock-adjustment-form.component';
 
 /**
@@ -33,14 +32,16 @@ import { StockAdjustmentFormComponent } from './stock-adjustment-form/stock-adju
  * inventory or costing rule of its own - date interpretation, ordering, bounding and every stock
  * mutation stay on the backend.
  *
- * **Two of its filters depend on the business having a Nayax connection** (issue #728,
- * decision P9 of issue #329), and each depends on a different thing:
+ * **The machine filter is the business's own machines, and only the source filter depends on the
+ * provider** (issue #746, G2b of issue #329, revising issue #728's rule here):
  *
- * - The **machine** filter needs a machine list, which today only a live fleet read can produce.
- *   It is loaded through `loadProviderList`, so a refused read hides the filter, a failed one
- *   reports its failure where the filter was, and neither is presented as "all machines". It stays
- *   hidden until machines exist - which is what issue #746 (G2b) is going to change by listing
- *   locally recorded machines.
+ * - The **machine** filter and the adjustment form's machine field are read from
+ *   `/api/local-machines` ({@link LocalMachineService}), not from the live Nayax fleet, so they work
+ *   with no provider at all. The filter is offered once the business has an **active** machine, and
+ *   lists its **deactivated** ones as well, so a movement recorded against a retired machine can
+ *   still be found and named; the machine column names them from the same list. A failed read is
+ *   reported where the filter was and an outstanding one says it is loading - neither is presented
+ *   as "all machines".
  * - The **"Nayax Sync Restock" source** option needs only Nayax to be part of this business: the
  *   movements it selects are already recorded locally. A connection that merely needs attention
  *   keeps it, and the table keeps labelling such a movement whatever the filter offers.
@@ -53,7 +54,14 @@ import { StockAdjustmentFormComponent } from './stock-adjustment-form/stock-adju
 })
 export class StockHistoryPageComponent implements OnInit {
   products: Product[] = [];
-  machines: Machine[] = [];
+
+  /**
+   * Every machine this business has recorded, active and inactive alike (issue #746). The filter
+   * and the machine column list all of them, because a movement recorded against a machine that
+   * has since been retired must stay findable and readable; the adjustment form, which records a
+   * *new* movement, narrows the same list to the active ones itself.
+   */
+  machines: LocalMachine[] = [];
   history: StockHistoryPage | null = null;
   loading = false;
   error = '';
@@ -90,8 +98,11 @@ export class StockHistoryPageComponent implements OnInit {
     { value: StockAdjustmentSource.Nayax, label: 'Nayax Sync Restock' }
   ];
 
-  /** Set when the machine list could not be read for a reason that is not an availability answer. */
+  /** Set when the machine list could not be read at all; never shown as "no machines". */
   machinesError = '';
+
+  /** Whether that read is still outstanding, which is not the same as there being no machines. */
+  machinesLoading = false;
 
   /** Whether Nayax is part of this business at all; only the source filter depends on it. */
   providerRecordsAvailable = true;
@@ -100,7 +111,7 @@ export class StockHistoryPageComponent implements OnInit {
     private route: ActivatedRoute,
     private stockService: StockService,
     private productService: ProductService,
-    private machineService: MachineService,
+    private localMachineService: LocalMachineService,
     private provider: ProviderAvailabilityService
   ) {}
 
@@ -125,27 +136,28 @@ export class StockHistoryPageComponent implements OnInit {
   }
 
   /**
-   * Whether the machine filter is offered at all: only once there are machines to filter by. A
-   * failed read is reported in its place instead ({@link machinesError}), and a business with no
-   * provider - and so no machine list - simply has no machine filter.
+   * Whether the machine filter is offered at all: only once the business has an **active** machine
+   * to filter by (issue #746). A failed read is reported in its place instead
+   * ({@link machinesError}) and an outstanding one says it is loading, so an empty filter is never
+   * a statement about a business whose machines nobody read.
    */
   get machineFilterShown(): boolean {
-    return this.machinesError === '' && this.attributableMachines.length > 0;
-  }
-
-  /**
-   * The machines the filter offers: those with a local machine record, because a movement records
-   * the local machine (issue #741) and the filter is matched against that.
-   */
-  get attributableMachines(): Machine[] {
-    return this.machines.filter((machine) => machine.localMachineId != null);
+    return this.machinesError === '' && !this.machinesLoading && this.machines.some((machine) => machine.isActive);
   }
 
   private loadMachines(): void {
-    loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe((outcome) => {
-      this.machines = outcome.kind === 'listed' ? outcome.items : [];
-      this.machinesError =
-        outcome.kind === 'failed' ? 'The machine list could not be loaded, so machines cannot be filtered.' : '';
+    this.machinesLoading = true;
+    this.machinesError = '';
+    this.localMachineService.getAll().subscribe({
+      next: (machines) => {
+        this.machines = machines ?? [];
+        this.machinesLoading = false;
+      },
+      error: () => {
+        this.machines = [];
+        this.machinesError = 'The machine list could not be loaded, so machines cannot be filtered.';
+        this.machinesLoading = false;
+      }
     });
   }
 
@@ -263,9 +275,14 @@ export class StockHistoryPageComponent implements OnInit {
     return source === StockAdjustmentSource.Nayax ? 'Nayax Sync Restock' : 'Manual';
   }
 
+  /**
+   * A movement's machine, named from the business's own records - deactivated machines included, so
+   * history stays readable (issue #746). A machine the list does not hold is shown as its id rather
+   * than as no machine at all.
+   */
   machineLabel(machineId?: number | null): string {
     if (machineId === null || machineId === undefined) return '—';
-    return this.machines.find((machine) => machine.localMachineId === machineId)?.machineName ?? String(machineId);
+    return this.machines.find((machine) => machine.id === machineId)?.name ?? String(machineId);
   }
 
   /** Unit cost is unavailable on many movements; an unknown cost is shown as unknown, never as $0.00. */

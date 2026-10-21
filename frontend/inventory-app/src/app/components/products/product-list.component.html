@@ -9,16 +9,12 @@
       }
     </select>
 
-    <select class="max-w-[200px]" [(ngModel)]="supplierId" (ngModelChange)="applyFilters()">
-      <option value="">All Suppliers</option>
-      @for (s of suppliers; track s.id) {
-        <option [ngValue]="s.id">{{ s.name }}</option>
-      }
-    </select>
-
     <label class="flex items-center gap-2 self-center">
-      <input [(ngModel)]="includeRetired" (ngModelChange)="applyFilters()" name="includeRetired" type="checkbox" class="h-4 w-4 border-md-gray-300 text-md-dark" />
-      <span>Show retired</span>
+      <span>Status</span>
+      <select class="max-w-[180px]" [(ngModel)]="statusFilter" (ngModelChange)="applyFilters()" name="statusFilter">
+        <option value="active">Only active</option>
+        <option value="all">All</option>
+      </select>
     </label>
 
     <button type="button" class="btn btn-secondary" (click)="resetFilters()">Reset</button>
@@ -27,6 +23,15 @@
 
 <div class="card">
   <div class="card-body p-0">
+    <!--
+      The purchase-cost read behind the Last and Cheapest purchase columns is its own feature
+      component (issue #191's page composition boundary): this page hands it the product ids it is
+      displaying and lays out the answer it publishes, while the read, its capability gate, its
+      failure message and its Retry control stay inside it.
+    -->
+    <app-product-purchase-costs
+      [productIds]="productIds"
+      (costsChange)="onPurchaseCostsChange($event)"></app-product-purchase-costs>
     @if (loadState.loadFailed) {
       <p class="p-4 text-md-body value-negative">Failed to load products. Change a filter or reload the page to try again.</p>
     } @else if (loadState.loaded && products.length === 0) {
@@ -35,7 +40,7 @@
       <!--
         The Actions column is pinned to the right edge of this scroll area (rather than the whole
         table) so Edit/Stock/Delete stay visible and usable without scrolling to discover them when
-        long product names or a populated Category/Supplier/Price/Stock/Status set of columns push
+        long product names or a populated Category/Stock/Status set of columns push
         the table wider than the viewport. Each sticky cell carries its own opaque #410 token
         background, because a transparent cell would let scrolled columns show through underneath it.
       -->
@@ -49,18 +54,23 @@
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('category')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('category')">{{ sortLabel('Category', 'category') }}</button>
               </th>
-              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('supplier')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('supplier')">{{ sortLabel('Supplier', 'supplier') }}</button>
-              </th>
-              <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('price')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('price')">{{ sortLabel('Price', 'price') }}</button>
-              </th>
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('stock')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('stock')">{{ sortLabel('Stock', 'stock') }}</button>
               </th>
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('status')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('status')">{{ sortLabel('Status', 'status') }}</button>
               </th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('averageCost')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('averageCost')">{{ sortLabel('Average cost', 'averageCost') }}</button>
+              </th>
+              @if (canViewFinancials) {
+                <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('lastPurchase')">
+                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lastPurchase')">{{ sortLabel('Last purchase', 'lastPurchase') }}</button>
+                </th>
+                <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('cheapestPurchase')">
+                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('cheapestPurchase')">{{ sortLabel('Cheapest purchase', 'cheapestPurchase') }}</button>
+                </th>
+              }
               <th scope="col" class="table-cell sticky right-0 z-10 bg-md-gray-100"></th>
             </tr>
           </thead>
@@ -74,8 +84,6 @@
                     [attr.aria-label]="'Edit product ' + p.name">{{ p.name }}</a>
                 </td>
                 <td class="table-cell">{{ p.category?.name }}</td>
-                <td class="table-cell">{{ p.supplier?.name }}</td>
-                <td class="table-cell table-num">${{ p.unitPrice.toFixed(2) }}</td>
                 <td class="table-cell">
                   <span class="badge" [ngClass]="p.isActive ? (p.isLowStock ? 'badge-danger' : 'badge-success') : 'badge-neutral'">
                     {{ p.quantityInStock }} {{ p.unit }}
@@ -92,6 +100,21 @@
                     {{ p.isActive ? 'Active' : 'Inactive' }}
                   </button>
                 </td>
+                <td class="table-cell">{{ averageCostDisplay(p) }}</td>
+                @if (canViewFinancials) {
+                  <td class="table-cell">
+                    <div>{{ purchaseCostDisplay(p, 'lastPurchase') }}</div>
+                    @if (purchaseCostSupplierDisplay(p, 'lastPurchase'); as supplier) {
+                      <div class="mt-1 value-muted">{{ supplier }}</div>
+                    }
+                  </td>
+                  <td class="table-cell">
+                    <div>{{ purchaseCostDisplay(p, 'cheapestPurchase') }}</div>
+                    @if (purchaseCostSupplierDisplay(p, 'cheapestPurchase'); as supplier) {
+                      <div class="mt-1 value-muted">{{ supplier }}</div>
+                    }
+                  </td>
+                }
                 <td class="table-cell sticky right-0 z-10 bg-white">
                   <div class="flex flex-wrap gap-2 max-w-[140px] sm:max-w-none">
                     <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>

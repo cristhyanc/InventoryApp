@@ -3,8 +3,9 @@
   products - because a product's category is the local category carrying the provider's group id,
   which step one is what settles.
 
-  Nothing here computes a catalogue value. Every name, price, group and link is the API's own, and
-  the only inputs are the operator's three actions and the one keep-or-take answer about the price.
+  Nothing here computes a catalogue value. Every name, group and link is the API's own, and the only
+  inputs are the operator's three actions. There is no price to negotiate since issue #792 (A2 of
+  #786): a product carries no selling price.
 -->
 <section class="card mt-5" data-testid="catalogue-review">
   <div class="card-header flex flex-wrap items-start justify-between gap-3">
@@ -40,8 +41,6 @@
             <div>Created {{ applied.createdCount }} new row(s)</div>
             <div>Linked {{ applied.linkedCount }} existing row(s)</div>
             <div>Changes applied automatically: {{ applied.automaticChanges.length }}</div>
-            <div>Price changes accepted: {{ applied.acceptedChanges.length }}</div>
-            <div>Price changes skipped: {{ applied.skippedChanges.length }}</div>
             <div>Sales a link would explain: {{ applied.unresolvedSaleCount }}</div>
           </div>
           @if (applied.links.length > 0) {
@@ -312,56 +311,11 @@
               }
             }
 
-            @if (priceChoice(entry); as price) {
-              @if (entry.isLinked || answer(entry.itemId).action === actions.LinkExisting) {
-                <fieldset class="mt-3" data-testid="price-choice">
-                  <legend class="field-label">
-                    @if (entry.isLinked) {
-                      Nayax has changed this product's price
-                    } @else {
-                      The price for the product you link
-                    }
-                  </legend>
-                  <!--
-                    "Mine" is the price of the row this decision is actually about: the linked row's
-                    for a linked entry, and the product the operator just named for one they are
-                    linking now. The review reports no local value for the latter, because the local
-                    row did not exist when it was read.
-                  -->
-                  <p class="mt-1 text-sm text-md-gray-800" data-testid="price-comparison">
-                    Mine: <strong>{{ localPrice(entry, price) ?? 'none yet' }}</strong> &middot; Nayax:
-                    <strong>{{ price.providerValue }}</strong>
-                  </p>
-                  <div class="mt-1 grid gap-1">
-                    <label class="flex items-center gap-2 text-sm">
-                      <input
-                        type="radio"
-                        [name]="'product-price-' + entry.itemId"
-                        class="h-4 w-4"
-                        [checked]="answer(entry.itemId).price === decisions.TakeProvider"
-                        (change)="setPrice(entry.itemId, decisions.TakeProvider)"
-                      />
-                      <span>{{ entry.isLinked ? 'Accept the Nayax price' : "Take the Nayax price" }}</span>
-                    </label>
-                    <label class="flex items-center gap-2 text-sm">
-                      <input
-                        type="radio"
-                        [name]="'product-price-' + entry.itemId"
-                        class="h-4 w-4"
-                        [checked]="answer(entry.itemId).price === decisions.KeepLocal"
-                        (change)="setPrice(entry.itemId, decisions.KeepLocal)"
-                      />
-                      <span>{{ entry.isLinked ? 'Skip it and keep my price' : 'Keep my own price' }}</span>
-                    </label>
-                  </div>
-                  <p class="mt-1 text-sm value-muted">
-                    Either answer is remembered, so this Nayax price is not proposed again until Nayax
-                    changes it. Leaving both unanswered leaves your price alone and asks again next
-                    review.
-                  </p>
-                </fieldset>
-              }
-            }
+            <!--
+              No price choice since issue #792 (A2 of #786): a product carries no selling price, so
+              the API proposes none and there is nothing here to keep or take. The provider's name
+              and category are still applied automatically and listed above.
+            -->
 
             @if (entry.unresolvedSaleCount > 0) {
               <p class="mt-2 text-sm value-muted">

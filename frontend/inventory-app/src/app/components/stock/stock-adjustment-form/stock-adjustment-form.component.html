@@ -37,13 +37,23 @@
             <p class="field-hint">{{ restockCostHelp }}</p>
           </div>
         }
-        @if (machineFieldShown) {
+        @if (machinesError) {
+          <div class="field">
+            <span class="field-label">Machine (optional)</span>
+            <p data-testid="adjustment-machine-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
+          </div>
+        } @else if (machinesLoading) {
+          <div class="field">
+            <span class="field-label">Machine (optional)</span>
+            <output data-testid="adjustment-machine-loading" class="field-hint">Loading machines…</output>
+          </div>
+        } @else if (machineFieldShown) {
           <div class="field">
             <label for="adjustment-machine" class="field-label">Machine (optional)</label>
             <select id="adjustment-machine" [(ngModel)]="form.machineId" name="machineId">
               <option [ngValue]="null">— None —</option>
-              @for (m of attributableMachines; track m.machineID) {
-                <option [ngValue]="m.localMachineId">{{ m.machineName || m.machineID }}</option>
+              @for (m of attributableMachines; track m.id) {
+                <option [ngValue]="m.id">{{ m.name }}</option>
               }
             </select>
           </div>

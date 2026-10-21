@@ -112,22 +112,8 @@ public class CatalogueReviewPolicyTests
         string? local, string? provider, bool changed) =>
         Assert.Equal(changed, CatalogueReviewPolicy.IsAutomaticChange(local, provider));
 
-    [Theory]
-    [InlineData(3.5d, "3.50")]
-    [InlineData(0d, "0.00")]
-    [InlineData(12.345d, "12.35")]
-    [InlineData(null, null)]
-    public void A_price_renders_as_invariant_two_decimal_text(double? price, string? expected) =>
-        Assert.Equal(expected, ProviderCatalogueFieldValue.FromPrice((decimal?)price));
-
-    /// <summary>
-    /// Trailing zeros must not make two readings of the same price two different answers, or the
-    /// operator would be asked about $3.50 again every time the provider reported it as 3.5.
-    /// </summary>
-    [Fact]
-    public void The_same_price_written_two_ways_renders_identically() =>
-        Assert.Equal(
-            ProviderCatalogueFieldValue.FromPrice(3.5m), ProviderCatalogueFieldValue.FromPrice(3.500m));
+    // The price rendering and its strict reader left with Product.UnitPrice (issue #792, A2 of
+    // #786): there is no local price to compare a provider price against, so nothing renders one.
 
     [Theory]
     [InlineData("can", "can")]
@@ -136,17 +122,4 @@ public class CatalogueReviewPolicyTests
     [InlineData(null, null)]
     public void A_blank_provider_label_is_no_label(string? label, string? expected) =>
         Assert.Equal(expected, ProviderCatalogueFieldValue.FromLabel(label));
-
-    [Theory]
-    [InlineData("3.50", true, 3.50)]
-    [InlineData("-1.00", true, -1.00)]
-    [InlineData("3,50", false, 0)]
-    [InlineData("abc", false, 0)]
-    [InlineData(null, false, 0)]
-    public void A_stored_price_parses_back_only_from_text_this_renderer_could_have_written(
-        string? stored, bool parsed, double expected)
-    {
-        Assert.Equal(parsed, ProviderCatalogueFieldValue.TryParsePrice(stored, out var price));
-        Assert.Equal((decimal)expected, price);
-    }
 }

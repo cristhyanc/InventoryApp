@@ -8,9 +8,8 @@ public class UpdateProductTests
     private static ProductUpdateFields ValidFields(
         int lowStockThreshold = 5,
         int restockTo = 10,
-        string? name = "Coke",
-        decimal unitPrice = 2.50m) =>
-        new(name, "SKU-1", null, unitPrice, lowStockThreshold, restockTo, "unit", null, null, true);
+        string? name = "Coke") =>
+        new(name, "SKU-1", null, lowStockThreshold, restockTo, "unit", null, true);
 
     [Fact]
     public async Task Handle_UpdatesTheProduct_WhenFieldsAreValid()
@@ -66,23 +65,23 @@ public class UpdateProductTests
     }
 
     /// <summary>
-    /// Issue #736: the name, the selling price and the category reach the store, because a business
-    /// without a sales provider maintains its own catalogue and this is the only place those three
-    /// fields can be changed.
+    /// Issue #736: the name and the category reach the store, because a business without a sales
+    /// provider maintains its own catalogue and this is the only place those fields can be changed.
+    /// The selling price that reached it alongside them is gone with the field (issue #792).
     /// </summary>
     [Fact]
-    public async Task Handle_PassesTheNamePriceAndCategoryToTheStore()
+    public async Task Handle_PassesTheNameAndCategoryToTheStore()
     {
         var store = new FakeProductStore([1]);
 
         var result = await new UpdateProduct(store).Handle(
             1,
-            new ProductUpdateFields("Coke Zero", "SKU-1", null, 4.25m, 5, 10, "can", 9, null, true),
+            new ProductUpdateFields("Coke Zero", "SKU-1", null, 5, 10, "can", 9, true),
             CancellationToken.None);
 
         Assert.Equal(UpdateProductOutcome.Success, result.Outcome);
-        Assert.Equal(("Coke Zero", 4.25m, (long?)9), (
-            store.LastUpdated!.Name, store.LastUpdated.UnitPrice, store.LastUpdated.CategoryId));
+        Assert.Equal(("Coke Zero", "can", (long?)9), (
+            store.LastUpdated!.Name, store.LastUpdated.Unit, store.LastUpdated.CategoryId));
     }
 
     [Theory]
@@ -96,21 +95,6 @@ public class UpdateProductTests
 
         Assert.Equal(UpdateProductOutcome.Invalid, result.Outcome);
         Assert.Equal(Inventory.Domain.Products.ProductCataloguePolicy.NameRequiredMessage, result.ValidationError);
-        Assert.Null(store.LastUpdatedId);
-    }
-
-    [Fact]
-    public async Task Handle_RejectsANegativeUnitPrice_WithoutPersisting()
-    {
-        var store = new FakeProductStore([1]);
-
-        var result = await new UpdateProduct(store).Handle(
-            1, ValidFields(unitPrice: -1m), CancellationToken.None);
-
-        Assert.Equal(UpdateProductOutcome.Invalid, result.Outcome);
-        Assert.Equal(
-            Inventory.Domain.Products.ProductCataloguePolicy.NegativeUnitPriceMessage,
-            result.ValidationError);
         Assert.Null(store.LastUpdatedId);
     }
 

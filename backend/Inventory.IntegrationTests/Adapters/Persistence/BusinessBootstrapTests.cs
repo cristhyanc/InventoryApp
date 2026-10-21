@@ -98,19 +98,16 @@ public class BusinessBootstrapTests : IDisposable
         {
             Name = "Chips",
             Sku = "CHIP-1",
-            UnitPrice = 3.50m,
             AverageUnitCost = 1.25m,
             CostingQuantity = 40,
             InventoryValue = 50.00m,
             QuantityInStock = 42,
             CategoryId = category.Id,
-            SupplierId = supplier.Id,
         };
         var bars = new Product
         {
             Name = "Bars",
             Sku = "BAR-1",
-            UnitPrice = 2.75m,
             AverageUnitCost = 0.95m,
             CostingQuantity = 18,
             InventoryValue = 17.10m,
@@ -527,7 +524,7 @@ public class BusinessBootstrapTests : IDisposable
 
         Assert.Equal(2, scoped.Products.Count());
         Assert.Equal(2, scoped.NayaxSales.Count());
-        Assert.Equal(3.50m, scoped.Products.Single(p => p.Name == "Chips").UnitPrice);
+        Assert.Equal(1.25m, scoped.Products.Single(p => p.Name == "Chips").AverageUnitCost);
         Assert.Equal(50.00m, scoped.Products.Single(p => p.Name == "Chips").InventoryValue);
     }
 

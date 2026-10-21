@@ -437,7 +437,6 @@ public class MachinesControllerTests
                 {
                     Id = 200,
                     Name = "Coke",
-                    UnitPrice = 3.50m,
                     AverageUnitCost = 1.25m,
                     QuantityInStock = 40,
                     LowStockThreshold = 0,

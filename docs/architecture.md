@@ -1632,6 +1632,8 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| Dashboard → Reorder Alerts, Last purchase/Cheapest purchase columns (issue #789; Needs Ordering is #790) | `GET api/products/purchase-cost-summary` (issue #788) | `Dashboard.ViewFinancials` | ✘ | ✔ | ✔ |
+| All Products — Last purchase/Cheapest purchase columns (issue #791, E of #786) | `GET api/products/purchase-cost-summary` (issue #788) | `Dashboard.ViewFinancials` | ✘ | ✔ | ✔ |
 | Admin → Integrations → connection wizard, Test (issue #536, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Admin → Integrations → connection wizard, Save and Re-test (issue #537, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Connection banners on every page that needs Nayax (issue #539) | `GET api/settings/nayax-connection/status` (issue #537) | `Dashboard.View` | ✔ | ✔ | ✔ |
@@ -1662,6 +1664,7 @@ The other is `NayaxConnectionController` since issue #537: its test, save and re
   It is also **rate-limited per business** since issue #681: `Inventory.Application.SalesSync.NayaxSalesSyncRateLimiter` allows ten runs per business per two minutes, claimed before the first Nayax call, and a refused run answers `429` with `Retry-After` and reaches neither Nayax nor the database. One run is one Nayax request per machine plus one, and the Dashboard triggers one per load — which a browser repeats on every visit, back-navigation and refresh — so this was the most expensive call in the application and the easiest to repeat, with nothing bounding either the requests against someone else's API or the write amplification in this one. The limit is per business rather than per actor for the reason the connection test's is: what it protects is the business's own Nayax account and its own rows. The window is kept in memory, like every other limiter here (docs § SQLite operating assumptions). Because the allowance is the business's, members opening the Dashboard together share it: ten simultaneous loads all synchronize (`NayaxSalesSyncControllerTests`), and a load past that is refused. A refusal proves the business started runs inside the last two minutes, so the Dashboard loads its persisted figures and says they were refreshed in the last couple of minutes, not that synchronization failed (`isSalesSyncRecentlyRefreshed`); any other error still shows the not-synchronized warning. The `429` body names no wait and points at `Retry-After`, because the wait can be up to the whole window.
 
 - `GET api/products/inventory-value-summary` → **`Inventory.Operate` and `Dashboard.ViewFinancials`** (issue #681). It is an action on `ProductsController`, so it carries the catalogue's own capability; the second one is declared on the action. The endpoint reports the exact value of the business's inventory at cost, broken down — the figure [issue #527](#dashboard-financial-redaction-issue-527) omits from the dashboard response entirely for a role without `Dashboard.ViewFinancials`, today an Operator. On the catalogue's capability alone, that redaction was a presentation detail rather than a boundary: an Operator could read the number directly. No page calls this endpoint (`ProductService.getInventoryValuationSummary` has no caller since the dashboard stopped using it), so it was gated rather than removed — gating preserves the API contract, which AGENTS.md § Architecture rules asks for, while removing it would be a breaking change for a caller nobody has surveyed. A Manager and an Owner hold both capabilities and are unaffected; an Operator gets the ordinary bare `403`. Gating this one action left the figure reachable by summing the catalogue's own `inventoryValue`, which is what [issue #698](#machine-and-product-financial-redaction-issue-698) closed, along with the machine endpoints' revenue, profit and profitability-status figures: those endpoints stay on `Inventory.Operate` for every role, because an Operator restocks from them, and only the figures inside the response are withheld. [Issue #700](#operator-readable-financial-disclosure-issue-700) closed the last two routes to the same figure — a stock movement's `inventoryValueAfter` and the catalogue snapshot nested in a purchase or supplier-order line — and audited every other Operator-readable endpoint for one.
+- `GET api/products/purchase-cost-summary` → **`Dashboard.ViewFinancials`**, so a Manager and an Owner (issue #788, B of parent #786). It reports what every product was last bought for and what it was cheapest at, with the supplier of each — supplier purchasing facts over the whole catalogue, which is the same kind of figure `GET api/products/{id}/price-history` shows one product at a time. **It is its own controller, `ProductPurchaseCostsController`, for exactly that reason**: a controller declares one capability for every action it holds, so adding this action to `ProductsController` would either have inherited the catalogue's `Inventory.Operate` — handing those figures to every role that may operate inventory — or, declared per action, left the catalogue and this read looking alike when they are not. The first page that calls it is the home Dashboard's Reorder Alerts table (issue #789, see [Provider-optional dashboard and Needs Ordering screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)); Products → Needs Ordering (issue #790, D of #786) is the second, and All Products (issue #791, E of #786) the third, requesting it once for its listed product ids and showing the Last/Cheapest purchase columns only with `Dashboard.ViewFinancials`. The Angular client is `ProductPurchaseCostService`. It is read-only and `GET`, so a support session may call it under the central `GET`/`HEAD` rule of issue #551, which grants `Dashboard.ViewFinancials`. See [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63).
 - `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
 
 **What an Operator and a Manager lose, and when.** An Operator can no longer reach expenses, any report or export, the imports, the site commission surface, the Nayax fee rates, the catalogue reconciliation or any repair. A Manager additionally cannot reach the Nayax fee rates, the catalogue reconciliation or any repair — a Manager may read a report whose underlying fee rate only an Owner may change, which is the agreed table and not a defect. Routes, verbs, request shapes and success responses are unchanged; the only new answer is the bare `403` an under-privileged caller receives. Every member of the one live business is an `Owner`, so nothing anybody reaches changes until non-Owner roles are assigned.
@@ -1726,7 +1729,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 
 #527 above redacts the Dashboard summary, and #681 closed `GET /api/products/inventory-value-summary`. The machine and product endpoints were the way back to both figures: `GET /api/machines` and `GET /api/machines/{id}` carry six periods of gross revenue, the six matching direct-profit figures and `profitabilityStatus`, and `GET /api/products`, `GET /api/products/{id}`, `GET /api/products/alerts/low-stock` and `GET /api/machines/{id}/products` carry each product's `inventoryValue`, which sums to the valuation the Dashboard withholds. All of them are gated on `Inventory.Operate`, which an Operator holds — correctly, because restocking machines is exactly what they are for. Issue #698 therefore withholds the figures and keeps the endpoints.
 
-**The recorded decision (Cristhyan, 15 October 2026).** `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure. **Unit cost (`averageUnitCost`, `unitPrice`) and selling price (`machinePrice` and the slot's `suggestedNetValue`/`suggestedPriceValue`) stay visible to an Operator**, who needs them to restock and to price a slot. `costingQuantity` is a quantity, not a value, and stays too.
+**The recorded decision (Cristhyan, 15 October 2026).** `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure. **Unit cost (`averageUnitCost`) and selling price (`machinePrice` and the slot's `suggestedNetValue`/`suggestedPriceValue`) stay visible to an Operator**, who needs them to restock and to price a slot. `costingQuantity` is a quantity, not a value, and stays too. The catalogue `unitPrice` this decision also named is not a question any more: issue #792 removed the field, so the responses carry none at all (see [A product carries no selling price](#a-product-carries-no-selling-price-issue-792)).
 
 **Withheld is `null` here, not absent.** This is the deliberate difference from #527, and it is the API contract change the issue approved: `MachineResponse`'s six gross-revenue fields became nullable, and the restricted fields are serialized as explicit `null`. #527 could remove its two properties because one of them was a whole object and the other had no "withheld" meaning to confuse; here the keys are the ones every machine and product client binds to, and thirteen disappearing keys on one response would be a far larger break than a nullable figure. `null` is already how both responses say "unavailable" for profit and for an incomplete inventory valuation, which is why the frontend already renders it (issue #699, merged first). What must never happen is `0`: a withheld revenue arriving as zero is a false financial statement about the business, so the redacted projection writes every withheld figure out rather than letting a default supply one.
 
@@ -2106,13 +2109,13 @@ The page says what it is before it knows who is asking: cross-business scope, re
 Businesses(Id)
 Categories(Id, BusinessId)
 Suppliers(Id, BusinessId)
-Products(Id, BusinessId, CategoryId, SupplierId)
+Products(Id, BusinessId, CategoryId)
 Receipts(Id, BusinessId, SupplierId)
 ReceiptItems(Id, BusinessId, ReceiptId, ProductId)
 StockAdjustments(Id, BusinessId, ProductId, ReceiptItemId)
 ```
 
-Every entry is an identity or foreign-key column, which is what an orphan or cross-business ownership investigation needs and all it needs. No name, note, amount, quantity, timestamp or free-text column is on it; `Businesses` exposes only `Id`, not the trading name. `BusinessMemberships` (Entra identity data), the `Nayax*` and `Imported*` tables (raw remote payloads, and where issue #327's token configuration would land), SQLite's own schema tables and everything else are absent. **A new table, or a new column on a listed table, is denied automatically** until a separately reviewed change adds it here.
+Every entry is an identity or foreign-key column, which is what an orphan or cross-business ownership investigation needs and all it needs. No name, note, amount, quantity, timestamp or free-text column is on it; `Businesses` exposes only `Id`, not the trading name. `BusinessMemberships` (Entra identity data), the `Nayax*` and `Imported*` tables (raw remote payloads, and where issue #327's token configuration would land), SQLite's own schema tables and everything else are absent. **A new table, or a new column on a listed table, is denied automatically** until a separately reviewed change adds it here. `Products.SupplierId` was on this list until issue #787 dropped the column; the allowlist names *physical* columns, so a column that leaves the schema leaves the surface with it — narrowing needs no review, only widening does.
 
 **How the surface is enforced: inside SQLite, not by reading the SQL.** `Inventory.Infrastructure.PlatformDiagnostics.SqliteDiagnosticsQueryExecutor` opens its own connection to the same configured data source and puts four independent barriers in front of the statement:
 
@@ -5949,26 +5952,27 @@ the page reports on.
   no machines to filter by and show `machinesError` in its place when the read failed. Apply keeps its
   right alignment either way. **Site Commissions** does the same for its Site select over
   `SiteService.getAll()`, which is a live fleet read too.
-- **Stock History** (`StockHistoryPageComponent`) keeps its two provider-dependent filters apart: the
-  **machine** filter needs a machine list (`machineFleet`) and stays hidden until machines exist - which
-  is what issue #746 (G2b) will change by listing locally recorded machines - while the **"Nayax Sync
-  Restock" source** option needs only `providerRecords`, because the movements it selects are already
-  recorded locally. The table keeps labelling a Nayax-sourced movement whatever the filter offers.
-- **The stock adjustment form** (`StockAdjustmentFormComponent`) takes the page's machine list as an
-  input and reads an **empty** list as "no machine list is available": the field is hidden rather than
-  offering "— None —" alone, and a machine staged before the list went away is dropped rather than
-  submitted against a list the page can no longer show.
-- **Expenses** (`OperatingExpenseComponent`) hides its machine field the same way, and without
-  `providerRecords` it stops offering "Nayax monthly fee" for a **new** expense and drops the Nayax
-  sentence from its subtitle. An expense already recorded under that category **keeps** it - in the
-  table, in the Category filter and on the edit form, which offers the category whenever the expense
-  being edited carries it - because a recorded expense is a fact about the past and this page must
-  never quietly reclassify one.
+- **Stock History** (`StockHistoryPageComponent`) keeps only the **"Nayax Sync Restock" source**
+  option on this signal, through `providerRecords`, because the movements it selects are already
+  recorded locally; the table keeps labelling a Nayax-sourced movement whatever the filter offers. Its
+  **machine** filter left this signal in issue #746 - it is the business's own machine records now
+  (see [Machine fields from the business's own machines](#machine-fields-from-the-businesss-own-machines-issue-746)).
+- **The stock adjustment form** (`StockAdjustmentFormComponent`) takes its machine list from the page
+  as an input and is no longer on this signal either (issue #746). It keeps the rule the signal
+  taught: a failed read is an error in place of the field, never an empty one.
+- **Expenses** (`OperatingExpenseComponent`) is on this signal for its categories and its wording
+  only: without `providerRecords` it stops offering "Nayax monthly fee" for a **new** expense and
+  drops the Nayax sentence from its subtitle. An expense already recorded under that category
+  **keeps** it - in the table, in the Category filter and on the edit form, which offers the category
+  whenever the expense being edited carries it - because a recorded expense is a fact about the past
+  and this page must never quietly reclassify one. Its machine field and its list's machine filter are
+  the business's own machines (issue #746).
 
 **What is deliberately not here.** The home Dashboard and Needs Ordering keep issue #727's own
 answer, derived from the summary and the reorder listing they already fetch: those responses are
 authoritative about the cards beside them, and a second probe would be a second answer that could
-disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b). The menu was
+disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b), the last of which
+took three of the screens below off this signal. The menu was
 issue #729 (E2), and it reads this signal through
 [Provider-locked navigation](#provider-locked-navigation-issue-729).
 
@@ -5985,11 +5989,11 @@ check no feature claims all leaving a feature `unknown`.
 per-feature difference between `machineFleet` and `providerRecords`, the second request a retained
 permission refusal prevents while an unrelated feature stays loadable, and the failures that stay
 errors.
-`pick-list.component.provider-optional.spec.ts`,
-`stock-history-page.component.provider-optional.spec.ts`,
-`operating-expense.component.provider-optional.spec.ts` and `reports/report-provider-optional.spec.ts`
+`pick-list.component.provider-optional.spec.ts` and `reports/report-provider-optional.spec.ts`
 cover each screen's hidden control, its error state, and the empty list neither may be confused with;
-`stock-adjustment-form.component.spec.ts` covers the machine field and the dropped staged machine;
+`stock-history-page.component.provider-optional.spec.ts` and
+`operating-expense.component.provider-optional.spec.ts` cover what is left of this signal on those
+two screens after issue #746 - the source option, the Nayax fee category and the subtitle;
 `nayax-connection-wizard.component.spec.ts` covers the signal being refreshed by a save and a
 re-test, including the per-feature permissions a re-test found, granted and refused alike;
 `nayax-status-banner.component.spec.ts` covers three banners costing one read; and
@@ -6600,14 +6604,19 @@ its own column set.
 - **Row navigates to the same product editor Edit opened.** Clicking or tapping anywhere in a row
   outside a nested control, or pressing Enter while one is focused, navigates to
   `/products/:id/edit` — the destination the removed Edit button used. The product Name cell holds
-  the real `<a class="table-row-anchor" [routerLink]="['/products', p.id, 'edit']">`, which gives
-  keyboard focus, Enter activation, ctrl/cmd/middle-click and "copy link address" natively;
-  `onRowActivate` only extends that anchor's plain click to the rest of the row (`table-row-link`
-  on the `<tr>`, `(click)`/`(keydown.enter)` bound to it) and ignores anything that originated from
-  a nested `a`, `button`, `input`, `select`, `textarea` or `label` — the selection checkbox, the
-  Stock link and the Active/Inactive status badge button — or a modified/non-primary click the
-  browser should handle itself (Ctrl/Meta/Shift/Alt, or a non-left mouse button). The row carries
-  no `tabindex` or `role` of its own; the shared `.table-row-link`/`.table-row-anchor` styling
+  the real `<a class="table-row-anchor">`, which gives keyboard focus, Enter activation,
+  ctrl/cmd/middle-click and "copy link address" natively; since issue #790 that anchor is a Google
+  search for the product rather than a `routerLink` to the editor (see [Provider-optional dashboard
+  and Needs Ordering
+  screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)), so the editor's own
+  focusable link is the row's `Edit` anchor beside Stock, which #790 restored for exactly that
+  reason, and the row click is a convenience over it. `onRowActivate` only extends a plain click on
+  the row itself (`table-row-link` on the `<tr>`, `(click)`/`(keydown.enter)` bound to it) and
+  ignores anything that originated from a nested `a`, `button`, `input`, `select`, `textarea` or
+  `label` — the Name search link, the selection checkbox, the Stock link and the Edit link — or a
+  modified/non-primary click the browser should handle itself (Ctrl/Meta/Shift/Alt, or a non-left
+  mouse button). The row carries no `tabindex` or `role` of its own; the shared
+  `.table-row-link`/`.table-row-anchor` styling
   (`styles.css`) already supplies the hover cursor, hover underline and `:focus-within` affordance,
   exactly as it does for the Products list and the Sites list.
 - **Stock is unchanged and isolated from row navigation.** The Stock `<a routerLink>` to
@@ -6619,9 +6628,11 @@ its own column set.
   `confirmDelete`/`cancelDelete`/`deleteConfirmed`/`confirmingProduct` members were removed from the
   component; `ProductService.delete` and the Products list's own Delete button are unchanged, as is
   backend delete authorization.
-- **Every visible data column sorts ascending/descending.** Name, Category, Supplier, Price,
-  Stock, Machine need, Low Stock Threshold, Restock To, On order, Need to Order and Status each
-  have a header `<button>` toggling `sortBy(column)`; the active header's `[attr.aria-sort]`
+- **Every visible data column sorts ascending/descending.** Each has a header `<button>` toggling
+  `sortBy(column)`. The set has changed since this issue: Supplier left with #787, Price with #792,
+  and Status with #790, which added Last purchase and Cheapest purchase, so today it is Name,
+  Category, Stock, Machine need, Low Stock Threshold, Restock To, On order, Need to Order, Last
+  purchase and Cheapest purchase. The active header's `[attr.aria-sort]`
   reflects `ascending`/`descending` and its visible label gains the same `(ascending)`/
   `(descending)` suffix the Products list and Site Products tables use. `sortedProducts` computes a
   new sorted array from `products` on each read — comparing numbers numerically, everything else as
@@ -6766,17 +6777,30 @@ Reconciliation applies the same separation as bookkeeping, and adds a third cate
 
 **Export parity.** The reconciliation CSV/XLSX rows add `AdjustmentsSupported`, `AdjustmentsBasis` (the assumption above), the five status counts and `DataQualityNotes`. Each period row carries its own counts and its own notes; the `TOTAL` row carries the report's range-wide counts and notes rather than a sum of the period rows'. A clean period exports an empty `DataQualityNotes` cell and no boilerplate, and the export keeps every figure, filter and status it exported before.
 
-### Product selling price
+### A product carries no selling price (issue #792)
 
-`Product.UnitPrice` is the catalog default/list selling price, taken from the Nayax product catalog's `ProductDefaultRetailPrice` field by the catalogue review's apply, and only on an operator's explicit per-product decision (issue #57 for the field; the one-way sync was `ImportService.ImportProductsAsync`, then `Inventory.Application.Imports.ImportNayaxProductCatalog` from issue #300, until issue #739 replaced it with the review — see [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300) and [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)). It is a display/default value, not a calculation input: no reporting, profit, or costing calculation in `Inventory.Application`/`Inventory.Domain` reads it. It is distinct from:
+**`Product.UnitPrice` does not exist.** It was the catalog default/list selling price (issue #57 for the field), and issue #792 — A2 of parent #786 — deleted it: the `RemoveProductUnitPrice` migration drops `Products.UnitPrice` and the stored prices with it, under the repository owner's explicit approval of a destructive deletion on **21 October 2026**. `Down` recreates the column so the schema matches the previous release's code, and every row comes back at its `0` default; the values are not recoverable, and nothing is inferred in their place.
 
-- `Product.AverageUnitCost` and the AVCO/historical-cost ledger — purchase cost, not selling price;
-- `Product.MachinePrice` (`[NotMapped]` on the entity, and a machine-slot value on `ProductResponse`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) by `ListMachineProducts`/`GetSiteProducts`;
-- the Nayax `ProductCostPrice` field on an imported sale (`NayaxSales.NayaxProductCostPrice`) — a genuine cost value used for historical COGS, never a selling price. The catalogue import previously set `UnitPrice` from this cost field by mistake; it now uses the catalog `ProductDefaultRetailPrice` instead.
+**Why it went.** It was a display/default value and never a calculation input — no reporting, profit or costing calculation in `Inventory.Application`/`Inventory.Domain` ever read it. What it did do was stand beside the machine's own live price as a second answer to "what does this sell for?", with nothing keeping the two in step: a provider import, and later an operator's keep-or-take decision, were the only things that moved it, so a catalogue that nobody reviewed went quietly stale while the machine kept charging its real price.
 
-**The JSON field this value is imported from is confirmed (issue #363).** A human confirmed from a live `GET /v1/operators/{OperatorID}/products` response that the product selling price field is `ProductDefaultRetailPrice`, matching the Nayax developer portal, which documents that field on `GET /v1/operators/{OperatorID}/products` and `GET /v1/products/{NayaxProductID}` and documents no bare `RetailPrice` field on either endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` above correctly use. The operator-catalogue DTO `Inventory.Application.Nayax.NayaxProduct.ProductDefaultRetailPrice` binds that confirmed JSON name. Products already imported with `UnitPrice` of `0` under the previous, unconfirmed `RetailPrice` mapping are not backfilled by this change; whether to backfill them is a separate decision.
+**What a product sells for, and what it costs, after the change.**
 
-The public property name `UnitPrice` is retained for API/contract compatibility. **Since issue #736 the business owns this value too** (parent #329 decision P2 and P3): `PUT /api/products/{id}` accepts it, `ProductUpdateFields` carries it, and the only bound on it is that it is not negative (`Inventory.Domain.Products.ProductCataloguePolicy`). It had to become editable, because a business with no sales provider has no import to set it. **Since issue #737 (B2) the product edit screen presents it editable for every product**, and presents the name and the category as read-only inputs only for a product carrying an external id, naming the provider in a note beside them. A local price edit of a provider-managed product is accepted rather than refused — the price is deliberately *not* one of the provider-managed fields that are locked, which are the product's name and category only (see [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)). **Nothing overwrites it from the provider without being asked.** Choosing per field whether to keep the local price or take the provider's is the catalogue review of issue #738, which also remembers the provider value a skipped price was decided about so it is not proposed again until the provider changes it (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)); issue #739 built its screen and, with it, removed the write-through import that used to overwrite the price on every run. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
+- The **selling price** is the machine's, not the catalogue's: `Product.MachinePrice` (`[NotMapped]` on the entity, and a machine-slot value on `ProductResponse`) is the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) by `ListMachineProducts`/`GetSiteProducts`, together with the slot's `suggestedNetValue`/`suggestedPriceValue`. A recorded sale's own amount is the other authoritative statement of what was charged, and it is unchanged.
+- The **cost** is `Product.AverageUnitCost` and the AVCO/historical-cost ledger, a purchase item's `UnitCost`, a supplier-order line's agreed `UnitPrice` (a different column on a different table, untouched) and the Nayax `ProductCostPrice` on an imported sale (`NayaxSales.NayaxProductCostPrice`). None of them is a selling price and none of them changed.
+
+**The API contract (breaking, as issue #792 permits).** `ProductResponse` no longer carries `unitPrice`, and neither does the product snapshot nested in a purchase line, a supplier-order line or a machine slot — removed, never sent as `null`. `ProductCreateDto`/`ProductUpdateDto` bind none either, so a submitted `unitPrice` is simply not bound and nothing is stored for it; `initialUnitCost` on the create is a cost and is unaffected. `ProductCataloguePolicy` is down to one invariant, that a product has a name, and `ProductCataloguePolicy.NegativeUnitPriceMessage` is gone with the bound it expressed.
+
+**The UI.** The product form has no Unit Price input; All Products, Needs Ordering and the Dashboard's Reorder Alerts have no Price column or price sort; and the Stock History page's product summary is three tiles rather than four. The stock movement table's own unit-cost and cost-impact columns, the purchase and supplier-order prices and the machine pages' live prices are all untouched.
+
+**The catalogue review proposes no price** (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)). The Nayax `ProductDefaultRetailPrice` is not read, a review entry records no provider price, a created row is initialised without one, and a submitted selling-price decision is refused outright rather than dropped. A review **stored** before this change still carries the provider prices it meant to negotiate, so it is refused whole as stale — `ApplyCatalogueReview.StaleSellingPriceReviewMessage`, decided on the authoritative row inside the apply's own transaction and before anything is staged — and the operator starts a fresh one.
+
+**Two things are deliberately kept.** `ProviderCatalogueReviewItems.ProviderUnitPrice` and the values earlier releases wrote into it stay in the schema and are neither dropped nor backfilled: they record what the provider said at the moment a review was read, and they are what identifies a stale stored review. `NegotiableCatalogueField.UnitPrice = 1` stays declared because stored `ProviderCatalogueFieldDecisions` rows hold that number; nothing reads those rows any more, and the number must not be reused for a new field.
+
+**The Nayax contract is unchanged, and still confirmed (issue #363).** `Inventory.Application.Nayax.NayaxProduct.ProductDefaultRetailPrice` stays declared and still binds the confirmed JSON name: a human confirmed from a live `GET /v1/operators/{OperatorID}/products` response that the product selling price field is `ProductDefaultRetailPrice`, matching the Nayax developer portal, which documents that field on `GET /v1/operators/{OperatorID}/products` and `GET /v1/products/{NayaxProductID}` and documents no bare `RetailPrice` field on either endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` correctly use. Nothing consumes it now — that record mirrors the provider's published contract rather than the subset the application happens to read, the same reason `CashPrice` and `CreditCardPrice` stay — and no Nayax contract was invented, altered or guessed by this change.
+
+**Release sequence.** Production applies pending migrations at startup (AGENTS.md § Database and migrations), so the API that starts after `RemoveProductUnitPrice` is applied is the one that no longer reads the column: running the *previous* release against this schema does not work, and rolling back to it is not supported. Deploy the API before the frontend, as the human-started **Deploy Production** workflow already does. A stored catalogue review that was pending across the upgrade is refused as stale on its first apply and the operator restarts it; nothing else about the upgrade is visible to an operator.
+
+**Do not reintroduce it.** No selling-price column, navigation, create/update field, response property, list column, sort or form input on a product, and no `quantityInStock * unitPrice` retail valuation anywhere: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42).
 
 ### Purchase GST classification (issue #429)
 
@@ -7161,8 +7185,8 @@ and it never substitutes for a real purchase, correction or write-off.
 #### Dashboard "Inventory Value" tile (issue #42)
 
 The business-owned perpetual inventory value - the sum of every product's persisted
-`InventoryValue` (the AVCO valuation the `RebuildProductCost` use case maintains), never
-`QuantityInStock * UnitPrice` retail value and never home/storage stock quantity on its own - is
+`InventoryValue` (the AVCO valuation the `RebuildProductCost` use case maintains), never a
+quantity × retail-price value and never home/storage stock quantity on its own - is
 the figure behind the home Dashboard's "Inventory" card (see
 [Home dashboard: four headline cards](#home-dashboard-four-headline-cards-issue-460) below).
 
@@ -7185,6 +7209,52 @@ its valuation, product count and storage units all describe one catalogue read. 
 `inventory` card, so the home Dashboard no longer calls `GET /api/products/inventory-value-summary`
 directly; the endpoint itself is unchanged and stays available for any other caller that needs the
 valuation alone.
+
+##### One product's average cost, and whether it has been established (issue #788)
+
+The same `null InventoryValue` evidence answers a second question, about one product rather than the
+catalogue: **may this product's average unit cost be displayed at all?** `Product.AverageUnitCost` is a
+non-nullable column, so a product no cost rebuild has ever run for still carries a number in it — a
+create can seed one — and a screen that rendered that number would present an unestablished figure as
+a costed one. Before issue #788 a client had no authoritative way to tell the two apart: the only
+available signal was `inventoryValue`, which the product responses **withhold** from a caller without
+`Dashboard.ViewFinancials` (issue #698), so reading it would have reported every product's cost as
+unknown to an Operator.
+
+`InventoryValuationPolicy.DisplayUnitCost(inventoryValue, averageUnitCost)` is that answer, and it is
+deliberately the one-row form of the rule the tile above already applies rather than a new AVCO
+calculation: a `null` inventory value means no rebuild has run, so the display cost is `null`;
+otherwise it is the **persisted** `AverageUnitCost` exactly as the rebuild left it, **including a
+genuine zero**. The Dashboard's `ProductsWithUnknownCost` count is the same evidence counted, so a
+product cannot be counted as unknown there and shown a cost here.
+
+On the wire it is `ProductResponse.averageUnitCostForDisplay`, and these properties are the contract:
+
+- **Additive and non-breaking.** It is appended after issue #736's `providerManagedFields` and issue
+  #737's `canDelete`/`deletionRefusal`, so every key a client already read keeps its name, type, value
+  and position (`ProductJsonContractTests`). The legacy `averageUnitCost` and every persisted costing
+  value — `AverageUnitCost`, `CostingQuantity`, `InventoryValue` — are unchanged, and there is no
+  migration and no historical recalculation: this is a projection of what is already stored.
+- **Absent, never `0`, when the cost is unknown.** It is omitted from the JSON rather than sent as
+  `null`, so in TypeScript it is `averageUnitCostForDisplay?: number | null` and a client renders an
+  absent value as unknown (`—`). A rebuilt cost of `0` is present as `0`, which is a measured answer
+  and must render as `$0.00`.
+- **Available to exactly the roles that already read `averageUnitCost`** — every role that may
+  operate inventory. It is decided from the product record's own inventory value, not from the
+  withheld response field, which is why an Operator gets a real answer. It carries no revenue, profit,
+  margin or valuation figure, so it is outside the restricted vocabulary
+  `OperatorReadableFinancialFigureTests` guards, and it exposes **none** of the gated last/cheapest
+  supplier facts: those stay on `GET api/products/purchase-cost-summary` behind
+  `Dashboard.ViewFinancials` (see
+  [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63)).
+- **Published only by the `/api/products` reads.** It is deliberately absent from the product snapshot
+  nested in a purchase line or a supplier-order line and from a machine slot's product: those are
+  pinned contracts of their own and are not surfaces a product's cost is presented from, so they keep
+  every key they had and say nothing rather than answering a question their reader cannot act on — the
+  same treatment issues #736 and #737 gave their keys there. `PurchaseResponseJsonContractTests`,
+  `SupplierOrderJsonContractTests`, `MachineJsonContractTests` and `ProductJsonContractTests` each pin
+  the absence. An absent key on one of those payloads says nothing about the cost, exactly as an
+  absent `canDelete` is not permission.
 
 #### Home Dashboard summary API (issue #459)
 
@@ -7451,13 +7521,55 @@ so a pending decision is never rendered as an empty one. A **failed** summary sa
 provider, so it leaves `unknown` and keeps the connected behaviour - a transient failure must not
 hide a connected business's live sections.
 
-**A storage-only figure is labelled, and the machine columns go with it.** The "Needs ordering"
+**A storage-only figure is labelled, and the machine column goes with it.** The "Needs ordering"
 card's label comes from `needsOrdering.mode` with the reason from the same response's refill
 section; the Reorder Alerts list's comes from its own response headers, so the table and its label
-always describe one read. In storage-only mode the list drops the "Machine need" and "Stock after
-machine need" columns, because `machineReplenishmentNeed` is `0` there for the one reason that is
-not "the machines need nothing", and a "Stock after machine need" equal to the stock beside it
-would assert the opposite. The label is rendered for an **empty** list too.
+always describe one read. In storage-only mode the list drops the "Machine need" column, because
+`machineReplenishmentNeed` is `0` there for the one reason that is not "the machines need nothing",
+and a column of zeroes would assert the opposite. The label is rendered for an **empty** list too.
+
+**The Reorder Alerts columns, and what the row now reports (issues #787, #792 and #789).** The table
+is Product, Stock, Low Stock Threshold, Machine need (machine-aware mode only), Restock To, On order,
+Need to Order, and then "Last purchase" and "Cheapest purchase". Three columns left it: Supplier
+(issue #787 — a product carries no supplier), Unit Price (issue #792 — a product carries no selling
+price), and "Stock after machine need" (issue #789), which was a frontend subtraction of two figures
+already on the row and is replaced by what the business actually paid. So the row answers "how much
+do I have, how much do I need, and what does it cost me to buy" without a selling price anywhere
+near it.
+
+**The two cost columns are one read, gated on the capability behind them.** `Dashboard.ViewFinancials`
+decides it, through `AccessService` as everywhere else on this page: without it neither column is
+rendered **and no request is sent** — these are supplier purchasing figures, and a role that may not
+see them must not cause them to be fetched. The capability is read asynchronously, so the request
+waits for the answer: `canViewFinancials` still starts `true` (hiding a figure from the role it
+belongs to over an unread capability is the wrong default), but `DashboardComponent` only *asks*
+once the answer has arrived and granted it, and asks then if the alert list was already read.
+`ProductPurchaseCostService.getSummaries` is called **once** with the alert products' ids, never once
+per row; an **empty** alert list is asked nothing at all, because no ids deliberately means "every
+product of the business" (issue #788) and this table is about the products in front of the reader.
+Each cell is `supplier · cost` (`Acme · $1.25`), with `None` for a purchase that recorded no supplier
+— a fact about that purchase, never another purchase's supplier, and independent of the cost beside
+it — and the cost formatted by the shared `money`. Angular computes no last or cheapest cost, no tie
+break and no saving: `SupplierPriceComparisonPolicy` decides all of them on the server.
+
+**Loading, no purchase history and unavailable are three different answers.**
+`DashboardComponent.purchaseCostState` (`PurchaseCostLoadState`) is `idle`/`loading`/`loaded`/
+`failed`, and only `loaded` may say `—`: "this product has never been bought" is a fact about the
+purchase history, which a pending or failed request is not evidence of. A pending or not-yet-issued
+read therefore shows `Loading`, a failed one shows `Unavailable` in both columns with an actionable
+**Retry** beside the table — and the rest of the page, whose figures are local data that was never
+part of that request, renders exactly as it would have. A recorded `$0.00` is a **real cost** (a free
+sample, a replacement delivery) and is shown as `$0.00` with its supplier, never as `—`: the response
+carries no entry at all for a product with no history, which is the only thing `—` means. The
+Reorder Alerts table is not sortable, so there is no missing-cost sort order to define here; #790 and
+#791 are the sortable screens.
+
+**One request's answer belongs to one product set.** Every read supersedes the previous one and
+clears what it had already read, so a changed alert list never renders the previous list's costs
+while the new ones are outstanding, and a response for a superseded request — a slower first read, or
+the failure a Retry has already replaced — is discarded instead of published over the current answer
+(`purchaseCostRequest` is the generation it is checked against). Retry re-issues the same read for
+the product set currently displayed.
 
 **One vocabulary, one sentence each.** `provider/nayax-availability.ts` is the frontend's copy of
 the published availability vocabulary and the only place it is worded:
@@ -7484,21 +7596,89 @@ which used to leave a failed section loading forever.
 
 **Products → Needs Ordering** is the same change in one page: it reads the mode from the listing it
 already fetches, labels a storage-only list, and hides the "Machine need" column there. Its
-filters, sorting, status toggle and "Mark as ordered" are untouched and work without a provider -
-the supplier order it creates is local data. Its error-versus-empty distinction already existed
-(`ListLoadState`) and is unchanged.
+filters, sorting and "Mark as ordered" are untouched and work without a provider - the supplier
+order it creates is local data. Its error-versus-empty distinction already existed (`ListLoadState`)
+and is unchanged.
+
+**What that page shows now (issue #790, D of #786).** Its columns are the checkbox, Name, Category,
+Stock, "Machine need" (in machine-aware mode only), the thresholds, "On order", "Need to order",
+"Last purchase", "Cheapest purchase" and the Stock and Edit links - and nothing else:
+
+- **The name looks the product up on Google**, as `https://www.google.com/search?q=<URL-encoded
+  name>` in a new tab (`target="_blank"`, `rel="noopener noreferrer"`), labelled "Search Google for
+  &lt;name&gt;". The row's own click handler already defers to a nested anchor, so that click does
+  not also open the editor in the current tab; clicking anywhere else on the row still opens it, and
+  the checkbox and the Stock button are unchanged.
+- **The product editor keeps a focusable control of its own**, the row's `Edit`
+  `<a routerLink="/products/:id/edit">` beside Stock, labelled "Edit product &lt;name&gt;". It is
+  there because the Name anchor is no longer the editor's link: a row click is not a keyboard
+  action - the `<tr>` carries no `tabindex` and `onRowActivate` defers to every focusable child - so
+  without it the editor would have been reachable by pointer only, which AGENTS.md § Frontend rules
+  does not allow. Issue #498 had removed that button precisely because the Name anchor was then the
+  editor's own link; with that premise gone the link comes back, while #498's other outcomes - no
+  Delete, no confirmation dialog, and a row click that opens the editor - stand unchanged.
+- **No Price and no Status column.** The price left with issue #792 (a product carries no selling
+  price); the Status column, its sort and this page's product-status write left with #790, because
+  the list holds **only active products**. `GET /api/products/alerts/low-stock` already excludes
+  retired products, and the component drops any product with `isActive === false` as well - the same
+  defence the dashboard's reorder-alert card applies. Product activation stays on
+  Products → All Products, which is the page that lists both states.
+- **"Last purchase" and "Cheapest purchase"** come from issue #788's bulk
+  `GET /api/products/purchase-cost-summary`, requested **once** for the ids the page actually lists
+  and never recomputed here: what was last paid and what was cheapest, with the supplier each was
+  paid to, are decided by `SupplierPriceComparisonPolicy` on the server. Both columns sort by cost,
+  and a row with no cost - still loading, unavailable, or never bought - sorts last in **both**
+  directions rather than as a zero.
+
+**Those two columns keep four answers apart**, for the same reason the availability model exists: a
+figure nobody established must never be rendered as a measured one.
+
+- Both columns and the request appear **only** with `Dashboard.ViewFinancials`. Without it there are
+  no columns and no request at all - the endpoint answers `403`, so asking before the capability is
+  known would be asking for a refusal, which is why this gate starts closed rather than at the
+  fail-open `true` other hidden figures use. `AccessService` still fails open where it matters: a
+  capability set that could not be read answers `true`.
+- While the request is outstanding both columns say **"Loading…"**. A **`—`** is published only once
+  a successful response establishes that the product has no recorded purchase history (a product
+  with none is absent from the response). A **genuinely recorded `$0.00`** - a free sample, a
+  replacement delivery - is a measured cost and is shown as `$0.00` with its supplier, never as
+  `—`. An unknown supplier is **"None"** independently of the cost beside it.
+- A **failed** request shows **"Unavailable"** in both columns with one actionable **Retry** above
+  the table, and the rest of the page keeps working: the reorder figures and "Mark as ordered" are
+  the business's own data and are unaffected. Retry re-asks for the same listed ids.
+- **A stale answer cannot land on a newer list.** The previous list's costs are dropped
+  synchronously with the product set they belonged to, and the cost request runs under a `switchMap`
+  on the product ids, so a superseded response - or a superseded failure - is unsubscribed, its HTTP
+  request cancelled, and neither its rows nor its "Unavailable" can appear under the products that
+  replaced it. An empty list makes no request, because the endpoint reads "no ids" as "every product
+  of the business".
 
 **What proves it.** `dashboard.component.provider-optional.spec.ts` covers the five states the issue
 names - not usable, permission not granted, support session, usable, and a failed request - over the
 rendered page: the hidden cards and sections, the sync that is not called and the warning that is
 not shown, the sites and machines that are not even asked for, the storage-only label, the dropped
-machine columns, the per-feature permission message (both from the summary and from a refused
+machine-need column, the per-feature permission message (both from the summary and from a refused
 section request), the three error states and the empty states they must not be confused with, and
 the unchanged connected and support-session pages including the `sync → machines → sites` order.
-`product-needs-ordering.component.provider-optional.spec.ts` covers that page in both modes.
+`product-needs-ordering.component.provider-optional.spec.ts` covers that page in both modes, and
+that its purchase-cost columns are present and filled without a provider.
+`dashboard.component.purchase-costs.spec.ts` covers the two cost columns over the rendered page: the
+column list with "Stock after machine need" gone, the supplier/cost cells, `None`, a genuine `$0.00`,
+`—` only after a successful answer, the single request for the alert ids only and the empty list that
+asks nothing, the hidden columns and absent request without the capability and the request that
+follows a later capability answer, `Unavailable` with a working Retry while the rest of the dashboard
+renders, and the cleared and discarded answers when the displayed product set changes.
 `product.service.spec.ts` covers the response-header contract, including an empty listing, an
 unrecognised code and a reason published beside a machine-aware mode, and
 `provider/nayax-availability.spec.ts` covers what is **not** an availability answer.
+`product-needs-ordering.component.purchase-costs.spec.ts` covers issue #790: the Google URL and its
+encoding (`&`, spaces, accents, `+`, `?`), the name click that does not open the editor and the row
+click that still does, the Edit link that reaches the editor from the keyboard - focused, Enter
+pressed on it, navigating once - while the Name link still only searches Google, the absent Price
+and Status columns, the retired product the page refuses to list, the one request for the listed
+ids, loading versus `—` versus "Unavailable", a recorded `$0.00`, an unknown supplier, Retry, the
+superseded response and the superseded failure, the cost sorting in both directions with no-history
+last, and the capability gate that renders no column and sends no request.
 
 #### Home dashboard: four headline cards (issue #460)
 
@@ -8729,15 +8909,18 @@ rather than one filter. **A connected business with every permission granted see
 `mode` defaults to `'calculated'`, the toggle is offered, and every existing calculated-mode test
 (`pick-list.component.spec.ts`, `pick-list.component.provider-optional.spec.ts`) passes unmodified.
 
-**No machine selector, and no local id substituted for a provider one (issue #746 not yet merged).**
+**No machine selector, and no local id substituted for a provider one (deferred to issue #794).**
 Every manual save omits `machineId` entirely; the batch refill contract already treats an absent
 machine as a valid whole-business pick (`PickListRefillPolicy.ValidateAgainstState` only checks a
 machine when one is named). The calculated view's own machine selection is untouched by this issue:
 it keeps selecting and querying by the raw provider machine id (`Machine.machineID`) it always has,
-and manual entry never reads or writes that selection. A local machine selector for manual entry, and
-the machine-page consolidation the 18 October 2026 owner decision describes (replacing the
-machine-detail page's per-product quantity inputs with a link into this screen), are both explicitly
-deferred to #746 and are not part of this slice.
+and manual entry never reads or writes that selection. A local machine selector for manual entry is
+issue #794 - the second half of G2b, which issue #746 split off when it took the stock and expense
+screens onto the local machines (see [Machine fields from the business's own
+machines](#machine-fields-from-the-businesss-own-machines-issue-746)) - and the machine-page
+consolidation the 18 October 2026 owner decision describes (replacing the machine-detail page's
+per-product quantity inputs with a link into this screen) is tracked separately under #744. Neither
+is part of this slice.
 
 **Entry, validation and the save contract.** Manual entry lists every product in `products` (already
 active-only, since `ProductService.getAll()` with no filters answers the working catalogue), with a
@@ -8976,9 +9159,13 @@ form calculates the other from that line's purchased **unit** quantity:
 
 The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,
 immutable `PurchaseItem.UnitCost` history joined to its owning Purchase's date, title/reference, and
-supplier, rather than adding a separate quoted/current-price table: `Product`'s existing primary
-`SupplierId` is a default for ordering, not the source of this comparison, and every supplier a
-product was ever actually bought from remains visible. `Inventory.Domain.Purchases.SupplierPriceComparisonPolicy`
+supplier, rather than adding a separate quoted/current-price table: every supplier a
+product was ever actually bought from remains visible. `Product` used to carry a `SupplierId` as a
+default for ordering, which was never the source of this comparison and which issue #787 removed
+(see [A product carries no supplier](#a-product-carries-no-supplier-issue-787)); the purchase history
+this comparison reads *is* now the only record of who a product is bought from, and it is the better
+one, because a product bought from whoever is cheapest this month never had one supplier to store.
+`Inventory.Domain.Purchases.SupplierPriceComparisonPolicy`
 is the one authoritative calculation: it selects the lowest and most recent recorded unit cost with
 deterministic tie-breaks (lowest-cost ties break to the earliest occurrence; latest-date ties break to
 the higher purchase item id), computes the absolute/percentage difference between them - leaving the
@@ -8992,11 +9179,56 @@ port a product's actual Purchase-item history is read through, implemented by
 (composed into the product-edit page's at-a-glance summary and "View price history" drill-down, per
 [Page composition boundary](#page-composition-boundary-issue-191)) only fetch and present this result.
 
-This comparison is historical/quoted guidance, never a substitute for AVCO, `Product.UnitPrice`, or a
+This comparison is historical/quoted guidance, never a substitute for AVCO or a
 live supplier quote: it never feeds inventory costing, and a supplier-order creation flow that shows it
 for reference must not let it silently overwrite an entered order price/cost. A Purchase with no
 supplier recorded stays visible in the comparison and history with an explicit null/"None" source
 rather than being omitted.
+
+**The same facts for the whole catalogue at once: `GET api/products/purchase-cost-summary` (issue
+#788, B of parent #786).** The product screens need every product's last and cheapest cost together,
+and one `price-history` request per product is an N+1 against the purchase history. The bulk answer is
+`Inventory.Application.Purchases.ListProductPurchaseCostSummaries`, which reads the history in one
+query through the `IProductPurchaseCostFactsProvider` port the profitability report already uses and
+then applies **this same `SupplierPriceComparisonPolicy.Evaluate`** per product. It selects nothing
+itself, which is the whole design: there is no third last/cheapest formula, and
+`ProductPurchaseCostSummaryApiTests` compares the bulk answer field by field against what
+`price-history` answers for the same product over a fixture built to make a divergence show — four
+lines for one product, two of them on the same latest date and one of them a genuine $0.
+
+Three properties of that endpoint are deliberate and tested:
+
+- **The tie-breaks are the policy's, and they are pinned rather than assumed.** The last cost is the
+  latest `PurchaseDate`, then the **higher** `PurchaseItemId`; the cheapest is the lowest `UnitCost`,
+  then the **earliest** `PurchaseDate`, then the **lower** `PurchaseItemId`. The use-case tests supply
+  equal-cost and same-date records in an order that would give a different answer if anything sorted
+  by arrival.
+- **A genuine $0 purchase line is a real recorded cost** — a free sample, a replacement delivery, a
+  promotional case — and stays one. It can be the cheapest cost paid and it can be the last cost
+  paid; it is never filtered out, and never reported as a missing figure. A `null` supplier name means
+  the purchase had no supplier recorded and is published as such, never replaced with another
+  purchase's supplier and never used as a reason to drop the line (dropping it would quietly move the
+  last cost to an older purchase).
+- **A product with no purchase history is absent, not zero.** The response is an array of
+  `{ productId, lastUnitCost, lastSupplierName, lastPurchaseDate, lowestUnitCost, lowestSupplierName,
+  lowestPurchaseDate }` holding one entry per product with at least one recorded purchase line, in
+  product id order, so it is normally shorter than the catalogue; a client matches rows up by
+  `productId` and shows "no purchases recorded" for a product it does not find. The optional repeated
+  `productIds` query value narrows the read in the query itself; with no ids the answer covers every
+  product of the business, **retired products included**, because a retired product's purchase history
+  is exactly what a tool reaching into the past needs. The whole-business read is a second method on
+  the port (`GetForAllProductsAsync`) rather than an empty id list, so "no products were asked about"
+  keeps answering nothing for the report that passes a filter. Scoping is the ordinary tenant query
+  filters on the EF adapter; nothing in the request names or carries a business.
+
+The Angular client is `ProductPurchaseCostService`
+(`frontend/inventory-app/src/app/services/product-purchase-cost.service.ts`) with its
+`ProductPurchaseCostSummary` model (`src/app/models/product-purchase-cost-summary.ts`). It fetches and
+presents; it sorts nothing, picks no cheapest and derives no saving. The home Dashboard's Reorder
+Alerts table is its first caller (issue #789), Needs Ordering the second (issue #790), and All
+Products (`ProductListComponent`, issue #791, E of #786) the third — see
+[Average cost and purchase cost columns, and the retired-product filter, on All Products](#average-cost-and-purchase-cost-columns-and-the-retired-product-filter-on-all-products-issue-791)
+below.
 
 Product Profitability's **Last Cost**/**Lowest Cost**/**Saving per unit** columns (issue #207) are the
 same purchasing insight surfaced on the report used to compare sales performance against purchasing
@@ -9095,7 +9327,11 @@ that holds the published description still. It does four narrowly scoped things:
   `#/components/schemas/Product` and `supplier` at
   `#/components/schemas/Supplier`. Because the replacement runs through the generator rather than
   rewriting a reference string, the referenced component is registered with its complete shape —
-  including its own nested `category`/`supplier`/`stockAdjustments` references — instead of dangling;
+  including its own nested `category`/`stockAdjustments` references — instead of dangling. The
+  legacy `Product` component had a nested `supplier` reference of its own until issue #787 dropped
+  the product's supplier; the purchase's and the supplier order's **own** `supplier` reference, which
+  is what this bullet is about, is unchanged (see
+  [A product carries no supplier](#a-product-carries-no-supplier-issue-787));
 - describes the stock history/adjust operations' response with the schema of the legacy
   `Inventory.Infrastructure.Models.StockAdjustment` entity (issue #305), through an operation filter rather than
   a schema-id redirect. Those two actions return the API-owned
@@ -9143,7 +9379,9 @@ generated before the DTOs replaced the entities — no substitution is applied t
 shape of the `Supplier` and `Product` components they point at, that every published property
 reference resolves, that `ProductResponse`/`SupplierResponse` are untouched by the boundary, that
 the internal DTO names and a requiredness declaration are absent, and that no Receipt-named schema
-or tag exists.
+or tag exists. The `Product` property list it compares against lost `supplierId`/`supplier` in issue
+#787, the one approved break in that component; the `Supplier` component it is compared to is
+byte-identical, because the purchase and the supplier order still reference it.
 
 | Layer | Canonical Purchase language | Left as a legacy/compatibility surface | Why |
 | --- | --- | --- | --- |
@@ -10165,6 +10403,13 @@ business has recorded no machine for contributes **no** expenses and narrows the
 to none — never silently to the whole business's, which would report another machine's costs against
 the one that was asked about.
 
+**The expense form reads the machine records themselves since issue #746** (see [Machine fields from
+the business's own machines](#machine-fields-from-the-businesss-own-machines-issue-746)), rather than
+the fleet list this section describes. What it submits is unchanged: the same local machine id, under
+the same server-side check. The same issue gave the expense **list** the Machine filter that this
+section's `machineId` list parameter was waiting for; the parameter, its `AND` and its refusal of a
+machine the business does not have are the ones described above, unchanged.
+
 **One lookup, gated on the provider.** `Inventory.Application.Nayax.INayaxMachineLinkStore` is the
 machine half of [`INayaxProductLinkStore`](#resolving-a-nayax-product-id-to-a-local-product-issue-733),
 with the same rules and for the same reason: `ExternalMachineId` holds whatever provider the business
@@ -10253,8 +10498,90 @@ combined shape and so has the same `Down` ordering; that is not changed here.
 
 **The frontend.** The machine list and the dashboard link to `/machines/{localMachineId}` and link
 nothing for a listed machine with no local record; the machine page passes the route id to its tabs;
-the restock, the stock adjustment form and the stock history filter submit and match `localMachineId`
-and offer only machines that have one.
+the restock, the stock adjustment form and the stock history filter submit and match the local
+machine id. The restock still takes it from the fleet row it is already showing and so offers only
+machines that have one; the stock adjustment form and the stock history filter stopped reading the
+fleet at all in issue #746 (next section) and read the machine records themselves.
+
+### Machine fields from the business's own machines (issue #746)
+
+Child G2b of issue #329, and frontend only: no endpoint, contract, stored value or migration is
+involved. [#780](#expense-machine-references-issue-780) and [#741](#stock-machine-references-issue-741)
+had already moved what these screens *store* onto the business's own machine row, but each still
+**discovered** its machines by reading the live Nayax fleet (`MachineService.getAll()` through
+[`loadProviderList`](#shared-provider-availability-and-error-versus-empty-states-issue-728)) and
+keeping the rows that carried a `localMachineId`. A business with no provider therefore had no
+machine list, and so no machine field at all, even with machines of its own recorded - the one thing
+the G group exists to fix.
+
+**Three screens, one source.** `StockAdjustmentFormComponent` (fed by its page),
+`StockHistoryPageComponent` and `OperatingExpenseComponent` read `LocalMachineService.getAll()`
+(`GET /api/local-machines`, issue #740) and key every option by `LocalMachine.id`. That is the same
+id they submitted before, so nothing about a stored movement or expense changes; what changed is that
+the id now comes from the resource that owns it instead of from a provider read that could not be
+made. The fleet read is **not** made by these screens at all - not as a fallback, and not for a
+label. The label is `LocalMachine.name` and nothing else: that resource publishes no provider name or
+number (it publishes `isProviderNamed`, the fact), so there is none to show and none is invented.
+
+**Active for a new record, every machine for history.**
+
+| Surface | What it lists |
+| --- | --- |
+| Stock adjustment form (a new movement) | the **active** machines |
+| New expense | the **active** machines |
+| Expense being edited | the active machines **plus the machine that expense already names**, deactivated or not |
+| Stock History machine filter | **every** recorded machine, deactivated included |
+| Stock History machine column | named from that same list, deactivated included |
+| Expense list machine filter | **every** recorded machine, deactivated included |
+
+A retired machine is not somewhere stock is being put or a cost is being incurred now, so it is not
+offered for a new record. It is still part of what happened, so it stays in both filters and in the
+column - and it stays as the selected value of an expense being edited, which is why
+`machineOptions` reads the machine from the **stored expense** rather than from the form: choosing
+"None" and changing one's mind must not make the machine unreachable, and saving the form again must
+not silently detach the cost from the machine that incurred it. The server already accepts a
+deactivated machine for exactly that reason ([#780](#expense-machine-references-issue-780)), and
+still refuses one that is not this business's.
+
+**The expense list's filter rides a parameter that already exists.** `GET /api/operating-expenses`
+has accepted an optional local `machineId` since [#780](#expense-machine-references-issue-780) -
+`OperatingExpenseFilter.MachineId`, applied by `EfOperatingExpenseStore` as one more `AND` beside the
+date, category, supplier and site filters - so `OperatingExpenseComponent`'s Machine filter is the
+frontend finally using it, and no endpoint, DTO or query was added or changed for it. It is the same
+id the field submits, so the filter and the field cannot disagree about which machine a row is, and
+the server still answers nothing for a machine the business does not have. The totals row sums the
+rows the server returned, which is what makes a machine-narrowed list state that machine's cost
+rather than the whole business's.
+
+**The field is offered once there is an active machine, and the three other states stay distinct.**
+A read still outstanding says it is loading, a read that **failed** renders an explicit error in
+place of the field or filter, and a business with no active machine simply has no field - with no
+error, because that is a true statement about the business. This is issue #728's error-versus-empty
+rule kept on a read that is no longer the provider's: `loadProviderList`'s `unavailable` outcome has
+no counterpart here, because `/api/local-machines` has no availability answer to give. The page owns
+the read and the adjustment form takes `machines`, `machinesFailed` and `machinesLoading` as inputs,
+so the two agree about which of those states they are in; a machine staged on the form that the list
+stops offering - the list went away, or that machine was deactivated - is dropped rather than
+submitted.
+
+**What stayed where it was.** `MachineService` and the provider fleet screens are untouched; the pick
+list's manual entry is issue #794; the report machine filters stay on the provider's machine number
+by the G2 decision ([#780](#expense-machine-references-issue-780)); and the Nayax source filter, the
+"Nayax monthly fee" category and the Expenses subtitle stay on the shared provider signal, because
+they are about whether Nayax is part of this business rather than about a machine list. No
+support-session guard changed. Every role that can reach these screens already holds
+`Inventory.Operate`, which is what `/api/local-machines` requires, so no role loses a field it had.
+
+**What proves it.** `stock-history-page.component.local-machines.spec.ts` and
+`operating-expense.component.local-machines.spec.ts` each cover the four cases the issue names -
+without a provider, with one, with a deactivated machine, and with a failed read - plus the
+outstanding read and the id that is actually submitted; the Stock History spec also asserts the
+adjustment field through its page, which is where the form's list comes from. The expense spec covers
+the list's Machine filter over the same four cases, including the deactivated machine it lists and the
+local id it narrows by, and `operating-expense.service.spec.ts` pins the request itself: the chosen id
+is sent as `machineId`, and no machine parameter is sent while none is chosen.
+`stock-adjustment-form.component.spec.ts` covers the active-only offer, the error and loading states,
+and the staged machine dropped when the list stops offering it.
 
 ### Resolving a Nayax product id to a local product (issue #733)
 
@@ -10548,8 +10875,10 @@ on `ProductsController`, and `POST api/categories`, `PUT api/categories/{id}` an
 capability the catalogue reads declare — maintaining the catalogue is the same day-to-day inventory
 work as refilling from it — so no capability is added, a read-only support session is refused them
 by the central `GET`/`HEAD` rule (issue #551), and the business is resolved from the caller's
-membership as everywhere else. `PUT api/products/{id}` now also binds `name`, `unitPrice` and
-`categoryId`, which the request body always carried and the action used to ignore.
+membership as everywhere else. `PUT api/products/{id}` now also binds `name` and
+`categoryId`, which the request body always carried and the action used to ignore. It bound
+`unitPrice` too until issue #792 removed the field (see [A product carries no selling
+price](#a-product-carries-no-selling-price-issue-792)).
 
 **Provider-managed fields.** `Inventory.Domain.Providers.ProviderManagedCatalogueFields` is the one
 statement of which fields a provider owns: a product carrying an `ExternalProductId` has its `name`
@@ -10558,8 +10887,10 @@ row with no external id has nothing managed. The product and category responses 
 `providerManagedFields`, so a client locks exactly the inputs the server refuses — the same function
 produces both, which is what stops the lock and the enforcement from drifting apart. A *change* to a
 managed field is refused with `400` and a message naming the provider; submitting the stored value is
-not a change, so a client may send the whole row back, and the price, SKU, unit, supplier, restock
-settings and active flag stay editable for every product. Nothing here clears an external id; if a
+not a change, so a client may send the whole row back, and the price, SKU, unit, restock
+settings and active flag stay editable for every product. (A supplier was in that list until issue
+#787 removed the field entirely — see
+[A product carries no supplier](#a-product-carries-no-supplier-issue-787).) Nothing here clears an external id; if a
 future provider switch (#761) does, the fields become editable again with no further change.
 
 `providerManagedFields` is the key issue #736 appended to the catalogue response (issue #737 appended
@@ -10677,10 +11008,82 @@ stock are untouched throughout.
 **`GET api/products` hiding retired products is a deliberate read-contract change** (issue #736's
 criterion that a deactivated product is hidden from lists, pick lists and reorder while keeping its
 history and staying reactivatable). **The catalogue page passes `includeRetired=true` through its
-"Show retired" filter since issue #737 (B2)**, which is how a retired product is found again to
+Status filter since issue #737 (B2), now "Only active" (default)/"All" rather than a "Show retired"
+checkbox (issue #791, E of #786 — see below)**, which is how a retired product is found again to
 reactivate; the Admin costing-repair and AVCO-transition tools and the stock-history product filter
 still call the endpoint without it and show active products only - picking those three up is
 unrelated follow-up work, not part of #737. Nothing on the server depends on any of them.
+
+#### Average cost and purchase cost columns, and the retired-product filter, on All Products (issue #791)
+
+Issue #791 — E of parent #786 — is one of the three product screens (issues #789-#791) to
+use `ProductPurchaseCostService`; it changes `ProductListComponent`'s filters and columns and adds
+the `ProductPurchaseCostsComponent` feature component the page composes for that read, with no
+backend change: `includeRetired` already existed, and #788 already owns the average-cost
+availability projection this issue only displays.
+
+- **The "Show retired" checkbox is now a Status filter.** `statusFilter: 'active' | 'all'`
+  replaces the boolean `includeRetired` field; "Only active" (the default, and what Reset returns
+  to) sends no `includeRetired`, and "All" sends `includeRetired=true` — the same two
+  `GET api/products` reads issue #737 already defined, under clearer labels. The reactivation path
+  and the "a deactivated product drops out of the 'Only active' list after the next refresh"
+  behaviour are unchanged, because both were already properties of `includeRetired` and this issue
+  only renames the control that sets it.
+- **The Price column stays gone** (issue #792, A2 of #786): this issue adds no selling-price
+  column or sort back.
+- **Three cost columns are added**, none of them computed in Angular: "Average cost" is
+  `ProductResponse.averageUnitCostForDisplay` (issue #788) formatted to two decimals, `—` when it
+  is absent and `$0.00` for a genuine recorded zero — the legacy `averageUnitCost` default is never
+  read as evidence of a known cost. "Last purchase" and "Cheapest purchase" are
+  `ProductPurchaseCostSummary.lastUnitCost`/`lowestUnitCost` with their suppliers
+  (`lastSupplierName`/`lowestSupplierName`, `None` when null), from one
+  `ProductPurchaseCostService.getSummaries(ids)` call per loaded product page, keyed by
+  `productId`; a product absent from that answer has no recorded purchase, shown as `—`. All three
+  columns are sortable through the same missing-values-sort-last mechanism
+  (`compareSortValuesDirectionalNulls`) every other column here uses; Average cost sorts on
+  `averageUnitCostForDisplay`, and Last/Cheapest purchase sort on their cost figure, never their
+  supplier.
+- **The purchase-cost read is its own feature component, not a second workflow inside the page.**
+  `ProductPurchaseCostsComponent`
+  (`components/products/product-purchase-costs/product-purchase-costs.component.ts`) owns the whole
+  lifecycle of that read — when it starts, the capability that permits it, its
+  loading/loaded/failed state, its failure message and the Retry control that re-enters it — and
+  `ProductListComponent` composes it through `@Input`/`@Output` only: it passes `productIds` (the
+  ids it is displaying) and records what `costsChange` publishes, which is one
+  `{ state, summaries }` answer. That is [Page composition boundary (issue
+  #191)](#page-composition-boundary-issue-191) applied to this screen: the routed page keeps its
+  own filters, fetch, load state, sorting and layout, and nothing of the second read beyond laying
+  its answer out. The two cost columns stay as cells in the page's own `<table>` — this codebase
+  has no pattern for a child component contributing cells to a parent's table, and inventing one
+  was not in this issue's scope — but the *rules* those cells follow are stated once, in that
+  component's exported `purchaseCostDisplay`/`purchaseCostSupplierDisplay`/`purchaseCostSortValue`
+  helpers, which the page calls rather than restates. Issues #789 and #790 (the other two product
+  screens) can compose the same component instead of repeating the workflow.
+- **Average cost is shown to every role**, matching `averageUnitCostForDisplay`'s own availability
+  (issue #788). **Last purchase and Cheapest purchase, and the request behind them, require
+  `Dashboard.ViewFinancials`** — `ProductListComponent.canViewFinancials` (the same fail-open-until-read
+  field every other capability-gated control here starts from) hides both columns and their header
+  cells for a role without it, and the bulk request is gated a second time, independently, inside
+  `ProductPurchaseCostsComponent`, by a fresh one-shot read of
+  `AccessService.allows('Dashboard.ViewFinancials')` taken before the request is ever issued — so no
+  request reaches the endpoint for a role that may not see its answer, even during the fail-open
+  window before the page's own capability read settles. The two reads are deliberately separate:
+  one decides what is rendered and lives with the page's columns, the other decides whether a
+  request may leave at all and lives with the request.
+- **Three distinct states, decided in this order: loading, then failed, then the data.** A
+  product set change (a new search, a new category, the Status filter, Reset) clears the previous
+  purchase-cost results immediately and starts a fresh read; "Loading" shows while that read is in
+  flight, "Unavailable" shows once it has failed (with a Retry control next to the table), and only
+  a *successful* response may answer "—" for a product it did not find — never the other way
+  round, so an in-flight or failed read is never misread as "no purchase history". A genuine `$0`
+  last or cheapest cost displays as `$0.00` with its supplier, never `—`; an unknown supplier shows
+  `None` independently of the cost.
+- **Retry re-enters the same read for the same product ids**, and a stale or failed response can
+  never overwrite a newer product/filter selection's results: the read for one product set is one
+  switchable RxJS stream per set inside `ProductPurchaseCostsComponent` (the `productIds` input
+  outer, `retry$`/the initial request inner), so a new product set arriving — from a filter change,
+  not from Retry — unsubscribes whatever the previous set's stream was still waiting on, Retry
+  included.
 
 **The provider import was refused for a manual catalogue, and issue #739 removed that refusal by
 removing the import it protected against.** `Inventory.Domain.Providers.ManualCatalogueImportPolicy`
@@ -10694,6 +11097,84 @@ name, or creates one. See
 and [The catalogue review screen](#the-catalogue-review-screen-issue-739) below. Nothing else about
 this section changed: the provider still owns a linked row's name and category, the price is still
 local and still editable, and a row with no external id is still the business's own in full.
+
+### A product carries no supplier (issue #787)
+
+A product held one supplier — `Product.SupplierId`, a nullable foreign key to `Suppliers` with
+`OnDelete(SetNull)` — described as a default for ordering. **Nothing ever read it as one.** No
+reorder, pick-list, purchasing, costing or reporting decision consulted it; the supplier-order
+create has always taken its supplier from the request and validated it against the business's own
+suppliers; and the per-product
+[supplier price comparison](#supplier-product-price-history-and-comparison-issue-63) was always
+derived from the purchase history instead. Issue #787 (A1 of #786) removed the field, its stored
+values, and the whole surface built on it.
+
+**Why removal rather than reinterpretation.** A supplier is a party to a transaction, so the place
+to record one is the transaction: the purchase that was bought, and the supplier order that was
+placed. Both of those already do, and both are untouched. A product bought from whoever is cheapest
+this month has no single supplier, so a stored default on the catalogue row was a field that could
+only be stale or wrong, and the one screen that pre-filled from it — the Needs Ordering order dialog
+— was guessing at a decision about *this order*.
+
+**The schema.** `RemoveProductSupplier` drops the column with its foreign key and its
+`IX_Products_SupplierId` index. It is **destructive, by the repository owner's approval on
+21 October 2026**, and it is the whole of what it touches: every other product column keeps its
+value — the selling price `UnitPrice` explicitly, which the very next migration then removed under
+its own approval (issue #792, see [A product carries no selling
+price](#a-product-carries-no-selling-price-issue-792)) — and the table
+keeps its own key, its category foreign key, and its `Sku`, `BusinessId` and filtered
+`(BusinessId, ExternalProductId)` indexes. `Down` recreates the column, index and foreign key so the
+schema matches the previous release's code, and every row comes back `NULL`: a dropped value is not
+recoverable and nothing is inferred in its place. `RemoveProductSupplierMigrationTests` proves both
+directions, including `PRAGMA foreign_key_check` finding nothing after the rebuild.
+
+**The code.** `Product.SupplierId`/`Product.Supplier` and `Supplier.Products` are gone with their
+`AppDbContext` relationship. `ProductRecord.SupplierId`/`Supplier` and `ProductSupplierRecord`,
+`ProductCreateFields.SupplierId`, `ProductUpdateFields.SupplierId` and
+`ProductCatalogFilter.SupplierId` are gone from `Inventory.Application`, and with them the
+`Include(product => product.Supplier)` and the supplier `Where` in `EfProductCatalogStore` and the
+two assignments in `EfProductStore`. `Products.SupplierId` left
+[the platform diagnostics allowlist](#platform-diagnostics-issue-336) with the column, because that
+allowlist names physical columns.
+
+**The API contract breaks, deliberately and once.** `ProductResponse` no longer carries
+`supplierId`/`supplier`, so neither does `GET /api/products`, `GET /api/products/{id}`, the reorder
+listing, `GET /api/machines/{id}/products`, nor the product snapshot nested in a purchase line or a
+supplier-order line (`PurchaseProductSummaryRecord`/`SupplierOrderProductSummaryRecord` lost the
+field too). The keys are **removed, not nulled**: a product has no supplier to report, and an
+explicit `null` would state "no supplier recorded", which is a different and now meaningless claim.
+`GET /api/products` and `GET /api/products/alerts/low-stock` no longer bind a `supplierId` query
+parameter, and `ProductCreateDto`/`ProductUpdateDto` no longer bind one either — a client that still
+sends it is simply not bound, so the write succeeds and stores nothing for it, rather than being
+refused. **The purchase's and the supplier order's own `supplier` is untouched** in the payload and
+in the published `Supplier` component, which is what their contract tests and
+`PublishedResponseSchemaContractTests` still assert.
+
+**The UI.** The product form has no Supplier dropdown and loads no supplier list. All Products and
+Needs Ordering lose their "All Suppliers" filter, their Supplier column and its sort; All Products
+loads no supplier list either, while **Needs Ordering still does**, because its order dialog needs
+one. The home Dashboard's Reorder Alerts table loses its Supplier column. `ProductNeedsOrderingComponent.openOrderForm`
+opens with `orderForm.supplierId` **null** instead of inferring it from the selected products, and
+the selector stays `required`, so an order still cannot be sent without a supplier a person chose.
+The product edit page's supplier price comparison and its GST-rule note still speak of suppliers, and
+should: both are about the purchases a product was actually bought in.
+
+**What is explicitly not in this change.** `Product.UnitPrice`, the selling-price table columns and
+catalogue price negotiation were issue #792, which has since removed all three (see [A product
+carries no selling price](#a-product-carries-no-selling-price-issue-792)). The purchase summaries
+and the other screen changes are issues #788–#791. No cost, average cost, inventory value, COGS,
+reorder figure or stored purchase is recalculated or backfilled.
+
+**Release sequence, because Production migrates at startup.** `DatabaseSchemaStartup` applies pending
+migrations when the API starts (issue #201), so for a short period the deployed API is the previous
+build running against a schema with no `Products.SupplierId`. That build's EF model still declares
+the column, so **a product read or write by the old code fails until the new build is serving**;
+purchases, supplier orders and everything else are unaffected. The deployment is therefore
+human-sequenced in the ordinary way — one **Deploy Production** run for an exact `main` commit,
+API first and then the frontend from the same commit — and the window is the API's own restart, not
+a period either build can be left in. **Rolling back to a release that reads the column is not
+supported**: `Down` restores an empty column, so the old build would read every product as having no
+supplier, and the deleted associations do not come back.
 
 ### Provider catalogue review: link-or-create and change review (issue #738)
 
@@ -10744,7 +11225,14 @@ its product stays unlinked, and a local key that happens to equal a provider id 
 (issue #735). The only ways a link comes about are an operator naming a row and a row the review
 creates, which is what keeps a provider id from ever being inferred.
 
-**Name and category follow the provider; price is negotiated.**
+**Name and category follow the provider; nothing is negotiated any more.** Until issue #792 the
+selling price was the one field the operator decided, and that issue (A2 of #786) deleted the
+product field behind it: a review proposes no price, records none on its stored entries, writes none
+onto a created row, and refuses a submitted price decision — see [A product carries no selling
+price](#a-product-carries-no-selling-price-issue-792). What remains below describes the negotiation
+mechanism because it is still the contract the one surviving negotiable field (`UnitVolume`, which
+carries no provider value) and any future field run on.
+
 `Inventory.Domain.Providers.ProviderManagedCatalogueFields` already says which fields a provider owns
 on a row it names (issue #736), and this review is where that becomes a *transition*: linking a
 product replaces its name with the provider's and its category with the local category carrying the
@@ -10759,20 +11247,21 @@ The negotiable fields are `Inventory.Domain.Providers.NegotiableCatalogueField`,
 
 - **A value is proposed only when three things hold**: the provider has one, it differs from the local
   value, and it differs from the provider value this field was **last decided about**. The third is
-  what makes a skip stick — an operator who kept their own $3.00 over the provider's $3.50 is not
+  what makes a skip stick — an operator who kept their own value over the provider's is not
   asked again until the provider moves it somewhere new.
 - That last-decided value is the whole reason `ProviderCatalogueFieldDecisions` exists: one row per
   product and field, holding the provider value and which way it went, replaced rather than appended
   because "what did we last ask about?" has one current answer. Both answers are recorded — keeping
-  the local value is a decision about that provider value just as taking it is.
+  the local value is a decision about that provider value just as taking it is. The rows an earlier
+  release wrote about the retired selling price stay in the table and are read by nothing.
 - Values are compared as the opaque text `ProviderCatalogueFieldValue` renders, in the invariant
-  culture and with a price's trailing zeros fixed, so `3.5` and `3.50` are one answer rather than two
+  culture, so two spellings of one value are one answer rather than two
   and the operator is not asked the same question on every review.
 - A field nobody answered is left exactly as it is and proposed again next time. A **created** row has
   no local value to keep, so it takes the provider's.
 
 **The provider publishes no unit/volume label, so none is proposed.** `NegotiableCatalogueField`
-declares `UnitVolume` beside `UnitPrice`, and its provider value is always absent. The authoritative
+declares `UnitVolume` beside the retired `UnitPrice`, and its provider value is always absent. The authoritative
 Lynx contract for `GET /v1/operators/{OperatorID}/products` declares no unit or volume *label*: its
 only volume-shaped fields are `ProductVolumeTypeID`, an `int32` whose vocabulary the documentation
 does not publish, and `ProductPackageQuantity`, which is units per package. `Product.Unit` is a
@@ -10784,9 +11273,12 @@ says about it, and the API returns it as `unitVolumeNote`.
 
 **The review is persisted, and the apply is authorised by it.** `ProviderCatalogueReviews` and
 `ProviderCatalogueReviewItems` hold the provider's side exactly as it was read. The apply request
-carries item keys, one of three actions (`Defer`, `LinkExisting`, `CreateNew`) and the two field
-answers — **nothing a caller submits reaches a catalogue field**: every provider name, price and group
+carries item keys, one of three actions (`Defer`, `LinkExisting`, `CreateNew`) and the field
+answers — **nothing a caller submits reaches a catalogue field**: every provider name and group
 id comes from the stored items, and every local value from the rows read inside the transaction. A
+stored review that predates issue #792 is refused whole, before anything is staged, because its
+entries still carry provider prices and its plan can no longer be carried out in full
+(`ApplyCatalogueReview.StaleSellingPriceReviewMessage`). A
 business has at most one *pending* review, enforced by a filtered unique index over `(BusinessId)`
 where `AppliedAtUtc IS NULL`: a review is a reading of the provider's catalogue at an instant, and an
 older reading is not a second opinion, so starting one replaces the unapplied one. An applied review
@@ -10882,21 +11374,16 @@ theirs, which is exactly what the apply does with it.
   read-only here*, and linking a category states the same about its name. That is the transition
   `ProviderManagedCatalogueFields` describes, said at the moment the operator chooses it rather than
   discovered afterwards on the edit form.
-- The one negotiable field is the **price**: keep mine or take the provider's when linking, accept or
-  skip when a linked product's provider price has moved. The screen notes that either answer is
-  remembered and that leaving both unanswered asks again next review, which is
-  `CatalogueReviewPolicy.IsProposed` in the operator's words.
-- **Which price "mine" is, in that comparison** (`localPrice`). For an already-linked row it is the
-  review's own local value, because the server compared it when it read the catalogue. For a row the
-  operator is linking now the review reports **no** local value at all — `StartCatalogueReview`
-  cannot report one, since the local row is what the operator is naming on this screen — so the
-  screen shows the price of the product they named, rendered with the two decimals
-  `ProviderCatalogueFieldValue.FromPrice` writes so both sides read alike. That is the price the
-  apply itself negotiates against (`ApplyNegotiableFields` re-reads the named product's `UnitPrice`),
-  and it is the single local catalogue value this screen renders beside the provider's: showing
-  nothing there would tell an operator authorising a replacement that they have no price to lose.
-- A **unit/volume** is never offered. The provider publishes no unit or volume label, so the API
-  proposes none, and the screen renders a control for the price choice alone — issue #739's
+- **Nothing is negotiated, so the screen offers no field control at all** (issue #792, A2 of #786).
+  The price used to be the one choice — keep mine or take the provider's when linking, accept or
+  skip when a linked product's provider price had moved — and a product carries no selling price
+  any more, so the keep-or-take fieldset, the "Mine … Nayax …" comparison and the applied result's
+  accepted/skipped counts are all gone. A stale API response that still proposes a `UnitPrice`
+  choice renders nothing and sends nothing: the screen never offers a field it cannot write, and
+  the apply would refuse a price decision anyway. See [A product carries no selling
+  price](#a-product-carries-no-selling-price-issue-792).
+- A **unit/volume** is not offered either, and never was. The provider publishes no unit or volume
+  label, so the API proposes none — issue #739's
   out-of-scope note and the owner's decision of 20 October 2026 keep `Product.Unit` locally managed
   until a human decides which Lynx field, if any, means it.
 - A provider-owned change on an already-linked row is listed as **applied automatically** with the
@@ -10909,7 +11396,7 @@ theirs, which is exactly what the apply does with it.
 
 **Every entry starts on Skip**, and an entry the operator answered nothing about is sent as nothing
 at all — a half-decided review must not link the other half by omission. The screen sends decisions
-and nothing else: no provider name, price or group id travels back from the browser, and a link that
+and nothing else: no provider name or group id travels back from the browser, and a link that
 names no local row is refused locally with a message rather than sent, because the server refuses the
 whole apply over one such decision and would throw away every other answer on the screen. Both calls
 are disabled while a support session is active, for the reason every other write on this page is
@@ -10928,16 +11415,19 @@ and because what it did is still the right explanation of *why* the review exist
 - It was a one-way write-through sync of the Nayax operator catalogue into the local product and
   category tables: it created a row for every snapshot entry no local row carried the provider id of,
   and overwrote `Name`, `Description`, `UnitPrice` (from the catalogue `ProductDefaultRetailPrice`,
-  never the Nayax `ProductCostPrice` — see [Product selling price](#product-selling-price)) and
-  `CategoryId` on every row that did, plus `UpdatedAt`. Stock, costing, supplier and the operator's
-  own local fields were never written. A local product Nayax stopped returning was never removed —
-  that drift is reported by the catalogue reconciliation below.
+  never the Nayax `ProductCostPrice`) and `CategoryId` on every row that did, plus `UpdatedAt`.
+  Stock, costing, supplier and the operator's own local fields were never written. A local product
+  Nayax stopped returning was never removed — that drift is reported by the catalogue
+  reconciliation below.
 - **Two of those four fields are what the review still applies without asking** — the name and the
   category, because the provider owns them (`ProviderManagedCatalogueFields`). The price became a
-  per-product decision in issue #738, and the **description is no longer taken from the provider at
-  all**: it is not one of the fields the review negotiates or applies, so a provider description
-  change now leaves the local description alone. That is a deliberate consequence of C1/C2 rather
-  than an oversight — the review's contract names exactly the fields it writes.
+  per-product decision in issue #738 and then went altogether in issue #792, which deleted the
+  product field behind it (see [A product carries no selling
+  price](#a-product-carries-no-selling-price-issue-792)); and the **description is no longer taken
+  from the provider at all**: it is not one of the fields the review negotiates or applies, so a
+  provider description change now leaves the local description alone. That is a deliberate
+  consequence of C1/C2 rather than an oversight — the review's contract names exactly the fields it
+  writes.
 - It had no concurrency token, so two overlapping imports could both decide the same product was new
   and a local edit to a provider-linked row committed between its read and its write was simply
   overwritten. The review's apply is the opposite shape: it re-reads every row it is about to write
@@ -12071,7 +12561,8 @@ files" as the historical record of that slice, not as a test to look for today.
       `Inventory.Infrastructure.Persistence.EfNayaxProductCatalogImportStore` (API-owned until issue #309); see
       [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300) for the full
       behaviour, including the preserved new/existing upsert, the untouched local stock/costing
-      state, the never-renamed existing category and the `Product.UnitPrice` retail-price semantics.
+      state, the never-renamed existing category and the retail-price semantics of the
+      then-existing `Product.UnitPrice` (removed by issue #792).
       Like child 1, this slice adds no `Inventory.Domain` code: the import persists raw remote
       catalogue facts and derives no accounting value. The Products slice ports from issue #240 were
       deliberately not reused or widened for an upsert keyed by the remote identifier, and the

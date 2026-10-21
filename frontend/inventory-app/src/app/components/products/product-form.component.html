@@ -48,25 +48,10 @@
             </select>
           </label>
 
-          <label class="field">
-            <span class="field-label">Supplier</span>
-            <select [(ngModel)]="form.supplierId" name="supplierId">
-              <option value="">None</option>
-              @for (s of suppliers; track s.id) {
-                <option [ngValue]="s.id">{{ s.name }}</option>
-              }
-            </select>
-          </label>
-
           <!-- `self-end` keeps this label-less control's box on the same baseline as the inputs beside it. -->
           <label class="flex items-center gap-2 self-end rounded-md-control border border-md-gray-200 bg-md-gray-100 px-3 py-2">
             <input [(ngModel)]="form.isActive" name="isActive" type="checkbox" class="h-4 w-4 border-md-gray-300 text-md-dark" />
             <span class="field-label">Active product</span>
-          </label>
-
-          <label class="field">
-            <span class="field-label">Unit Price ($) *</span>
-            <input [(ngModel)]="form.unitPrice" name="unitPrice" type="number" min="0" step="0.01" />
           </label>
 
           @if (!productId) {

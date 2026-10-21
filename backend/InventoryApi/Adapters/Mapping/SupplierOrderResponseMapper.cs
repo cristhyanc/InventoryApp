@@ -82,7 +82,6 @@ public static class SupplierOrderResponseMapper
             Name = record.Name,
             Sku = record.Sku,
             Description = record.Description,
-            UnitPrice = record.UnitPrice,
             AverageUnitCost = record.AverageUnitCost,
             CostingQuantity = record.CostingQuantity,
             InventoryValue = visibility.Withhold(record.InventoryValue),
@@ -94,6 +93,5 @@ public static class SupplierOrderResponseMapper
             CreatedAt = record.CreatedAt,
             UpdatedAt = record.UpdatedAt,
             CategoryId = record.CategoryId,
-            SupplierId = record.SupplierId,
         };
 }

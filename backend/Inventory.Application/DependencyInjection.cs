@@ -311,6 +311,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<IGetRestockCostSuggestion>(sp => sp.GetRequiredService<GetRestockCostSuggestion>());
         services.AddScoped<AdjustStock>();
         services.AddScoped<GetProductPriceComparison>();
+        // The same last/cheapest purchase facts for many products at once (issue #788), through the
+        // bulk port the product profitability report already reads.
+        services.AddScoped<ListProductPurchaseCostSummaries>();
         services.AddScoped<GetBookkeepingReport>();
         services.AddScoped<IGetBookkeepingReport>(sp => sp.GetRequiredService<GetBookkeepingReport>());
         services.AddScoped<GetDailyReport>();

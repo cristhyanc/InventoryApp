@@ -9,14 +9,10 @@ import {
   CatalogueReviewApplied,
   CatalogueReviewCategory,
   CatalogueReviewDecisionRequest,
-  CatalogueReviewField,
   CatalogueReviewProduct,
   CatalogueReviewService,
-  NegotiableCatalogueField,
   PROVIDER_MANAGED_CATEGORY_FIELD,
-  PROVIDER_MANAGED_NAME_FIELD,
-  ProviderFieldDecision,
-  UNIT_PRICE_FIELD
+  PROVIDER_MANAGED_NAME_FIELD
 } from '../../../../services/catalogue-review.service';
 import { CategoryService } from '../../../../services/category.service';
 import { ProductService } from '../../../../services/product.service';
@@ -32,8 +28,6 @@ interface EntryDecision {
   localRowId: number | null;
   /** The link picker's search text. Local to the screen; never sent. */
   search: string;
-  /** The keep-or-take answer for the price, or `null` while the operator has not answered. */
-  price: ProviderFieldDecision | null;
 }
 
 /**
@@ -44,8 +38,8 @@ interface EntryDecision {
  * because it is a workflow with its own two-step state, its own actions and its own loading and
  * error lifecycle (AGENTS.md § Frontend rules; docs/architecture.md § Page composition boundary).
  *
- * <p><strong>It decides nothing about the catalogue.</strong> Every provider name, price, group and
- * link comes from `POST api/catalogue-review`, and the apply carries the operator's decisions and
+ * <p><strong>It decides nothing about the catalogue.</strong> Every provider name, group and link
+ * comes from `POST api/catalogue-review`, and the apply carries the operator's decisions and
  * nothing else - no provider value is ever sent back from the browser, which is what keeps the
  * server's stored review the only source of what gets written (issue #738).</p>
  *
@@ -55,11 +49,13 @@ interface EntryDecision {
  * settles the groups, and step two shows each product the category it will actually end up in,
  * which is why the steps are ordered rather than merely tabbed.</p>
  *
- * <p><strong>Only the price is negotiated.</strong> A linked row's name, and a product's category,
- * belong to the provider: the screen lists those changes as applied automatically and offers no
- * choice about them. The unit/volume is not offered either - the Lynx product contract publishes no
- * unit or volume label, so the API proposes none and `Product.Unit` stays the business's own
- * (issue #739's out-of-scope note, and the owner's decision of 20 October 2026).</p>
+ * <p><strong>Nothing is negotiated any more.</strong> A linked row's name, and a product's
+ * category, belong to the provider: the screen lists those changes as applied automatically and
+ * offers no choice about them. The selling price used to be the one field the operator decided, and
+ * issue #792 (A2 of #786) removed the product field behind it, so no price is proposed, shown or
+ * sent. The unit/volume is not offered either - the Lynx product contract publishes no unit or
+ * volume label, so the API proposes none and `Product.Unit` stays the business's own (issue #739's
+ * out-of-scope note, and the owner's decision of 20 October 2026).</p>
  */
 @Component({
   selector: 'app-catalogue-review',
@@ -74,16 +70,14 @@ export class CatalogueReviewComponent implements OnInit, OnDestroy {
   /** The three sentences the screen states about what linking does, worded once. */
   static readonly ProductLinkNotice =
     "This product's name and category will be replaced by the provider's and become read-only " +
-    'here; only its price is yours to decide.';
+    'here. Its stock, costs and purchase history are unchanged.';
 
   static readonly CategoryLinkNotice =
     "This category's name will be replaced by the provider's name and become read-only here.";
 
-  static readonly CreateNotice =
-    "A new local row is created with the provider's name, category and price.";
+  static readonly CreateNotice = "A new local row is created with the provider's name and category.";
 
   readonly actions = CatalogueReviewAction;
-  readonly decisions = ProviderFieldDecision;
   readonly productLinkNotice = CatalogueReviewComponent.ProductLinkNotice;
   readonly categoryLinkNotice = CatalogueReviewComponent.CategoryLinkNotice;
   readonly createNotice = CatalogueReviewComponent.CreateNotice;
@@ -148,7 +142,7 @@ export class CatalogueReviewComponent implements OnInit, OnDestroy {
   answer(itemId: number): EntryDecision {
     const existing = this.answers.get(itemId);
     if (existing) return existing;
-    const created: EntryDecision = { action: CatalogueReviewAction.Defer, localRowId: null, search: '', price: null };
+    const created: EntryDecision = { action: CatalogueReviewAction.Defer, localRowId: null, search: '' };
     this.answers.set(itemId, created);
     return created;
   }
@@ -157,18 +151,16 @@ export class CatalogueReviewComponent implements OnInit, OnDestroy {
     const answer = this.answer(itemId);
     answer.action = action;
     if (action !== CatalogueReviewAction.LinkExisting) {
-      // Only a link names a local row, and only a link negotiates a price: a created row takes the
-      // provider's price with nothing to decide, and a deferred entry is not written at all.
+      // Only a link names a local row; a created row has none yet and a deferred entry is not
+      // written at all.
       answer.localRowId = null;
-      answer.price = null;
     }
   }
 
-  /** The operator-facing name of a field the API reports a change or a choice about. */
+  /** The operator-facing name of a field the API reports a change about. */
   fieldLabel(field: string): string {
     if (field === PROVIDER_MANAGED_NAME_FIELD) return 'name';
     if (field === PROVIDER_MANAGED_CATEGORY_FIELD) return 'category';
-    if (field === UNIT_PRICE_FIELD) return 'price';
     return field;
   }
 
@@ -180,10 +172,6 @@ export class CatalogueReviewComponent implements OnInit, OnDestroy {
   setLocalRow(itemId: number, localRowId: number | string | null): void {
     const parsed = typeof localRowId === 'string' ? Number.parseInt(localRowId, 10) : localRowId;
     this.answer(itemId).localRowId = parsed != null && Number.isFinite(parsed) ? parsed : null;
-  }
-
-  setPrice(itemId: number, decision: ProviderFieldDecision): void {
-    this.answer(itemId).price = decision;
   }
 
   /**
@@ -209,41 +197,6 @@ export class CatalogueReviewComponent implements OnInit, OnDestroy {
           product.name.toLowerCase().includes(search) ||
           (product.sku ?? '').toLowerCase().includes(search)
       );
-  }
-
-  /**
-   * The one negotiable field this screen offers: the catalogue price, and only while the API
-   * proposed it. Anything else the API may ever propose - the declared but never-populated
-   * unit/volume among it - is deliberately not rendered, because taking a provider unit/volume is
-   * out of scope for issue #739 and the provider publishes none.
-   */
-  priceChoice(entry: CatalogueReviewProduct): CatalogueReviewField | null {
-    return entry.choices.find((choice) => choice.field === UNIT_PRICE_FIELD) ?? null;
-  }
-
-  /**
-   * The price the comparison calls "mine", for the one screen on which an operator authorises
-   * replacing a real price.
-   *
-   * For a row the provider is already linked to, that is the review's own local value, because the
-   * server compared it when it started the review. For a row that is not linked yet, the started
-   * review reports no local value at all - at that moment there is no local row, since naming one is
-   * what the operator is doing here - so the price of the product they named is the only truthful
-   * answer. The apply negotiates against exactly that product's price, so showing "none yet" opposite
-   * the provider's would tell an operator with a $3.20 product that they have no price to lose.
-   *
-   * Rendered with the two decimals `ProviderCatalogueFieldValue.FromPrice` writes, so both sides of
-   * the comparison read alike. `null` is a row the operator has not named yet, which genuinely has
-   * no price to show.
-   */
-  localPrice(entry: CatalogueReviewProduct, price: CatalogueReviewField): string | null {
-    if (entry.isLinked) return price.localValue;
-
-    const answer = this.answer(entry.itemId);
-    if (answer.action !== CatalogueReviewAction.LinkExisting || answer.localRowId == null) return null;
-
-    const local = this.localProducts.find((product) => product.id === answer.localRowId);
-    return local ? local.unitPrice.toFixed(2) : null;
   }
 
   /**
@@ -402,35 +355,25 @@ export class CatalogueReviewComponent implements OnInit, OnDestroy {
 
   private requestDecisions(): CatalogueReviewDecisionRequest[] {
     const decisions: CatalogueReviewDecisionRequest[] = [];
-    for (const entry of this.categoryEntries) {
-      const decision = this.decisionOf(entry.itemId, null);
-      if (decision) decisions.push(decision);
-    }
-    for (const entry of this.productEntries) {
-      const decision = this.decisionOf(entry.itemId, entry);
+    for (const entry of [...this.categoryEntries, ...this.productEntries]) {
+      const decision = this.decisionOf(entry.itemId);
       if (decision) decisions.push(decision);
     }
     return decisions;
   }
 
   /**
-   * One entry's decision, or `null` when the operator answered nothing about it. A price answer on
-   * its own is a decision: that is how a linked product's price change is accepted or skipped
-   * without the entry being linked or created again.
+   * One entry's decision, or `null` when the operator answered nothing about it. Since issue #792
+   * the only answer there is to give is the action, so a deferred entry is sent as nothing at all -
+   * there is no field answer that could make it a decision on its own, and none is ever sent.
    */
-  private decisionOf(itemId: number, product: CatalogueReviewProduct | null): CatalogueReviewDecisionRequest | null {
+  private decisionOf(itemId: number): CatalogueReviewDecisionRequest | null {
     const answer = this.answers.get(itemId);
-    if (!answer) return null;
-
-    const price = product && this.priceChoice(product) ? answer.price : null;
-    if (answer.action === CatalogueReviewAction.Defer && price == null) return null;
+    if (!answer || answer.action === CatalogueReviewAction.Defer) return null;
 
     const decision: CatalogueReviewDecisionRequest = { itemId, action: answer.action };
     if (answer.action === CatalogueReviewAction.LinkExisting && answer.localRowId != null) {
       decision.localRowId = answer.localRowId;
-    }
-    if (price != null) {
-      decision.fields = [{ field: NegotiableCatalogueField.UnitPrice, decision: price }];
     }
     return decision;
   }

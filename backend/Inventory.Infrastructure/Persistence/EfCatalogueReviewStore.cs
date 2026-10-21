@@ -66,7 +66,6 @@ public sealed partial class EfCatalogueReviewStore : ICatalogueReviewStore
                 product.Id,
                 product.Name,
                 product.ExternalProductId,
-                product.UnitPrice,
                 product.Unit,
                 product.CategoryId))
             .ToListAsync(cancellationToken);
@@ -119,7 +118,9 @@ public sealed partial class EfCatalogueReviewStore : ICatalogueReviewStore
                 ExternalId = entry.ExternalId,
                 ProviderName = entry.ProviderName,
                 ProviderGroupExternalId = entry.ProviderGroupExternalId,
-                ProviderUnitPrice = entry.ProviderUnitPrice,
+                // ProviderUnitPrice is left unwritten since issue #792: a review this release starts
+                // records no provider selling price, which is also what identifies an older stored
+                // review as stale when it is applied.
                 ProviderUnitVolume = entry.ProviderUnitVolume,
                 LinkedProductId = entry.LinkedProductId,
                 LinkedCategoryId = entry.LinkedCategoryId,
@@ -164,6 +165,13 @@ public sealed partial class EfCatalogueReviewStore : ICatalogueReviewStore
             throw new DomainValidationException(
                 "This catalogue review has already been applied, so nothing was changed. Start a new "
                     + "review to decide about the provider's catalogue again.");
+
+        // Decided on the authoritative row, inside the caller's transaction, before anything is read
+        // or staged: a review carrying provider selling prices was read against a product field that
+        // issue #792 removed, so its plan can no longer be carried out in full. It is refused whole
+        // rather than applied in part, and the stored prices are left exactly as they are.
+        if (review.Items.Any(item => item.ProviderUnitPrice is not null))
+            throw new DomainValidationException(ApplyCatalogueReview.StaleSellingPriceReviewMessage);
 
         var products = await _db.Products.ToListAsync(cancellationToken);
         var categories = await _db.Categories.ToListAsync(cancellationToken);
@@ -255,9 +263,10 @@ public sealed partial class EfCatalogueReviewStore : ICatalogueReviewStore
 
     /// <summary>
     /// Phase two: the provider's products. A product the provider names takes its name and its
-    /// category from the provider, which is applied and listed; its price and unit/volume are
-    /// negotiated per field, and both answers are recorded so neither value is proposed again until
-    /// the provider changes it.
+    /// category from the provider, which is applied and listed; its remaining negotiable field is
+    /// decided per field, and the answer is recorded so the value is not proposed again until the
+    /// provider changes it. Its selling price is not among them since issue #792: a product carries
+    /// none.
     /// </summary>
     private void ApplyProducts(ApplyWork work)
     {
@@ -412,7 +421,6 @@ public sealed partial class EfCatalogueReviewStore : ICatalogueReviewStore
                         item.ExternalId,
                         item.ProviderName,
                         item.ProviderGroupExternalId,
-                        item.ProviderUnitPrice,
                         item.ProviderUnitVolume,
                         item.LinkedProductId,
                         item.LinkedCategoryId,

@@ -53,16 +53,20 @@ public sealed record PurchaseItemRecord(
 /// <summary>
 /// The catalogue snapshot a purchase line item's product navigation carries. It mirrors only the
 /// persisted scalar fields the former <c>Include(i => i.Product)</c> query loaded - never the
-/// product's own category/supplier/stock-adjustment history, which that query never included
+/// product's own category/stock-adjustment history, which that query never included
 /// either - so the InventoryApi response mapper can reconstruct the exact response shape clients
 /// already receive.
+///
+/// <para>The product's supplier is not among those fields since issue #787 (A1 of #786): a product
+/// carries none. The supplier of the <em>purchase</em> is unaffected and is still on
+/// <see cref="PurchaseRecord"/> itself. Its selling price is not among them either since issue #792
+/// (A2 of #786) - the purchase's own line unit costs and totals are untouched.</para>
 /// </summary>
 public sealed record PurchaseProductSummaryRecord(
     long Id,
     string Name,
     string? Sku,
     string? Description,
-    decimal UnitPrice,
     decimal AverageUnitCost,
     int? CostingQuantity,
     decimal? InventoryValue,
@@ -73,8 +77,7 @@ public sealed record PurchaseProductSummaryRecord(
     bool IsActive,
     DateTime CreatedAt,
     DateTime UpdatedAt,
-    long? CategoryId,
-    int? SupplierId);
+    long? CategoryId);
 
 /// <summary>The stored-document metadata needed to open, persist, or delete a purchase's supporting document.</summary>
 public sealed record PurchaseFileMetadata(string StoredFileName, string ContentType, string FileName, long FileSizeBytes);

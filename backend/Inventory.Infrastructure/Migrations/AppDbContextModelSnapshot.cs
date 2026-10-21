@@ -1546,14 +1546,8 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<string>("Sku")
                         .HasColumnType("TEXT");
 
-                    b.Property<int?>("SupplierId")
-                        .HasColumnType("INTEGER");
-
                     b.Property<string>("Unit")
                         .HasColumnType("TEXT");
-
-                    b.Property<decimal>("UnitPrice")
-                        .HasColumnType("decimal(18,2)");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
@@ -1565,8 +1559,6 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("CategoryId");
 
                     b.HasIndex("Sku");
-
-                    b.HasIndex("SupplierId");
 
                     b.HasIndex("BusinessId", "ExternalProductId")
                         .IsUnique()
@@ -2406,14 +2398,7 @@ namespace Inventory.Infrastructure.Migrations
                         .HasForeignKey("CategoryId")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("Inventory.Infrastructure.Models.Supplier", "Supplier")
-                        .WithMany("Products")
-                        .HasForeignKey("SupplierId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.Navigation("Category");
-
-                    b.Navigation("Supplier");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ProductExternalId", b =>
@@ -2616,11 +2601,6 @@ namespace Inventory.Infrastructure.Migrations
             modelBuilder.Entity("Inventory.Infrastructure.Models.PurchaseItem", b =>
                 {
                     b.Navigation("SupplierOrderAllocations");
-                });
-
-            modelBuilder.Entity("Inventory.Infrastructure.Models.Supplier", b =>
-                {
-                    b.Navigation("Products");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierOrder", b =>

@@ -129,8 +129,8 @@ public sealed class EfSupplierOrderStore : ISupplierOrderStore
         line.Notes);
 
     private static SupplierOrderProductSummaryRecord ToProductSummary(Product product) => new(
-        product.Id, product.Name, product.Sku, product.Description, product.UnitPrice, product.AverageUnitCost,
+        product.Id, product.Name, product.Sku, product.Description, product.AverageUnitCost,
         product.CostingQuantity, product.InventoryValue, product.QuantityInStock, product.LowStockThreshold,
         product.RestockTo, product.Unit, product.IsActive, product.CreatedAt, product.UpdatedAt,
-        product.CategoryId, product.SupplierId);
+        product.CategoryId);
 }

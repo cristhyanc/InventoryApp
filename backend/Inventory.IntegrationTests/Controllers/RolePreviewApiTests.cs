@@ -677,7 +677,6 @@ public class RolePreviewApiTests : IClassFixture<RolePreviewApiTests.ApiFactory>
             BusinessId = businessId,
             Name = name,
             Sku = $"{name}-SKU",
-            UnitPrice = 2.50m,
             QuantityInStock = 5,
         };
     }

@@ -75,7 +75,6 @@ public sealed class EfProductStore : IProductStore
             Name = name,
             Sku = fields.Sku,
             Description = fields.Description,
-            UnitPrice = fields.UnitPrice,
             AverageUnitCost = fields.InitialUnitCost ?? 0m,
             IsActive = fields.IsActive,
             QuantityInStock = fields.QuantityInStock,
@@ -83,7 +82,6 @@ public sealed class EfProductStore : IProductStore
             RestockTo = fields.RestockTo,
             Unit = fields.Unit,
             CategoryId = fields.CategoryId,
-            SupplierId = fields.SupplierId,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
@@ -158,13 +156,11 @@ public sealed class EfProductStore : IProductStore
         product.Name = name;
         product.Sku = fields.Sku;
         product.Description = fields.Description;
-        product.UnitPrice = fields.UnitPrice;
         product.IsActive = fields.IsActive;
         product.LowStockThreshold = fields.LowStockThreshold;
         product.RestockTo = fields.RestockTo;
         product.Unit = fields.Unit;
         product.CategoryId = fields.CategoryId;
-        product.SupplierId = fields.SupplierId;
         product.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(cancellationToken);

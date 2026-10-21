@@ -4,7 +4,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Nayax is an optional add-on: inventory, purchasing, expenses and the reports over sales already imported work without it, while the features that read live Nayax data are grouped together in the menu and shown locked until a provider is connected (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
@@ -64,7 +64,7 @@ Inventory App/
 ├── scripts/validate.ps1           Windows/PowerShell validation
 ├── scripts/validate.sh            Bash validation
 ├── scripts/run-agent-evals.mjs    Agent Evals runner
-├── scripts/validate-runner-placement.mjs  Every workflow job on the self-hosted runners
+├── scripts/validate-runner-placement.mjs  Every workflow job on the runner the INVENTORY_AGENT_SELF_HOSTED_ALL switch selects
 ├── AGENTS.md                      Engineering and agent safeguards
 └── CLAUDE.md                      Claude Code entry point (points to AGENTS.md and docs)
 ```
@@ -400,7 +400,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **`Dashboard.ViewFinancials` covers every sales, revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699) — not only the two headline cards above. The Sites list and the home Dashboard's Sites/Machines tables hide their revenue, direct-profit, margin and trend columns without it; Site Products hides Estimated Card Profit (and drops it from the CSV export); the Machines list hides sales, direct profit and the profitability-status badge; and Machine Detail hides its revenue/direct-profit summary cards and the Estimated Card Profit/50% Card Margin Price product columns. Unit cost, site/machine selling price, stock, restock and navigation stay visible to every role. That page-level hide is read from `GET /api/me/access` rather than from each endpoint's response, so on its own it hides a figure rather than protecting it; the API withholds the figures too, for the site endpoints since #697, for the machine and product endpoints since #698, and for the stock-movement and purchasing endpoints since #700 (the next three bullets).
   - **The site endpoints withhold revenue and estimated profit from a role that may not see them** (issue #697). Every role reaches `GET /api/sites` and `GET /api/sites/{id}/products` — stocking and pricing a site is day-to-day inventory work, on `Inventory.Operate` — but a role without `Dashboard.ViewFinancials`, today an Operator, is sent `null` for `todayRevenue`, `currentWeekRevenue` and `previousComparableWeekRevenue` on every site row and for `estimatedCardProfit` on every site product row. Never `0`: a period with no completed sale still reports an honest `0` to a caller who may see it, so `null` means "not yours to see". The revenue and the estimate are never calculated for that caller at all — the completed-sales read behind the revenue and the commission and processing-fee reads behind the estimate are not made. **Unit cost (`averageUnitCost`) and site price (`sitePrice`) stay visible to every role**, together with stock, MDB codes, machine counts and the alert counts, and a Manager's and an Owner's response is unchanged. A platform administrator in a [support session](#super-admin-support-sessions) sees the figures, because that session's fixed capability set grants `Dashboard.ViewFinancials`. The machine and product endpoints are covered separately by #698 (next bullet).
-  - **The machine and product endpoints withhold their financial figures too** (issue #698). `GET /api/machines`, `GET /api/machines/{id}`, `GET /api/machines/{id}/products`, `GET /api/products`, `GET /api/products/{id}` and the low-stock list all stay available to an Operator — restocking machines is what they are for — but for a caller without `Dashboard.ViewFinancials` every machine revenue, direct-profit and `profitabilityStatus` field and every product's `inventoryValue` is **`null`, never `0`**: a withheld revenue arriving as zero would be a false statement about the business, and summing `inventoryValue` would have recovered the valuation the dashboard withholds. Machine identity, stock, restock and Sync Restock are untouched, and **unit cost (`averageUnitCost`, `unitPrice`) and selling price (`machinePrice` and the slot's suggested price fields) stay visible to every role** by the recorded decision — an Operator needs them to restock and price a slot. A Manager's and an Owner's responses are unchanged. The one gap #698 left open — a product's `stockAdjustments` still carrying each movement's inventory value — is closed by #700 in the next bullet. See [docs/architecture.md § Machine and product financial redaction](docs/architecture.md#machine-and-product-financial-redaction-issue-698).
+  - **The machine and product endpoints withhold their financial figures too** (issue #698). `GET /api/machines`, `GET /api/machines/{id}`, `GET /api/machines/{id}/products`, `GET /api/products`, `GET /api/products/{id}` and the low-stock list all stay available to an Operator — restocking machines is what they are for — but for a caller without `Dashboard.ViewFinancials` every machine revenue, direct-profit and `profitabilityStatus` field and every product's `inventoryValue` is **`null`, never `0`**: a withheld revenue arriving as zero would be a false statement about the business, and summing `inventoryValue` would have recovered the valuation the dashboard withholds. Machine identity, stock, restock and Sync Restock are untouched, and **unit cost (`averageUnitCost`) and selling price (`machinePrice` and the slot's suggested price fields) stay visible to every role** by the recorded decision — an Operator needs them to restock and price a slot. The catalogue `unitPrice` that decision also named is no longer a question: the field was removed, so no response carries it (see [A product carries no selling price](#a-product-carries-no-selling-price)). A Manager's and an Owner's responses are unchanged. The one gap #698 left open — a product's `stockAdjustments` still carrying each movement's inventory value — is closed by #700 in the next bullet. See [docs/architecture.md § Machine and product financial redaction](docs/architecture.md#machine-and-product-financial-redaction-issue-698).
   - **Every remaining Operator-readable endpoint has been audited, and the last two leaks are closed** (issue #700). Issue #700 walked every endpoint a role without `Dashboard.ViewFinancials` can reach — taken from the capability policies themselves — and classified each restricted figure on each one; the endpoint-by-endpoint table is in [docs/architecture.md § Operator-readable financial disclosure](docs/architecture.md#operator-readable-financial-disclosure-issue-700). Two figures were still being sent. A **stock movement's `inventoryValueAfter`** — the business's inventory value at cost after that movement, so the latest one reports the current valuation — is now `null` for a caller without the capability on `GET`/`POST api/products/{id}/stock`, on `GET api/stock-history`, and nested in a product's `stockAdjustments`. The **catalogue product nested in a purchase line or a supplier-order line** now withholds its `inventoryValue` on the `api/purchases` and `api/supplierorders` responses, the same way `api/products` has since #698 — otherwise listing purchases was a way around that. Never `0`: both fields already mean "no cost" or "no valuation yet" when they are `null`, and a withheld amount arriving as zero would be a false statement about the business. **Nothing else is withheld.** A movement's own `unitCost`, `totalCost` and `averageUnitCostAfter`, a purchase's `totalAmount`, delivery and package charges, each line's `unitCost` and `lineTotal` and its input-GST block, and a supplier order's quantities, `unitPrice` and `outstandingQuantity` all stay visible to every role, because they are purchasing and unit-cost data an Operator enters and has to be able to read back. Every other Operator-readable endpoint — the pick list, categories, take inventory, the price history and restock-cost suggestion, Sync Restock, the machine stock ledger, suppliers and the stored purchase document — carries no restricted figure at all. A Manager's and an Owner's responses are unchanged, and a new revenue, profit, margin, sales or inventory-value property on any of these responses now fails the build until somebody decides what happens to it.
   - **The Angular application renders what the role allows** (issue #528). It reads the caller's capabilities once from `GET /api/me/access` and builds the sidebar from them, so an Operator is offered no Expenses, Reports or Admin entries and a Manager no Integrations or data-repair entries; a route the role does not allow shows an "access not allowed" page, and an action the role cannot use — the supplier GST defaults editor — is not offered. **None of that is the boundary**: the API checks the same capability on every request and refuses it there, so a hidden entry hides a page rather than protecting one, and a capability list that cannot be read hides nothing at all. Since every current member is an Owner, nothing changed for anybody using the application today.
   - The capability vocabulary and the one role → capability table are described in [docs/architecture.md](docs/architecture.md#membership-roles-and-capabilities-issue-521), how they are enforced in [docs/architecture.md § Capability authorization](docs/architecture.md#capability-authorization-issue-525), and the full matrix by page and endpoint in [docs/architecture.md § Capability authorization on the Manager and Owner endpoints](docs/architecture.md#capability-authorization-on-the-manager-and-owner-endpoints-issue-526).
@@ -971,7 +971,11 @@ Failure output (screenshots and traces) is written under `frontend/inventory-app
 
 ### GitHub Actions runners
 
-Every GitHub Actions job in this repository, Deploy Production included, runs on the self-hosted Linux x64 runners labelled `[self-hosted, linux, x64, inventory-agent]`. Nothing falls back to a GitHub-hosted runner, and `scripts/validate-runner-placement.mjs` fails validation if a workflow tries to. While no runner is online, jobs wait in the queue. To start them, bring the runner VM and its runner service back up and confirm the runner shows **Idle** under Repository Settings → Actions → Runners. The runner host must provide `git`, `curl`, `jq`, `tar`, `gzip`, `unzip`, `/usr/bin/gh`, the Azure CLI and a Docker daemon. Jobs install .NET and Node.js themselves. Run **Actions → Inventory agent runner diagnostic** to check a runner. Jobs that hold a credential stay disabled until a human provisions reset or ephemeral runners and sets the repository variable `INVENTORY_RUNNER_ISOLATION_VERIFIED` to `true`. That covers the Claude agents, the SonarCloud and Project sync reads, both production deploy jobs, and every job with a write-capable `GITHUB_TOKEN`: dispatchers, review publication, branch cleanup, the release record and the validation status jobs. Until then those runs fail with an error naming the variable. Pull requests do not receive the required `merge-validation` status, so they cannot merge without an administrator bypass, although the validation job itself still runs. Deploy Production also needs `INVENTORY_RUNNER_BASELINE_VERIFIED` set to `true` once the diagnostic has passed on every runner. See [docs/automation.md § Self-hosted runner placement](docs/automation.md#self-hosted-runner-placement-issue-645) for the isolation limits of a persistent runner and the cost boundaries.
+The repository variable `INVENTORY_AGENT_SELF_HOSTED_ALL` (Repository Settings → Secrets and variables → Actions → Variables) chooses where every GitHub Actions job runs, Deploy Production included. Exactly `true` runs every job on the self-hosted Linux x64 runners labelled `[self-hosted, linux, x64, inventory-agent]`; `false` or unset runs every job on GitHub-hosted `ubuntu-latest`; any other value (including `TRUE`) makes every job fail in its first step, **Report and validate runner mode**, which also logs the mode and the runner each job got. This is an explicit choice, not a fallback: if the selected runners are offline, jobs wait. Changing the variable affects newly scheduled jobs only; running jobs stay put and queued jobs are not moved, so cancel and re-run them (re-apply the readiness label for an implementation run). GitHub-hosted mode uses GitHub-hosted runner minutes under the account's existing plan and spending limit. `scripts/validate-runner-placement.mjs` fails validation if a workflow selects its runner any other way.
+
+In self-hosted mode, while no runner is online, jobs wait in the queue. To start them, bring the runner VM and its runner service back up and confirm the runner shows **Idle** under Repository Settings → Actions → Runners. The runner host must provide `git`, `curl`, `jq`, `tar`, `gzip`, `unzip`, `/usr/bin/gh`, the Azure CLI and a Docker daemon (GitHub's `ubuntu-latest` image already has them). Jobs install .NET and Node.js themselves. Run **Actions → Inventory agent runner diagnostic** in self-hosted mode to check a runner; in GitHub-hosted mode it checks the hosted runner and says it did not verify your VM.
+
+Choosing the mode is separate from verifying the VM. In self-hosted mode, jobs that hold a credential stay disabled until a human provisions reset or ephemeral runners and sets the repository variable `INVENTORY_RUNNER_ISOLATION_VERIFIED` to `true`. That covers the Claude agents, the SonarCloud and Project sync reads, both production deploy jobs, and every job with a write-capable `GITHUB_TOKEN`: dispatchers, review publication, branch cleanup, the release record and the validation status jobs. Until then those runs fail with an error naming the variable, and pull requests do not receive the required `merge-validation` status, so they cannot merge without an administrator bypass, although the validation job itself still runs. Deploy Production in self-hosted mode also needs `INVENTORY_RUNNER_BASELINE_VERIFIED` set to `true` once the diagnostic has passed on every self-hosted runner. In GitHub-hosted mode neither verification variable is required, because each job gets a fresh GitHub-hosted VM; Deploy Production instead checks its tools on the hosted runner before it changes anything, and keeps its manual start, `main`-only exact commit, environment approval, API-before-frontend order and health checks. See [docs/automation.md § Runner placement](docs/automation.md#runner-placement-issues-645-and-807) for the isolation limits of a persistent runner, recovery and the cost boundaries.
 
 ## Important domain rules
 
@@ -1043,17 +1047,20 @@ maintains every product and category itself, and a business with one keeps the f
 does not manage.
 
 - **Create a product** with `POST /api/products`, and a **category** with `POST /api/categories`.
-  Both answer the created record with its new id. A product needs a name and a selling price that
-  is not negative; a category needs a name, unique within the business (compared without case, so
+  Both answer the created record with its new id. A product needs a name; a category needs a name,
+  unique within the business (compared without case, so
   "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
-  the initial restock movement it always did.
-- **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name, selling price and
-  category** as well as the SKU, description, unit, supplier, low-stock threshold, restock target
-  and active flag. **Edit a category** with `PUT /api/categories/{id}`.
+  the initial restock movement it always did, at the optional initial unit **cost**.
+- **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name and
+  category** as well as the SKU, description, unit, low-stock threshold, restock target
+  and active flag. There is no supplier among them — see
+  [A product carries no supplier](#a-product-carries-no-supplier) — and no selling price either —
+  see [A product carries no selling price](#a-product-carries-no-selling-price). **Edit a category**
+  with `PUT /api/categories/{id}`.
 - **Which fields a provider manages.** For a product the provider's catalogue names, its **name and
   category** come from the provider and are refused with a message naming the provider if you try to
-  change them — the next catalogue import would overwrite the local value. Its **price and every
-  other local field stay editable**. For a category the provider named, its **name** is managed the
+  change them — the next catalogue import would overwrite the local value. **Every other local
+  field stays editable.** For a category the provider named, its **name** is managed the
   same way and its description stays editable. Every product and category response says which of
   its fields are managed, in `providerManagedFields`, so a screen can lock exactly those inputs.
 - **The Products and Categories screens use all of this** (issue #737). **Products →
@@ -1118,9 +1125,98 @@ does not manage.
   A category: its **name**. Those become read-only on the Products and Categories screens and are
   updated automatically by every later review, which lists each such change rather than asking about
   it. Everything else stays yours — the **price** (you decide per product whether to keep yours or
-  take Nayax's), the SKU, the **unit/volume**, the supplier, the low-stock threshold, the restock
+  take Nayax's), the SKU, the **unit/volume**, the low-stock threshold, the restock
   target, the active flag and all of your stock, costing and history. Nayax publishes no unit or
   volume label at all, so the review never proposes one.
+
+## A product carries no supplier
+
+A product used to hold one supplier, as a default for ordering. Nothing ever ordered from it: the
+supplier of an order is a decision about that order, and a product you buy from whoever is cheapest
+this month has no single supplier to record. That field and its stored values are gone.
+
+**What changed.**
+
+- The **product form** has no Supplier dropdown. The **All Products** and **Needs Ordering** pages
+  have no "All Suppliers" filter and no Supplier column or sort. The home dashboard's **Reorder
+  Alerts** table has no Supplier column.
+- **Creating a supplier order** still begins with choosing the supplier, and that choice is still
+  required. It now starts **empty** instead of being pre-filled from the selected products, so the
+  supplier on the order is always one somebody picked.
+- `GET /api/products` and `GET /api/products/{id}` no longer return `supplierId` or `supplier`, and
+  neither does the product snapshot nested in a purchase line, a supplier-order line or a machine
+  slot. `POST`/`PUT /api/products` no longer accept `supplierId`; sending one is ignored rather than
+  refused.
+
+**What did not change.** Suppliers themselves, and everything that records one: the supplier on a
+**purchase** and on a **supplier order**, supplier contact details, supplier GST defaults, and
+creating, editing and deleting a supplier. Every purchase and order keeps its supplier, its item
+unit costs, quantities, totals, GST and receipt attachments exactly as recorded, and no cost,
+average cost, inventory value, COGS or reorder figure is recalculated. The per-product **supplier
+price comparison** on the product page is unaffected and in fact says more than the old field did:
+it is derived from the purchases a product was really bought in, so it shows every supplier it came
+from, with the lowest and the most recent unit cost.
+
+**If you relied on the stored product supplier**, it is not recoverable — reverting the release
+restores the column empty, not the values. Use the product's supplier price comparison, which reads
+the purchase history, to see who a product has actually been bought from.
+
+## A product carries no selling price
+
+A product used to hold a catalogue "Unit Price" — a default list price. Nothing ever calculated
+with it: no report, profit, margin, COGS or inventory valuation read it. What it did do was sit
+beside the real price the machine charges, with nothing keeping the two in step, so a catalogue
+nobody reviewed went quietly stale while the machine kept selling at its own price. That field and
+its stored values are gone.
+
+**What changed.**
+
+- The **product form** has no Unit Price input. The **All Products** and **Needs Ordering** pages
+  have no Price column or price sort, the home dashboard's **Reorder Alerts** table has no Unit
+  Price column, and the **Stock History** page's product summary shows three tiles instead of four.
+- **Import products** (Admin → Imports) no longer asks you to keep or take a Nayax price. Linking a
+  product still replaces its **name and category** with the provider's, and those changes are still
+  listed as applied automatically; there is simply no price to decide about any more.
+- **A catalogue review you had already started before this release cannot be applied.** It was read
+  against a field that no longer exists, so applying it would carry out only part of what you were
+  answering. It is refused with "This catalogue review was started before product prices were
+  removed, so it cannot be applied. Nothing was changed. Start the review again." — nothing is
+  linked, renamed or created — and starting a fresh review works normally.
+- `GET /api/products` and `GET /api/products/{id}` no longer return `unitPrice`, and neither does
+  the product snapshot nested in a purchase line, a supplier-order line or a machine slot.
+  `POST`/`PUT /api/products` no longer accept `unitPrice`; sending one is ignored rather than
+  refused.
+
+**What did not change.** Every price and cost that a real event recorded. The **machine's own live
+price** (`machinePrice`, from Nayax) and the machine pages' suggested prices, a **purchase item's
+unit cost**, a **supplier order line's agreed price**, the amount on a **recorded sale**, and a
+product's `averageUnitCost`, costing quantity and inventory value are all exactly as they were.
+Purchases, supplier orders, their suppliers, quantities, totals, GST and receipt attachments are
+untouched, the initial unit **cost** you may give a new product still records its opening stock
+movement, and no cost, average cost, inventory value, COGS, recorded sale or reorder figure is
+recalculated or backfilled.
+
+**If you relied on the stored product price**, it is not recoverable — reverting the release
+restores the column empty, not the values. The price a product actually sells at is on the machine
+it is in, on the Machines pages.
+
+## What you paid, on the dashboard's Reorder Alerts
+
+Where the Reorder Alerts table used to carry a selling price, it now carries what you actually paid:
+a **Last purchase** column and a **Cheapest purchase** column, each showing the supplier and the unit
+cost — for example `Acme · $1.25`. Both come from your recorded purchase history, so you can see
+while ordering whether the last price was the best one you have had. The old **Stock after machine
+need** column is gone; it was only the stock figure minus the machine-need figure already beside it.
+
+- **A product nothing has ever been bought for shows `—`**, which only ever means "no purchase
+  recorded". A purchase with no supplier on it shows **None** as the supplier, and a genuinely free
+  or zero-cost delivery shows **$0.00** with its supplier — a real recorded cost, not a blank.
+- **While the costs are being read the two columns say "Loading".** If that read fails they say
+  **"Unavailable"** and offer **Retry**; the rest of the table and the dashboard still work, because
+  every other figure on them is your own data and was not part of that request. Reordering or
+  reloading the page never shows one product set's costs against another's.
+- **The two columns need the same permission as the dashboard's money figures.** An Operator does not
+  see them at all, and nothing is requested on their behalf; a Manager or an Owner sees both.
 
 ## Product and supplier GST rules
 
@@ -1360,10 +1456,10 @@ storage-management dashboard, and it says what the business has rather than what
   the page's main section.
 - **The storage-only figures say so.** The "Needs ordering" card and the reorder-alert list each
   carry a label — "Storage stock only: these figures do not include the machines' current
-  replenishment need, because Nayax is not connected" — and the list drops its "Machine need" and
-  "Stock after machine need" columns, whose values would otherwise be a column of zeroes stating
-  that the machines need nothing. The label is shown for an **empty** list too, because "nothing
-  needs ordering" means something different when the machines were never read.
+  replenishment need, because Nayax is not connected" — and the list drops its "Machine need"
+  column, whose values would otherwise be a column of zeroes stating that the machines need nothing.
+  The label is shown for an **empty** list too, because "nothing needs ordering" means something
+  different when the machines were never read.
 - **No sales synchronization is attempted, and no sync warning is shown.** `POST
   /api/nayax-sales-sync` is a Nayax call that could only be refused, so the page does not make it;
   a call that was never attempted neither failed nor succeeded, so there is nothing to warn about.
@@ -1398,25 +1494,28 @@ Owner saves or re-tests the connection, and used by the "Nayax isn't fully conne
 the filters and fields below.
 
 - **A filter over a list that cannot exist is not shown.** Without a usable connection, the machine
-  filter disappears from Stock History and the report pages, the Site filter disappears from Site
-  Commissions, and the optional machine field disappears from the stock adjustment form and the
-  Expenses form. No request is sent that could only be refused. The Pick List is the one exception
+  filter disappears from the report pages and the Site filter disappears from Site Commissions. No
+  request is sent that could only be refused. The Pick List is the one exception
   (see [Recording a pick without a provider](#recording-a-pick-without-a-provider) below): instead of
   disappearing, it opens straight into its manual entry screen and says why the calculated matrix is
   unavailable, because a business can still record what it took out of storage with no provider at
-  all.
+  all. Stock History, the stock adjustment form and the Expenses screen are no longer on this list at
+  all: since issue #746 their machine fields and filters are the business's **own** machine records
+  and need no provider (see [Choosing a machine on the stock and expense
+  screens](#choosing-a-machine-on-the-stock-and-expense-screens) below).
 - **A request that *failed* says so where its filter was.** "The machine list could not be loaded, so
   this report cannot be narrowed to one machine", for example. It is never shown as "All machines"
   narrowing nothing, and a business that genuinely has no machines is never reported as an error.
 - **Expenses stops mentioning Nayax it does not have.** Without a connection, "Nayax monthly fee" is
   not offered for a **new** expense and the page subtitle drops its Nayax sentence. An expense already
   recorded under that category keeps it — in the table, in the Category filter and on its own edit
-  form — because a recorded expense is a fact about the past.
+  form — because a recorded expense is a fact about the past. Its machine field and its Machine filter
+  are not affected: those are the business's own machines.
 - **Stock History keeps the two questions apart.** The "Nayax Sync Restock" source filter is about
   movements that are already recorded locally, so it is offered whenever Nayax is part of the business
   at all — including while a stored connection needs attention — and the table keeps labelling such a
-  movement either way. The machine filter needs a machine list, so it stays hidden until there are
-  machines to filter by.
+  movement either way. Its machine filter is about the business's own machines and does not depend on
+  the connection at all.
 - **A connection that needs attention is still a connection.** A business whose stored token stopped
   working keeps its Nayax expense category and its Nayax source filter; what it loses is the live
   fleet reads, with the banner asking an Owner to reconnect.
@@ -1429,6 +1528,43 @@ the filters and fields below.
 
 **A connected business sees no change here either.** Every filter, field and category is exactly as
 before.
+
+#### Choosing a machine on the stock and expense screens
+
+Issue #746 takes the three screens that attribute the business's **own** records to a machine — the
+stock adjustment form, Stock History and Operating Expenses — off the live Nayax fleet and onto the
+machines the business keeps itself (see [Machines](#machines) below). They worked only with a
+connected provider before, even for a business that had recorded its machines, because the only
+machine list there was came from the fleet read.
+
+- **The machine field and the machine filter are your own machines, with or without a provider.**
+  They list the machines from Machines → *Your machines*, by the name you gave each one, and a
+  business with no provider at all gets exactly the same field and filter as one with a usable
+  connection. No Nayax request is made for them. What is stored is unchanged — these screens already
+  recorded your own machine, not the provider's number — so no movement, expense, report or export
+  changes meaning.
+- **No provider name or number is shown.** A machine's name is yours and is the only label; the
+  machine records publish no provider identifier at all (see [Machines](#machines)).
+- **A new record offers the machines that are in service.** A stock adjustment and a **new** expense
+  offer only **active** machines, because a retired machine is not somewhere stock is being put or a
+  cost is being incurred now.
+- **History stays readable, deactivated machines included.** The Stock History filter and the
+  Expenses list's own Machine filter list the deactivated machines too, and Stock History's Machine
+  column names them, so a movement or a cost recorded against a machine you have since retired is
+  still findable and still reads as that machine rather than as a number. An **expense being edited**
+  keeps its own machine as the selected value even once that machine has been deactivated, so saving
+  the form again cannot quietly detach the cost from the machine that incurred it.
+- **The Expenses list narrows to one machine.** Its Machine filter sits beside the date, Category and
+  Supplier filters and applies with the same **Apply filters** button, so the table and its totals
+  show what one machine cost you. "All machines" asks for no machine at all, which is what you see
+  until you choose one.
+- **No machines yet is not a machine list that failed.** While the machine read is outstanding the
+  field or filter says it is loading; a read that **failed** says so in its place ("The machine list
+  could not be loaded…"), and it is never shown as "All machines" narrowing nothing or as a business
+  with no machines. A business that has recorded no active machine simply has no machine field, with
+  no error.
+- **Read-only support sessions are unchanged.** Every write control on these screens is still hidden
+  or disabled in a support session, exactly as before.
 
 #### Recording a pick without a provider
 
@@ -1475,9 +1611,10 @@ that cannot be used.
   and "No active products match your filters." appears only after a successful read. If refreshing
   storage quantities after a save fails, the screen keeps the last list, says the quantities may be
   out of date and offers **Refresh**.
-- **No machine selector yet.** Issue #746 is what lets an operator attribute a manual pick to one of
+- **No machine selector yet.** Issue #794 is what lets an operator attribute a manual pick to one of
   the business's own machines; until it ships, every manual save omits a machine and is recorded as a
-  whole-business pick, exactly as the batch refill endpoint already allows.
+  whole-business pick, exactly as the batch refill endpoint already allows. (Issue #746 brought those
+  machines to the stock and expense screens, above, and deliberately left the pick list alone.)
 
 #### The menu without a usable provider
 

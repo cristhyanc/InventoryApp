@@ -35,13 +35,18 @@ public sealed record SupplierOrderLineRecord(
 /// <summary>
 /// The catalogue snapshot a supplier-order line's product navigation carries, mirroring only the
 /// persisted scalar fields the former <c>Include(line => line.Product)</c> query loaded.
+///
+/// <para>A product's supplier is not one of them since issue #787 (A1 of #786): a product carries
+/// none, and the order's own supplier - the one a person chose when placing it - is on
+/// <see cref="SupplierOrderRecord"/> itself. A product's selling price is not one of them since
+/// issue #792 (A2 of #786); the line's own agreed <c>UnitPrice</c> on
+/// <see cref="SupplierOrderLineRecord"/> is a different value and is untouched.</para>
 /// </summary>
 public sealed record SupplierOrderProductSummaryRecord(
     long Id,
     string Name,
     string? Sku,
     string? Description,
-    decimal UnitPrice,
     decimal AverageUnitCost,
     int? CostingQuantity,
     decimal? InventoryValue,
@@ -52,5 +57,4 @@ public sealed record SupplierOrderProductSummaryRecord(
     bool IsActive,
     DateTime CreatedAt,
     DateTime UpdatedAt,
-    long? CategoryId,
-    int? SupplierId);
+    long? CategoryId);

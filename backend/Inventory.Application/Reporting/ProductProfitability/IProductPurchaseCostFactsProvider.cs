@@ -15,4 +15,19 @@ public interface IProductPurchaseCostFactsProvider
 {
     Task<IReadOnlyDictionary<long, IReadOnlyList<SupplierPriceHistoryEntry>>> GetForProductsAsync(
         IReadOnlyCollection<long> productIds, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The same projection for <b>every</b> product of the current business, retired products
+    /// included (issue #788, B of #786). It is a separate read rather than an empty id list,
+    /// because an empty list means "no products were asked about" and must keep answering nothing:
+    /// <c>Inventory.Application.Purchases.ListProductPurchaseCostSummaries</c> needs the
+    /// whole-business read for the unfiltered product screens, and conflating the two would make
+    /// one caller's empty filter silently read the entire history.
+    ///
+    /// <para>A product with no recorded purchase line is absent, exactly as it is above - there is
+    /// no row to summarise, not a zero cost - so this answers purchase history rather than a
+    /// catalogue, and needs no product listing beside it.</para>
+    /// </summary>
+    Task<IReadOnlyDictionary<long, IReadOnlyList<SupplierPriceHistoryEntry>>> GetForAllProductsAsync(
+        CancellationToken cancellationToken);
 }

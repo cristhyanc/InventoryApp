@@ -30,7 +30,7 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
     {
         await SeedAsync(
             new Category { Id = 7, Name = "Local snacks" },
-            new Product { Id = 50, Name = "Chips", UnitPrice = 3.00m, RestockTo = 0 });
+            new Product { Id = 50, Name = "Chips", RestockTo = 0 });
 
         var nayax = Nayax(
             [Product(100, "Nayax Chips", 3.50m, groupId: 10)],
@@ -50,11 +50,7 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
                     review.ReviewId,
                     [
                         LinkTo(category.ItemId, 7),
-                        Price(
-                            product.ItemId,
-                            ProviderFieldDecision.TakeProvider,
-                            CatalogueReviewAction.LinkExisting,
-                            50),
+                        LinkTo(product.ItemId, 50),
                     ]),
                 CancellationToken.None);
 
@@ -71,8 +67,8 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
 
             var product = await verify.Products.AsNoTracking().SingleAsync();
             Assert.Equal(
-                (50L, NayaxExternalId.From(100), "Nayax Chips", (long?)7, 3.50m),
-                (product.Id, product.ExternalProductId, product.Name, product.CategoryId, product.UnitPrice));
+                (50L, NayaxExternalId.From(100), "Nayax Chips", (long?)7),
+                (product.Id, product.ExternalProductId, product.Name, product.CategoryId));
         }
 
         // The second review resolves both entries through the recorded ids, not by name and not by
@@ -88,7 +84,8 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
     /// Creating, rather than linking: the new rows are keyed by the database and record the provider's
     /// ids beside those keys (issue #735), so a provider id that happens to equal no local key - and a
     /// local key that happens to equal no provider id - is the normal case rather than a collision.
-    /// A created product has no local value to keep, so it takes the provider's price.
+    /// Since issue #792 a created product is initialised with no selling price at all, because a
+    /// product has none: the provider's price is neither read nor written.
     /// </summary>
     [Fact]
     public async Task Creating_a_local_row_keys_it_by_the_database_and_records_the_provider_id_beside_it()
@@ -115,13 +112,11 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
             Assert.Equal(0, applied.LinkedCount);
 
             // A created row takes its provider values rather than having them changed: there is no
-            // local name or category it replaced, and the link already reports the name. The price it
-            // took is still reported as a decision, because it is one and it is recorded.
+            // local name or category it replaced, and the link already reports the name. Nothing is
+            // accepted as a negotiated field, because the one the provider priced is gone.
             Assert.Empty(applied.AutomaticChanges);
-            Assert.Equal(
-                [(NayaxExternalId.From(100), nameof(NegotiableCatalogueField.UnitPrice), (string?)null, "3.50")],
-                applied.AcceptedChanges.Select(change =>
-                    (change.ExternalId, change.Field, change.PreviousValue, change.ProviderValue)));
+            Assert.Empty(applied.AcceptedChanges);
+            Assert.Empty(applied.SkippedChanges);
         }
 
         await using var verify = Scoped();
@@ -130,8 +125,15 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
 
         Assert.Equal((NayaxExternalId.From(10), "Snacks"), (category.ExternalCategoryId, category.Name));
         Assert.Equal(
-            (NayaxExternalId.From(100), "Nayax Chips", (long?)category.Id, 3.50m),
-            (product.ExternalProductId, product.Name, product.CategoryId, product.UnitPrice));
+            (NayaxExternalId.From(100), "Nayax Chips", (long?)category.Id),
+            (product.ExternalProductId, product.Name, product.CategoryId));
+
+        // The provider's price reached nothing: no field decision was recorded about it, and the
+        // stored review entry carries none either.
+        Assert.Empty(await verify.ProviderCatalogueFieldDecisions.AsNoTracking().ToListAsync());
+        Assert.All(
+            await verify.ProviderCatalogueReviewItems.AsNoTracking().ToListAsync(),
+            item => Assert.Null(item.ProviderUnitPrice));
 
         // The keys are the database's own: neither row is keyed by the provider's number.
         Assert.NotEqual(100L, product.Id);
@@ -153,7 +155,6 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
                 Name = "Nayax Chips",
                 ExternalProductId = NayaxExternalId.From(100),
                 CategoryId = 7,
-                UnitPrice = 3.50m,
                 RestockTo = 0,
             });
 
@@ -195,101 +196,146 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
     }
 
     /// <summary>
-    /// The negotiable half. Two linked products whose provider price has moved: one keeps its local
-    /// price, the other takes the provider's, and both answers are recorded so neither is asked again.
+    /// The negotiable half is empty since issue #792 (A2 of #786). A product carries no selling
+    /// price, so a provider price - even one that has moved since the last reading - is neither read
+    /// into the stored review nor offered as a choice, for a linked product or any other.
     /// </summary>
     [Fact]
-    public async Task A_changed_provider_price_is_taken_or_kept_per_product_and_both_answers_are_recorded()
+    public async Task A_provider_price_is_neither_recorded_on_the_review_nor_offered_as_a_choice()
     {
-        await SeedAsync(
-            Linked(50, 100, "Chips", 3.00m),
-            Linked(51, 101, "Bar", 2.00m));
+        await SeedAsync(Linked(50, 100, "Chips"), Linked(51, 101, "Bar"));
 
-        var nayax = Nayax(
-            [Product(100, "Chips", 3.50m), Product(101, "Bar", 2.50m)],
-            []);
+        await using var db = Scoped();
+        var review = await Start(db, Nayax([Product(100, "Chips", 3.50m), Product(101, "Bar", 2.50m)], []))
+            .Handle(CancellationToken.None);
 
-        await using (var db = Scoped())
-        {
-            var review = await Start(db, nayax).Handle(CancellationToken.None);
-            var chips = ProductEntry(review, 100);
-            var bar = ProductEntry(review, 101);
-
-            Assert.Equal(
-                [new CatalogueReviewFieldDto(nameof(NegotiableCatalogueField.UnitPrice), "3.00", "3.50")],
-                chips.Choices);
-
-            var applied = await Apply(db).Handle(
-                new ApplyCatalogueReviewRequest(
-                    review.ReviewId,
-                    [
-                        Price(chips.ItemId, ProviderFieldDecision.TakeProvider),
-                        Price(bar.ItemId, ProviderFieldDecision.KeepLocal),
-                    ]),
-                CancellationToken.None);
-
-            Assert.Equal(
-                [(NayaxExternalId.From(100), "3.00", "3.50")],
-                applied.AcceptedChanges.Select(change =>
-                    (change.ExternalId, change.PreviousValue, change.ProviderValue)));
-            Assert.Equal(
-                [(NayaxExternalId.From(101), "2.00", "2.50")],
-                applied.SkippedChanges.Select(change =>
-                    (change.ExternalId, change.PreviousValue, change.ProviderValue)));
-        }
-
-        await using var verify = Scoped();
-        Assert.Equal(
-            [(50L, 3.50m), (51L, 2.00m)],
-            await verify.Products.AsNoTracking()
-                .OrderBy(product => product.Id)
-                .Select(product => ValueTuple.Create(product.Id, product.UnitPrice))
-                .ToListAsync());
-
-        Assert.Equal(
-            [(50L, "3.50", ProviderFieldDecision.TakeProvider), (51L, "2.50", ProviderFieldDecision.KeepLocal)],
-            await verify.ProviderCatalogueFieldDecisions.AsNoTracking()
-                .OrderBy(decision => decision.ProductId)
-                .Select(decision => ValueTuple.Create(
-                    decision.ProductId, decision.ProviderValue, decision.Decision))
-                .ToListAsync());
+        Assert.Empty(ProductEntry(review, 100).Choices);
+        Assert.Empty(ProductEntry(review, 101).Choices);
+        Assert.All(
+            await db.ProviderCatalogueReviewItems.AsNoTracking().ToListAsync(),
+            item => Assert.Null(item.ProviderUnitPrice));
     }
 
     /// <summary>
-    /// The skip rule, which is the whole reason the last-decided value is stored: a price the operator
-    /// kept their own over is not proposed again, and is proposed again the moment the provider moves
-    /// it somewhere new.
+    /// An older client that still submits a keep-or-take answer about the retired selling price is
+    /// refused, and the refusal is atomic: the link beside it, which would have succeeded on its
+    /// own, is not written either. A decision the server cannot carry out must never be reported as
+    /// applied (issue #792).
     /// </summary>
     [Fact]
-    public async Task A_skipped_price_is_not_proposed_again_until_the_provider_changes_it_again()
+    public async Task A_submitted_selling_price_decision_is_refused_and_the_whole_apply_writes_nothing()
     {
-        await SeedAsync(Linked(50, 100, "Chips", 3.00m));
+        await SeedAsync(
+            new Product { Id = 50, Name = "Chips", RestockTo = 0 },
+            new Product { Id = 51, Name = "Bar", RestockTo = 0 });
+
+        await using var db = Scoped();
+        var review = await Start(db, Nayax([Product(100, "Nayax Chips"), Product(101, "Nayax Bar")], []))
+            .Handle(CancellationToken.None);
+
+        var refusal = await Assert.ThrowsAsync<DomainValidationException>(() => Apply(db).Handle(
+            new ApplyCatalogueReviewRequest(
+                review.ReviewId,
+                [
+                    LinkTo(ProductEntry(review, 101).ItemId, 51),
+                    RetiredPriceDecision(
+                        ProductEntry(review, 100).ItemId,
+                        ProviderFieldDecision.TakeProvider,
+                        CatalogueReviewAction.LinkExisting,
+                        50),
+                ]),
+            CancellationToken.None));
+
+        Assert.Contains(
+            ApplyCatalogueReview.RetiredSellingPriceDecisionMessage,
+            refusal.Message,
+            StringComparison.Ordinal);
+
+        await using var verify = Scoped();
+        Assert.Equal(
+            [(50L, (string?)null), (51L, (string?)null)],
+            await verify.Products.AsNoTracking()
+                .OrderBy(product => product.Id)
+                .Select(product => ValueTuple.Create(product.Id, product.ExternalProductId))
+                .ToListAsync());
+        Assert.Empty(await verify.ProviderCatalogueFieldDecisions.AsNoTracking().ToListAsync());
+        Assert.Null(await verify.ProviderCatalogueReviews.AsNoTracking()
+            .Select(stored => stored.AppliedAtUtc)
+            .SingleAsync());
+    }
+
+    /// <summary>
+    /// A review stored before issue #792 still carries the provider prices it meant to negotiate,
+    /// against a product field that no longer exists. Applying it would carry out only part of the
+    /// plan the operator approved, so it is refused whole - before any link, rename or category
+    /// change is written - and the operator is told to start again. A review started afterwards
+    /// applies normally against the same catalogue.
+    /// </summary>
+    [Fact]
+    public async Task A_pre_upgrade_review_carrying_provider_prices_is_refused_as_stale_and_a_fresh_one_applies()
+    {
+        await SeedAsync(new Product { Id = 50, Name = "Chips", RestockTo = 0 });
+
+        var nayax = Nayax([Product(100, "Nayax Chips", 3.50m)], []);
+
+        long staleItemId;
+        long staleReviewId;
+        await using (var db = Scoped())
+        {
+            var review = await Start(db, nayax).Handle(CancellationToken.None);
+            staleReviewId = review.ReviewId;
+            staleItemId = ProductEntry(review, 100).ItemId;
+        }
+
+        // Exactly what the previous release wrote: the provider's price on the stored entry.
+        await using (var legacy = Scoped())
+        {
+            var item = await legacy.ProviderCatalogueReviewItems.SingleAsync(row => row.Id == staleItemId);
+            item.ProviderUnitPrice = "3.50";
+            await legacy.SaveChangesAsync();
+        }
 
         await using (var db = Scoped())
         {
-            var first = await Start(db, Nayax([Product(100, "Chips", 3.50m)], [])).Handle(CancellationToken.None);
-            await Apply(db).Handle(
-                new ApplyCatalogueReviewRequest(
-                    first.ReviewId,
-                    [Price(ProductEntry(first, 100).ItemId, ProviderFieldDecision.KeepLocal)]),
-                CancellationToken.None);
+            var refusal = await Assert.ThrowsAsync<DomainValidationException>(() => Apply(db).Handle(
+                new ApplyCatalogueReviewRequest(staleReviewId, [LinkTo(staleItemId, 50)]),
+                CancellationToken.None));
+
+            Assert.Equal(ApplyCatalogueReview.StaleSellingPriceReviewMessage, refusal.Message);
         }
 
-        await using (var again = Scoped())
+        await using (var verify = Scoped())
         {
-            var second = await Start(again, Nayax([Product(100, "Chips", 3.50m)], []), StartedAt.AddDays(1))
-                .Handle(CancellationToken.None);
-
-            Assert.Empty(ProductEntry(second, 100).Choices);
+            // Nothing was linked, nothing was renamed, and the review is still unapplied - so the
+            // operator can start a fresh one rather than being left with half a catalogue.
+            var untouched = await verify.Products.AsNoTracking().SingleAsync();
+            Assert.Equal((50L, "Chips", (string?)null), (untouched.Id, untouched.Name, untouched.ExternalProductId));
+            Assert.Null(await verify.ProviderCatalogueReviews.AsNoTracking()
+                .Select(stored => stored.AppliedAtUtc)
+                .SingleAsync());
+            Assert.Equal("3.50", await verify.ProviderCatalogueReviewItems.AsNoTracking()
+                .Where(item => item.Id == staleItemId)
+                .Select(item => item.ProviderUnitPrice)
+                .SingleAsync());
         }
 
-        await using var moved = Scoped();
-        var third = await Start(moved, Nayax([Product(100, "Chips", 3.95m)], []), StartedAt.AddDays(2))
-            .Handle(CancellationToken.None);
+        // A fresh reading of the same catalogue records no provider price and applies normally.
+        await using (var fresh = Scoped())
+        {
+            var review = await Start(fresh, nayax, StartedAt.AddDays(1)).Handle(CancellationToken.None);
+            var applied = await Apply(fresh, AppliedAt.AddDays(1)).Handle(
+                new ApplyCatalogueReviewRequest(
+                    review.ReviewId, [LinkTo(ProductEntry(review, 100).ItemId, 50)]),
+                CancellationToken.None);
 
+            Assert.Equal(1, applied.LinkedCount);
+        }
+
+        await using var after = Scoped();
+        var linked = await after.Products.AsNoTracking().SingleAsync();
         Assert.Equal(
-            [new CatalogueReviewFieldDto(nameof(NegotiableCatalogueField.UnitPrice), "3.00", "3.95")],
-            ProductEntry(third, 100).Choices);
+            (50L, "Nayax Chips", NayaxExternalId.From(100)),
+            (linked.Id, linked.Name, linked.ExternalProductId));
     }
 
     /// <summary>
@@ -300,7 +346,7 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
     [Fact]
     public async Task A_matching_name_links_nothing_and_an_undecided_entry_changes_nothing()
     {
-        await SeedAsync(new Product { Id = 50, Name = "Nayax Chips", UnitPrice = 3.00m, RestockTo = 0 });
+        await SeedAsync(new Product { Id = 50, Name = "Nayax Chips", RestockTo = 0 });
 
         await using (var db = Scoped())
         {
@@ -319,8 +365,8 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
 
         await using var verify = Scoped();
         var product = await verify.Products.AsNoTracking().SingleAsync();
-        Assert.Equal((50L, "Nayax Chips", (string?)null, 3.00m),
-            (product.Id, product.Name, product.ExternalProductId, product.UnitPrice));
+        Assert.Equal((50L, "Nayax Chips", (string?)null),
+            (product.Id, product.Name, product.ExternalProductId));
     }
 
     /// <summary>
@@ -332,8 +378,8 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
     public async Task Linking_a_row_that_already_carries_a_different_provider_id_refuses_the_whole_apply()
     {
         await SeedAsync(
-            Linked(50, 77, "Chips", 3.00m),
-            new Product { Id = 51, Name = "Bar", UnitPrice = 2.00m, RestockTo = 0 });
+            Linked(50, 77, "Chips"),
+            new Product { Id = 51, Name = "Bar", RestockTo = 0 });
 
         await using var db = Scoped();
         var review = await Start(db, Nayax([Product(100, "Nayax Chips"), Product(101, "Nayax Bar")], []))
@@ -371,8 +417,8 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
     public async Task A_provider_id_another_row_took_since_the_review_refuses_the_apply()
     {
         await SeedAsync(
-            new Product { Id = 50, Name = "Chips", UnitPrice = 3.00m, RestockTo = 0 },
-            new Product { Id = 51, Name = "Other", UnitPrice = 1.00m, RestockTo = 0 });
+            new Product { Id = 50, Name = "Chips", RestockTo = 0 },
+            new Product { Id = 51, Name = "Other", RestockTo = 0 });
 
         await using var db = Scoped();
         var review = await Start(db, Nayax([Product(100, "Nayax Chips")], [])).Handle(CancellationToken.None);
@@ -404,17 +450,18 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
     [Fact]
     public async Task Applying_the_same_review_a_second_time_changes_nothing()
     {
-        await SeedAsync(Linked(50, 100, "Chips", 3.00m));
+        await SeedAsync(new Product { Id = 50, Name = "Chips", RestockTo = 0 });
 
         long reviewId;
+        long itemId;
         await using (var db = Scoped())
         {
             var review = await Start(db, Nayax([Product(100, "Nayax Chips", 3.50m)], []))
                 .Handle(CancellationToken.None);
             reviewId = review.ReviewId;
+            itemId = ProductEntry(review, 100).ItemId;
             await Apply(db).Handle(
-                new ApplyCatalogueReviewRequest(
-                    reviewId, [Price(ProductEntry(review, 100).ItemId, ProviderFieldDecision.TakeProvider)]),
+                new ApplyCatalogueReviewRequest(reviewId, [LinkTo(itemId, 50)]),
                 CancellationToken.None);
         }
 
@@ -423,8 +470,7 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
         await using (var again = Scoped())
         {
             var applied = await Apply(again, AppliedAt.AddHours(1)).Handle(
-                new ApplyCatalogueReviewRequest(
-                    reviewId, [Price(1, ProviderFieldDecision.KeepLocal)]),
+                new ApplyCatalogueReviewRequest(reviewId, [LinkTo(itemId, 50)]),
                 CancellationToken.None);
 
             Assert.True(applied.AlreadyApplied);
@@ -451,7 +497,6 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
         {
             Id = 50,
             Name = "Chips",
-            UnitPrice = 3.00m,
             RestockTo = 0,
             CostingQuantity = 4,
             InventoryValue = 8m,
@@ -539,7 +584,7 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
     [Fact]
     public async Task No_unit_or_volume_value_is_ever_proposed_because_the_provider_publishes_none()
     {
-        await SeedAsync(Linked(50, 100, "Chips", 3.00m, unit: "bag"));
+        await SeedAsync(Linked(50, 100, "Chips", unit: "bag"));
 
         await using var db = Scoped();
         var review = await Start(db, Nayax([Product(100, "Chips", 3.00m)], [])).Handle(CancellationToken.None);
@@ -552,13 +597,12 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
     }
 
     private static Product Linked(
-        long localRowId, long nayaxProductId, string name, decimal price, string? unit = null) =>
+        long localRowId, long nayaxProductId, string name, string? unit = null) =>
         new()
         {
             Id = localRowId,
             Name = name,
             ExternalProductId = NayaxExternalId.From(nayaxProductId),
-            UnitPrice = price,
             Unit = unit,
             RestockTo = 0,
         };
@@ -614,7 +658,7 @@ public class CatalogueReviewTests : CatalogueReviewTestBase
 
         return string.Join("|",
             products.Select(product =>
-                $"P{product.Id}:{product.ExternalProductId}:{product.Name}:{product.UnitPrice}:{product.CategoryId}:{product.Unit}")
+                $"P{product.Id}:{product.ExternalProductId}:{product.Name}:{product.CategoryId}:{product.Unit}")
             .Concat(categories.Select(category =>
                 $"C{category.Id}:{category.ExternalCategoryId}:{category.Name}"))
             .Concat(decisions.Select(decision =>

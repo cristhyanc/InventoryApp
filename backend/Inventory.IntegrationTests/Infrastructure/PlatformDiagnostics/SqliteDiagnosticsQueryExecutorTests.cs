@@ -126,7 +126,7 @@ public sealed class SqliteDiagnosticsQueryExecutorTests : IDisposable
     [InlineData("SELECT count(*) FROM Products")]
     [InlineData("SELECT BusinessId, count(*) FROM Categories GROUP BY BusinessId")]
     [InlineData("SELECT max(Id), min(Id), sum(Id), avg(Id), total(Id) FROM Products")]
-    [InlineData("SELECT coalesce(SupplierId, -1), ifnull(CategoryId, -1), typeof(Id) FROM Products")]
+    [InlineData("SELECT coalesce(CategoryId, -1), ifnull(CategoryId, -1), typeof(Id) FROM Products")]
     [InlineData("WITH owned AS (SELECT Id, BusinessId FROM Products) SELECT count(*) FROM owned")]
     public async Task The_permitted_aggregate_and_null_handling_functions_work(string sql)
     {
@@ -163,7 +163,7 @@ public sealed class SqliteDiagnosticsQueryExecutorTests : IDisposable
     [Theory]
     [InlineData("SELECT Name FROM Products")]
     [InlineData("SELECT Sku FROM Products")]
-    [InlineData("SELECT UnitPrice FROM Products")]
+    [InlineData("SELECT Description FROM Products")]
     [InlineData("SELECT AverageUnitCost, InventoryValue FROM Products")]
     [InlineData("SELECT Name FROM Businesses")]
     [InlineData("SELECT Email FROM Suppliers")]
@@ -207,7 +207,7 @@ public sealed class SqliteDiagnosticsQueryExecutorTests : IDisposable
     [InlineData("SELECT Id, (SELECT Name FROM Businesses b WHERE b.Id = Products.BusinessId) AS owner FROM Products")]
     [InlineData("SELECT p.Id AS anything FROM Products p ORDER BY p.Name")]
     [InlineData("SELECT CASE WHEN Name IS NULL THEN 0 ELSE 1 END FROM Products")]
-    [InlineData("SELECT BusinessId FROM Products GROUP BY BusinessId HAVING max(UnitPrice) > 0")]
+    [InlineData("SELECT BusinessId FROM Products GROUP BY BusinessId HAVING max(AverageUnitCost) > 0")]
     [InlineData("WITH identities AS (SELECT ObjectId FROM BusinessMemberships) SELECT * FROM identities")]
     [InlineData("SELECT Id FROM Products UNION ALL SELECT Id FROM NayaxSales")]
     [InlineData("SELECT Id FROM Products WHERE EXISTS (SELECT 1 FROM BusinessMemberships)")]

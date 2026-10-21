@@ -17,6 +17,7 @@ import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
+import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { AccessService } from '../../access/access.service';
 import { BusinessSettingsService } from '../../services/business-settings.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -102,6 +103,9 @@ function createComponent(
     siteService,
     nayaxSalesSyncService,
     dashboardService,
+    // The Reorder Alerts purchase-cost columns (issue #789) are
+    // `dashboard.component.purchase-costs.spec.ts`'s subject; here the read simply answers nothing.
+    { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
     { active$: overrides.sessionActive ?? of(false) } as unknown as SupportSessionService,
     { allows: () => of(overrides.canViewFinancials ?? true) } as unknown as AccessService
   );
@@ -147,7 +151,6 @@ function product(overrides: Partial<Product> = {}): Product {
     name: 'Cola 375mL',
     sku: 'COLA-375',
     description: null,
-    unitPrice: 3,
     averageUnitCost: 1.2,
     costingQuantity: 10,
     inventoryValue: 12,
@@ -170,8 +173,6 @@ function product(overrides: Partial<Product> = {}): Product {
     updatedAt: '2026-01-01T00:00:00Z',
     categoryId: null,
     category: null,
-    supplierId: null,
-    supplier: { id: 1, name: 'Acme Supplies' },
     isActive: true,
     isLowStock: true,
     isReorderAlert: true,
@@ -438,32 +439,6 @@ describe('DashboardComponent redacted financial figures (issues #527 and #528)',
   });
 });
 
-describe('DashboardComponent reorder alerts - stock after machine need', () => {
-  it('is positive when stock exceeds machine need', () => {
-    const component = createComponent(of(SUMMARY));
-    const p = product({ quantityInStock: 46, machineReplenishmentNeed: 16 });
-
-    expect(component.stockAfterMachineNeed(p)).toBe(30);
-    expect(component.stockAfterMachineNeedClass(p)).not.toContain('value-negative');
-  });
-
-  it('is zero when stock exactly covers machine need', () => {
-    const component = createComponent(of(SUMMARY));
-    const p = product({ quantityInStock: 16, machineReplenishmentNeed: 16 });
-
-    expect(component.stockAfterMachineNeed(p)).toBe(0);
-    expect(component.stockAfterMachineNeedClass(p)).not.toContain('value-negative');
-  });
-
-  it('keeps the signed negative value and flags it with the negative value class when machine need exceeds stock', () => {
-    const component = createComponent(of(SUMMARY));
-    const p = product({ quantityInStock: 10, machineReplenishmentNeed: 16 });
-
-    expect(component.stockAfterMachineNeed(p)).toBe(-6);
-    expect(component.stockAfterMachineNeedClass(p)).toContain('value-negative');
-  });
-});
-
 async function renderDashboard(
   overrides: {
     products?: Product[];
@@ -484,6 +459,7 @@ async function renderDashboard(
       { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } },
+      { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
       // The composed legacy-business-settings-prompt (issue #549) is stubbed to stay hidden: it is
       // its own component with its own tests, and not what this page's own tests are about.
       // Issue #699's own `Dashboard.ViewFinancials` check reads this same stub, so it defaults
@@ -517,24 +493,21 @@ describe('DashboardComponent template rendering', () => {
     expect(host.textContent).not.toContain('Adjust Stock');
   });
 
-  it('shows the Stock after machine need column between On order and Need to Order', async () => {
-    const host = await renderDashboard({ products: [product()] });
-
-    const headers = Array.from(host.querySelectorAll('th')).map((th) => th.textContent?.trim());
-    const onOrderIndex = headers.indexOf('On order');
-    const needToOrderIndex = headers.indexOf('Need to Order');
-    const stockAfterIndex = headers.indexOf('Stock after machine need');
-
-    expect(stockAfterIndex).toBeGreaterThan(onOrderIndex);
-    expect(stockAfterIndex).toBeLessThan(needToOrderIndex);
-  });
-
-  it('renders a negative Stock after machine need with the negative value class', async () => {
+  /**
+   * Issue #789 removed the "Stock after machine need" column: it was a frontend subtraction of two
+   * figures the row already carries, and the row now reports what the business paid instead. The
+   * machine need itself, and every other reorder column, is unchanged.
+   */
+  it('no longer shows the Stock after machine need column, and keeps the machine need', async () => {
     const host = await renderDashboard({ products: [product({ quantityInStock: 10, machineReplenishmentNeed: 16 })] });
 
-    const cell = Array.from(host.querySelectorAll('td')).find((td) => td.textContent?.trim() === '-6');
-    expect(cell).toBeDefined();
-    expect(cell?.className).toContain('value-negative');
+    const headers = Array.from(host.querySelectorAll('th')).map((th) => th.textContent?.trim());
+    expect(headers).not.toContain('Stock after machine need');
+    expect(headers).toContain('Machine need');
+    expect(headers).toContain('Need to Order');
+
+    // -6 was that column's value for this row; nothing computes it any more.
+    expect(Array.from(host.querySelectorAll('td')).map((td) => td.textContent?.trim())).not.toContain('-6');
   });
 
   it('no longer renders the permanent Admin tools banner', async () => {

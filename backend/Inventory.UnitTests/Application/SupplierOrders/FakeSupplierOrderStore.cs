@@ -39,7 +39,7 @@ public sealed class FakeSupplierOrderStore : ISupplierOrderStore
             SupplierOrderStatus.Ordered, now, now,
             fields.Lines.Select(line => new SupplierOrderLineRecord(
                 0, id, line.ProductId,
-                new SupplierOrderProductSummaryRecord(line.ProductId, "Product", null, null, 0, 0, null, null, 0, 0, 0, null, true, now, now, null, null),
+                new SupplierOrderProductSummaryRecord(line.ProductId, "Product", null, null, 0, null, null, 0, 0, 0, null, true, now, now, null),
                 line.QuantityOrdered, 0, line.UnitPrice, line.Notes)).ToList());
         _records[id] = record;
         LastCreated = record;

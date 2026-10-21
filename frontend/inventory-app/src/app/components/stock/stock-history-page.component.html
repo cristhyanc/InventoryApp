@@ -42,13 +42,19 @@
           <span class="field-label">Machine</span>
           <p data-testid="machine-filter-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
         </div>
+      } @else if (machinesLoading) {
+        <div class="field">
+          <span class="field-label">Machine</span>
+          <output data-testid="machine-filter-loading" class="text-md-body value-muted">Loading machines…</output>
+        </div>
       } @else if (machineFilterShown) {
         <div class="field">
           <label for="filter-machine" class="field-label">Machine</label>
           <select id="filter-machine" name="machineId" [(ngModel)]="filters.machineId">
             <option [ngValue]="null">All machines</option>
-            @for (machine of attributableMachines; track machine.machineID) {
-              <option [ngValue]="machine.localMachineId">{{ machine.machineName || machine.machineID }}</option>
+            <!-- Every recorded machine, deactivated ones included, so a retired machine's movements stay findable. -->
+            @for (machine of machines; track machine.id) {
+              <option [ngValue]="machine.id">{{ machine.name }}</option>
             }
           </select>
         </div>
@@ -78,7 +84,12 @@
   </form>
 
   @if (selectedProduct) {
-    <div class="grid gap-4 md:grid-cols-4" data-testid="selected-product-summary">
+    <!--
+      Three tiles since issue #792 (A2 of #786): the product's selling price was the fourth, and a
+      product carries none. The stock movement table below keeps its own unit-cost and cost-impact
+      columns - those are costs, not a price.
+    -->
+    <div class="grid gap-4 md:grid-cols-3" data-testid="selected-product-summary">
       <div class="card">
         <div class="card-body text-center">
           <span class="block text-md-card-title font-semibold text-md-gray-800">{{ selectedProduct.name }}</span>
@@ -97,17 +108,13 @@
           <span class="mt-2 block text-md-body value-muted">Low Stock Threshold</span>
         </div>
       </div>
-      <div class="card">
-        <div class="card-body text-center">
-          <span class="block text-md-stat-value font-semibold text-md-info-text">${{ selectedProduct.unitPrice.toFixed(2) }}</span>
-          <span class="mt-2 block text-md-body value-muted">Unit Price</span>
-        </div>
-      </div>
     </div>
 
     <app-stock-adjustment-form
       [productId]="selectedProduct.id"
       [machines]="machines"
+      [machinesFailed]="machinesError !== ''"
+      [machinesLoading]="machinesLoading"
       (adjustmentApplied)="onAdjustmentApplied()">
     </app-stock-adjustment-form>
   } @else if (filters.productId !== null) {
