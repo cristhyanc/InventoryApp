@@ -9,13 +9,17 @@ import { Machine, PickListMachineQuantity, PickListProduct, Product } from '../.
 import { ListLoadState } from '../shared/list-load-state';
 import { MultiSelectDropdownComponent, MultiSelectOption } from '../shared/multi-select-dropdown.component';
 import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
-import { nayaxUnavailableMessage } from '../../provider/nayax-availability';
+import { PERMISSION_NOT_GRANTED_REASON, nayaxUnavailableMessage } from '../../provider/nayax-availability';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { loadProviderList } from '../../provider/provider-list-load';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 import { SortDirection, compareSortValues, nextSortState, sortAriaState, sortColumnLabel } from '../shared/sortable-column';
+import { ManualPickListCatalogueState, ManualPickListComponent } from './manual-pick-list.component';
 
 type PickListSortColumn = 'name' | 'mdbCode';
+
+/** Which of the page's two views is showing. See `PickListComponent.calculatedUnavailableReason`. */
+export type PickListMode = 'calculated' | 'manual';
 
 /**
  * Pick List (Restock Planning) page (issues #222, #226): a read-only matrix built on the #221
@@ -30,16 +34,69 @@ type PickListSortColumn = 'name' | 'mdbCode';
  * matrix, because "No machines selected yet" is a claim about this business's selection rather than
  * about Nayax - and a machine read that *failed* leaves {@link machinesError}, which says so instead
  * of presenting an empty dropdown as "this business has no machines".
+ *
+ * **Issue #744 adds a second, machine-free view: manual entry.** With a usable provider and the
+ * permissions the calculated list needs (the machine fleet read and each machine's own product
+ * read), both views are offered and {@link mode} defaults to `'calculated'`, unchanged from before
+ * this issue. Without either - {@link calculatedUnavailableReason} is non-empty, from
+ * {@link machinesUnavailable} or from a stated refusal of the `machineStock` permission, checked
+ * up front and, for the latter, also caught live if a selected machine's own product read is
+ * refused only once Apply actually asks for it - the page opens straight into manual mode and
+ * states why, and the toggle to switch back to calculated is not offered at all: there is nothing
+ * to switch to. `ManualPickListComponent` is composed in rather than grown inline (docs/
+ * architecture.md § Page composition boundary) and is handed {@link allProducts}, the same
+ * already-fetched active catalogue the calculated view's Products filter uses, rather than fetching
+ * it a second time.
+ *
+ * **A mode switch never destroys the manual entry, because manual entry can hold an unconfirmed
+ * write.** Manual mode is the only view here that saves anything, and what protects it from
+ * recording a pick twice is the exact row set and idempotency key its component keeps for a retry
+ * (see `ManualPickListComponent`). Destroying it would throw both away, so an operator whose save
+ * ended uncertain could switch views, retype the same pick, and deduct the same storage a second
+ * time under a new key. So the component is created once, the first time manual mode is shown
+ * ({@link manualViewCreated}), and is **hidden rather than destroyed** afterwards - the same
+ * treatment `MachineDetailComponent` gives its tab panels - and while a save is actually in flight
+ * ({@link manualSaveInFlight}) switching away is refused outright, so no response can land on a view
+ * the operator has already left. The calculated matrix is a read-only projection, so it has nothing
+ * comparable to lose; its own state survives because nothing clears it.
+ *
+ * **The active catalogue has its own load state** ({@link productsLoadState}), because manual entry
+ * is built entirely from it: until the first read succeeds, an empty {@link allProducts} is "not
+ * known yet" or "could not be read", never "this business has no products", and a failed refresh
+ * after a recorded refill is reported rather than leaving stale storage quantities unlabelled. Both
+ * failures are retried through {@link loadProducts}.
  */
 @Component({
   selector: 'app-pick-list',
   standalone: true,
-  imports: [CommonModule, MultiSelectDropdownComponent, BusinessDateTimePipe, NayaxStatusBannerComponent],
+  imports: [CommonModule, MultiSelectDropdownComponent, BusinessDateTimePipe, NayaxStatusBannerComponent, ManualPickListComponent],
   templateUrl: './pick-list.component.html'
 })
 export class PickListComponent implements OnInit {
   allMachines: Machine[] = [];
   allProducts: Product[] = [];
+
+  /** The active catalogue reads: the first one, its retries, and the refresh after each manual refill. */
+  readonly productsLoadState = new ListLoadState();
+
+  /** Whether a catalogue read has ever succeeded, so a later failure is a failed refresh of real data rather than no data at all. */
+  private productsEverLoaded = false;
+
+  /** Which view is showing; see the class doc for when it is forced to `'manual'`. */
+  mode: PickListMode = 'calculated';
+
+  /**
+   * Whether `ManualPickListComponent` exists yet. It is created the first time manual mode is shown
+   * and then kept alive - hidden while the calculated view is showing - so its typed quantities and
+   * its retry key survive every later switch. A page that never enters manual mode never builds it.
+   */
+  manualViewCreated = false;
+
+  /** Whether manual entry has a save outstanding; while it has, switching away from manual is refused. */
+  manualSaveInFlight = false;
+
+  /** The one sentence saying Nayax has refused the `machineStock` permission the calculated list needs; `''` while it has not. */
+  machineProductsUnavailable = '';
 
   /** Staged filter choices from the dropdowns, not yet applied to the matrix. */
   stagedMachineIds: number[] = [];
@@ -83,13 +140,100 @@ export class PickListComponent implements OnInit {
         outcome.kind === 'unavailable' ? nayaxUnavailableMessage(outcome.unavailability, 'The pick list') : '';
       this.machinesError =
         outcome.kind === 'failed' ? 'The machine list could not be loaded, so a pick list cannot be built.' : '';
+      if (this.machinesUnavailable !== '') {
+        this.setMode('manual');
+      }
     });
-    this.productService.getAll().subscribe((products) => {
-      this.allProducts = products;
-      const allProductIds = products.map((p) => p.id);
-      this.stagedProductIds = allProductIds;
-      this.appliedProductIds = allProductIds;
+    // Checked up front, beside the machine fleet above: a usable connection does not mean Nayax has
+    // granted every read the calculated list needs, and a permission this session already knows is
+    // refused must open straight into manual mode rather than offering a matrix that will only fail.
+    this.provider.featureAvailability('machineStock').subscribe((availability) => {
+      if (availability === 'permissionNotGranted') {
+        this.machineProductsUnavailable = nayaxUnavailableMessage(PERMISSION_NOT_GRANTED_REASON, 'The calculated pick list');
+        this.setMode('manual');
+      }
     });
+    this.loadProducts();
+  }
+
+  /**
+   * Reads the active catalogue: on arrival, after each manual refill, and whenever the operator
+   * retries a failed read. Only the first successful read seeds the Products filter's selection; a
+   * later one only replaces the products, so a refresh never resets what the operator selected.
+   */
+  loadProducts(): void {
+    const token = this.productsLoadState.start();
+    this.productService.getAll().subscribe({
+      next: (products) => {
+        if (this.productsLoadState.isCurrent(token)) {
+          this.allProducts = products;
+          if (!this.productsEverLoaded) {
+            const allProductIds = products.map((p) => p.id);
+            this.stagedProductIds = allProductIds;
+            this.appliedProductIds = allProductIds;
+          }
+          this.productsEverLoaded = true;
+        }
+        this.productsLoadState.succeed(token);
+      },
+      error: () => {
+        this.productsLoadState.fail(token);
+        this.toastService.error(this.productsEverLoaded ? 'Failed to refresh the product list.' : 'Failed to load the product list.');
+      }
+    });
+  }
+
+  /** What manual entry may say about {@link allProducts}; see `ManualPickListCatalogueState`. */
+  get catalogueState(): ManualPickListCatalogueState {
+    if (this.productsEverLoaded) {
+      return 'loaded';
+    }
+    return this.productsLoadState.loadFailed ? 'failed' : 'loading';
+  }
+
+  /** Whether the last catalogue read failed after an earlier one succeeded, so the storage quantities shown may be stale. */
+  get catalogueRefreshFailed(): boolean {
+    return this.productsEverLoaded && this.productsLoadState.loadFailed;
+  }
+
+  /**
+   * The one sentence saying why the calculated view is not a real choice right now, or `''` while
+   * it is. Non-empty forces {@link mode} to `'manual'` and hides the toggle to switch back: there
+   * is nothing to switch to.
+   */
+  get calculatedUnavailableReason(): string {
+    return this.machinesUnavailable || this.machineProductsUnavailable;
+  }
+
+  /**
+   * Switches the visible view. Switching to `'calculated'` is refused once
+   * {@link calculatedUnavailableReason} is set (there is nothing to switch to) and while
+   * {@link manualSaveInFlight} is set (an outstanding save must land where the operator can see
+   * what it did); the toggle button is disabled in both cases, and this is the same rule behind it.
+   */
+  switchMode(mode: PickListMode): void {
+    if (mode === 'calculated' && (this.calculatedUnavailableReason !== '' || this.manualSaveInFlight)) {
+      return;
+    }
+    this.setMode(mode);
+  }
+
+  /** Refreshes the active catalogue `ManualPickListComponent` reads, after it records a refill. */
+  refreshProductsAfterManualRefill(): void {
+    this.loadProducts();
+  }
+
+  /** Records whether manual entry has a save outstanding; see {@link switchMode}. */
+  onManualSaveInFlightChange(inFlight: boolean): void {
+    this.manualSaveInFlight = inFlight;
+  }
+
+  /** The one place `mode` is written, so entering manual mode always creates the view that must then survive. */
+  private setMode(mode: PickListMode): void {
+    this.mode = mode;
+    if (mode === 'manual') {
+      this.manualViewCreated = true;
+    }
   }
 
   /**
@@ -242,9 +386,19 @@ export class PickListComponent implements OnInit {
         }
         this.loadState.succeed(token);
       }),
-      catchError(() => {
+      catchError((error: unknown) => {
         this.loadState.fail(token);
-        this.toastService.error('Failed to load the pick list.');
+        // The permission `machineStock` evidence above is read once at init; a session's first
+        // concrete proof that it is refused is often this very read, once Apply actually asks a
+        // machine for its products, so it is recorded here too rather than only reported as a
+        // generic failure.
+        const unavailability = this.provider.noteRefusal(error, 'machineStock');
+        if (unavailability !== null) {
+          this.machineProductsUnavailable = nayaxUnavailableMessage(unavailability, 'The calculated pick list');
+          this.setMode('manual');
+        } else {
+          this.toastService.error('Failed to load the pick list.');
+        }
         return EMPTY;
       })
     ).subscribe();

@@ -8539,9 +8539,9 @@ is unchanged; every role that holds `Inventory.Operate` today also holds `PickLi
 access changes. Being a write, it is refused in a read-only support session by the central `GET`/`HEAD`
 rule of issue #551, with no rule of its own.
 
-**Not in this slice.** There is no UI (#744), and no par levels or suggested quantities for a business
-without a provider. There is no update or delete of a recorded refill: a correction is its own
-movement.
+**Not in this slice.** No par levels or suggested quantities for a business without a provider, and no
+update or delete of a recorded refill: a correction is its own movement. The frontend that calls this
+endpoint is [Pick List frontend page](#pick-list-frontend-page-issue-222) below (#744).
 
 **What proves it.** `PickListRefillPolicyTests` and `PickListRefillFingerprintTests` (the rules and the
 canonical rendering, including the reordered-rows retry and a note that cannot impersonate the
@@ -8575,11 +8575,12 @@ than being collapsed into the row-level value. Every piece of state the page add
 the applied machine/product filter selections, the matrix data for the applied machines, and which
 positive-pick cells the operator has marked picked (`pickedCells`) - lives only in the component
 instance. None of it is written to `localStorage`, a query parameter, or any backend store, so it is
-lost on every page refresh or navigation away, by design: the page is a planning aid, not a record
-of what was actually picked. The page calls no endpoint besides this projection and the existing
-read-only machine/product list endpoints: no selection, filter, or pick/unpick interaction ever
-calls a mutation endpoint, so the page can never create a `MachineRefill`, a stock adjustment, or any
-other inventory movement.
+lost on every page refresh or navigation away, by design: the calculated view is a planning aid, not
+a record of what was actually picked. No selection, filter, or pick/unpick interaction in the
+calculated view ever calls a mutation endpoint, so it can never create a `MachineRefill`, a stock
+adjustment, or any other inventory movement on its own; the page's other view, manual entry, does
+record one - see [Manual pick-list entry and mode selection](#manual-pick-list-entry-and-mode-selection-issue-744)
+below.
 
 **Staged filter model (issue #226).** Products and Machines are both compact checkbox-style
 multi-select dropdown filters (`MultiSelectDropdownComponent`,
@@ -8655,6 +8656,183 @@ here - so the chosen sort survives Apply (including a machine-selection refetch)
 but Reset clears it back to no active column, and the next loaded pick list appears in backend order.
 No other column (Total to Pick, the per-machine columns) is sortable, and sorting never calls an
 endpoint or introduces a query parameter.
+
+#### Manual pick-list entry and mode selection (issue #744)
+
+Issue #744 (parent #329 child H2) gives the Pick List a second view - manual entry - and the
+page-level logic that decides which one is offered. It is the frontend of [Batch refill from the
+pick list](#batch-refill-from-the-pick-list-issue-743) above: the read-only calculated matrix never
+called a mutation endpoint, so without a usable provider the page had nothing to offer at all; this
+issue is what lets a business with no provider, or whose Nayax account has not granted the
+calculated list's permissions, still record what it took out of storage.
+
+**Two views, one component each, composed by `PickListComponent`.** `ManualPickListComponent`
+(`frontend/inventory-app/src/app/components/pick-list/manual-pick-list.component.ts`) is a dedicated
+feature component per the [page composition boundary](#page-composition-boundary-issue-191) rule,
+not UI grown inside the page: it owns its own search/category filter state, its "Taken" entries, its
+per-row and request-level refusal messages, and the save itself, and is handed the page's own
+already-fetched active product list (`PickListComponent.allProducts` - the same list the calculated
+view's Products filter already reads) through an `@Input() products`, rather than fetching it a
+second time. A successful save emits `@Output() refillRecorded`, which the page answers by
+re-fetching that list, so the manual table's storage quantities reflect the refill it just recorded.
+`PickListComponent.mode` (`'calculated' | 'manual'`) decides which one is shown.
+
+**A mode switch never destroys manual entry, because manual entry is the only view here that
+writes.** What stops a retry deducting the same storage twice is the exact row set and idempotency
+key `ManualPickListComponent` keeps (see **Idempotency** below), and that protection lives in the
+component instance. So the page creates it once, the first time manual mode is shown
+(`manualViewCreated`), and **hides rather than destroys** it afterwards - `[hidden]="mode !==
+'manual'"` on the element, the same treatment `MachineDetailComponent` gives its tab panels - so the
+typed quantities, the per-row refusals and the key all survive every later switch. Destroying it
+instead is a double-deduction path, not a cosmetic loss: an operator whose save ended uncertain could
+switch views, find an empty form, retype the same pick and send it under a **new** key, which the
+server has no way to recognise as the same refill. Two further rules close the rest of that gap: an
+uncertain outcome raises `unresolvedSubmission`, an inline notice that stays on screen until a later
+Save resolves it rather than only the toast that fades, and while a save is actually in flight
+(`ManualPickListComponent.saveInFlightChange` → `PickListComponent.manualSaveInFlight`) switching
+back to calculated is refused outright - the Calculated button is disabled and `switchMode
+('calculated')` is a no-op - so no response can land on a view the operator has already left. A page
+that never enters manual mode never builds it at all, so the calculated-only path is unchanged. The
+calculated matrix needs none of this: it is a read-only projection with nothing to lose, and its
+already-fetched state survives simply because nothing clears it.
+
+**The page says what it does to inventory per mode.** The subtitle
+(`data-testid="pick-list-inventory-impact"`) is the calculated view's long-standing "Planning only.
+This is a read-only view … nothing selected or picked here is saved" only while the calculated view
+is showing. In manual mode it says instead that nothing is saved until Save is clicked and that Save
+then records one machine refill per entered quantity and reduces that product's storage quantity.
+Describing a view that writes `MachineRefill` movements as read-only is the one thing that line must
+never do, so both wordings are asserted in `pick-list.component.manual-rendering.spec.ts`.
+
+**When the calculated view is offered, and when it is not.** `PickListComponent.
+calculatedUnavailableReason` is the one sentence saying why - empty while the calculated view is a
+real choice. It is non-empty for either of the acceptance criteria's two triggers, both read through
+the shared `ProviderAvailabilityService` (issue #728, see [Shared provider availability and
+error-versus-empty states](#shared-provider-availability-and-error-versus-empty-states-issue-728)):
+the existing `machineFleet` unavailability (`machinesUnavailable`, unchanged from before this issue)
+for no usable provider at all, and a new `machineStock` permission refusal
+(`machineProductsUnavailable`) for a usable provider that has not granted the per-machine product
+read the calculated matrix's fan-out needs. The `machineStock` check happens twice, like every other
+provider-optional screen's two-stage check: once up front in `ngOnInit`, from `featureAvailability
+('machineStock')`, so a permission this session already knows is refused opens the page straight into
+manual mode before anything is requested; and again live, in `fetchOrClear`'s `catchError`, through
+`ProviderAvailabilityService.noteRefusal` - the same path `loadProviderList` already uses for the
+machine fleet - because the calculated matrix's own fan-out (`GetMachineProductsAsync` per selected
+machine) is the first concrete read of that permission for a session that has not tried before. A
+request failure that is **not** one of the two published Nayax availability codes (a transport
+failure, an unrelated `5xx`) stays the existing generic "Failed to load the pick list" toast and does
+not force manual mode, because it says nothing about whether the calculated view could work. Non-empty
+`calculatedUnavailableReason` forces `mode` to `'manual'` and hides the calculated/manual toggle
+entirely (`switchMode('calculated')` is a no-op while it is set) - the same "a control over something
+that cannot exist is not shown" rule issue #728 already established, reused here for a whole view
+rather than one filter. **A connected business with every permission granted sees no change at all**:
+`mode` defaults to `'calculated'`, the toggle is offered, and every existing calculated-mode test
+(`pick-list.component.spec.ts`, `pick-list.component.provider-optional.spec.ts`) passes unmodified.
+
+**No machine selector, and no local id substituted for a provider one (issue #746 not yet merged).**
+Every manual save omits `machineId` entirely; the batch refill contract already treats an absent
+machine as a valid whole-business pick (`PickListRefillPolicy.ValidateAgainstState` only checks a
+machine when one is named). The calculated view's own machine selection is untouched by this issue:
+it keeps selecting and querying by the raw provider machine id (`Machine.machineID`) it always has,
+and manual entry never reads or writes that selection. A local machine selector for manual entry, and
+the machine-page consolidation the 18 October 2026 owner decision describes (replacing the
+machine-detail page's per-product quantity inputs with a link into this screen), are both explicitly
+deferred to #746 and are not part of this slice.
+
+**Entry, validation and the save contract.** Manual entry lists every product in `products` (already
+active-only, since `ProductService.getAll()` with no filters answers the working catalogue), with a
+client-side, case-insensitive name search and a category filter whose options are derived from the
+`category` already nested on each product - not a second `CategoryService.getAll()` call - sorted by
+name. Each row's "Taken" box holds free text; a blank box or an explicit `0` means nothing was taken
+and contributes no row, and anything else that is not a positive whole number is refused inline with
+"Enter a whole number greater than 0." (mirroring `PickListRefillPolicy.QuantityMustBePositiveMessage`
+without importing it - a second, Angular-side copy of the same rule, the same way
+`business-application-rules.ts` mirrors `BusinessSettingsPolicy`) and blocks Save until it is fixed or
+cleared, regardless of whether that row is currently visible under the search/category filter. Save
+builds its row set from every product in `products` order (not the visible/filtered subset) whose
+"Taken" box parses to a positive quantity, and sends exactly `{ idempotencyKey, rows }` - no
+`machineId`, no `notes` - to `PickListService.recordRefill` (`POST /api/pick-list/refills`). A `400`'s
+`ValidationProblemDetails` is parsed by `pick-list-refill-errors.ts`'s `parsePickListRefillRejection`:
+each `rows[i]` key is mapped back to the **product id** the submitted row at that index named (not
+the row's position in the currently-visible, filtered list), so a refusal lands on the right line
+however the operator has since re-sorted or re-filtered; any other key (`idempotencyKey`, `machineId`,
+`notes`, the bare `rows` key - none of which this screen offers a field for) surfaces as a
+request-level message instead. A successful save clears every "Taken" box and toasts "Refill
+recorded."; nothing is saved to `localStorage`, a query parameter, or any state outside the component
+instance, matching the calculated view's own no-persistence rule.
+
+**Idempotency and the three outcomes a save can have (issue #743's contract, read correctly from the
+client side).** `ManualPickListComponent` keeps the exact row set and key of its last attempted save
+(`lastSubmission`) and compares it with what Save would send now:
+
+- **An unchanged resubmission reuses the key and resends the identical rows**, generated nowhere
+  else - not even recomputed from the current product order - so a retry is bit-for-bit the same
+  request the server last saw, whatever else on screen may have changed (a filter, a sort) in
+  between. This is what makes the three failure modes safe to retry at all: `PickListRefillPolicy.
+  ValidateRequestShape`/`ValidateAgainstState` both refuse *before* `RecordPickListRefill` ever claims
+  the idempotency key (see [Batch refill from the pick list](#batch-refill-from-the-pick-list-issue-743)
+  above), so a `400` has recorded nothing and the same key is always safe to resend once the named
+  row is fixed.
+- **A `400` is a definite, per-row refusal.** Nothing was recorded; `rowErrors`/`requestErrors` are
+  replaced from the response (never merged with a previous attempt's), and `lastSubmission` is left
+  exactly as it is - an unedited retry resends the same refused request, which is deterministic and
+  harmless, while editing a flagged row changes the row set and so mints a new key on the next Save.
+- **A `409` means the key is already spent on a *different* request.** Reusing it would only be
+  refused again, so `lastSubmission` is cleared and the next Save always mints a fresh key; the
+  response's own `detail` sentence (`DomainExceptionHandler`'s `ProblemDetails`) is shown, or a
+  generic one when it carries none.
+- **Anything else (a network failure, an unrelated `5xx`) is uncertain - it is not known whether the
+  server recorded the refill before the response was lost.** `lastSubmission` is left untouched and
+  the entered quantities are **not** cleared, so clicking Save again - with nothing edited - resends
+  precisely the same request under precisely the same key: if the first attempt had in fact been
+  recorded, the retry is answered as a replay and writes nothing a second time; if it had not, the
+  retry records it. Either way the operator never has to decide which happened. This is the one
+  outcome that sets `unresolvedSubmission`, so the attempt stays reported on screen until a later
+  Save resolves it, and it is why the component survives a mode switch at all; a `400`, a `403` and a
+  `409` are definite answers and leave it clear.
+- **A `403` is a definite refusal too** - a read-only support session, or a capability the member
+  lacks, refused the request before anything was recorded - so it is reported as a refusal ("This
+  refill was refused, so nothing was recorded.", or the response's own `detail`), never as the
+  uncertain outcome that asks for a retry, and `lastSubmission` is cleared so a later, permitted Save
+  mints its own key.
+
+**A support session is read-only here too (issue #658's rule).** A support session grants
+`Inventory.Operate`, so the backend refuses this write only by its read-only method rule. Like
+`MachineDetailComponent`'s Restock, `ManualPickListComponent` subscribes to `SupportSessionService.
+active$` (`sessionActive`) and, while it is set, **hides** the "Taken" column and Save and says why
+(`data-testid="manual-pick-list-support-session"`); the product list and storage quantities stay
+readable. `canSave` is false and `save()` returns before sending, so a session that starts after the
+page opened cannot send a refill either. An already-raised uncertain-save notice stays visible.
+
+**The catalogue's own load state.** Manual entry is built entirely from `allProducts`, so an empty
+array cannot be read as "no products" until a read has succeeded. `PickListComponent.loadProducts()`
+is the one catalogue read - on arrival, after each recorded refill, and on retry - tracked by a
+`ListLoadState` (`productsLoadState`) so a superseded response never overwrites a newer one; only the
+first successful read seeds the Products filter's selection. It hands manual entry `catalogueState`
+(`'loading' | 'failed' | 'loaded'`): while the first read is outstanding the table says "Loading
+products…", a failed first read says the list could not be loaded with a **Retry** button, and "No
+active products match your filters." is shown only after a successful read. A failed refresh after a
+recorded refill (`catalogueRefreshFailed`) keeps the last list, says the storage quantities may be out
+of date (`data-testid="manual-pick-list-refresh-failed"`) and offers **Refresh**; either failure also
+toasts. `pick-list.component.manual-rendering.spec.ts` covers a delayed first read, a failed first
+read and its retry, a successful empty read, and a failed refresh, plus the support-session cases
+(no Taken boxes, no Save, no POST and no uncertain-write notice, including a session that starts after
+the page opened); `manual-pick-list.component.spec.ts` covers the `save()` guard and the `403` outcome.
+
+**What proves it.** `idempotency-key.spec.ts` (the generator's uniqueness and the 128-character
+contract bound), `pick-list-refill-errors.spec.ts` (`rows[i]` mapped back to the submitted row's
+product id, request-level keys kept separate, and `null` for a `409`/network failure/a body with no
+`errors`), `manual-pick-list.component.spec.ts` (filtering, the blank/zero/malformed "Taken" rules,
+the exact submitted row set and order, the three failure outcomes above including the idempotency-key
+reuse/mint rules, that a save in flight is never resent, and which outcomes leave `unresolvedSubmission`
+set), `pick-list.component.mode.spec.ts` (the default calculated mode, both forced-manual triggers -
+up front and live - the generic-failure exception, the manual-mode toggle, that switching back to
+calculated preserves the already-fetched matrix, that the manual view is created once and kept, and
+that manual mode cannot be left while a save is in flight) and
+`pick-list.component.manual-rendering.spec.ts` (the toggle and the manual table rendered through the
+real template, including the provider-unavailable case hiding the Calculated option entirely, both
+mode-specific inventory-impact wordings, an uncertain save retried with the identical key and body
+after switching to calculated and back, and the toggle refusing to move while a save is in flight).
 
 #### Supplier Orders frontend page (issue #387)
 

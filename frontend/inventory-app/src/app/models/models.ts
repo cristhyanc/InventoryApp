@@ -860,6 +860,44 @@ export interface PickListResult {
   products: PickListProduct[];
 }
 
+/**
+ * One row of a `POST /api/pick-list/refills` request (issue #743, frontend #744): a product of the
+ * caller's own catalogue and the whole number of units taken out of storage for it.
+ */
+export interface PickListRefillRowRequest {
+  productId: number;
+  quantityTaken: number;
+}
+
+/**
+ * A batch refill request (issue #743): one request recording everything a worker took out of
+ * storage. `machineId` is omitted here while #746 (the local machine selector) has not shipped, so
+ * every submission from this frontend records a refill with no machine.
+ */
+export interface PickListRefillRequest {
+  idempotencyKey: string;
+  machineId?: number | null;
+  notes?: string | null;
+  rows: PickListRefillRowRequest[];
+}
+
+/** One recorded row of a batch refill: the product, the units taken, and the movement it created. */
+export interface PickListRefillRecordedRow {
+  productId: number;
+  quantityTaken: number;
+  stockAdjustmentId: number;
+}
+
+/** What `POST /api/pick-list/refills` answers, for a newly recorded refill and a replayed retry alike. */
+export interface PickListRefillResponse {
+  idempotencyKey: string;
+  replayed: boolean;
+  machineId: number | null;
+  notes: string | null;
+  recordedAtUtc: string;
+  rows: PickListRefillRecordedRow[];
+}
+
 /** Whether a Take Inventory Apply request created a stock movement (issue #245). */
 export enum InventoryCountApplyOutcome {
   /** Counted matched the authoritative current quantity: no stock movement was created. */

@@ -13,6 +13,7 @@ import { MachineService } from '../../services/machine.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ProductService } from '../../services/product.service';
 import { ToastService } from '../../services/toast.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
 import { PickListComponent } from './pick-list.component';
 
 function machine(machineID: number, machineName: string): Machine {
@@ -47,6 +48,7 @@ async function render(options: { status?: SpecConnectionStatus; machines?: Obser
       { provide: PickListService, useValue: { get: jest.fn(() => of(pickListResult())) } },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
       { provide: AccessService, useValue: { allows: () => of(true) } },
+      { provide: SupportSessionService, useValue: { active$: of(false) } },
       provideNayaxConnectionStatus(options.status ?? 'Ready')
     ]
   }).compileComponents();

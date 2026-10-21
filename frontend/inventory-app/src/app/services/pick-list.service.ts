@@ -1,7 +1,7 @@
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import { Observable } from 'rxjs';
-import { PickListResult } from '../models/models';
+import { PickListRefillRequest, PickListRefillResponse, PickListResult } from '../models/models';
 import { ConfigService } from './config.service';
 
 @Injectable({ providedIn: 'root' })
@@ -16,5 +16,10 @@ export class PickListService {
   get(machineIds: number[]): Observable<PickListResult> {
     const params = machineIds.reduce((p, id) => p.append('machineIds', id), new HttpParams());
     return this.http.get<PickListResult>(this.baseUrl, { params });
+  }
+
+  /** Records a whole pick as one atomic, idempotent refill (issue #743). */
+  recordRefill(request: PickListRefillRequest): Observable<PickListRefillResponse> {
+    return this.http.post<PickListRefillResponse>(`${this.baseUrl}/refills`, request);
   }
 }
