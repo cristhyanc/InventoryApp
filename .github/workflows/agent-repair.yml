@@ -28,37 +28,54 @@ concurrency:
 jobs:
   isolation-gate:
     name: Refuse repair until runner isolation is verified
-    # The repair job holds the Claude token and the App key, so it is skipped until a human confirms
-    # the self-hosted runners are reset or ephemeral per job (issue #645 review). This job makes that
-    # refusal a visible failure on the same explicit repair request.
+    # The repair job holds the Claude token and the App key, so in self-hosted mode it is skipped until
+    # a human confirms the runners are reset or ephemeral per job (issues #645 review and #807). This
+    # job makes that refusal a visible failure on the same explicit repair request.
     if: |
-      vars.INVENTORY_RUNNER_ISOLATION_VERIFIED != 'true' &&
+      vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED != 'true' &&
       github.event.issue.pull_request != null &&
       github.event.issue.state == 'open' &&
       contains(github.event.issue.labels.*.name, 'agent-review') &&
       startsWith(github.event.comment.body, '@claude repair') &&
       github.event.comment.user.login == github.repository_owner &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions: {}
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Require verified runner isolation for credentialed jobs
         run: |
-          echo "::error::Repair is disabled until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Self-hosted runner placement."
+          echo "::error::Repair is disabled in self-hosted mode (INVENTORY_AGENT_SELF_HOSTED_ALL is true) until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Runner placement."
           exit 1
 
   repair:
     name: Repair pull request on explicit request
     if: |
-      vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' &&
+      (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true') &&
       github.event.issue.pull_request != null &&
       github.event.issue.state == 'open' &&
       contains(github.event.issue.labels.*.name, 'agent-review') &&
       startsWith(github.event.comment.body, '@claude repair') &&
       github.event.comment.user.login == github.repository_owner &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 120
     permissions:
       contents: read
@@ -77,6 +94,23 @@ jobs:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Set up Node.js for trusted helper scripts
         # The self-hosted runner has no preinstalled Node.js; the npm-cached setup below needs the checkout.
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -323,8 +357,8 @@ jobs:
   dispatch-validation:
     name: Dispatch exact-SHA validation
     needs: repair
-    if: always() && needs.repair.outputs.dispatch_validation == 'true' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    if: always() && needs.repair.outputs.dispatch_validation == 'true' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     permissions:
       actions: write
       pull-requests: read
@@ -333,6 +367,23 @@ jobs:
       issues: read
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:

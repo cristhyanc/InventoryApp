@@ -40,7 +40,7 @@ env:
 jobs:
   resolve:
     name: Resolve release commit
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -51,6 +51,23 @@ jobs:
       baseline_source: ${{ steps.baseline.outputs.baseline_source }}
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Refuse runs not started from main
         if: github.ref != 'refs/heads/main'
         env:
@@ -61,27 +78,42 @@ jobs:
 
       - name: Require verified runner isolation for credentialed jobs
         # Issue #645 review: jobs that receive a long-lived secret, an App key or Azure OIDC are skipped
-        # until a human confirms the self-hosted runners are reset or ephemeral per job. This step makes
+        # in self-hosted mode until a human confirms those runners are reset or ephemeral per job. This step makes
         # that refusal a visible failure instead of a silent skip.
         env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
           RUNNER_ISOLATION_VERIFIED: ${{ vars.INVENTORY_RUNNER_ISOLATION_VERIFIED }}
         run: |
-          if [ "$RUNNER_ISOLATION_VERIFIED" != "true" ]; then
-            echo "::error::Credentialed jobs are disabled until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Self-hosted runner placement."
+          if [ "$RUNNER_MODE" = "true" ] && [ "$RUNNER_ISOLATION_VERIFIED" != "true" ]; then
+            echo "::error::Credentialed jobs are disabled in self-hosted mode (INVENTORY_AGENT_SELF_HOSTED_ALL is true) until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Runner placement."
             exit 1
           fi
 
       - name: Require a verified tool baseline on every runner
         # Any runner in the pool can take any deploy job, so the host that later uploads the
         # frontend is unknown when the API is deployed. A check on that host would come after the
-        # API had already changed. deploy-api and deploy-frontend therefore run only once a human
-        # has run the runner diagnostic on every runner in the pool and recorded the result.
+        # API had already changed. In self-hosted mode deploy-api and deploy-frontend therefore run
+        # only once a human has run the runner diagnostic on every runner in the pool and recorded
+        # the result. In GitHub-hosted mode (issue #807) every job gets a fresh runner from the same
+        # published ubuntu-latest image, so this job checks the deploy jobs' tools on its own runner
+        # before anything changes, and each deploy job checks them again before using a credential.
         env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
           RUNNER_BASELINE_VERIFIED: ${{ vars.INVENTORY_RUNNER_BASELINE_VERIFIED }}
         run: |
-          if [ "$RUNNER_BASELINE_VERIFIED" != "true" ]; then
-            echo "::error::Deployment is disabled until a human runs the Inventory agent runner diagnostic on every self-hosted runner and sets the repository variable INVENTORY_RUNNER_BASELINE_VERIFIED to true. See docs/automation.md § Self-hosted runner placement."
+          if [ "$RUNNER_MODE" = "true" ] && [ "$RUNNER_BASELINE_VERIFIED" != "true" ]; then
+            echo "::error::Deployment is disabled in self-hosted mode (INVENTORY_AGENT_SELF_HOSTED_ALL is true) until a human runs the Inventory agent runner diagnostic on every self-hosted runner and sets the repository variable INVENTORY_RUNNER_BASELINE_VERIFIED to true. See docs/automation.md § Runner placement."
             exit 1
+          fi
+          if [ "$RUNNER_MODE" != "true" ]; then
+            missing=0
+            for tool in az jq curl docker; do
+              if ! command -v "$tool" >/dev/null 2>&1; then echo "::error::$tool is not installed on GitHub-hosted runner $RUNNER_NAME."; missing=1; fi
+            done
+            if [ ! -x /usr/bin/gh ]; then echo "::error::/usr/bin/gh is not installed on GitHub-hosted runner $RUNNER_NAME."; missing=1; fi
+            docker info >/dev/null 2>&1 || { echo "::error::The Docker daemon is not reachable on GitHub-hosted runner $RUNNER_NAME."; missing=1; }
+            [ "$missing" -eq 0 ] || exit 1
+            echo "GitHub-hosted mode: runner $RUNNER_NAME has the deploy jobs' tools. INVENTORY_RUNNER_BASELINE_VERIFIED describes the self-hosted VM and is not required."
           fi
 
       - name: Check out main history
@@ -144,12 +176,29 @@ jobs:
   validate:
     name: Validate release commit
     needs: resolve
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: read
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Check out release commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -174,7 +223,7 @@ jobs:
   preflight:
     name: Migration preflight
     needs: resolve
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read
@@ -183,6 +232,23 @@ jobs:
       pending: ${{ steps.preflight.outputs.pending }}
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Check out main history
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -233,12 +299,29 @@ jobs:
   build:
     name: Build release artifacts
     needs: resolve
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: read
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Check out release commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -283,14 +366,14 @@ jobs:
 
   deploy-api:
     name: Deploy API
-    if: github.ref == 'refs/heads/main' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' && vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true'
+    if: github.ref == 'refs/heads/main' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true') && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true')
     needs:
       - resolve
       - validate
       - preflight
       - build
     environment: VmInventoryApi_Env
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -299,6 +382,23 @@ jobs:
       webapp_url: ${{ steps.deploy.outputs.webapp-url }}
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Check runner tools for the API deployment
         run: |
           missing=0
@@ -377,11 +477,28 @@ jobs:
     needs:
       - resolve
       - deploy-api
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     permissions: {}
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Wait for /health/ready
         env:
           WEBAPP_URL: ${{ vars.PRODUCTION_API_BASE_URL || needs.deploy-api.outputs.webapp_url }}
@@ -411,17 +528,34 @@ jobs:
   record-release:
     name: Record production backend release
     # Without a status function this still runs only when every job it needs succeeded.
-    if: vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
+    if: (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
     needs:
       - resolve
       - deploy-api
       - verify-api
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       deployments: write
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Record the deployed backend SHA
         env:
           GH_TOKEN: ${{ github.token }}
@@ -442,7 +576,7 @@ jobs:
 
   deploy-frontend:
     name: Deploy frontend
-    if: github.ref == 'refs/heads/main' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true' && vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true'
+    if: github.ref == 'refs/heads/main' && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true') && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true')
     needs:
       - resolve
       - build
@@ -450,7 +584,7 @@ jobs:
       - verify-api
       - record-release
     environment: VmInventoryApi_Env
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     permissions:
       contents: read
@@ -458,6 +592,23 @@ jobs:
       url: ${{ steps.deploy.outputs.static_web_app_url }}
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Check runner tools for the frontend deployment
         run: |
           missing=0
@@ -533,11 +684,28 @@ jobs:
       - record-release
       - verify-api
       - deploy-frontend
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions: {}
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Publish deployment summary
         env:
           RELEASE_SHA: ${{ needs.resolve.outputs.sha }}

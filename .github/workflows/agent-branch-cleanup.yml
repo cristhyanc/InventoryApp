@@ -28,28 +28,62 @@ jobs:
   isolation-gate:
     name: Refuse branch cleanup until runner isolation is verified
     # The cleanup job holds a GITHUB_TOKEN with contents: write, so it is skipped
-    # until a human confirms the self-hosted runners are reset or ephemeral per job (issue #645
+    # in self-hosted mode until a human confirms those runners are reset or ephemeral per job (issue #645
     # review). This job makes that refusal a visible failure on the same event.
-    if: github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'agent/issue-') && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED != 'true'
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    if: github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'agent/issue-') && vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED != 'true'
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions: {}
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Require verified runner isolation for credentialed jobs
         run: |
-          echo "::error::Branch cleanup is disabled until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Self-hosted runner placement."
+          echo "::error::Branch cleanup is disabled in self-hosted mode (INVENTORY_AGENT_SELF_HOSTED_ALL is true) until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Runner placement."
           exit 1
 
   cleanup:
     name: Delete branches of a closed agent pull request
-    if: github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'agent/issue-') && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    if: github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.event.pull_request.head.ref, 'agent/issue-') && (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: read
 
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Check out trusted develop
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
