@@ -1,13 +1,26 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { Observable, of, throwError } from 'rxjs';
+import { Observable, Subject, of, throwError } from 'rxjs';
 import { ProductListComponent } from './product-list.component';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { ToastService } from '../../services/toast.service';
 import { Product } from '../../models/models';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { AccessService } from '../../access/access.service';
+import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { ProductPurchaseCostSummary } from '../../models/product-purchase-cost-summary';
+
+/** A stub matching `AccessService.allows`'s one method, for every describe block below that does not itself care about capability gating. */
+function accessServiceStub(allowed = true): Pick<AccessService, 'allows'> {
+  return { allows: () => of(allowed) };
+}
+
+/** A stub matching `ProductPurchaseCostService.getSummaries`, defaulting to no purchase history for anything asked. */
+function purchaseCostServiceStub(getSummaries: jest.Mock = jest.fn(() => of([]))): Pick<ProductPurchaseCostService, 'getSummaries'> {
+  return { getSummaries };
+}
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -60,7 +73,9 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
         { provide: ProductService, useValue: { getAll: () => of(products) } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
-        { provide: SupportSessionService, useValue: { active$: sessionActive } }
+        { provide: SupportSessionService, useValue: { active$: sessionActive } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
 
@@ -152,7 +167,9 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
         { provide: ProductService, useValue: { getAll: () => of(products), update: () => of(undefined) } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
-        { provide: SupportSessionService, useValue: { active$: sessionActive } }
+        { provide: SupportSessionService, useValue: { active$: sessionActive } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
 
@@ -349,7 +366,9 @@ describe('ProductListComponent write controls during a support session (issue #5
         { provide: ProductService, useValue: { getAll: () => of(products), update } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
-        { provide: SupportSessionService, useValue: { active$: sessionActive } }
+        { provide: SupportSessionService, useValue: { active$: sessionActive } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
 
@@ -423,7 +442,9 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
         { provide: ProductService, useValue: { getAll: () => of(products), delete: deleteFn } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: toastService },
-        { provide: SupportSessionService, useValue: { active$: of(false) } }
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
 
@@ -608,11 +629,12 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
 });
 
 /**
- * "Show retired" (issue #737): off by default so the catalogue page still answers the working
- * catalogue, and on demand so a product just deactivated through the Active/Inactive toggle stays
+ * The Status filter (issue #791, E of #786, replacing the "Show retired" checkbox issue #737
+ * added): "Only active" (the default) so the catalogue page still answers the working catalogue,
+ * and "All" on demand so a product just deactivated through the Active/Inactive toggle stays
  * reachable to reactivate instead of disappearing from the only screen that can flip it back.
  */
-describe('ProductListComponent "Show retired" (issue #737)', () => {
+describe('ProductListComponent Status filter (issue #791)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
   async function render(getAll: jest.Mock) {
@@ -623,7 +645,9 @@ describe('ProductListComponent "Show retired" (issue #737)', () => {
         { provide: ProductService, useValue: { getAll } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
-        { provide: SupportSessionService, useValue: { active$: of(false) } }
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
 
@@ -632,44 +656,50 @@ describe('ProductListComponent "Show retired" (issue #737)', () => {
     return { fixture, host: fixture.nativeElement as HTMLElement };
   }
 
-  it('lists only active products by default', async () => {
+  function statusSelect(host: HTMLElement): HTMLSelectElement {
+    return host.querySelector('[name="statusFilter"]') as HTMLSelectElement;
+  }
+
+  it('lists only active products by default, offering "Only active" and "All"', async () => {
     const getAll = jest.fn(() => of([]));
-    await render(getAll);
+    const { host } = await render(getAll);
 
     expect(getAll).toHaveBeenCalledWith(expect.objectContaining({ includeRetired: false }));
+    const options = Array.from(statusSelect(host).querySelectorAll('option')).map((option) => option.textContent?.trim());
+    expect(options).toEqual(['Only active', 'All']);
+    expect(statusSelect(host).value).toBe('active');
+    expect(host.textContent).not.toContain('Show retired');
   });
 
-  it('asks for retired products too once "Show retired" is checked', async () => {
+  it('asks for retired products too once "All" is selected', async () => {
     const getAll = jest.fn(() => of([]));
     const { fixture, host } = await render(getAll);
 
-    const checkbox = host.querySelector('[name="includeRetired"]') as HTMLInputElement;
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event('change'));
+    statusSelect(host).value = 'all';
+    statusSelect(host).dispatchEvent(new Event('change'));
     fixture.detectChanges();
 
     expect(getAll).toHaveBeenCalledWith(expect.objectContaining({ includeRetired: true }));
   });
 
-  it('resets "Show retired" back off along with the other filters', async () => {
+  it('resets the Status filter back to "Only active" along with the other filters', async () => {
     const getAll = jest.fn(() => of([]));
     const { fixture, host } = await render(getAll);
-    const checkbox = host.querySelector('[name="includeRetired"]') as HTMLInputElement;
 
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event('change'));
+    statusSelect(host).value = 'all';
+    statusSelect(host).dispatchEvent(new Event('change'));
     fixture.detectChanges();
-    expect(fixture.componentInstance.includeRetired).toBe(true);
+    expect(fixture.componentInstance.statusFilter).toBe('all');
 
     (Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Reset') as HTMLButtonElement).click();
     fixture.detectChanges();
     // NgModel's model-to-view write for a standalone control is a deferred microtask (to avoid
-    // ExpressionChangedAfterItHasBeenCheckedError), so the unchecked state needs one more tick.
+    // ExpressionChangedAfterItHasBeenCheckedError), so the reset state needs one more tick.
     await Promise.resolve();
     fixture.detectChanges();
 
-    expect(fixture.componentInstance.includeRetired).toBe(false);
-    expect(checkbox.checked).toBe(false);
+    expect(fixture.componentInstance.statusFilter).toBe('active');
+    expect(statusSelect(host).value).toBe('active');
   });
 
   /**
@@ -679,7 +709,9 @@ describe('ProductListComponent "Show retired" (issue #737)', () => {
    * above provides no `SupplierService`.
    *
    * The Price column and its sort went the same way in issue #792 (A2): a product carries no
-   * selling price either, so the header row is exactly these four columns and the Actions cell.
+   * selling price either. Issue #791 (E of #786) then added the Average cost, Last purchase and
+   * Cheapest purchase columns, so the header row is exactly these seven columns and the Actions
+   * cell when `Dashboard.ViewFinancials` is granted, as the default stub here grants it.
    */
   it('offers no supplier or price filter, column or sort', async () => {
     const { host } = await render(jest.fn(() => of([product({ id: 7, name: 'Widget' })])));
@@ -687,6 +719,242 @@ describe('ProductListComponent "Show retired" (issue #737)', () => {
     expect(host.textContent).not.toContain('All Suppliers');
     expect(
       Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim())
-    ).toEqual(['Name', 'Category', 'Stock', 'Status', '']);
+    ).toEqual(['Name', 'Category', 'Stock', 'Status', 'Average cost', 'Last purchase', 'Cheapest purchase', '']);
+  });
+});
+
+/**
+ * Average cost, Last purchase and Cheapest purchase (issue #791, E of #786). Average cost is
+ * `averageUnitCostForDisplay` (issue #788) and is shown to every role; Last/Cheapest purchase come
+ * from one `ProductPurchaseCostService.getSummaries` call for the listed ids and require
+ * `Dashboard.ViewFinancials`. None of these values is computed in Angular - only presented.
+ */
+describe('ProductListComponent average and purchase cost columns (issue #791)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  function summary(productId: number, overrides: Partial<ProductPurchaseCostSummary> = {}): ProductPurchaseCostSummary {
+    return {
+      productId,
+      lastUnitCost: 2.4,
+      lastSupplierName: 'Acme Supplies',
+      lastPurchaseDate: '2026-03-01T00:00:00',
+      lowestUnitCost: 1.1,
+      lowestSupplierName: 'Bravo Co',
+      lowestPurchaseDate: '2026-01-01T00:00:00',
+      ...overrides
+    };
+  }
+
+  async function render(products: Product[], options: { getSummaries?: jest.Mock; allowed?: boolean } = {}) {
+    const getSummaries = options.getSummaries ?? jest.fn(() => of([]));
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll: () => of(products) } },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        { provide: AccessService, useValue: accessServiceStub(options.allowed ?? true) },
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub(getSummaries) }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement, getSummaries };
+  }
+
+  function rowCells(host: HTMLElement, rowIndex = 0): HTMLTableCellElement[] {
+    const row = host.querySelectorAll('tbody tr')[rowIndex] as HTMLTableRowElement;
+    return Array.from(row.querySelectorAll('td'));
+  }
+
+  it('shows an em dash for an unestablished average cost and $0.00 for a known zero, never reading the legacy default as known', async () => {
+    const { host } = await render([
+      product({ id: 1, name: 'Unknown', averageUnitCost: 7, averageUnitCostForDisplay: undefined }),
+      product({ id: 2, name: 'Zero', averageUnitCost: 0, averageUnitCostForDisplay: 0 }),
+      product({ id: 3, name: 'Known', averageUnitCost: 3.5, averageUnitCostForDisplay: 3.5 })
+    ]);
+
+    const averageCostCells = Array.from(host.querySelectorAll('tbody tr')).map(
+      (row) => (row.querySelectorAll('td')[4] as HTMLTableCellElement).textContent?.trim()
+    );
+    expect(averageCostCells).toEqual(['—', '$0.00', '$3.50']);
+  });
+
+  it('requests last/cheapest purchase costs once for the listed ids and shows each cost with its supplier', async () => {
+    const getSummaries = jest.fn(() =>
+      of([summary(1), summary(2, { lastSupplierName: null, lowestUnitCost: 0, lowestSupplierName: null })])
+    );
+    const { host } = await render([product({ id: 1, name: 'A' }), product({ id: 2, name: 'B' })], { getSummaries });
+
+    expect(getSummaries).toHaveBeenCalledTimes(1);
+    expect(getSummaries).toHaveBeenCalledWith([1, 2]);
+
+    const rowA = rowCells(host, 0);
+    expect(rowA[5].textContent).toContain('$2.40');
+    expect(rowA[5].textContent).toContain('Acme Supplies');
+    expect(rowA[6].textContent).toContain('$1.10');
+    expect(rowA[6].textContent).toContain('Bravo Co');
+
+    const rowB = rowCells(host, 1);
+    // No supplier recorded on the last purchase: "None", never omitted and never another purchase's supplier.
+    expect(rowB[5].textContent).toContain('$2.40');
+    expect(rowB[5].textContent).toContain('None');
+    // A genuine $0 cheapest cost, with its own unknown supplier - never an em dash.
+    expect(rowB[6].textContent).toContain('$0.00');
+    expect(rowB[6].textContent).toContain('None');
+  });
+
+  it('shows an em dash and no supplier line for a product absent from the purchase-cost answer', async () => {
+    const { host } = await render([product({ id: 1, name: 'Widget' })], { getSummaries: jest.fn(() => of([])) });
+
+    const row = rowCells(host, 0);
+    expect(row[5].textContent?.trim()).toBe('—');
+    expect(row[6].textContent?.trim()).toBe('—');
+  });
+
+  it('hides the Last and Cheapest purchase columns and makes no request without Dashboard.ViewFinancials, while still showing Average cost', async () => {
+    const getSummaries = jest.fn(() => of([summary(1)]));
+    const { host } = await render([product({ id: 1, name: 'Widget', averageUnitCostForDisplay: 4 })], {
+      getSummaries,
+      allowed: false
+    });
+
+    expect(getSummaries).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain('Last purchase');
+    expect(host.textContent).not.toContain('Cheapest purchase');
+    expect(host.querySelector('tbody')?.textContent).toContain('$4.00');
+  });
+
+  it('shows Unavailable with a Retry control once the purchase-cost read fails, and Retry reloads it', async () => {
+    const getSummaries = jest
+      .fn()
+      .mockReturnValueOnce(throwError(() => new Error('boom')))
+      .mockReturnValueOnce(of([summary(1)]));
+    const { fixture, host } = await render([product({ id: 1, name: 'Widget' })], { getSummaries });
+
+    let row = rowCells(host, 0);
+    expect(row[5].textContent).toContain('Unavailable');
+    expect(row[6].textContent).toContain('Unavailable');
+    const retryButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Retry') as
+      | HTMLButtonElement
+      | undefined;
+    expect(retryButton).toBeDefined();
+
+    retryButton!.click();
+    fixture.detectChanges();
+
+    expect(getSummaries).toHaveBeenCalledTimes(2);
+    row = rowCells(host, 0);
+    expect(row[5].textContent).toContain('$2.40');
+    expect(Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Retry')).toBeUndefined();
+  });
+
+  it('shows Loading while the read is in flight, distinct from a successful no-history answer', async () => {
+    const pending = new Subject<ProductPurchaseCostSummary[]>();
+    const { fixture, host } = await render([product({ id: 1, name: 'Widget' })], {
+      getSummaries: jest.fn(() => pending.asObservable())
+    });
+
+    expect(rowCells(host, 0)[5].textContent).toContain('Loading');
+
+    pending.next([]);
+    pending.complete();
+    fixture.detectChanges();
+
+    expect(rowCells(host, 0)[5].textContent?.trim()).toBe('—');
+  });
+
+  it('does not let a slow or failed purchase-cost response for an earlier product set overwrite a newer one', async () => {
+    const firstAnswer = new Subject<ProductPurchaseCostSummary[]>();
+    const getAll = jest
+      .fn()
+      .mockReturnValueOnce(of([product({ id: 1, name: 'First' })]))
+      .mockReturnValueOnce(of([product({ id: 2, name: 'Second' })]));
+    const getSummaries = jest
+      .fn()
+      .mockReturnValueOnce(firstAnswer.asObservable())
+      .mockReturnValueOnce(of([summary(2)]));
+
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll } },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub(getSummaries) }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    const host = fixture.nativeElement as HTMLElement;
+
+    // A second filter-driven fetch lands (the second product set) while the first set's
+    // purchase-cost read is still outstanding.
+    fixture.componentInstance.applyFilters();
+    fixture.detectChanges();
+
+    // The first set's read is no longer subscribed to, so its late answer must be dropped rather
+    // than landing under the second set's row.
+    firstAnswer.next([summary(1, { lastUnitCost: 99 })]);
+    firstAnswer.complete();
+    fixture.detectChanges();
+
+    const row = rowCells(host, 0);
+    expect(row[5].textContent).toContain('$2.40');
+    expect(row[5].textContent).not.toContain('99');
+  });
+
+  /**
+   * "Where sortable, missing/unavailable costs sort last in both directions" - a no-history
+   * product on Average cost/Last purchase/Cheapest purchase stays last whichever way the column
+   * is toggled, exactly like the existing Category column's missing-value rule.
+   */
+  it('sorts by average cost numerically, with an unestablished cost last in both directions', async () => {
+    const { fixture, host } = await render([
+      product({ id: 1, name: 'A', averageUnitCostForDisplay: 5 }),
+      product({ id: 2, name: 'B', averageUnitCostForDisplay: undefined }),
+      product({ id: 3, name: 'C', averageUnitCostForDisplay: 1 })
+    ]);
+
+    const header = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Average cost')) as HTMLTableCellElement;
+    const button = header.querySelector('button') as HTMLButtonElement;
+
+    button.click();
+    fixture.detectChanges();
+    let names = Array.from(host.querySelectorAll('tbody tr')).map((row) => row.querySelector('td')?.textContent?.trim());
+    expect(names).toEqual(['C', 'A', 'B']);
+
+    button.click();
+    fixture.detectChanges();
+    names = Array.from(host.querySelectorAll('tbody tr')).map((row) => row.querySelector('td')?.textContent?.trim());
+    expect(names).toEqual(['A', 'C', 'B']);
+  });
+
+  it('sorts by last purchase cost, with a product absent from the purchase-cost answer last in both directions', async () => {
+    const getSummaries = jest.fn(() => of([summary(1, { lastUnitCost: 5 }), summary(3, { lastUnitCost: 1 })]));
+    const { fixture, host } = await render(
+      [product({ id: 1, name: 'A' }), product({ id: 2, name: 'B' }), product({ id: 3, name: 'C' })],
+      { getSummaries }
+    );
+
+    const header = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Last purchase')) as HTMLTableCellElement;
+    const button = header.querySelector('button') as HTMLButtonElement;
+
+    button.click();
+    fixture.detectChanges();
+    let names = Array.from(host.querySelectorAll('tbody tr')).map((row) => row.querySelector('td')?.textContent?.trim());
+    expect(names).toEqual(['C', 'A', 'B']);
+
+    button.click();
+    fixture.detectChanges();
+    names = Array.from(host.querySelectorAll('tbody tr')).map((row) => row.querySelector('td')?.textContent?.trim());
+    expect(names).toEqual(['A', 'C', 'B']);
   });
 });

@@ -10,8 +10,11 @@
     </select>
 
     <label class="flex items-center gap-2 self-center">
-      <input [(ngModel)]="includeRetired" (ngModelChange)="applyFilters()" name="includeRetired" type="checkbox" class="h-4 w-4 border-md-gray-300 text-md-dark" />
-      <span>Show retired</span>
+      <span>Status</span>
+      <select class="max-w-[180px]" [(ngModel)]="statusFilter" (ngModelChange)="applyFilters()" name="statusFilter">
+        <option value="active">Only active</option>
+        <option value="all">All</option>
+      </select>
     </label>
 
     <button type="button" class="btn btn-secondary" (click)="resetFilters()">Reset</button>
@@ -25,6 +28,12 @@
     } @else if (loadState.loaded && products.length === 0) {
       <p class="p-4 text-md-body value-muted">No products match your filters.</p>
     } @else if (loadState.loaded) {
+      @if (canViewFinancials && costsState === 'failed') {
+        <p class="p-4 text-md-body value-negative">
+          The Last and Cheapest purchase cost columns could not be loaded.
+          <button type="button" class="btn btn-sm btn-secondary" (click)="retryPurchaseCosts()">Retry</button>
+        </p>
+      }
       <!--
         The Actions column is pinned to the right edge of this scroll area (rather than the whole
         table) so Edit/Stock/Delete stay visible and usable without scrolling to discover them when
@@ -48,6 +57,17 @@
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('status')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('status')">{{ sortLabel('Status', 'status') }}</button>
               </th>
+              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('averageCost')">
+                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('averageCost')">{{ sortLabel('Average cost', 'averageCost') }}</button>
+              </th>
+              @if (canViewFinancials) {
+                <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('lastPurchase')">
+                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('lastPurchase')">{{ sortLabel('Last purchase', 'lastPurchase') }}</button>
+                </th>
+                <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('cheapestPurchase')">
+                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('cheapestPurchase')">{{ sortLabel('Cheapest purchase', 'cheapestPurchase') }}</button>
+                </th>
+              }
               <th scope="col" class="table-cell sticky right-0 z-10 bg-md-gray-100"></th>
             </tr>
           </thead>
@@ -77,6 +97,21 @@
                     {{ p.isActive ? 'Active' : 'Inactive' }}
                   </button>
                 </td>
+                <td class="table-cell">{{ averageCostDisplay(p) }}</td>
+                @if (canViewFinancials) {
+                  <td class="table-cell">
+                    <div>{{ purchaseCostDisplay(p, 'lastPurchase') }}</div>
+                    @if (purchaseCostSupplierDisplay(p, 'lastPurchase'); as supplier) {
+                      <div class="mt-1 value-muted">{{ supplier }}</div>
+                    }
+                  </td>
+                  <td class="table-cell">
+                    <div>{{ purchaseCostDisplay(p, 'cheapestPurchase') }}</div>
+                    @if (purchaseCostSupplierDisplay(p, 'cheapestPurchase'); as supplier) {
+                      <div class="mt-1 value-muted">{{ supplier }}</div>
+                    }
+                  </td>
+                }
                 <td class="table-cell sticky right-0 z-10 bg-white">
                   <div class="flex flex-wrap gap-2 max-w-[140px] sm:max-w-none">
                     <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>

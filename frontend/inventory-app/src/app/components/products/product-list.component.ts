@@ -2,8 +2,8 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { EMPTY, Subject, Subscription } from 'rxjs';
-import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
+import { EMPTY, Subject, Subscription, merge, of } from 'rxjs';
+import { catchError, switchMap, take, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { Product, Category } from '../../models/models';
@@ -21,11 +21,32 @@ import {
 import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { apiErrorMessage } from '../shared/api-error-message';
+import { AccessService } from '../../access/access.service';
+import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { ProductPurchaseCostSummary } from '../../models/product-purchase-cost-summary';
 
 // No 'supplier' column since issue #787 (A1 of #786): a product carries no supplier to sort by.
 // No `price` column since issue #792 (A2 of #786): a product carries no selling price, so there is
-// nothing to show or sort by. `stock` and `status` are unchanged.
-type ProductSortColumn = 'name' | 'category' | 'stock' | 'status';
+// nothing to show or sort by. `averageCost`, `lastPurchase` and `cheapestPurchase` were added by
+// issue #791 (E of #786); `stock` and `status` are unchanged.
+type ProductSortColumn =
+  | 'name'
+  | 'category'
+  | 'stock'
+  | 'status'
+  | 'averageCost'
+  | 'lastPurchase'
+  | 'cheapestPurchase';
+
+/** `GET api/products`'s working-catalogue/whole-catalogue choice (issue #737), as a page filter. */
+type ProductStatusFilter = 'active' | 'all';
+
+/**
+ * The state of the bulk purchase-cost read behind the Last/Cheapest purchase columns (issue #791,
+ * E of #786): distinct from "no value", because an in-flight or failed read says nothing about
+ * whether a product has purchase history, and only a successful read may answer `—`.
+ */
+type PurchaseCostsState = 'loading' | 'loaded' | 'failed';
 
 @Component({
   selector: 'app-product-list',
@@ -41,12 +62,14 @@ export class ProductListComponent implements OnInit, OnDestroy {
   search = '';
   categoryId: number | '' = '';
   /**
-   * Whether to list a deactivated product too (issue #737): off by default, because `GET
-   * /api/products` answers only the working catalogue unless asked otherwise. Checking it is what
-   * keeps a just-deactivated product reachable to Reactivate - the toggle flips `isActive` either
-   * way, but the row has to still be on screen to click it.
+   * The working-catalogue/whole-catalogue choice (issue #791, E of #786, replacing the "Show
+   * retired" checkbox): "Only active" (the default) calls `GET /api/products` with no
+   * `includeRetired`, which is what keeps the page's default view the working catalogue; "All"
+   * sends `includeRetired=true`, which is how a just-deactivated product stays reachable to
+   * Reactivate - the toggle flips `isActive` either way, but the row has to still be on screen to
+   * click it.
    */
-  includeRetired = false;
+  statusFilter: ProductStatusFilter = 'active';
   sortColumn: ProductSortColumn | null = null;
   sortDirection: SortDirection = 'asc';
 
@@ -59,19 +82,45 @@ export class ProductListComponent implements OnInit, OnDestroy {
    */
   sessionActive = false;
 
+  /**
+   * Whether the signed-in member's role grants `Dashboard.ViewFinancials` (issue #791, E of #786):
+   * the Last/Cheapest purchase columns and their request are hidden without it, on the same
+   * fail-open default every other capability-gated control in this codebase starts from while the
+   * capability has not been read yet. Average cost is unaffected and always shown.
+   */
+  canViewFinancials = true;
+
+  /** The state of the current purchase-cost read; see {@link PurchaseCostsState}. */
+  costsState: PurchaseCostsState = 'loading';
+
+  /**
+   * The current product set's purchase-cost summaries, keyed by product id. A product with no
+   * entry has either not been asked about yet or has no recorded purchase history - which one is
+   * told apart by {@link costsState}, never by this map alone.
+   */
+  purchaseCosts = new Map<number, ProductPurchaseCostSummary>();
+
   private readonly search$ = new Subject<string>();
   private readonly immediateFilter$ = new Subject<void>();
+  private readonly productIdsChanged$ = new Subject<readonly number[]>();
+  private readonly retryCosts$ = new Subject<void>();
   private readonly destroy$ = new Subject<void>();
   private readonly sessionActiveSubscription: Subscription;
+  private readonly financialsAccessSubscription: Subscription;
 
   constructor(
     private productService: ProductService,
     private categoryService: CategoryService,
+    private purchaseCostService: ProductPurchaseCostService,
     private toastService: ToastService,
     private router: Router,
-    supportSession: SupportSessionService
+    supportSession: SupportSessionService,
+    private access: AccessService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+    this.financialsAccessSubscription = access
+      .allows('Dashboard.ViewFinancials')
+      .subscribe((allowed) => (this.canViewFinancials = allowed));
   }
 
   ngOnInit(): void {
@@ -86,6 +135,18 @@ export class ProductListComponent implements OnInit, OnDestroy {
       )
       .subscribe();
 
+    // The displayed product set changes only once a new fetch actually succeeds (a failed refetch
+    // leaves the previous rows on screen), which is the one moment stale purchase-cost results must
+    // be dropped. The outer switchMap cancels an in-flight read - and any pending Retry on it - the
+    // moment a newer product set arrives, so a slow or failed response can never land under a set
+    // it no longer describes.
+    this.productIdsChanged$
+      .pipe(
+        switchMap((productIds) => this.loadPurchaseCosts(productIds)),
+        takeUntil(this.destroy$)
+      )
+      .subscribe();
+
     this.applyFilters();
   }
 
@@ -93,13 +154,14 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.destroy$.next();
     this.destroy$.complete();
     this.sessionActiveSubscription.unsubscribe();
+    this.financialsAccessSubscription.unsubscribe();
   }
 
   private fetchProducts() {
     const filters = {
       search: this.search || undefined,
       categoryId: this.categoryId === '' ? undefined : this.categoryId,
-      includeRetired: this.includeRetired
+      includeRetired: this.statusFilter === 'all'
     };
 
     const token = this.loadState.start();
@@ -107,6 +169,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
       tap((products) => {
         if (this.loadState.isCurrent(token)) {
           this.products = products;
+          this.productIdsChanged$.next(products.map((product) => product.id));
         }
         this.loadState.succeed(token);
       }),
@@ -116,6 +179,54 @@ export class ProductListComponent implements OnInit, OnDestroy {
         return EMPTY;
       })
     );
+  }
+
+  /**
+   * Starts (or restarts) the purchase-cost read for the given product ids: the old results are
+   * cleared immediately, because they describe a product set that is no longer on screen, and no
+   * request is made at all without `Dashboard.ViewFinancials` - asked for fresh every time, so a
+   * capability change since the last read is honoured rather than cached past it. Retry re-enters
+   * the same read for the same ids.
+   */
+  private loadPurchaseCosts(productIds: readonly number[]) {
+    this.purchaseCosts = new Map();
+
+    if (productIds.length === 0) {
+      this.costsState = 'loaded';
+      return EMPTY;
+    }
+
+    this.costsState = 'loading';
+    return this.access.allows('Dashboard.ViewFinancials').pipe(
+      take(1),
+      switchMap((allowed) => {
+        if (!allowed) {
+          this.costsState = 'loaded';
+          return EMPTY;
+        }
+
+        return merge(of(undefined), this.retryCosts$).pipe(switchMap(() => this.requestPurchaseCosts(productIds)));
+      })
+    );
+  }
+
+  private requestPurchaseCosts(productIds: readonly number[]) {
+    this.costsState = 'loading';
+    return this.purchaseCostService.getSummaries(productIds).pipe(
+      tap((summaries) => {
+        this.purchaseCosts = new Map(summaries.map((summary) => [summary.productId, summary]));
+        this.costsState = 'loaded';
+      }),
+      catchError(() => {
+        this.costsState = 'failed';
+        return EMPTY;
+      })
+    );
+  }
+
+  /** Re-enters the purchase-cost read for the currently displayed products, after a failure. */
+  retryPurchaseCosts(): void {
+    this.retryCosts$.next();
   }
 
   onSearchChange(value: string): void {
@@ -131,7 +242,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
   resetFilters(): void {
     this.search = '';
     this.categoryId = '';
-    this.includeRetired = false;
+    this.statusFilter = 'active';
     this.applyFilters();
   }
 
@@ -226,12 +337,30 @@ export class ProductListComponent implements OnInit, OnDestroy {
     }
 
     const direction = this.sortDirection;
+    const missingAlwaysLast = ProductListComponent.sortsMissingValueLast(column);
     return [...this.products].sort((left, right) => {
-      const comparison = compareSortValuesDirectionalNulls(this.sortValue(left, column), this.sortValue(right, column));
+      const leftValue = this.sortValue(left, column);
+      const rightValue = this.sortValue(right, column);
+
+      // The cost columns (issue #791, E of #786) sort a missing/unavailable value last whichever
+      // way the column is toggled, unlike Category's directional null policy below: this decision
+      // is made before - and is never multiplied by - the direction flip.
+      if (missingAlwaysLast && (leftValue == null || rightValue == null)) {
+        if (leftValue == null && rightValue == null) {
+          return left.id - right.id;
+        }
+        return leftValue == null ? 1 : -1;
+      }
+
+      const comparison = compareSortValuesDirectionalNulls(leftValue, rightValue);
       // Ties keep a deterministic order (by id) instead of relying on sort stability alone.
       const resolved = comparison !== 0 ? comparison : left.id - right.id;
       return direction === 'desc' ? -resolved : resolved;
     });
+  }
+
+  private static sortsMissingValueLast(column: ProductSortColumn): boolean {
+    return column === 'averageCost' || column === 'lastPurchase' || column === 'cheapestPurchase';
   }
 
   sortBy(column: ProductSortColumn): void {
@@ -258,7 +387,56 @@ export class ProductListComponent implements OnInit, OnDestroy {
         return product.quantityInStock;
       case 'status':
         return product.isActive ? 1 : 0;
+      case 'averageCost':
+        return product.averageUnitCostForDisplay ?? null;
+      case 'lastPurchase':
+        return this.purchaseCosts.get(product.id)?.lastUnitCost ?? null;
+      case 'cheapestPurchase':
+        return this.purchaseCosts.get(product.id)?.lowestUnitCost ?? null;
     }
+  }
+
+  /** `—` for an unestablished average cost (never `0`); a genuine `0` renders as `$0.00`. */
+  averageCostDisplay(product: Product): string {
+    const value = product.averageUnitCostForDisplay;
+    return value == null ? '—' : this.money(value);
+  }
+
+  /**
+   * The Last/Cheapest purchase cost cell's text: `Loading` while the bulk read for the current
+   * product set is in flight, `Unavailable` once it has failed, `—` once it has succeeded and
+   * found no recorded purchase for this product, and the cost itself - a genuine `0` included -
+   * once it has found one. The order matters: only a successful response may answer `—`.
+   */
+  purchaseCostDisplay(product: Product, column: 'lastPurchase' | 'cheapestPurchase'): string {
+    if (this.costsState === 'loading') {
+      return 'Loading';
+    }
+    if (this.costsState === 'failed') {
+      return 'Unavailable';
+    }
+
+    const summary = this.purchaseCosts.get(product.id);
+    if (!summary) {
+      return '—';
+    }
+
+    return this.money(column === 'lastPurchase' ? summary.lastUnitCost : summary.lowestUnitCost);
+  }
+
+  /** The supplier beside a found Last/Cheapest cost, or `null` while there is no cost to show one beside. */
+  purchaseCostSupplierDisplay(product: Product, column: 'lastPurchase' | 'cheapestPurchase'): string | null {
+    const summary = this.purchaseCosts.get(product.id);
+    if (this.costsState !== 'loaded' || !summary) {
+      return null;
+    }
+
+    const supplierName = column === 'lastPurchase' ? summary.lastSupplierName : summary.lowestSupplierName;
+    return supplierName ?? 'None';
+  }
+
+  private money(value: number): string {
+    return `$${value.toFixed(2)}`;
   }
 
   toggleActive(product: Product): void {
