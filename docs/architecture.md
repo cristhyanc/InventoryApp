@@ -1632,7 +1632,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
-| *(no page yet — the screens are issues #789–#791)* | `GET api/products/purchase-cost-summary` (issue #788) | `Dashboard.ViewFinancials` | ✘ | ✔ | ✔ |
+| Dashboard → Reorder Alerts, Last purchase/Cheapest purchase columns (issue #789; the Needs Ordering and All Products screens are #790 and #791) | `GET api/products/purchase-cost-summary` (issue #788) | `Dashboard.ViewFinancials` | ✘ | ✔ | ✔ |
 | Admin → Integrations → connection wizard, Test (issue #536, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Admin → Integrations → connection wizard, Save and Re-test (issue #537, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Connection banners on every page that needs Nayax (issue #539) | `GET api/settings/nayax-connection/status` (issue #537) | `Dashboard.View` | ✔ | ✔ | ✔ |
@@ -1663,7 +1663,7 @@ The other is `NayaxConnectionController` since issue #537: its test, save and re
   It is also **rate-limited per business** since issue #681: `Inventory.Application.SalesSync.NayaxSalesSyncRateLimiter` allows ten runs per business per two minutes, claimed before the first Nayax call, and a refused run answers `429` with `Retry-After` and reaches neither Nayax nor the database. One run is one Nayax request per machine plus one, and the Dashboard triggers one per load — which a browser repeats on every visit, back-navigation and refresh — so this was the most expensive call in the application and the easiest to repeat, with nothing bounding either the requests against someone else's API or the write amplification in this one. The limit is per business rather than per actor for the reason the connection test's is: what it protects is the business's own Nayax account and its own rows. The window is kept in memory, like every other limiter here (docs § SQLite operating assumptions). Because the allowance is the business's, members opening the Dashboard together share it: ten simultaneous loads all synchronize (`NayaxSalesSyncControllerTests`), and a load past that is refused. A refusal proves the business started runs inside the last two minutes, so the Dashboard loads its persisted figures and says they were refreshed in the last couple of minutes, not that synchronization failed (`isSalesSyncRecentlyRefreshed`); any other error still shows the not-synchronized warning. The `429` body names no wait and points at `Retry-After`, because the wait can be up to the whole window.
 
 - `GET api/products/inventory-value-summary` → **`Inventory.Operate` and `Dashboard.ViewFinancials`** (issue #681). It is an action on `ProductsController`, so it carries the catalogue's own capability; the second one is declared on the action. The endpoint reports the exact value of the business's inventory at cost, broken down — the figure [issue #527](#dashboard-financial-redaction-issue-527) omits from the dashboard response entirely for a role without `Dashboard.ViewFinancials`, today an Operator. On the catalogue's capability alone, that redaction was a presentation detail rather than a boundary: an Operator could read the number directly. No page calls this endpoint (`ProductService.getInventoryValuationSummary` has no caller since the dashboard stopped using it), so it was gated rather than removed — gating preserves the API contract, which AGENTS.md § Architecture rules asks for, while removing it would be a breaking change for a caller nobody has surveyed. A Manager and an Owner hold both capabilities and are unaffected; an Operator gets the ordinary bare `403`. Gating this one action left the figure reachable by summing the catalogue's own `inventoryValue`, which is what [issue #698](#machine-and-product-financial-redaction-issue-698) closed, along with the machine endpoints' revenue, profit and profitability-status figures: those endpoints stay on `Inventory.Operate` for every role, because an Operator restocks from them, and only the figures inside the response are withheld. [Issue #700](#operator-readable-financial-disclosure-issue-700) closed the last two routes to the same figure — a stock movement's `inventoryValueAfter` and the catalogue snapshot nested in a purchase or supplier-order line — and audited every other Operator-readable endpoint for one.
-- `GET api/products/purchase-cost-summary` → **`Dashboard.ViewFinancials`**, so a Manager and an Owner (issue #788, B of parent #786). It reports what every product was last bought for and what it was cheapest at, with the supplier of each — supplier purchasing facts over the whole catalogue, which is the same kind of figure `GET api/products/{id}/price-history` shows one product at a time. **It is its own controller, `ProductPurchaseCostsController`, for exactly that reason**: a controller declares one capability for every action it holds, so adding this action to `ProductsController` would either have inherited the catalogue's `Inventory.Operate` — handing those figures to every role that may operate inventory — or, declared per action, left the catalogue and this read looking alike when they are not. No page calls it yet: the screens that will are issues #789–#791 (C, D and E of #786), and the Angular client is already in place (`ProductPurchaseCostService`). It is read-only and `GET`, so a support session may call it under the central `GET`/`HEAD` rule of issue #551, which grants `Dashboard.ViewFinancials`. See [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63).
+- `GET api/products/purchase-cost-summary` → **`Dashboard.ViewFinancials`**, so a Manager and an Owner (issue #788, B of parent #786). It reports what every product was last bought for and what it was cheapest at, with the supplier of each — supplier purchasing facts over the whole catalogue, which is the same kind of figure `GET api/products/{id}/price-history` shows one product at a time. **It is its own controller, `ProductPurchaseCostsController`, for exactly that reason**: a controller declares one capability for every action it holds, so adding this action to `ProductsController` would either have inherited the catalogue's `Inventory.Operate` — handing those figures to every role that may operate inventory — or, declared per action, left the catalogue and this read looking alike when they are not. The first page that calls it is the home Dashboard's Reorder Alerts table (issue #789, see [Provider-optional dashboard and Needs Ordering screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)); Products → Needs Ordering (issue #790, D of #786) is the second; the remaining screen is issue #791 (E of #786), and the Angular client is `ProductPurchaseCostService`. It is read-only and `GET`, so a support session may call it under the central `GET`/`HEAD` rule of issue #551, which grants `Dashboard.ViewFinancials`. See [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63).
 - `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
 
 **What an Operator and a Manager lose, and when.** An Operator can no longer reach expenses, any report or export, the imports, the site commission surface, the Nayax fee rates, the catalogue reconciliation or any repair. A Manager additionally cannot reach the Nayax fee rates, the catalogue reconciliation or any repair — a Manager may read a report whose underlying fee rate only an Owner may change, which is the agreed table and not a defect. Routes, verbs, request shapes and success responses are unchanged; the only new answer is the bare `403` an under-privileged caller receives. Every member of the one live business is an `Owner`, so nothing anybody reaches changes until non-Owner roles are assigned.
@@ -5951,26 +5951,27 @@ the page reports on.
   no machines to filter by and show `machinesError` in its place when the read failed. Apply keeps its
   right alignment either way. **Site Commissions** does the same for its Site select over
   `SiteService.getAll()`, which is a live fleet read too.
-- **Stock History** (`StockHistoryPageComponent`) keeps its two provider-dependent filters apart: the
-  **machine** filter needs a machine list (`machineFleet`) and stays hidden until machines exist - which
-  is what issue #746 (G2b) will change by listing locally recorded machines - while the **"Nayax Sync
-  Restock" source** option needs only `providerRecords`, because the movements it selects are already
-  recorded locally. The table keeps labelling a Nayax-sourced movement whatever the filter offers.
-- **The stock adjustment form** (`StockAdjustmentFormComponent`) takes the page's machine list as an
-  input and reads an **empty** list as "no machine list is available": the field is hidden rather than
-  offering "— None —" alone, and a machine staged before the list went away is dropped rather than
-  submitted against a list the page can no longer show.
-- **Expenses** (`OperatingExpenseComponent`) hides its machine field the same way, and without
-  `providerRecords` it stops offering "Nayax monthly fee" for a **new** expense and drops the Nayax
-  sentence from its subtitle. An expense already recorded under that category **keeps** it - in the
-  table, in the Category filter and on the edit form, which offers the category whenever the expense
-  being edited carries it - because a recorded expense is a fact about the past and this page must
-  never quietly reclassify one.
+- **Stock History** (`StockHistoryPageComponent`) keeps only the **"Nayax Sync Restock" source**
+  option on this signal, through `providerRecords`, because the movements it selects are already
+  recorded locally; the table keeps labelling a Nayax-sourced movement whatever the filter offers. Its
+  **machine** filter left this signal in issue #746 - it is the business's own machine records now
+  (see [Machine fields from the business's own machines](#machine-fields-from-the-businesss-own-machines-issue-746)).
+- **The stock adjustment form** (`StockAdjustmentFormComponent`) takes its machine list from the page
+  as an input and is no longer on this signal either (issue #746). It keeps the rule the signal
+  taught: a failed read is an error in place of the field, never an empty one.
+- **Expenses** (`OperatingExpenseComponent`) is on this signal for its categories and its wording
+  only: without `providerRecords` it stops offering "Nayax monthly fee" for a **new** expense and
+  drops the Nayax sentence from its subtitle. An expense already recorded under that category
+  **keeps** it - in the table, in the Category filter and on the edit form, which offers the category
+  whenever the expense being edited carries it - because a recorded expense is a fact about the past
+  and this page must never quietly reclassify one. Its machine field and its list's machine filter are
+  the business's own machines (issue #746).
 
 **What is deliberately not here.** The home Dashboard and Needs Ordering keep issue #727's own
 answer, derived from the summary and the reorder listing they already fetch: those responses are
 authoritative about the cards beside them, and a second probe would be a second answer that could
-disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b). The menu was
+disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b), the last of which
+took three of the screens below off this signal. The menu was
 issue #729 (E2), and it reads this signal through
 [Provider-locked navigation](#provider-locked-navigation-issue-729).
 
@@ -5987,11 +5988,11 @@ check no feature claims all leaving a feature `unknown`.
 per-feature difference between `machineFleet` and `providerRecords`, the second request a retained
 permission refusal prevents while an unrelated feature stays loadable, and the failures that stay
 errors.
-`pick-list.component.provider-optional.spec.ts`,
-`stock-history-page.component.provider-optional.spec.ts`,
-`operating-expense.component.provider-optional.spec.ts` and `reports/report-provider-optional.spec.ts`
+`pick-list.component.provider-optional.spec.ts` and `reports/report-provider-optional.spec.ts`
 cover each screen's hidden control, its error state, and the empty list neither may be confused with;
-`stock-adjustment-form.component.spec.ts` covers the machine field and the dropped staged machine;
+`stock-history-page.component.provider-optional.spec.ts` and
+`operating-expense.component.provider-optional.spec.ts` cover what is left of this signal on those
+two screens after issue #746 - the source option, the Nayax fee category and the subtitle;
 `nayax-connection-wizard.component.spec.ts` covers the signal being refreshed by a save and a
 re-test, including the per-feature permissions a re-test found, granted and refused alike;
 `nayax-status-banner.component.spec.ts` covers three banners costing one read; and
@@ -7519,13 +7520,55 @@ so a pending decision is never rendered as an empty one. A **failed** summary sa
 provider, so it leaves `unknown` and keeps the connected behaviour - a transient failure must not
 hide a connected business's live sections.
 
-**A storage-only figure is labelled, and the machine columns go with it.** The "Needs ordering"
+**A storage-only figure is labelled, and the machine column goes with it.** The "Needs ordering"
 card's label comes from `needsOrdering.mode` with the reason from the same response's refill
 section; the Reorder Alerts list's comes from its own response headers, so the table and its label
-always describe one read. In storage-only mode the list drops the "Machine need" and "Stock after
-machine need" columns, because `machineReplenishmentNeed` is `0` there for the one reason that is
-not "the machines need nothing", and a "Stock after machine need" equal to the stock beside it
-would assert the opposite. The label is rendered for an **empty** list too.
+always describe one read. In storage-only mode the list drops the "Machine need" column, because
+`machineReplenishmentNeed` is `0` there for the one reason that is not "the machines need nothing",
+and a column of zeroes would assert the opposite. The label is rendered for an **empty** list too.
+
+**The Reorder Alerts columns, and what the row now reports (issues #787, #792 and #789).** The table
+is Product, Stock, Low Stock Threshold, Machine need (machine-aware mode only), Restock To, On order,
+Need to Order, and then "Last purchase" and "Cheapest purchase". Three columns left it: Supplier
+(issue #787 — a product carries no supplier), Unit Price (issue #792 — a product carries no selling
+price), and "Stock after machine need" (issue #789), which was a frontend subtraction of two figures
+already on the row and is replaced by what the business actually paid. So the row answers "how much
+do I have, how much do I need, and what does it cost me to buy" without a selling price anywhere
+near it.
+
+**The two cost columns are one read, gated on the capability behind them.** `Dashboard.ViewFinancials`
+decides it, through `AccessService` as everywhere else on this page: without it neither column is
+rendered **and no request is sent** — these are supplier purchasing figures, and a role that may not
+see them must not cause them to be fetched. The capability is read asynchronously, so the request
+waits for the answer: `canViewFinancials` still starts `true` (hiding a figure from the role it
+belongs to over an unread capability is the wrong default), but `DashboardComponent` only *asks*
+once the answer has arrived and granted it, and asks then if the alert list was already read.
+`ProductPurchaseCostService.getSummaries` is called **once** with the alert products' ids, never once
+per row; an **empty** alert list is asked nothing at all, because no ids deliberately means "every
+product of the business" (issue #788) and this table is about the products in front of the reader.
+Each cell is `supplier · cost` (`Acme · $1.25`), with `None` for a purchase that recorded no supplier
+— a fact about that purchase, never another purchase's supplier, and independent of the cost beside
+it — and the cost formatted by the shared `money`. Angular computes no last or cheapest cost, no tie
+break and no saving: `SupplierPriceComparisonPolicy` decides all of them on the server.
+
+**Loading, no purchase history and unavailable are three different answers.**
+`DashboardComponent.purchaseCostState` (`PurchaseCostLoadState`) is `idle`/`loading`/`loaded`/
+`failed`, and only `loaded` may say `—`: "this product has never been bought" is a fact about the
+purchase history, which a pending or failed request is not evidence of. A pending or not-yet-issued
+read therefore shows `Loading`, a failed one shows `Unavailable` in both columns with an actionable
+**Retry** beside the table — and the rest of the page, whose figures are local data that was never
+part of that request, renders exactly as it would have. A recorded `$0.00` is a **real cost** (a free
+sample, a replacement delivery) and is shown as `$0.00` with its supplier, never as `—`: the response
+carries no entry at all for a product with no history, which is the only thing `—` means. The
+Reorder Alerts table is not sortable, so there is no missing-cost sort order to define here; #790 and
+#791 are the sortable screens.
+
+**One request's answer belongs to one product set.** Every read supersedes the previous one and
+clears what it had already read, so a changed alert list never renders the previous list's costs
+while the new ones are outstanding, and a response for a superseded request — a slower first read, or
+the failure a Retry has already replaced — is discarded instead of published over the current answer
+(`purchaseCostRequest` is the generation it is checked against). Retry re-issues the same read for
+the product set currently displayed.
 
 **One vocabulary, one sentence each.** `provider/nayax-availability.ts` is the frontend's copy of
 the published availability vocabulary and the only place it is worded:
@@ -7613,11 +7656,17 @@ figure nobody established must never be rendered as a measured one.
 names - not usable, permission not granted, support session, usable, and a failed request - over the
 rendered page: the hidden cards and sections, the sync that is not called and the warning that is
 not shown, the sites and machines that are not even asked for, the storage-only label, the dropped
-machine columns, the per-feature permission message (both from the summary and from a refused
+machine-need column, the per-feature permission message (both from the summary and from a refused
 section request), the three error states and the empty states they must not be confused with, and
 the unchanged connected and support-session pages including the `sync → machines → sites` order.
 `product-needs-ordering.component.provider-optional.spec.ts` covers that page in both modes, and
 that its purchase-cost columns are present and filled without a provider.
+`dashboard.component.purchase-costs.spec.ts` covers the two cost columns over the rendered page: the
+column list with "Stock after machine need" gone, the supplier/cost cells, `None`, a genuine `$0.00`,
+`—` only after a successful answer, the single request for the alert ids only and the empty list that
+asks nothing, the hidden columns and absent request without the capability and the request that
+follows a later capability answer, `Unavailable` with a working Retry while the rest of the dashboard
+renders, and the cleared and discarded answers when the displayed product set changes.
 `product.service.spec.ts` covers the response-header contract, including an empty listing, an
 unrecognised code and a reason published beside a machine-aware mode, and
 `provider/nayax-availability.spec.ts` covers what is **not** an availability answer.
@@ -8859,15 +8908,18 @@ rather than one filter. **A connected business with every permission granted see
 `mode` defaults to `'calculated'`, the toggle is offered, and every existing calculated-mode test
 (`pick-list.component.spec.ts`, `pick-list.component.provider-optional.spec.ts`) passes unmodified.
 
-**No machine selector, and no local id substituted for a provider one (issue #746 not yet merged).**
+**No machine selector, and no local id substituted for a provider one (deferred to issue #794).**
 Every manual save omits `machineId` entirely; the batch refill contract already treats an absent
 machine as a valid whole-business pick (`PickListRefillPolicy.ValidateAgainstState` only checks a
 machine when one is named). The calculated view's own machine selection is untouched by this issue:
 it keeps selecting and querying by the raw provider machine id (`Machine.machineID`) it always has,
-and manual entry never reads or writes that selection. A local machine selector for manual entry, and
-the machine-page consolidation the 18 October 2026 owner decision describes (replacing the
-machine-detail page's per-product quantity inputs with a link into this screen), are both explicitly
-deferred to #746 and are not part of this slice.
+and manual entry never reads or writes that selection. A local machine selector for manual entry is
+issue #794 - the second half of G2b, which issue #746 split off when it took the stock and expense
+screens onto the local machines (see [Machine fields from the business's own
+machines](#machine-fields-from-the-businesss-own-machines-issue-746)) - and the machine-page
+consolidation the 18 October 2026 owner decision describes (replacing the machine-detail page's
+per-product quantity inputs with a link into this screen) is tracked separately under #744. Neither
+is part of this slice.
 
 **Entry, validation and the save contract.** Manual entry lists every product in `products` (already
 active-only, since `ProductService.getAll()` with no filters answers the working catalogue), with a
@@ -9171,8 +9223,9 @@ Three properties of that endpoint are deliberate and tested:
 The Angular client is `ProductPurchaseCostService`
 (`frontend/inventory-app/src/app/services/product-purchase-cost.service.ts`) with its
 `ProductPurchaseCostSummary` model (`src/app/models/product-purchase-cost-summary.ts`). It fetches and
-presents; it sorts nothing, picks no cheapest and derives no saving. No screen uses it yet — the
-screens are issues #789–#791.
+presents; it sorts nothing, picks no cheapest and derives no saving. The home Dashboard's Reorder
+Alerts table is its first caller (issue #789) and Needs Ordering the second (issue #790); the
+remaining screen is issue #791.
 
 Product Profitability's **Last Cost**/**Lowest Cost**/**Saving per unit** columns (issue #207) are the
 same purchasing insight surfaced on the report used to compare sales performance against purchasing
@@ -10347,6 +10400,13 @@ business has recorded no machine for contributes **no** expenses and narrows the
 to none — never silently to the whole business's, which would report another machine's costs against
 the one that was asked about.
 
+**The expense form reads the machine records themselves since issue #746** (see [Machine fields from
+the business's own machines](#machine-fields-from-the-businesss-own-machines-issue-746)), rather than
+the fleet list this section describes. What it submits is unchanged: the same local machine id, under
+the same server-side check. The same issue gave the expense **list** the Machine filter that this
+section's `machineId` list parameter was waiting for; the parameter, its `AND` and its refusal of a
+machine the business does not have are the ones described above, unchanged.
+
 **One lookup, gated on the provider.** `Inventory.Application.Nayax.INayaxMachineLinkStore` is the
 machine half of [`INayaxProductLinkStore`](#resolving-a-nayax-product-id-to-a-local-product-issue-733),
 with the same rules and for the same reason: `ExternalMachineId` holds whatever provider the business
@@ -10435,8 +10495,90 @@ combined shape and so has the same `Down` ordering; that is not changed here.
 
 **The frontend.** The machine list and the dashboard link to `/machines/{localMachineId}` and link
 nothing for a listed machine with no local record; the machine page passes the route id to its tabs;
-the restock, the stock adjustment form and the stock history filter submit and match `localMachineId`
-and offer only machines that have one.
+the restock, the stock adjustment form and the stock history filter submit and match the local
+machine id. The restock still takes it from the fleet row it is already showing and so offers only
+machines that have one; the stock adjustment form and the stock history filter stopped reading the
+fleet at all in issue #746 (next section) and read the machine records themselves.
+
+### Machine fields from the business's own machines (issue #746)
+
+Child G2b of issue #329, and frontend only: no endpoint, contract, stored value or migration is
+involved. [#780](#expense-machine-references-issue-780) and [#741](#stock-machine-references-issue-741)
+had already moved what these screens *store* onto the business's own machine row, but each still
+**discovered** its machines by reading the live Nayax fleet (`MachineService.getAll()` through
+[`loadProviderList`](#shared-provider-availability-and-error-versus-empty-states-issue-728)) and
+keeping the rows that carried a `localMachineId`. A business with no provider therefore had no
+machine list, and so no machine field at all, even with machines of its own recorded - the one thing
+the G group exists to fix.
+
+**Three screens, one source.** `StockAdjustmentFormComponent` (fed by its page),
+`StockHistoryPageComponent` and `OperatingExpenseComponent` read `LocalMachineService.getAll()`
+(`GET /api/local-machines`, issue #740) and key every option by `LocalMachine.id`. That is the same
+id they submitted before, so nothing about a stored movement or expense changes; what changed is that
+the id now comes from the resource that owns it instead of from a provider read that could not be
+made. The fleet read is **not** made by these screens at all - not as a fallback, and not for a
+label. The label is `LocalMachine.name` and nothing else: that resource publishes no provider name or
+number (it publishes `isProviderNamed`, the fact), so there is none to show and none is invented.
+
+**Active for a new record, every machine for history.**
+
+| Surface | What it lists |
+| --- | --- |
+| Stock adjustment form (a new movement) | the **active** machines |
+| New expense | the **active** machines |
+| Expense being edited | the active machines **plus the machine that expense already names**, deactivated or not |
+| Stock History machine filter | **every** recorded machine, deactivated included |
+| Stock History machine column | named from that same list, deactivated included |
+| Expense list machine filter | **every** recorded machine, deactivated included |
+
+A retired machine is not somewhere stock is being put or a cost is being incurred now, so it is not
+offered for a new record. It is still part of what happened, so it stays in both filters and in the
+column - and it stays as the selected value of an expense being edited, which is why
+`machineOptions` reads the machine from the **stored expense** rather than from the form: choosing
+"None" and changing one's mind must not make the machine unreachable, and saving the form again must
+not silently detach the cost from the machine that incurred it. The server already accepts a
+deactivated machine for exactly that reason ([#780](#expense-machine-references-issue-780)), and
+still refuses one that is not this business's.
+
+**The expense list's filter rides a parameter that already exists.** `GET /api/operating-expenses`
+has accepted an optional local `machineId` since [#780](#expense-machine-references-issue-780) -
+`OperatingExpenseFilter.MachineId`, applied by `EfOperatingExpenseStore` as one more `AND` beside the
+date, category, supplier and site filters - so `OperatingExpenseComponent`'s Machine filter is the
+frontend finally using it, and no endpoint, DTO or query was added or changed for it. It is the same
+id the field submits, so the filter and the field cannot disagree about which machine a row is, and
+the server still answers nothing for a machine the business does not have. The totals row sums the
+rows the server returned, which is what makes a machine-narrowed list state that machine's cost
+rather than the whole business's.
+
+**The field is offered once there is an active machine, and the three other states stay distinct.**
+A read still outstanding says it is loading, a read that **failed** renders an explicit error in
+place of the field or filter, and a business with no active machine simply has no field - with no
+error, because that is a true statement about the business. This is issue #728's error-versus-empty
+rule kept on a read that is no longer the provider's: `loadProviderList`'s `unavailable` outcome has
+no counterpart here, because `/api/local-machines` has no availability answer to give. The page owns
+the read and the adjustment form takes `machines`, `machinesFailed` and `machinesLoading` as inputs,
+so the two agree about which of those states they are in; a machine staged on the form that the list
+stops offering - the list went away, or that machine was deactivated - is dropped rather than
+submitted.
+
+**What stayed where it was.** `MachineService` and the provider fleet screens are untouched; the pick
+list's manual entry is issue #794; the report machine filters stay on the provider's machine number
+by the G2 decision ([#780](#expense-machine-references-issue-780)); and the Nayax source filter, the
+"Nayax monthly fee" category and the Expenses subtitle stay on the shared provider signal, because
+they are about whether Nayax is part of this business rather than about a machine list. No
+support-session guard changed. Every role that can reach these screens already holds
+`Inventory.Operate`, which is what `/api/local-machines` requires, so no role loses a field it had.
+
+**What proves it.** `stock-history-page.component.local-machines.spec.ts` and
+`operating-expense.component.local-machines.spec.ts` each cover the four cases the issue names -
+without a provider, with one, with a deactivated machine, and with a failed read - plus the
+outstanding read and the id that is actually submitted; the Stock History spec also asserts the
+adjustment field through its page, which is where the form's list comes from. The expense spec covers
+the list's Machine filter over the same four cases, including the deactivated machine it lists and the
+local id it narrows by, and `operating-expense.service.spec.ts` pins the request itself: the chosen id
+is sent as `machineId`, and no machine parameter is sent while none is chosen.
+`stock-adjustment-form.component.spec.ts` covers the active-only offer, the error and loading states,
+and the staged machine dropped when the list stops offering it.
 
 ### Resolving a Nayax product id to a local product (issue #733)
 

@@ -16,6 +16,7 @@ import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
 import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
+import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { AccessService } from '../../access/access.service';
 import { BusinessSettingsService } from '../../services/business-settings.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -189,6 +190,9 @@ function createComponent(doubles: Doubles = {}): DashboardComponent {
     { getAll: () => doubles.sites$ ?? of([SITE]) } as unknown as SiteService,
     { syncLatest: doubles.syncLatest ?? (() => of(undefined)) } as unknown as NayaxSalesSyncService,
     { getSummary: () => doubles.summary$ ?? of(CONNECTED_SUMMARY) } as unknown as DashboardService,
+    // Issue #789's purchase-cost columns are `dashboard.component.purchase-costs.spec.ts`'s
+    // subject; this file is about the provider-optional states of the page around them.
+    { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
     { active$: doubles.sessionActive ?? of(false) } as unknown as SupportSessionService,
     { allows: () => of(doubles.canViewFinancials ?? true) } as unknown as AccessService
   );
@@ -208,6 +212,7 @@ async function renderDashboard(doubles: Doubles = {}): Promise<HTMLElement> {
       { provide: NayaxSalesSyncService, useValue: { syncLatest: doubles.syncLatest ?? (() => of(undefined)) } },
       { provide: SupportSessionService, useValue: { active$: doubles.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => doubles.summary$ ?? of(CONNECTED_SUMMARY) } },
+      { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
       { provide: AccessService, useValue: { allows: () => of(doubles.canViewFinancials ?? true) } },
       { provide: BusinessSettingsService, useValue: { get: () => of(null) } }
     ]
@@ -274,6 +279,7 @@ describe('Dashboard without a usable provider (issue #727)', () => {
       { getAll: sites } as unknown as SiteService,
       { syncLatest: () => of(undefined) } as unknown as NayaxSalesSyncService,
       { getSummary: () => of(NOT_CONNECTED_SUMMARY) } as unknown as DashboardService,
+      { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
       { active$: of(false) } as unknown as SupportSessionService,
       { allows: () => of(true) } as unknown as AccessService
     );
@@ -310,7 +316,6 @@ describe('Dashboard without a usable provider (issue #727)', () => {
 
     const headers = Array.from(host.querySelectorAll('th')).map((th) => th.textContent?.trim());
     expect(headers).not.toContain('Machine need');
-    expect(headers).not.toContain('Stock after machine need');
     expect(headers).toContain('Need to Order');
   });
 });
@@ -455,7 +460,7 @@ describe('Dashboard in a support session keeps its existing behaviour (issue #72
 describe('Dashboard with a usable provider is unchanged (issue #727)', () => {
   afterEach(() => TestBed.resetTestingModule());
 
-  it('shows all four cards, all three sections and the machine-need columns', async () => {
+  it('shows all four cards, all three sections and the machine-need column', async () => {
     const host = await renderDashboard({ alerts$: of(machineAwareAlerts([product()])) });
 
     expect(cardLabels(host)).toEqual(['Sales this week', 'Needs refill', 'Needs ordering', 'Inventory']);
@@ -463,7 +468,8 @@ describe('Dashboard with a usable provider is unchanged (issue #727)', () => {
 
     const headers = Array.from(host.querySelectorAll('th')).map((th) => th.textContent?.trim());
     expect(headers).toContain('Machine need');
-    expect(headers).toContain('Stock after machine need');
+    // "Stock after machine need" was removed by issue #789; the machine need itself is unchanged.
+    expect(headers).not.toContain('Stock after machine need');
     expect(host.textContent).not.toContain('Storage stock only');
 
     // Reorder Alerts carries no Supplier column since issue #787 (A1 of #786): a product has no
@@ -494,6 +500,7 @@ describe('Dashboard with a usable provider is unchanged (issue #727)', () => {
         }
       } as unknown as NayaxSalesSyncService,
       { getSummary: () => of(CONNECTED_SUMMARY) } as unknown as DashboardService,
+      { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
       { active$: of(false) } as unknown as SupportSessionService,
       { allows: () => of(true) } as unknown as AccessService
     );

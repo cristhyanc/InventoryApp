@@ -42,13 +42,19 @@
           <span class="field-label">Machine</span>
           <p data-testid="machine-filter-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
         </div>
+      } @else if (machinesLoading) {
+        <div class="field">
+          <span class="field-label">Machine</span>
+          <output data-testid="machine-filter-loading" class="text-md-body value-muted">Loading machines…</output>
+        </div>
       } @else if (machineFilterShown) {
         <div class="field">
           <label for="filter-machine" class="field-label">Machine</label>
           <select id="filter-machine" name="machineId" [(ngModel)]="filters.machineId">
             <option [ngValue]="null">All machines</option>
-            @for (machine of attributableMachines; track machine.machineID) {
-              <option [ngValue]="machine.localMachineId">{{ machine.machineName || machine.machineID }}</option>
+            <!-- Every recorded machine, deactivated ones included, so a retired machine's movements stay findable. -->
+            @for (machine of machines; track machine.id) {
+              <option [ngValue]="machine.id">{{ machine.name }}</option>
             }
           </select>
         </div>
@@ -107,6 +113,8 @@
     <app-stock-adjustment-form
       [productId]="selectedProduct.id"
       [machines]="machines"
+      [machinesFailed]="machinesError !== ''"
+      [machinesLoading]="machinesLoading"
       (adjustmentApplied)="onAdjustmentApplied()">
     </app-stock-adjustment-form>
   } @else if (filters.productId !== null) {

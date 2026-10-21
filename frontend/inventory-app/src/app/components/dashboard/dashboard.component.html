@@ -370,6 +370,16 @@
       } @else if (lowStock.length === 0) {
         <p class="p-4 text-md-body value-muted">No reorder alerts. Everything looks good! ✅</p>
       } @else {
+        <!--
+          The purchase costs failed on their own, so the table around them still renders (issue
+          #789): the reorder figures are local data and were never part of that request.
+        -->
+        @if (isPurchaseCostRetryShown) {
+          <div class="flex flex-wrap items-center gap-4 border-b border-md-gray-200 p-4">
+            <p role="alert" class="text-md-body text-md-danger-text">{{ purchaseCostUnavailableMessage }}</p>
+            <button type="button" class="btn btn-sm btn-secondary" (click)="refreshPurchaseCosts()">Retry</button>
+          </div>
+        }
         <div class="overflow-x-auto">
           <table class="table">
             <thead class="table-head">
@@ -382,10 +392,11 @@
                 }
                 <th scope="col" class="table-cell">Restock To</th>
                 <th scope="col" class="table-cell">On order</th>
-                @if (isMachineNeedShownInReorderAlerts) {
-                  <th scope="col" class="table-cell">Stock after machine need</th>
-                }
                 <th scope="col" class="table-cell">Need to Order</th>
+                @if (arePurchaseCostColumnsShown) {
+                  <th scope="col" class="table-cell">Last purchase</th>
+                  <th scope="col" class="table-cell">Cheapest purchase</th>
+                }
               </tr>
             </thead>
             <tbody>
@@ -399,10 +410,11 @@
                   }
                   <td class="table-cell">{{ p.restockTo }}</td>
                   <td class="table-cell">{{ p.onOrderQuantity }}</td>
-                  @if (isMachineNeedShownInReorderAlerts) {
-                    <td class="table-cell" [ngClass]="stockAfterMachineNeedClass(p)">{{ stockAfterMachineNeed(p) }}</td>
-                  }
                   <td class="table-cell value-negative font-semibold">{{ p.needToOrder }}</td>
+                  @if (arePurchaseCostColumnsShown) {
+                    <td class="table-cell" [ngClass]="purchaseCostCellClass(p)">{{ lastPurchaseDisplay(p) }}</td>
+                    <td class="table-cell" [ngClass]="purchaseCostCellClass(p)">{{ cheapestPurchaseDisplay(p) }}</td>
+                  }
                 </tr>
               }
             </tbody>

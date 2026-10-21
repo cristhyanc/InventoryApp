@@ -21,7 +21,8 @@ import { ConfigService } from './config.service';
  * Products → Needs Ordering (issue #790, D of #786) does not ask at all without the capability,
  * and reports a failed request as "Unavailable" with a Retry rather than as "no purchases".
  *
- * The remaining screens are issues #789 and #791 (C and E of #786).
+ * The home Dashboard's Reorder Alerts table is its first caller (issue #789, C of #786); the All
+ * Products screen is issue #791.
  */
 @Injectable({ providedIn: 'root' })
 export class ProductPurchaseCostService {
