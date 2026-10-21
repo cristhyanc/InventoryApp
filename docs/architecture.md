@@ -6602,12 +6602,15 @@ its own column set.
 - **Row navigates to the same product editor Edit opened.** Clicking or tapping anywhere in a row
   outside a nested control, or pressing Enter while one is focused, navigates to
   `/products/:id/edit` — the destination the removed Edit button used. The product Name cell holds
-  the real `<a class="table-row-anchor" [routerLink]="['/products', p.id, 'edit']">`, which gives
-  keyboard focus, Enter activation, ctrl/cmd/middle-click and "copy link address" natively;
-  `onRowActivate` only extends that anchor's plain click to the rest of the row (`table-row-link`
-  on the `<tr>`, `(click)`/`(keydown.enter)` bound to it) and ignores anything that originated from
-  a nested `a`, `button`, `input`, `select`, `textarea` or `label` — the selection checkbox, the
-  Stock link and the Active/Inactive status badge button — or a modified/non-primary click the
+  the real `<a class="table-row-anchor">`, which gives keyboard focus, Enter activation,
+  ctrl/cmd/middle-click and "copy link address" natively; since issue #790 that anchor is a Google
+  search for the product rather than a `routerLink` to the editor (see [Provider-optional dashboard
+  and Needs Ordering
+  screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)), and the row click is
+  what opens the editor. `onRowActivate` only extends a plain click on the row itself
+  (`table-row-link` on the `<tr>`, `(click)`/`(keydown.enter)` bound to it) and ignores anything
+  that originated from a nested `a`, `button`, `input`, `select`, `textarea` or `label` — the Name
+  search link, the selection checkbox and the Stock link — or a modified/non-primary click the
   browser should handle itself (Ctrl/Meta/Shift/Alt, or a non-left mouse button). The row carries
   no `tabindex` or `role` of its own; the shared `.table-row-link`/`.table-row-anchor` styling
   (`styles.css`) already supplies the hover cursor, hover underline and `:focus-within` affordance,
@@ -6621,9 +6624,11 @@ its own column set.
   `confirmDelete`/`cancelDelete`/`deleteConfirmed`/`confirmingProduct` members were removed from the
   component; `ProductService.delete` and the Products list's own Delete button are unchanged, as is
   backend delete authorization.
-- **Every visible data column sorts ascending/descending.** Name, Category, Supplier, Price,
-  Stock, Machine need, Low Stock Threshold, Restock To, On order, Need to Order and Status each
-  have a header `<button>` toggling `sortBy(column)`; the active header's `[attr.aria-sort]`
+- **Every visible data column sorts ascending/descending.** Each has a header `<button>` toggling
+  `sortBy(column)`. The set has changed since this issue: Supplier left with #787, Price with #792,
+  and Status with #790, which added Last purchase and Cheapest purchase, so today it is Name,
+  Category, Stock, Machine need, Low Stock Threshold, Restock To, On order, Need to Order, Last
+  purchase and Cheapest purchase. The active header's `[attr.aria-sort]`
   reflects `ascending`/`descending` and its visible label gains the same `(ascending)`/
   `(descending)` suffix the Products list and Site Products tables use. `sortedProducts` computes a
   new sorted array from `products` on each read — comparing numbers numerically, everything else as
@@ -7545,9 +7550,55 @@ which used to leave a failed section loading forever.
 
 **Products → Needs Ordering** is the same change in one page: it reads the mode from the listing it
 already fetches, labels a storage-only list, and hides the "Machine need" column there. Its
-filters, sorting, status toggle and "Mark as ordered" are untouched and work without a provider -
-the supplier order it creates is local data. Its error-versus-empty distinction already existed
-(`ListLoadState`) and is unchanged.
+filters, sorting and "Mark as ordered" are untouched and work without a provider - the supplier
+order it creates is local data. Its error-versus-empty distinction already existed (`ListLoadState`)
+and is unchanged.
+
+**What that page shows now (issue #790, D of #786).** Its columns are the checkbox, Name, Category,
+Stock, "Machine need" (in machine-aware mode only), the thresholds, "On order", "Need to order",
+"Last purchase", "Cheapest purchase" and the Stock button - and nothing else:
+
+- **The name looks the product up on Google**, as `https://www.google.com/search?q=<URL-encoded
+  name>` in a new tab (`target="_blank"`, `rel="noopener noreferrer"`), labelled "Search Google for
+  &lt;name&gt;". The row's own click handler already defers to a nested anchor, so that click does
+  not also open the editor in the current tab; clicking anywhere else on the row still opens it, and
+  the checkbox and the Stock button are unchanged. The one accepted cost is that the editor no longer
+  has a focusable link of its own on this page - the row click is how it is reached.
+- **No Price and no Status column.** The price left with issue #792 (a product carries no selling
+  price); the Status column, its sort and this page's product-status write left with #790, because
+  the list holds **only active products**. `GET /api/products/alerts/low-stock` already excludes
+  retired products, and the component drops any product with `isActive === false` as well - the same
+  defence the dashboard's reorder-alert card applies. Product activation stays on
+  Products → All Products, which is the page that lists both states.
+- **"Last purchase" and "Cheapest purchase"** come from issue #788's bulk
+  `GET /api/products/purchase-cost-summary`, requested **once** for the ids the page actually lists
+  and never recomputed here: what was last paid and what was cheapest, with the supplier each was
+  paid to, are decided by `SupplierPriceComparisonPolicy` on the server. Both columns sort by cost,
+  and a row with no cost - still loading, unavailable, or never bought - sorts last in **both**
+  directions rather than as a zero.
+
+**Those two columns keep four answers apart**, for the same reason the availability model exists: a
+figure nobody established must never be rendered as a measured one.
+
+- Both columns and the request appear **only** with `Dashboard.ViewFinancials`. Without it there are
+  no columns and no request at all - the endpoint answers `403`, so asking before the capability is
+  known would be asking for a refusal, which is why this gate starts closed rather than at the
+  fail-open `true` other hidden figures use. `AccessService` still fails open where it matters: a
+  capability set that could not be read answers `true`.
+- While the request is outstanding both columns say **"Loading…"**. A **`—`** is published only once
+  a successful response establishes that the product has no recorded purchase history (a product
+  with none is absent from the response). A **genuinely recorded `$0.00`** - a free sample, a
+  replacement delivery - is a measured cost and is shown as `$0.00` with its supplier, never as
+  `—`. An unknown supplier is **"None"** independently of the cost beside it.
+- A **failed** request shows **"Unavailable"** in both columns with one actionable **Retry** above
+  the table, and the rest of the page keeps working: the reorder figures and "Mark as ordered" are
+  the business's own data and are unaffected. Retry re-asks for the same listed ids.
+- **A stale answer cannot land on a newer list.** The previous list's costs are dropped
+  synchronously with the product set they belonged to, and the cost request runs under a `switchMap`
+  on the product ids, so a superseded response - or a superseded failure - is unsubscribed, its HTTP
+  request cancelled, and neither its rows nor its "Unavailable" can appear under the products that
+  replaced it. An empty list makes no request, because the endpoint reads "no ids" as "every product
+  of the business".
 
 **What proves it.** `dashboard.component.provider-optional.spec.ts` covers the five states the issue
 names - not usable, permission not granted, support session, usable, and a failed request - over the
@@ -7556,10 +7607,18 @@ not shown, the sites and machines that are not even asked for, the storage-only 
 machine columns, the per-feature permission message (both from the summary and from a refused
 section request), the three error states and the empty states they must not be confused with, and
 the unchanged connected and support-session pages including the `sync → machines → sites` order.
-`product-needs-ordering.component.provider-optional.spec.ts` covers that page in both modes.
+`product-needs-ordering.component.provider-optional.spec.ts` covers that page in both modes, and
+that its purchase-cost columns are present and filled without a provider.
 `product.service.spec.ts` covers the response-header contract, including an empty listing, an
 unrecognised code and a reason published beside a machine-aware mode, and
 `provider/nayax-availability.spec.ts` covers what is **not** an availability answer.
+`product-needs-ordering.component.purchase-costs.spec.ts` covers issue #790: the Google URL and its
+encoding (`&`, spaces, accents, `+`, `?`), the name click that does not open the editor and the row
+click that still does, the absent Price and Status columns, the retired product the page refuses to
+list, the one request for the listed ids, loading versus `—` versus "Unavailable", a recorded
+`$0.00`, an unknown supplier, Retry, the superseded response and the superseded failure, the cost
+sorting in both directions with no-history last, and the capability gate that renders no column and
+sends no request.
 
 #### Home dashboard: four headline cards (issue #460)
 

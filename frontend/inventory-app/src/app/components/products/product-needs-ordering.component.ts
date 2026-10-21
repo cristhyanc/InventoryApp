@@ -2,8 +2,8 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { EMPTY, Subject } from 'rxjs';
-import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
+import { EMPTY, Observable, Subject } from 'rxjs';
+import { catchError, switchMap, take, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
@@ -17,8 +17,13 @@ import { SortDirection, SortValue, compareSortValues, nextSortState, sortAriaSta
 import { ToastService } from '../../services/toast.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { AccessService } from '../../access/access.service';
+import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
+import { ProductPurchaseCostSummary } from '../../models/product-purchase-cost-summary';
 
-// No `price` column since issue #792 (A2 of #786): a product carries no selling price. The reorder
+// No `price` column since issue #792 (A2 of #786): a product carries no selling price, and no
+// `status` column since issue #790 (D of #786): the list holds only active products, so a column
+// of "Active" badges and a toggle for the one state that is listed say nothing. The reorder
 // arithmetic - machine need, thresholds, on-order and need-to-order - is unchanged.
 type NeedsOrderingSortColumn =
   | 'name'
@@ -29,7 +34,24 @@ type NeedsOrderingSortColumn =
   | 'restockTo'
   | 'onOrder'
   | 'needToOrder'
-  | 'status';
+  | 'lastPurchaseCost'
+  | 'cheapestPurchaseCost';
+
+/**
+ * What the two purchase-cost columns know (issue #790, D of #786), and the reason they are four
+ * states rather than "a cost or nothing":
+ *
+ * - `idle` - nothing is being asked: before the first list arrives, and once a load was refused
+ *   because the member's role does not grant `Dashboard.ViewFinancials`, in which case the columns
+ *   are not rendered at all;
+ * - `loading` - a request for the listed products is outstanding;
+ * - `loaded` - a successful response established the costs, and a product **absent** from it has
+ *   no recorded purchase history. This is the only state in which `—` may be shown;
+ * - `unavailable` - the request failed. The columns say so and offer Retry, because "this product
+ *   has never been bought" and "nobody could answer" are different facts and showing the second as
+ *   the first is the mistake AGENTS.md § Frontend rules forbids.
+ */
+type PurchaseCostState = 'idle' | 'loading' | 'loaded' | 'unavailable';
 
 @Component({
   selector: 'app-product-needs-ordering',
@@ -76,6 +98,28 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   reorderMode: ReorderMode | null = null;
   machineNeedUnavailableReason: NayaxUnavailability | null = null;
 
+  /**
+   * Whether the signed-in member's role grants `Dashboard.ViewFinancials`, which is what the two
+   * purchase-cost columns and their one request need (issue #790).
+   *
+   * It starts `false` and not at the fail-open `true` other capability-gated figures use, because
+   * here the capability decides whether a **request** is made at all: `GET
+   * /api/products/purchase-cost-summary` answers `403` without it, and asking before the answer is
+   * known would be asking for a refusal. `AccessService` already fails open where that matters - an
+   * unreadable capability set answers `true` - so a member whose capabilities could not be read
+   * still gets the columns.
+   */
+  canViewFinancials = false;
+
+  /** Which of the four {@link PurchaseCostState} answers the cost columns currently hold. */
+  purchaseCostState: PurchaseCostState = 'idle';
+
+  private purchaseCosts = new Map<number, ProductPurchaseCostSummary>();
+
+  /** The ids the displayed list is made of, which is what Retry asks about again. */
+  private listedProductIds: readonly number[] = [];
+
+  private readonly purchaseCostRequest$ = new Subject<readonly number[]>();
   private readonly search$ = new Subject<string>();
   private readonly immediateFilter$ = new Subject<void>();
   private readonly destroy$ = new Subject<void>();
@@ -85,16 +129,32 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     private categoryService: CategoryService,
     private supplierService: SupplierService,
     private supplierOrderService: SupplierOrderService,
+    private purchaseCostService: ProductPurchaseCostService,
     private toastService: ToastService,
     private router: Router,
+    private access: AccessService,
     supportSession: SupportSessionService
   ) {
     supportSession.active$.pipe(takeUntil(this.destroy$)).subscribe((active) => (this.sessionActive = active));
+    this.access
+      .allows('Dashboard.ViewFinancials')
+      .pipe(takeUntil(this.destroy$))
+      .subscribe((allowed) => (this.canViewFinancials = allowed));
   }
 
   ngOnInit(): void {
     this.categoryService.getAll().subscribe((categories) => (this.categories = categories));
     this.supplierService.getAll().subscribe((suppliers) => (this.suppliers = suppliers));
+
+    // `switchMap` is what makes a superseded cost answer unreachable: the request for the previous
+    // product set is unsubscribed - and the HTTP request cancelled - the moment a newer one starts,
+    // so neither its rows nor its failure can land on the list that replaced it.
+    this.purchaseCostRequest$
+      .pipe(
+        switchMap((productIds) => this.requestPurchaseCosts(productIds)),
+        takeUntil(this.destroy$)
+      )
+      .subscribe();
 
     createFilterTrigger$(this.search$, this.immediateFilter$)
       .pipe(
@@ -121,9 +181,13 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     return this.productService.getLowStock(filters).pipe(
       tap((listing) => {
         if (this.loadState.isCurrent(token)) {
-          this.products = listing.products;
+          // Active products only (issue #790). `GET /api/products/alerts/low-stock` already
+          // excludes retired products server-side; this is the same defence the dashboard's
+          // reorder-alert card applies, so a response that ever carried one cannot list it here.
+          this.products = listing.products.filter((product) => product.isActive !== false);
           this.reorderMode = listing.mode;
           this.machineNeedUnavailableReason = listing.machineNeedUnavailableReason;
+          this.beginPurchaseCostLoad(this.products.map((product) => product.id));
         }
         this.loadState.succeed(token);
       }),
@@ -133,6 +197,74 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
         return EMPTY;
       })
     );
+  }
+
+  /**
+   * Starts the one bulk purchase-cost request for the products now on screen (issue #790).
+   *
+   * The previous list's costs are dropped **here**, synchronously with the product set they
+   * belonged to, so no row of the new list can be rendered beside a cost paid for a different
+   * product. No ids means no request: the endpoint reads "no ids" as "every product of the
+   * business", which is not what an empty alert list is asking for - and an empty list has no row
+   * left whose costs could be outstanding, so it settles as `loaded`.
+   */
+  private beginPurchaseCostLoad(productIds: readonly number[]): void {
+    this.purchaseCosts = new Map();
+    this.listedProductIds = productIds;
+    this.purchaseCostState = productIds.length === 0 ? 'loaded' : 'loading';
+
+    if (productIds.length > 0) {
+      this.purchaseCostRequest$.next(productIds);
+    }
+  }
+
+  /** Re-asks for the listed products' costs after a failure. */
+  retryPurchaseCosts(): void {
+    this.beginPurchaseCostLoad(this.listedProductIds);
+  }
+
+  private requestPurchaseCosts(productIds: readonly number[]): Observable<unknown> {
+    return this.access.allows('Dashboard.ViewFinancials').pipe(
+      take(1),
+      switchMap((allowed) => {
+        if (!allowed) {
+          // No capability, no request: the endpoint refuses it, and the columns it would fill are
+          // not rendered. The state goes back to `idle` so nothing claims to be loading.
+          this.purchaseCostState = 'idle';
+          return EMPTY;
+        }
+
+        return this.purchaseCostService.getSummaries(productIds).pipe(
+          tap((summaries) => {
+            this.purchaseCosts = new Map(summaries.map((summary) => [summary.productId, summary]));
+            this.purchaseCostState = 'loaded';
+          }),
+          catchError(() => {
+            this.purchaseCosts = new Map();
+            this.purchaseCostState = 'unavailable';
+            return EMPTY;
+          })
+        );
+      })
+    );
+  }
+
+  /**
+   * The product's last and cheapest recorded purchase, or `undefined` when a successful response
+   * held none for it - which is "never bought", and only ever read as that while the costs are
+   * {@link PurchaseCostState} `loaded`.
+   */
+  purchaseCost(product: Product): ProductPurchaseCostSummary | undefined {
+    return this.purchaseCostState === 'loaded' ? this.purchaseCosts.get(product.id) : undefined;
+  }
+
+  /**
+   * Where the product name links: a Google search for it, opened in a new tab (issue #790). The
+   * name is URL-encoded, so an `&`, a space or an accent in it searches for the name rather than
+   * breaking the query.
+   */
+  googleSearchUrl(productName: string): string {
+    return `https://www.google.com/search?q=${encodeURIComponent(productName)}`;
   }
 
   /**
@@ -245,8 +377,9 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
 
   /**
    * Row click/Enter navigates to the product editor, unless it originated from a nested control
-   * (the name link, checkbox, Stock, Status) or is a modified/non-primary click the browser should handle.
-   * The name cell's routerLink anchor is the real link: it gives keyboard focus, open-in-new-tab and copy-link.
+   * (the name's Google search link, the checkbox, Stock) or is a modified/non-primary click the
+   * browser should handle. Since issue #790 the name anchor is a Google search for the product, so
+   * deferring to it is what keeps one click from doing two things.
    */
   onRowActivate(product: Product, rowEvent: Event): void {
     // Bound to (click) and (keydown.enter) only; Angular types both template $events as Event.
@@ -324,27 +457,13 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
         return product.onOrderQuantity;
       case 'needToOrder':
         return product.needToOrder;
-      case 'status':
-        return product.isActive ? 1 : 0;
+      // A cost nobody has established yet - still loading, unavailable, or a product that has
+      // never been bought - is missing, and the comparison above keeps a missing value last in
+      // both directions. It is never sorted as a zero.
+      case 'lastPurchaseCost':
+        return this.purchaseCost(product)?.lastUnitCost ?? null;
+      case 'cheapestPurchaseCost':
+        return this.purchaseCost(product)?.lowestUnitCost ?? null;
     }
-  }
-
-  toggleActive(product: Product): void {
-    if (this.sessionActive) {
-      return;
-    }
-    this.productService.update(product.id, {
-      name: product.name,
-      sku: product.sku ?? null,
-      description: product.description ?? null,
-      lowStockThreshold: product.lowStockThreshold,
-      restockTo: product.restockTo,
-      unit: product.unit ?? null,
-      categoryId: product.categoryId ?? null,
-      isActive: !product.isActive
-    }).subscribe({
-      next: () => this.applyFilters(),
-      error: () => this.toastService.error('Failed to update product status.')
-    });
   }
 }

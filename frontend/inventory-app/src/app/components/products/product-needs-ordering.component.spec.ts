@@ -2,11 +2,13 @@ import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { Observable, of } from 'rxjs';
 import { ProductNeedsOrderingComponent } from './product-needs-ordering.component';
+import { AccessService } from '../../access/access.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
+import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { ToastService } from '../../services/toast.service';
 import { Product, Supplier } from '../../models/models';
 
@@ -76,8 +78,13 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
         { provide: SupplierService, useValue: { getAll: () => of(options.suppliers ?? []) } },
         { provide: SupplierOrderService, useValue: { create } },
+        // The purchase-cost columns of issue #790 have their own spec file; here they are simply
+        // granted and answered with "no product has been bought", so the row and sort behaviour
+        // these specs are about is unaffected by them.
+        { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
-        { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } }
+        { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
+        { provide: AccessService, useValue: { allows: () => of(true) } }
       ]
     }).compileComponents();
 
@@ -99,17 +106,23 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     expect(navigate).toHaveBeenCalledWith(['/products', 9, 'edit']);
   });
 
-  it('gives keyboard users a real link to the product editor instead of a focusable row with role="link"', async () => {
+  /**
+   * The name anchor is a real, focusable link with an accessible label, and the row is still not a
+   * focusable `role="link"`. Where it points changed with issue #790 (D of #786): it is now a
+   * Google search for the product rather than the product editor, which the row click still opens.
+   * The encoding and the label are that issue's own spec file's.
+   */
+  it('gives keyboard users a real, labelled link in the Name cell instead of a focusable row with role="link"', async () => {
     const { host } = await render([product({ id: 9, name: 'Widget' })]);
 
     const row = host.querySelector('tbody tr') as HTMLTableRowElement;
     expect(row.hasAttribute('tabindex')).toBe(false);
     expect(row.hasAttribute('role')).toBe(false);
 
-    const editLink = row.querySelector('a.table-row-anchor') as HTMLAnchorElement;
-    expect(editLink.getAttribute('href')).toBe('/products/9/edit');
-    expect(editLink.getAttribute('aria-label')).toContain('Widget');
-    expect(editLink.textContent?.trim()).toBe('Widget');
+    const nameLink = row.querySelector('a.table-row-anchor') as HTMLAnchorElement;
+    expect(nameLink.getAttribute('href')).toBe('https://www.google.com/search?q=Widget');
+    expect(nameLink.getAttribute('aria-label')).toContain('Widget');
+    expect(nameLink.textContent?.trim()).toBe('Widget');
   });
 
   it('defers Enter on the focusable Name anchor to the anchor itself instead of double-navigating', async () => {
@@ -168,13 +181,18 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     expect(navigate).not.toHaveBeenCalled();
   });
 
-  it('does not navigate when the Status badge button is clicked', async () => {
-    const { host, navigate } = await render([product({ id: 9, name: 'Widget', isActive: true })]);
+  /**
+   * There is no Status badge to click any more (issue #790): the list holds only active products,
+   * so the column, its sort and the toggle behind it are gone. What used to be asserted about that
+   * button's click not navigating is now asserted about the button not existing.
+   */
+  it('renders no Status badge button at all', async () => {
+    const { host } = await render([product({ id: 9, name: 'Widget', isActive: true })]);
 
-    const statusButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Active') as HTMLButtonElement;
-    statusButton.click();
-
-    expect(navigate).not.toHaveBeenCalled();
+    const statusButton = Array.from(host.querySelectorAll('button')).find((b) =>
+      ['Active', 'Inactive'].includes(b.textContent?.trim() ?? '')
+    );
+    expect(statusButton).toBeUndefined();
   });
 
   it('removes the standalone Edit and Delete buttons from Needs Ordering', async () => {
@@ -315,25 +333,28 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['B', 'A', 'C']);
   });
 
-  it('sorts the status column both ascending and descending', async () => {
-    const { fixture, host } = await render([
-      product({ id: 1, name: 'A', isActive: true }),
-      product({ id: 2, name: 'B', isActive: false }),
-      product({ id: 3, name: 'C', isActive: true })
+  /**
+   * The Status column used to be sorted here. Issue #790 removed it, so what the page offers is
+   * now asserted as a whole: the Price column left with issue #792, the Status column with #790,
+   * and the two purchase-cost columns arrived immediately after "Need to Order".
+   */
+  it('offers exactly the columns issue #790 leaves, with no Price and no Status among them', async () => {
+    const { host } = await render([product({ id: 1, name: 'A' })]);
+
+    expect(Array.from(host.querySelectorAll('thead th')).map((th) => th.textContent?.trim())).toEqual([
+      '',
+      'Name',
+      'Category',
+      'Stock',
+      'Machine need',
+      'Low Stock Threshold',
+      'Restock To',
+      'On order',
+      'Need to Order',
+      'Last purchase',
+      'Cheapest purchase',
+      ''
     ]);
-
-    const statusHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Status')) as HTMLTableCellElement;
-    const statusButton = statusHeader.querySelector('button') as HTMLButtonElement;
-
-    statusButton.click();
-    fixture.detectChanges();
-    let rows = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['B', 'A', 'C']);
-
-    statusButton.click();
-    fixture.detectChanges();
-    rows = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['C', 'A', 'B']);
   });
 
   it('keeps sorting applied after the product list is refreshed by a filter change', async () => {
@@ -431,20 +452,25 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
         button.textContent?.includes('Mark as ordered')
       );
-    const statusToggle = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('tbody button.badge')!;
+    /**
+     * The status toggle this page disabled during a session is gone with issue #790's Status
+     * column, so there is nothing left here for a session to disable: "Mark as ordered" is now
+     * this page's only write.
+     */
+    const statusToggle = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('tbody button.badge');
 
-    it('hides Mark as ordered and disables the status toggle while a session is active', async () => {
+    it('hides Mark as ordered while a session is active, and has no status toggle left to disable', async () => {
       const { host } = await render([product({ id: 9, name: 'Widget' })], { sessionActive: of(true) });
 
       expect(markAsOrdered(host)).toBeUndefined();
-      expect(statusToggle(host).disabled).toBe(true);
+      expect(statusToggle(host)).toBeNull();
     });
 
-    it('leaves both controls available while no session is active', async () => {
+    it('leaves Mark as ordered available while no session is active', async () => {
       const { host } = await render([product({ id: 9, name: 'Widget' })], { sessionActive: of(false) });
 
       expect(markAsOrdered(host)).toBeDefined();
-      expect(statusToggle(host).disabled).toBe(false);
+      expect(statusToggle(host)).toBeNull();
     });
 
     it('creates no supplier order from the guarded handler while a session is active', async () => {
@@ -470,13 +496,20 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       expect(fixture.componentInstance.showOrderForm).toBe(false);
     });
 
-    it('updates no product status from the guarded handler while a session is active', async () => {
+    /**
+     * The page writes no product at all since issue #790 removed the status toggle, so the write
+     * this used to guard cannot be reached from anywhere on it - during a session or outside one.
+     */
+    it('writes no product from this page at all, in a session or out of it', async () => {
       const update = jest.fn();
-      const { fixture } = await render([product({ id: 9, name: 'Widget' })], { sessionActive: of(true), update });
-
-      fixture.componentInstance.toggleActive(product({ id: 9, name: 'Widget' }));
+      const { host } = await render([product({ id: 9, name: 'Widget' })], { sessionActive: of(true), update });
 
       expect(update).not.toHaveBeenCalled();
+      expect(
+        Array.from(host.querySelectorAll('button')).some((button) =>
+          ['Active', 'Inactive'].includes(button.textContent?.trim() ?? '')
+        )
+      ).toBe(false);
     });
   });
 });
