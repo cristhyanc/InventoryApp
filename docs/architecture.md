@@ -1632,7 +1632,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
-| *(no page yet — the screens are issues #789–#791)* | `GET api/products/purchase-cost-summary` (issue #788) | `Dashboard.ViewFinancials` | ✘ | ✔ | ✔ |
+| Dashboard → Reorder Alerts, Last purchase/Cheapest purchase columns (issue #789; the Needs Ordering and All Products screens are #790 and #791) | `GET api/products/purchase-cost-summary` (issue #788) | `Dashboard.ViewFinancials` | ✘ | ✔ | ✔ |
 | Admin → Integrations → connection wizard, Test (issue #536, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Admin → Integrations → connection wizard, Save and Re-test (issue #537, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Connection banners on every page that needs Nayax (issue #539) | `GET api/settings/nayax-connection/status` (issue #537) | `Dashboard.View` | ✔ | ✔ | ✔ |
@@ -1663,7 +1663,7 @@ The other is `NayaxConnectionController` since issue #537: its test, save and re
   It is also **rate-limited per business** since issue #681: `Inventory.Application.SalesSync.NayaxSalesSyncRateLimiter` allows ten runs per business per two minutes, claimed before the first Nayax call, and a refused run answers `429` with `Retry-After` and reaches neither Nayax nor the database. One run is one Nayax request per machine plus one, and the Dashboard triggers one per load — which a browser repeats on every visit, back-navigation and refresh — so this was the most expensive call in the application and the easiest to repeat, with nothing bounding either the requests against someone else's API or the write amplification in this one. The limit is per business rather than per actor for the reason the connection test's is: what it protects is the business's own Nayax account and its own rows. The window is kept in memory, like every other limiter here (docs § SQLite operating assumptions). Because the allowance is the business's, members opening the Dashboard together share it: ten simultaneous loads all synchronize (`NayaxSalesSyncControllerTests`), and a load past that is refused. A refusal proves the business started runs inside the last two minutes, so the Dashboard loads its persisted figures and says they were refreshed in the last couple of minutes, not that synchronization failed (`isSalesSyncRecentlyRefreshed`); any other error still shows the not-synchronized warning. The `429` body names no wait and points at `Retry-After`, because the wait can be up to the whole window.
 
 - `GET api/products/inventory-value-summary` → **`Inventory.Operate` and `Dashboard.ViewFinancials`** (issue #681). It is an action on `ProductsController`, so it carries the catalogue's own capability; the second one is declared on the action. The endpoint reports the exact value of the business's inventory at cost, broken down — the figure [issue #527](#dashboard-financial-redaction-issue-527) omits from the dashboard response entirely for a role without `Dashboard.ViewFinancials`, today an Operator. On the catalogue's capability alone, that redaction was a presentation detail rather than a boundary: an Operator could read the number directly. No page calls this endpoint (`ProductService.getInventoryValuationSummary` has no caller since the dashboard stopped using it), so it was gated rather than removed — gating preserves the API contract, which AGENTS.md § Architecture rules asks for, while removing it would be a breaking change for a caller nobody has surveyed. A Manager and an Owner hold both capabilities and are unaffected; an Operator gets the ordinary bare `403`. Gating this one action left the figure reachable by summing the catalogue's own `inventoryValue`, which is what [issue #698](#machine-and-product-financial-redaction-issue-698) closed, along with the machine endpoints' revenue, profit and profitability-status figures: those endpoints stay on `Inventory.Operate` for every role, because an Operator restocks from them, and only the figures inside the response are withheld. [Issue #700](#operator-readable-financial-disclosure-issue-700) closed the last two routes to the same figure — a stock movement's `inventoryValueAfter` and the catalogue snapshot nested in a purchase or supplier-order line — and audited every other Operator-readable endpoint for one.
-- `GET api/products/purchase-cost-summary` → **`Dashboard.ViewFinancials`**, so a Manager and an Owner (issue #788, B of parent #786). It reports what every product was last bought for and what it was cheapest at, with the supplier of each — supplier purchasing facts over the whole catalogue, which is the same kind of figure `GET api/products/{id}/price-history` shows one product at a time. **It is its own controller, `ProductPurchaseCostsController`, for exactly that reason**: a controller declares one capability for every action it holds, so adding this action to `ProductsController` would either have inherited the catalogue's `Inventory.Operate` — handing those figures to every role that may operate inventory — or, declared per action, left the catalogue and this read looking alike when they are not. No page calls it yet: the screens that will are issues #789–#791 (C, D and E of #786), and the Angular client is already in place (`ProductPurchaseCostService`). It is read-only and `GET`, so a support session may call it under the central `GET`/`HEAD` rule of issue #551, which grants `Dashboard.ViewFinancials`. See [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63).
+- `GET api/products/purchase-cost-summary` → **`Dashboard.ViewFinancials`**, so a Manager and an Owner (issue #788, B of parent #786). It reports what every product was last bought for and what it was cheapest at, with the supplier of each — supplier purchasing facts over the whole catalogue, which is the same kind of figure `GET api/products/{id}/price-history` shows one product at a time. **It is its own controller, `ProductPurchaseCostsController`, for exactly that reason**: a controller declares one capability for every action it holds, so adding this action to `ProductsController` would either have inherited the catalogue's `Inventory.Operate` — handing those figures to every role that may operate inventory — or, declared per action, left the catalogue and this read looking alike when they are not. The first page that calls it is the home Dashboard's Reorder Alerts table (issue #789, see [Provider-optional dashboard and Needs Ordering screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)); the remaining screens are issues #790 and #791 (D and E of #786), and the Angular client is `ProductPurchaseCostService`. It is read-only and `GET`, so a support session may call it under the central `GET`/`HEAD` rule of issue #551, which grants `Dashboard.ViewFinancials`. See [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63).
 - `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
 
 **What an Operator and a Manager lose, and when.** An Operator can no longer reach expenses, any report or export, the imports, the site commission surface, the Nayax fee rates, the catalogue reconciliation or any repair. A Manager additionally cannot reach the Nayax fee rates, the catalogue reconciliation or any repair — a Manager may read a report whose underlying fee rate only an Owner may change, which is the agreed table and not a defect. Routes, verbs, request shapes and success responses are unchanged; the only new answer is the bare `403` an under-privileged caller receives. Every member of the one live business is an `Owner`, so nothing anybody reaches changes until non-Owner roles are assigned.
@@ -7512,13 +7512,55 @@ so a pending decision is never rendered as an empty one. A **failed** summary sa
 provider, so it leaves `unknown` and keeps the connected behaviour - a transient failure must not
 hide a connected business's live sections.
 
-**A storage-only figure is labelled, and the machine columns go with it.** The "Needs ordering"
+**A storage-only figure is labelled, and the machine column goes with it.** The "Needs ordering"
 card's label comes from `needsOrdering.mode` with the reason from the same response's refill
 section; the Reorder Alerts list's comes from its own response headers, so the table and its label
-always describe one read. In storage-only mode the list drops the "Machine need" and "Stock after
-machine need" columns, because `machineReplenishmentNeed` is `0` there for the one reason that is
-not "the machines need nothing", and a "Stock after machine need" equal to the stock beside it
-would assert the opposite. The label is rendered for an **empty** list too.
+always describe one read. In storage-only mode the list drops the "Machine need" column, because
+`machineReplenishmentNeed` is `0` there for the one reason that is not "the machines need nothing",
+and a column of zeroes would assert the opposite. The label is rendered for an **empty** list too.
+
+**The Reorder Alerts columns, and what the row now reports (issues #787, #792 and #789).** The table
+is Product, Stock, Low Stock Threshold, Machine need (machine-aware mode only), Restock To, On order,
+Need to Order, and then "Last purchase" and "Cheapest purchase". Three columns left it: Supplier
+(issue #787 — a product carries no supplier), Unit Price (issue #792 — a product carries no selling
+price), and "Stock after machine need" (issue #789), which was a frontend subtraction of two figures
+already on the row and is replaced by what the business actually paid. So the row answers "how much
+do I have, how much do I need, and what does it cost me to buy" without a selling price anywhere
+near it.
+
+**The two cost columns are one read, gated on the capability behind them.** `Dashboard.ViewFinancials`
+decides it, through `AccessService` as everywhere else on this page: without it neither column is
+rendered **and no request is sent** — these are supplier purchasing figures, and a role that may not
+see them must not cause them to be fetched. The capability is read asynchronously, so the request
+waits for the answer: `canViewFinancials` still starts `true` (hiding a figure from the role it
+belongs to over an unread capability is the wrong default), but `DashboardComponent` only *asks*
+once the answer has arrived and granted it, and asks then if the alert list was already read.
+`ProductPurchaseCostService.getSummaries` is called **once** with the alert products' ids, never once
+per row; an **empty** alert list is asked nothing at all, because no ids deliberately means "every
+product of the business" (issue #788) and this table is about the products in front of the reader.
+Each cell is `supplier · cost` (`Acme · $1.25`), with `None` for a purchase that recorded no supplier
+— a fact about that purchase, never another purchase's supplier, and independent of the cost beside
+it — and the cost formatted by the shared `money`. Angular computes no last or cheapest cost, no tie
+break and no saving: `SupplierPriceComparisonPolicy` decides all of them on the server.
+
+**Loading, no purchase history and unavailable are three different answers.**
+`DashboardComponent.purchaseCostState` (`PurchaseCostLoadState`) is `idle`/`loading`/`loaded`/
+`failed`, and only `loaded` may say `—`: "this product has never been bought" is a fact about the
+purchase history, which a pending or failed request is not evidence of. A pending or not-yet-issued
+read therefore shows `Loading`, a failed one shows `Unavailable` in both columns with an actionable
+**Retry** beside the table — and the rest of the page, whose figures are local data that was never
+part of that request, renders exactly as it would have. A recorded `$0.00` is a **real cost** (a free
+sample, a replacement delivery) and is shown as `$0.00` with its supplier, never as `—`: the response
+carries no entry at all for a product with no history, which is the only thing `—` means. The
+Reorder Alerts table is not sortable, so there is no missing-cost sort order to define here; #790 and
+#791 are the sortable screens.
+
+**One request's answer belongs to one product set.** Every read supersedes the previous one and
+clears what it had already read, so a changed alert list never renders the previous list's costs
+while the new ones are outstanding, and a response for a superseded request — a slower first read, or
+the failure a Retry has already replaced — is discarded instead of published over the current answer
+(`purchaseCostRequest` is the generation it is checked against). Retry re-issues the same read for
+the product set currently displayed.
 
 **One vocabulary, one sentence each.** `provider/nayax-availability.ts` is the frontend's copy of
 the published availability vocabulary and the only place it is worded:
@@ -7553,10 +7595,16 @@ the supplier order it creates is local data. Its error-versus-empty distinction 
 names - not usable, permission not granted, support session, usable, and a failed request - over the
 rendered page: the hidden cards and sections, the sync that is not called and the warning that is
 not shown, the sites and machines that are not even asked for, the storage-only label, the dropped
-machine columns, the per-feature permission message (both from the summary and from a refused
+machine-need column, the per-feature permission message (both from the summary and from a refused
 section request), the three error states and the empty states they must not be confused with, and
 the unchanged connected and support-session pages including the `sync → machines → sites` order.
 `product-needs-ordering.component.provider-optional.spec.ts` covers that page in both modes.
+`dashboard.component.purchase-costs.spec.ts` covers the two cost columns over the rendered page: the
+column list with "Stock after machine need" gone, the supplier/cost cells, `None`, a genuine `$0.00`,
+`—` only after a successful answer, the single request for the alert ids only and the empty list that
+asks nothing, the hidden columns and absent request without the capability and the request that
+follows a later capability answer, `Unavailable` with a working Retry while the rest of the dashboard
+renders, and the cleared and discarded answers when the displayed product set changes.
 `product.service.spec.ts` covers the response-header contract, including an empty listing, an
 unrecognised code and a reason published beside a machine-aware mode, and
 `provider/nayax-availability.spec.ts` covers what is **not** an availability answer.
@@ -9102,8 +9150,8 @@ Three properties of that endpoint are deliberate and tested:
 The Angular client is `ProductPurchaseCostService`
 (`frontend/inventory-app/src/app/services/product-purchase-cost.service.ts`) with its
 `ProductPurchaseCostSummary` model (`src/app/models/product-purchase-cost-summary.ts`). It fetches and
-presents; it sorts nothing, picks no cheapest and derives no saving. No screen uses it yet — the
-screens are issues #789–#791.
+presents; it sorts nothing, picks no cheapest and derives no saving. The home Dashboard's Reorder
+Alerts table is its first caller (issue #789); the remaining screens are issues #790 and #791.
 
 Product Profitability's **Last Cost**/**Lowest Cost**/**Saving per unit** columns (issue #207) are the
 same purchasing insight surfaced on the report used to compare sales performance against purchasing

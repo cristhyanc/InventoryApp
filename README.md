@@ -1196,6 +1196,24 @@ recalculated or backfilled.
 restores the column empty, not the values. The price a product actually sells at is on the machine
 it is in, on the Machines pages.
 
+## What you paid, on the dashboard's Reorder Alerts
+
+Where the Reorder Alerts table used to carry a selling price, it now carries what you actually paid:
+a **Last purchase** column and a **Cheapest purchase** column, each showing the supplier and the unit
+cost — for example `Acme · $1.25`. Both come from your recorded purchase history, so you can see
+while ordering whether the last price was the best one you have had. The old **Stock after machine
+need** column is gone; it was only the stock figure minus the machine-need figure already beside it.
+
+- **A product nothing has ever been bought for shows `—`**, which only ever means "no purchase
+  recorded". A purchase with no supplier on it shows **None** as the supplier, and a genuinely free
+  or zero-cost delivery shows **$0.00** with its supplier — a real recorded cost, not a blank.
+- **While the costs are being read the two columns say "Loading".** If that read fails they say
+  **"Unavailable"** and offer **Retry**; the rest of the table and the dashboard still work, because
+  every other figure on them is your own data and was not part of that request. Reordering or
+  reloading the page never shows one product set's costs against another's.
+- **The two columns need the same permission as the dashboard's money figures.** An Operator does not
+  see them at all, and nothing is requested on their behalf; a Manager or an Owner sees both.
+
 ## Product and supplier GST rules
 
 Purchase amounts are GST-inclusive, and GST is recorded per purchase line and per delivery/package
@@ -1434,10 +1452,10 @@ storage-management dashboard, and it says what the business has rather than what
   the page's main section.
 - **The storage-only figures say so.** The "Needs ordering" card and the reorder-alert list each
   carry a label — "Storage stock only: these figures do not include the machines' current
-  replenishment need, because Nayax is not connected" — and the list drops its "Machine need" and
-  "Stock after machine need" columns, whose values would otherwise be a column of zeroes stating
-  that the machines need nothing. The label is shown for an **empty** list too, because "nothing
-  needs ordering" means something different when the machines were never read.
+  replenishment need, because Nayax is not connected" — and the list drops its "Machine need"
+  column, whose values would otherwise be a column of zeroes stating that the machines need nothing.
+  The label is shown for an **empty** list too, because "nothing needs ordering" means something
+  different when the machines were never read.
 - **No sales synchronization is attempted, and no sync warning is shown.** `POST
   /api/nayax-sales-sync` is a Nayax call that could only be refused, so the page does not make it;
   a call that was never attempted neither failed nor succeeded, so there is nothing to warn about.
