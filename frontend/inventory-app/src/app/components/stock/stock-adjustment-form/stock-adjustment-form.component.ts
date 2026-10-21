@@ -3,8 +3,12 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
 import { StockService } from '../../../services/stock.service';
-import { Machine, RestockCostSuggestion, StockAdjustmentReason } from '../../../models/models';
+import { LocalMachine, RestockCostSuggestion, StockAdjustmentReason } from '../../../models/models';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+
+/** What is shown in place of the machine field when the page's machine read failed (issue #746). */
+export const ADJUSTMENT_MACHINES_ERROR =
+  'The machine list could not be loaded, so an adjustment cannot be attributed to a machine.';
 
 /**
  * The manual stock-adjustment workflow for one selected product (issue #384), moved out of the
@@ -33,14 +37,28 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
   @Input({ required: true }) productId!: number;
 
   /**
-   * The machines an adjustment may be attributed to; the page already loads them for its filters.
+   * The business's own machine records, which the page reads from `/api/local-machines` and hands
+   * over (issue #746). They need no sales provider, so the field works for a business that has
+   * never connected one.
    *
-   * An **empty** list is "no machine list is available" (issue #728): the page passes `[]` both for
-   * a business whose provider cannot list machines and for a machine read that failed, and in
-   * either case there is nothing to attribute an adjustment to. The field is hidden rather than
-   * offering "— None —" alone, and {@link machineFieldShown} is the one place that is decided.
+   * The list is every machine the business has recorded, active and inactive alike; **only the
+   * active ones are offered**, because this form records a new movement and a retired machine is
+   * not somewhere stock is being put now. An **empty** offer is a business with no active machine:
+   * the field is hidden rather than offering "— None —" alone. A read that failed or is still
+   * outstanding is a different state and arrives as {@link machinesFailed}/{@link machinesLoading},
+   * never as an empty list.
    */
-  @Input() machines: Machine[] = [];
+  @Input() machines: LocalMachine[] = [];
+
+  /**
+   * Whether the page's machine read failed. The field is then replaced by an explicit error rather
+   * than hidden: "there are no machines" is a claim about the business that a failed read did not
+   * make (issue #746, keeping issue #728's error-versus-empty rule).
+   */
+  @Input() machinesFailed = false;
+
+  /** Whether that read is still outstanding; the field says so rather than reading as empty. */
+  @Input() machinesLoading = false;
 
   /** Raised after the existing adjustment endpoint accepted a movement, so the page can reload. */
   @Output() readonly adjustmentApplied = new EventEmitter<void>();
@@ -95,24 +113,38 @@ export class StockAdjustmentFormComponent implements OnChanges, OnDestroy {
     if (changes['productId'] && !changes['productId'].firstChange) {
       this.reset();
     }
-    // A machine the field can no longer offer must not stay staged on the form: the list going
-    // away means the page can no longer list machines at all.
-    if (changes['machines'] && !this.machineFieldShown) {
-      this.form.machineId = null;
+    // A machine the field no longer offers must not stay staged on the form: the list may have
+    // gone away entirely, or that machine may since have been deactivated.
+    if (changes['machines'] || changes['machinesFailed'] || changes['machinesLoading']) {
+      this.dropUnofferedMachine();
     }
   }
 
   /**
-   * The machines an adjustment can name: those with a local machine record (issue #741), because
-   * a stock movement records the local machine and the API refuses a provider machine number.
+   * The machines an adjustment can name: the business's **active** machines, keyed by their own
+   * `LocalMachine.id` - the id a stock movement records (issue #741) and the API accepts.
    */
-  get attributableMachines(): Machine[] {
-    return this.machines.filter((machine) => machine.localMachineId != null);
+  get attributableMachines(): LocalMachine[] {
+    return this.machines.filter((machine) => machine.isActive);
   }
 
   /** Whether a machine may be attributed at all; see {@link machines}. */
   get machineFieldShown(): boolean {
-    return this.attributableMachines.length > 0;
+    return !this.machinesFailed && !this.machinesLoading && this.attributableMachines.length > 0;
+  }
+
+  /** The sentence shown in place of the field when the machine read failed. */
+  get machinesError(): string {
+    return this.machinesFailed ? ADJUSTMENT_MACHINES_ERROR : '';
+  }
+
+  private dropUnofferedMachine(): void {
+    if (this.form.machineId === null) return;
+    const offered =
+      this.machineFieldShown && this.attributableMachines.some((machine) => machine.id === this.form.machineId);
+    if (!offered) {
+      this.form.machineId = null;
+    }
   }
 
   get requiresRestockCost(): boolean {

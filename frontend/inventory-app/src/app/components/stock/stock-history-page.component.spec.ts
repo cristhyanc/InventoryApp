@@ -4,9 +4,9 @@ import { Subject, of, throwError } from 'rxjs';
 import { StockHistoryPageComponent } from './stock-history-page.component';
 import { StockService } from '../../services/stock.service';
 import { ProductService } from '../../services/product.service';
-import { MachineService } from '../../services/machine.service';
+import { LocalMachineService } from '../../services/local-machine.service';
 import {
-  Machine,
+  LocalMachine,
   Product,
   StockAdjustmentReason,
   StockAdjustmentSource,
@@ -31,10 +31,10 @@ function product(overrides: Partial<Product> = {}): Product {
   } as Product;
 }
 
-function machine(machineID: number, machineName: string): Machine {
-  // The local machine (issue #741) is what a movement records and the filter sends; it is
-  // deliberately a different number from the provider's.
-  return { machineID, localMachineId: machineID + 100, machineName } as Machine;
+function machine(id: number, name: string): LocalMachine {
+  // The business's own machine record (issue #746): its id is what a movement records, what the
+  // filter sends and what the machine column is named from.
+  return { id, name, isActive: true, isProviderNamed: false };
 }
 
 function entry(overrides: Partial<StockHistoryEntry> = {}): StockHistoryEntry {
@@ -77,7 +77,7 @@ function routeStub(queryParams: Record<string, string> = {}, params: Record<stri
 function createHarness(options: {
   result?: unknown;
   products?: Product[];
-  machines?: Machine[];
+  machines?: LocalMachine[];
   queryParams?: Record<string, string>;
   params?: Record<string, string>;
   init?: boolean;
@@ -88,7 +88,7 @@ function createHarness(options: {
     routeStub(options.queryParams, options.params),
     { historyPage } as unknown as StockService,
     { getAll: getAllProducts } as unknown as ProductService,
-    { getAll: jest.fn(() => of(options.machines ?? [machine(9, 'Lobby')])) } as unknown as MachineService,
+    { getAll: jest.fn(() => of(options.machines ?? [machine(41, 'Lobby')])) } as unknown as LocalMachineService,
     providerAvailabilityDouble()
   );
 
@@ -325,7 +325,7 @@ describe('StockHistoryPageComponent labels', () => {
     expect(component.reasonLabel(StockAdjustmentReason.Correction)).toBe('Correction');
     expect(component.sourceLabel(StockAdjustmentSource.Nayax)).toBe('Nayax Sync Restock');
     expect(component.sourceLabel(StockAdjustmentSource.Manual)).toBe('Manual');
-    expect(component.machineLabel(109)).toBe('Lobby');
+    expect(component.machineLabel(41)).toBe('Lobby');
     expect(component.machineLabel(404)).toBe('404');
     expect(component.machineLabel(null)).toBe('—');
     expect(component.unitCostLabel(null)).toBe('—');
@@ -345,7 +345,7 @@ describe('StockHistoryPageComponent rendering', () => {
         { provide: ActivatedRoute, useValue: routeStub(options.queryParams ?? {}) },
         { provide: StockService, useValue: { historyPage } },
         { provide: ProductService, useValue: { getAll: jest.fn(() => of([product()])) } },
-        { provide: MachineService, useValue: { getAll: jest.fn(() => of([machine(9, 'Lobby')])) } },
+        { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of([machine(41, 'Lobby')])) } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         provideNayaxConnectionStatus()
       ]
