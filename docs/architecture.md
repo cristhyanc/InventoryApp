@@ -1664,7 +1664,7 @@ The other is `NayaxConnectionController` since issue #537: its test, save and re
   It is also **rate-limited per business** since issue #681: `Inventory.Application.SalesSync.NayaxSalesSyncRateLimiter` allows ten runs per business per two minutes, claimed before the first Nayax call, and a refused run answers `429` with `Retry-After` and reaches neither Nayax nor the database. One run is one Nayax request per machine plus one, and the Dashboard triggers one per load — which a browser repeats on every visit, back-navigation and refresh — so this was the most expensive call in the application and the easiest to repeat, with nothing bounding either the requests against someone else's API or the write amplification in this one. The limit is per business rather than per actor for the reason the connection test's is: what it protects is the business's own Nayax account and its own rows. The window is kept in memory, like every other limiter here (docs § SQLite operating assumptions). Because the allowance is the business's, members opening the Dashboard together share it: ten simultaneous loads all synchronize (`NayaxSalesSyncControllerTests`), and a load past that is refused. A refusal proves the business started runs inside the last two minutes, so the Dashboard loads its persisted figures and says they were refreshed in the last couple of minutes, not that synchronization failed (`isSalesSyncRecentlyRefreshed`); any other error still shows the not-synchronized warning. The `429` body names no wait and points at `Retry-After`, because the wait can be up to the whole window.
 
 - `GET api/products/inventory-value-summary` → **`Inventory.Operate` and `Dashboard.ViewFinancials`** (issue #681). It is an action on `ProductsController`, so it carries the catalogue's own capability; the second one is declared on the action. The endpoint reports the exact value of the business's inventory at cost, broken down — the figure [issue #527](#dashboard-financial-redaction-issue-527) omits from the dashboard response entirely for a role without `Dashboard.ViewFinancials`, today an Operator. On the catalogue's capability alone, that redaction was a presentation detail rather than a boundary: an Operator could read the number directly. No page calls this endpoint (`ProductService.getInventoryValuationSummary` has no caller since the dashboard stopped using it), so it was gated rather than removed — gating preserves the API contract, which AGENTS.md § Architecture rules asks for, while removing it would be a breaking change for a caller nobody has surveyed. A Manager and an Owner hold both capabilities and are unaffected; an Operator gets the ordinary bare `403`. Gating this one action left the figure reachable by summing the catalogue's own `inventoryValue`, which is what [issue #698](#machine-and-product-financial-redaction-issue-698) closed, along with the machine endpoints' revenue, profit and profitability-status figures: those endpoints stay on `Inventory.Operate` for every role, because an Operator restocks from them, and only the figures inside the response are withheld. [Issue #700](#operator-readable-financial-disclosure-issue-700) closed the last two routes to the same figure — a stock movement's `inventoryValueAfter` and the catalogue snapshot nested in a purchase or supplier-order line — and audited every other Operator-readable endpoint for one.
-- `GET api/products/purchase-cost-summary` → **`Dashboard.ViewFinancials`**, so a Manager and an Owner (issue #788, B of parent #786). It reports what every product was last bought for and what it was cheapest at, with the supplier of each — supplier purchasing facts over the whole catalogue, which is the same kind of figure `GET api/products/{id}/price-history` shows one product at a time. **It is its own controller, `ProductPurchaseCostsController`, for exactly that reason**: a controller declares one capability for every action it holds, so adding this action to `ProductsController` would either have inherited the catalogue's `Inventory.Operate` — handing those figures to every role that may operate inventory — or, declared per action, left the catalogue and this read looking alike when they are not. The first page that calls it is the home Dashboard's Reorder Alerts table (issue #789, see [Provider-optional dashboard and Needs Ordering screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)); All Products (issue #791, E of #786) also calls it, requesting it once for its listed product ids and showing the Last/Cheapest purchase columns only with `Dashboard.ViewFinancials`; Needs Ordering is issue #790 (D of #786). The Angular client is `ProductPurchaseCostService`. It is read-only and `GET`, so a support session may call it under the central `GET`/`HEAD` rule of issue #551, which grants `Dashboard.ViewFinancials`. See [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63).
+- `GET api/products/purchase-cost-summary` → **`Dashboard.ViewFinancials`**, so a Manager and an Owner (issue #788, B of parent #786). It reports what every product was last bought for and what it was cheapest at, with the supplier of each — supplier purchasing facts over the whole catalogue, which is the same kind of figure `GET api/products/{id}/price-history` shows one product at a time. **It is its own controller, `ProductPurchaseCostsController`, for exactly that reason**: a controller declares one capability for every action it holds, so adding this action to `ProductsController` would either have inherited the catalogue's `Inventory.Operate` — handing those figures to every role that may operate inventory — or, declared per action, left the catalogue and this read looking alike when they are not. The first page that calls it is the home Dashboard's Reorder Alerts table (issue #789, see [Provider-optional dashboard and Needs Ordering screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)); Products → Needs Ordering (issue #790, D of #786) is the second, and All Products (issue #791, E of #786) the third, requesting it once for its listed product ids and showing the Last/Cheapest purchase columns only with `Dashboard.ViewFinancials`. The Angular client is `ProductPurchaseCostService`. It is read-only and `GET`, so a support session may call it under the central `GET`/`HEAD` rule of issue #551, which grants `Dashboard.ViewFinancials`. See [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63).
 - `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
 
 **What an Operator and a Manager lose, and when.** An Operator can no longer reach expenses, any report or export, the imports, the site commission surface, the Nayax fee rates, the catalogue reconciliation or any repair. A Manager additionally cannot reach the Nayax fee rates, the catalogue reconciliation or any repair — a Manager may read a report whose underlying fee rate only an Owner may change, which is the agreed table and not a defect. Routes, verbs, request shapes and success responses are unchanged; the only new answer is the bare `403` an under-privileged caller receives. Every member of the one live business is an `Owner`, so nothing anybody reaches changes until non-Owner roles are assigned.
@@ -6604,14 +6604,19 @@ its own column set.
 - **Row navigates to the same product editor Edit opened.** Clicking or tapping anywhere in a row
   outside a nested control, or pressing Enter while one is focused, navigates to
   `/products/:id/edit` — the destination the removed Edit button used. The product Name cell holds
-  the real `<a class="table-row-anchor" [routerLink]="['/products', p.id, 'edit']">`, which gives
-  keyboard focus, Enter activation, ctrl/cmd/middle-click and "copy link address" natively;
-  `onRowActivate` only extends that anchor's plain click to the rest of the row (`table-row-link`
-  on the `<tr>`, `(click)`/`(keydown.enter)` bound to it) and ignores anything that originated from
-  a nested `a`, `button`, `input`, `select`, `textarea` or `label` — the selection checkbox, the
-  Stock link and the Active/Inactive status badge button — or a modified/non-primary click the
-  browser should handle itself (Ctrl/Meta/Shift/Alt, or a non-left mouse button). The row carries
-  no `tabindex` or `role` of its own; the shared `.table-row-link`/`.table-row-anchor` styling
+  the real `<a class="table-row-anchor">`, which gives keyboard focus, Enter activation,
+  ctrl/cmd/middle-click and "copy link address" natively; since issue #790 that anchor is a Google
+  search for the product rather than a `routerLink` to the editor (see [Provider-optional dashboard
+  and Needs Ordering
+  screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)), so the editor's own
+  focusable link is the row's `Edit` anchor beside Stock, which #790 restored for exactly that
+  reason, and the row click is a convenience over it. `onRowActivate` only extends a plain click on
+  the row itself (`table-row-link` on the `<tr>`, `(click)`/`(keydown.enter)` bound to it) and
+  ignores anything that originated from a nested `a`, `button`, `input`, `select`, `textarea` or
+  `label` — the Name search link, the selection checkbox, the Stock link and the Edit link — or a
+  modified/non-primary click the browser should handle itself (Ctrl/Meta/Shift/Alt, or a non-left
+  mouse button). The row carries no `tabindex` or `role` of its own; the shared
+  `.table-row-link`/`.table-row-anchor` styling
   (`styles.css`) already supplies the hover cursor, hover underline and `:focus-within` affordance,
   exactly as it does for the Products list and the Sites list.
 - **Stock is unchanged and isolated from row navigation.** The Stock `<a routerLink>` to
@@ -6623,9 +6628,11 @@ its own column set.
   `confirmDelete`/`cancelDelete`/`deleteConfirmed`/`confirmingProduct` members were removed from the
   component; `ProductService.delete` and the Products list's own Delete button are unchanged, as is
   backend delete authorization.
-- **Every visible data column sorts ascending/descending.** Name, Category, Supplier, Price,
-  Stock, Machine need, Low Stock Threshold, Restock To, On order, Need to Order and Status each
-  have a header `<button>` toggling `sortBy(column)`; the active header's `[attr.aria-sort]`
+- **Every visible data column sorts ascending/descending.** Each has a header `<button>` toggling
+  `sortBy(column)`. The set has changed since this issue: Supplier left with #787, Price with #792,
+  and Status with #790, which added Last purchase and Cheapest purchase, so today it is Name,
+  Category, Stock, Machine need, Low Stock Threshold, Restock To, On order, Need to Order, Last
+  purchase and Cheapest purchase. The active header's `[attr.aria-sort]`
   reflects `ascending`/`descending` and its visible label gains the same `(ascending)`/
   `(descending)` suffix the Products list and Site Products tables use. `sortedProducts` computes a
   new sorted array from `products` on each read — comparing numbers numerically, everything else as
@@ -7589,9 +7596,62 @@ which used to leave a failed section loading forever.
 
 **Products → Needs Ordering** is the same change in one page: it reads the mode from the listing it
 already fetches, labels a storage-only list, and hides the "Machine need" column there. Its
-filters, sorting, status toggle and "Mark as ordered" are untouched and work without a provider -
-the supplier order it creates is local data. Its error-versus-empty distinction already existed
-(`ListLoadState`) and is unchanged.
+filters, sorting and "Mark as ordered" are untouched and work without a provider - the supplier
+order it creates is local data. Its error-versus-empty distinction already existed (`ListLoadState`)
+and is unchanged.
+
+**What that page shows now (issue #790, D of #786).** Its columns are the checkbox, Name, Category,
+Stock, "Machine need" (in machine-aware mode only), the thresholds, "On order", "Need to order",
+"Last purchase", "Cheapest purchase" and the Stock and Edit links - and nothing else:
+
+- **The name looks the product up on Google**, as `https://www.google.com/search?q=<URL-encoded
+  name>` in a new tab (`target="_blank"`, `rel="noopener noreferrer"`), labelled "Search Google for
+  &lt;name&gt;". The row's own click handler already defers to a nested anchor, so that click does
+  not also open the editor in the current tab; clicking anywhere else on the row still opens it, and
+  the checkbox and the Stock button are unchanged.
+- **The product editor keeps a focusable control of its own**, the row's `Edit`
+  `<a routerLink="/products/:id/edit">` beside Stock, labelled "Edit product &lt;name&gt;". It is
+  there because the Name anchor is no longer the editor's link: a row click is not a keyboard
+  action - the `<tr>` carries no `tabindex` and `onRowActivate` defers to every focusable child - so
+  without it the editor would have been reachable by pointer only, which AGENTS.md § Frontend rules
+  does not allow. Issue #498 had removed that button precisely because the Name anchor was then the
+  editor's own link; with that premise gone the link comes back, while #498's other outcomes - no
+  Delete, no confirmation dialog, and a row click that opens the editor - stand unchanged.
+- **No Price and no Status column.** The price left with issue #792 (a product carries no selling
+  price); the Status column, its sort and this page's product-status write left with #790, because
+  the list holds **only active products**. `GET /api/products/alerts/low-stock` already excludes
+  retired products, and the component drops any product with `isActive === false` as well - the same
+  defence the dashboard's reorder-alert card applies. Product activation stays on
+  Products → All Products, which is the page that lists both states.
+- **"Last purchase" and "Cheapest purchase"** come from issue #788's bulk
+  `GET /api/products/purchase-cost-summary`, requested **once** for the ids the page actually lists
+  and never recomputed here: what was last paid and what was cheapest, with the supplier each was
+  paid to, are decided by `SupplierPriceComparisonPolicy` on the server. Both columns sort by cost,
+  and a row with no cost - still loading, unavailable, or never bought - sorts last in **both**
+  directions rather than as a zero.
+
+**Those two columns keep four answers apart**, for the same reason the availability model exists: a
+figure nobody established must never be rendered as a measured one.
+
+- Both columns and the request appear **only** with `Dashboard.ViewFinancials`. Without it there are
+  no columns and no request at all - the endpoint answers `403`, so asking before the capability is
+  known would be asking for a refusal, which is why this gate starts closed rather than at the
+  fail-open `true` other hidden figures use. `AccessService` still fails open where it matters: a
+  capability set that could not be read answers `true`.
+- While the request is outstanding both columns say **"Loading…"**. A **`—`** is published only once
+  a successful response establishes that the product has no recorded purchase history (a product
+  with none is absent from the response). A **genuinely recorded `$0.00`** - a free sample, a
+  replacement delivery - is a measured cost and is shown as `$0.00` with its supplier, never as
+  `—`. An unknown supplier is **"None"** independently of the cost beside it.
+- A **failed** request shows **"Unavailable"** in both columns with one actionable **Retry** above
+  the table, and the rest of the page keeps working: the reorder figures and "Mark as ordered" are
+  the business's own data and are unaffected. Retry re-asks for the same listed ids.
+- **A stale answer cannot land on a newer list.** The previous list's costs are dropped
+  synchronously with the product set they belonged to, and the cost request runs under a `switchMap`
+  on the product ids, so a superseded response - or a superseded failure - is unsubscribed, its HTTP
+  request cancelled, and neither its rows nor its "Unavailable" can appear under the products that
+  replaced it. An empty list makes no request, because the endpoint reads "no ids" as "every product
+  of the business".
 
 **What proves it.** `dashboard.component.provider-optional.spec.ts` covers the five states the issue
 names - not usable, permission not granted, support session, usable, and a failed request - over the
@@ -7600,7 +7660,8 @@ not shown, the sites and machines that are not even asked for, the storage-only 
 machine-need column, the per-feature permission message (both from the summary and from a refused
 section request), the three error states and the empty states they must not be confused with, and
 the unchanged connected and support-session pages including the `sync → machines → sites` order.
-`product-needs-ordering.component.provider-optional.spec.ts` covers that page in both modes.
+`product-needs-ordering.component.provider-optional.spec.ts` covers that page in both modes, and
+that its purchase-cost columns are present and filled without a provider.
 `dashboard.component.purchase-costs.spec.ts` covers the two cost columns over the rendered page: the
 column list with "Stock after machine need" gone, the supplier/cost cells, `None`, a genuine `$0.00`,
 `—` only after a successful answer, the single request for the alert ids only and the empty list that
@@ -7610,6 +7671,14 @@ renders, and the cleared and discarded answers when the displayed product set ch
 `product.service.spec.ts` covers the response-header contract, including an empty listing, an
 unrecognised code and a reason published beside a machine-aware mode, and
 `provider/nayax-availability.spec.ts` covers what is **not** an availability answer.
+`product-needs-ordering.component.purchase-costs.spec.ts` covers issue #790: the Google URL and its
+encoding (`&`, spaces, accents, `+`, `?`), the name click that does not open the editor and the row
+click that still does, the Edit link that reaches the editor from the keyboard - focused, Enter
+pressed on it, navigating once - while the Name link still only searches Google, the absent Price
+and Status columns, the retired product the page refuses to list, the one request for the listed
+ids, loading versus `—` versus "Unavailable", a recorded `$0.00`, an unknown supplier, Retry, the
+superseded response and the superseded failure, the cost sorting in both directions with no-history
+last, and the capability gate that renders no column and sends no request.
 
 #### Home dashboard: four headline cards (issue #460)
 
@@ -9156,10 +9225,10 @@ The Angular client is `ProductPurchaseCostService`
 (`frontend/inventory-app/src/app/services/product-purchase-cost.service.ts`) with its
 `ProductPurchaseCostSummary` model (`src/app/models/product-purchase-cost-summary.ts`). It fetches and
 presents; it sorts nothing, picks no cheapest and derives no saving. The home Dashboard's Reorder
-Alerts table is its first caller (issue #789), and All Products (`ProductListComponent`, issue #791,
-E of #786) also uses it — see
+Alerts table is its first caller (issue #789), Needs Ordering the second (issue #790), and All
+Products (`ProductListComponent`, issue #791, E of #786) the third — see
 [Average cost and purchase cost columns, and the retired-product filter, on All Products](#average-cost-and-purchase-cost-columns-and-the-retired-product-filter-on-all-products-issue-791)
-below; Needs Ordering is issue #790.
+below.
 
 Product Profitability's **Last Cost**/**Lowest Cost**/**Saving per unit** columns (issue #207) are the
 same purchasing insight surfaced on the report used to compare sales performance against purchasing
