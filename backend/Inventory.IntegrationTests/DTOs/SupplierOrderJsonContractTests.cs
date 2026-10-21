@@ -46,8 +46,7 @@ public class SupplierOrderJsonContractTests
         true,
         new DateTime(2026, 1, 1, 8, 30, 0, DateTimeKind.Utc),
         new DateTime(2026, 2, 2, 9, 45, 0, DateTimeKind.Utc),
-        5,
-        4);
+        5);
 
     private static SupplierOrderRecord RecordWith(
         Inventory.Domain.SupplierOrders.SupplierOrderStatus status,
@@ -125,7 +124,6 @@ public class SupplierOrderJsonContractTests
                 CreatedAt = line.Product.CreatedAt,
                 UpdatedAt = line.Product.UpdatedAt,
                 CategoryId = line.Product.CategoryId,
-                SupplierId = line.Product.SupplierId,
             },
             QuantityOrdered = line.QuantityOrdered,
             QuantityReceived = line.QuantityReceived,
@@ -197,6 +195,32 @@ public class SupplierOrderJsonContractTests
                 "unitPrice", "notes", "outstandingQuantity",
             },
             document.RootElement.GetProperty("lines")[0].EnumerateObject().Select(property => property.Name));
+    }
+
+    /// <summary>
+    /// The nested product snapshot carries no supplier of its own (issue #787, A1 of #786), while
+    /// the order's own supplier - the one a person chose when placing it - is reported in full with
+    /// its complete nested shape. Those are two different suppliers, and only the product's is gone.
+    /// </summary>
+    [Fact]
+    public void Response_drops_the_supplier_from_the_nested_product_and_keeps_the_orders_own()
+    {
+        var json = JsonSerializer.Serialize(
+            SupplierOrderResponseMapper.ToResponse(
+                RecordWith(Inventory.Domain.SupplierOrders.SupplierOrderStatus.PartiallyReceived), Visible),
+            WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        var product = document.RootElement.GetProperty("lines")[0].GetProperty("product");
+        Assert.False(product.TryGetProperty("supplierId", out _));
+        Assert.False(product.TryGetProperty("supplier", out _));
+        Assert.Equal("Coke", product.GetProperty("name").GetString());
+        Assert.Equal(3.50m, product.GetProperty("unitPrice").GetDecimal());
+        Assert.Equal((long?)5, product.GetProperty("categoryId").GetInt64());
+
+        Assert.Equal(
+            new[] { "id", "name", "contactName", "phone", "email", "address" },
+            document.RootElement.GetProperty("supplier").EnumerateObject().Select(property => property.Name));
     }
 
     /// <summary>

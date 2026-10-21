@@ -132,5 +132,5 @@ public sealed class EfSupplierOrderStore : ISupplierOrderStore
         product.Id, product.Name, product.Sku, product.Description, product.UnitPrice, product.AverageUnitCost,
         product.CostingQuantity, product.InventoryValue, product.QuantityInStock, product.LowStockThreshold,
         product.RestockTo, product.Unit, product.IsActive, product.CreatedAt, product.UpdatedAt,
-        product.CategoryId, product.SupplierId);
+        product.CategoryId);
 }

@@ -27,7 +27,9 @@ public class PlatformDiagnosticsDataSurfaceTests
                 "Businesses(Id)",
                 "Categories(Id, BusinessId)",
                 "Suppliers(Id, BusinessId)",
-                "Products(Id, BusinessId, CategoryId, SupplierId)",
+                // Issue #787 (A1 of #786) dropped Products.SupplierId, so the allowlist - which
+                // names physical columns - lost it too. Narrowing the surface needs no review.
+                "Products(Id, BusinessId, CategoryId)",
                 "Receipts(Id, BusinessId, SupplierId)",
                 "ReceiptItems(Id, BusinessId, ReceiptId, ProductId)",
                 "StockAdjustments(Id, BusinessId, ProductId, ReceiptItemId)",

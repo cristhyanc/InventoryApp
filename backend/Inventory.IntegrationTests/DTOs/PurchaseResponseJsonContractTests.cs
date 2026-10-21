@@ -50,8 +50,7 @@ public class PurchaseResponseJsonContractTests
         true,
         new DateTime(2026, 1, 1, 8, 30, 0, DateTimeKind.Utc),
         new DateTime(2026, 2, 2, 9, 45, 0, DateTimeKind.Utc),
-        5,
-        4);
+        5);
 
     private static PurchaseRecord FullyPopulatedRecord() => new(
         7,
@@ -139,7 +138,6 @@ public class PurchaseResponseJsonContractTests
                     CreatedAt = item.Product.CreatedAt,
                     UpdatedAt = item.Product.UpdatedAt,
                     CategoryId = item.Product.CategoryId,
-                    SupplierId = item.Product.SupplierId,
                 },
         }).ToList(),
         FileName = record.FileName,
@@ -230,6 +228,30 @@ public class PurchaseResponseJsonContractTests
                 "gstClassification", "gstClassificationSource", "lineTotal",
             },
             document.RootElement.GetProperty("items")[0].EnumerateObject().Select(property => property.Name));
+    }
+
+    /// <summary>
+    /// The nested product snapshot carries no supplier of its own (issue #787, A1 of #786), while
+    /// the purchase's own supplier - the one the invoice came from - is reported in full with its
+    /// complete nested shape. Those are two different suppliers, and only the product's is gone.
+    /// </summary>
+    [Fact]
+    public void Response_drops_the_supplier_from_the_nested_product_and_keeps_the_purchases_own()
+    {
+        var json = JsonSerializer.Serialize(
+            PurchaseResponseMapper.ToResponse(FullyPopulatedRecord(), Visible), WebDefaults);
+
+        using var document = JsonDocument.Parse(json);
+        var product = document.RootElement.GetProperty("items")[0].GetProperty("product");
+        Assert.False(product.TryGetProperty("supplierId", out _));
+        Assert.False(product.TryGetProperty("supplier", out _));
+        Assert.Equal("Coke", product.GetProperty("name").GetString());
+        Assert.Equal(3.50m, product.GetProperty("unitPrice").GetDecimal());
+        Assert.Equal((long?)5, product.GetProperty("categoryId").GetInt64());
+
+        Assert.Equal(
+            new[] { "id", "name", "contactName", "phone", "email", "address" },
+            document.RootElement.GetProperty("supplier").EnumerateObject().Select(property => property.Name));
     }
 
     /// <summary>

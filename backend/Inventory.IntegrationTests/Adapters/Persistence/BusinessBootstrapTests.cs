@@ -104,7 +104,6 @@ public class BusinessBootstrapTests : IDisposable
             InventoryValue = 50.00m,
             QuantityInStock = 42,
             CategoryId = category.Id,
-            SupplierId = supplier.Id,
         };
         var bars = new Product
         {

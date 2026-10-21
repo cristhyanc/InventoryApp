@@ -254,7 +254,7 @@ export class PlatformDiagnosticsQueryComponent implements OnDestroy {
     { table: 'Businesses', columns: 'Id' },
     { table: 'Categories', columns: 'Id, BusinessId' },
     { table: 'Suppliers', columns: 'Id, BusinessId' },
-    { table: 'Products', columns: 'Id, BusinessId, CategoryId, SupplierId' },
+    { table: 'Products', columns: 'Id, BusinessId, CategoryId' },
     { table: 'Receipts (purchases)', columns: 'Id, BusinessId, SupplierId' },
     { table: 'ReceiptItems (purchase lines)', columns: 'Id, BusinessId, ReceiptId, ProductId' },
     { table: 'StockAdjustments', columns: 'Id, BusinessId, ProductId, ReceiptItemId' }

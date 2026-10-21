@@ -6,8 +6,7 @@ import { EMPTY, Subject, Subscription } from 'rxjs';
 import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
-import { SupplierService } from '../../services/supplier.service';
-import { Product, Category, Supplier } from '../../models/models';
+import { Product, Category } from '../../models/models';
 import { ConfirmationDialogComponent } from '../shared/confirmation-dialog.component';
 import { ListLoadState } from '../shared/list-load-state';
 import { createFilterTrigger$ } from '../shared/filter-request-trigger';
@@ -23,7 +22,8 @@ import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 
-type ProductSortColumn = 'name' | 'category' | 'supplier' | 'price' | 'stock' | 'status';
+// No 'supplier' column since issue #787 (A1 of #786): a product carries no supplier to sort by.
+type ProductSortColumn = 'name' | 'category' | 'price' | 'stock' | 'status';
 
 @Component({
   selector: 'app-product-list',
@@ -34,12 +34,10 @@ type ProductSortColumn = 'name' | 'category' | 'supplier' | 'price' | 'stock' | 
 export class ProductListComponent implements OnInit, OnDestroy {
   products: Product[] = [];
   categories: Category[] = [];
-  suppliers: Supplier[] = [];
   readonly loadState = new ListLoadState();
   confirmingProduct: Product | null = null;
   search = '';
   categoryId: number | '' = '';
-  supplierId: number | '' = '';
   /**
    * Whether to list a deactivated product too (issue #737): off by default, because `GET
    * /api/products` answers only the working catalogue unless asked otherwise. Checking it is what
@@ -67,7 +65,6 @@ export class ProductListComponent implements OnInit, OnDestroy {
   constructor(
     private productService: ProductService,
     private categoryService: CategoryService,
-    private supplierService: SupplierService,
     private toastService: ToastService,
     private router: Router,
     supportSession: SupportSessionService
@@ -76,8 +73,9 @@ export class ProductListComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    // No supplier list is loaded (issue #787, A1 of #786): this page has no supplier filter or
+    // column left, so there is nothing for one to feed.
     this.categoryService.getAll().subscribe((categories) => (this.categories = categories));
-    this.supplierService.getAll().subscribe((suppliers) => (this.suppliers = suppliers));
 
     createFilterTrigger$(this.search$, this.immediateFilter$)
       .pipe(
@@ -99,7 +97,6 @@ export class ProductListComponent implements OnInit, OnDestroy {
     const filters = {
       search: this.search || undefined,
       categoryId: this.categoryId === '' ? undefined : this.categoryId,
-      supplierId: this.supplierId === '' ? undefined : this.supplierId,
       includeRetired: this.includeRetired
     };
 
@@ -124,7 +121,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.search$.next(value);
   }
 
-  /** Triggers an immediate (non-debounced) refresh, e.g. for category/supplier changes. */
+  /** Triggers an immediate (non-debounced) refresh, e.g. for a category change. */
   applyFilters(): void {
     this.immediateFilter$.next();
   }
@@ -132,7 +129,6 @@ export class ProductListComponent implements OnInit, OnDestroy {
   resetFilters(): void {
     this.search = '';
     this.categoryId = '';
-    this.supplierId = '';
     this.includeRetired = false;
     this.applyFilters();
   }
@@ -256,8 +252,6 @@ export class ProductListComponent implements OnInit, OnDestroy {
         return product.name;
       case 'category':
         return product.category?.name ?? null;
-      case 'supplier':
-        return product.supplier?.name ?? null;
       case 'price':
         return product.unitPrice;
       case 'stock':
@@ -280,7 +274,6 @@ export class ProductListComponent implements OnInit, OnDestroy {
       restockTo: product.restockTo,
       unit: product.unit ?? null,
       categoryId: product.categoryId ?? null,
-      supplierId: product.supplierId ?? null,
       isActive: !product.isActive
     }).subscribe({
       next: () => this.applyFilters(),

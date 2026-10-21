@@ -60,7 +60,7 @@ public class EfProductCatalogStoreDeletionEligibilityTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private static ProductCatalogFilter WholeCatalogue() => new(null, null, null, IncludeRetired: true);
+    private static ProductCatalogFilter WholeCatalogue() => new(null, null, IncludeRetired: true);
 
     [Fact]
     public async Task ListOrderedByNameAsync_AllowsTheDelete_ForAProductNothingRefersTo()

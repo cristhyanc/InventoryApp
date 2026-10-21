@@ -330,12 +330,18 @@ public class BusinessDataIsolationTests : IDisposable
     #region Cross-business relationships
 
     /// <summary>
-    /// The relationship rule the issue calls out by name: a product must not be able to point at
-    /// another business's supplier. The foreign key value is valid and the row exists - only the
-    /// ownership check distinguishes it from a legitimate reference.
+    /// The relationship rule the issue calls out by name, on the record that still holds a supplier:
+    /// a purchase must not be able to point at another business's supplier. The foreign key value is
+    /// valid and the row exists - only the ownership check distinguishes it from a legitimate
+    /// reference.
+    ///
+    /// <para>It used to be asserted on a <em>product</em>'s supplier. Issue #787 (A1 of #786)
+    /// removed that association from the schema altogether, so the rule is asserted here instead,
+    /// on the purchase - plus the supplier order and the operating expense below. Those three are
+    /// now every relationship that names a supplier, and each one is covered.</para>
     /// </summary>
     [Fact]
-    public async Task A_product_cannot_reference_a_supplier_from_another_business()
+    public async Task A_purchase_cannot_reference_a_supplier_from_another_business()
     {
         SeedFor(BusinessB, (db, business) => db.Suppliers.Add(NewSupplier(business, "B Supplier")));
 
@@ -346,7 +352,7 @@ public class BusinessDataIsolationTests : IDisposable
         }
 
         await using var a = AsBusiness(BusinessA);
-        a.Products.Add(new Product { Name = "A Product", UnitPrice = 1m, SupplierId = bSupplierId });
+        a.Receipts.Add(new Purchase { Title = "A Purchase", SupplierId = bSupplierId });
 
         var exception = await Assert.ThrowsAsync<CrossBusinessAccessException>(() => a.SaveChangesAsync());
         Assert.Contains("Supplier", exception.Message, StringComparison.Ordinal);
@@ -447,16 +453,16 @@ public class BusinessDataIsolationTests : IDisposable
     public async Task Repointing_an_existing_record_at_another_business_is_refused()
     {
         SeedFor(BusinessA, (db, business) => db.Products.Add(NewProduct(business, "A Product")));
-        SeedFor(BusinessB, (db, business) => db.Suppliers.Add(NewSupplier(business, "B Supplier")));
+        SeedFor(BusinessB, (db, business) => db.Categories.Add(new Category { BusinessId = business, Name = "B Category" }));
 
-        int bSupplierId;
+        long bCategoryId;
         await using (var seeded = TestAppDbContext.Unrestricted(_options))
         {
-            bSupplierId = seeded.Suppliers.Single().Id;
+            bCategoryId = seeded.Categories.Single().Id;
         }
 
         await using var a = AsBusiness(BusinessA);
-        a.Products.Single().SupplierId = bSupplierId;
+        a.Products.Single().CategoryId = bCategoryId;
 
         await Assert.ThrowsAsync<CrossBusinessAccessException>(() => a.SaveChangesAsync());
     }
@@ -470,19 +476,18 @@ public class BusinessDataIsolationTests : IDisposable
     {
         await using (var a = AsBusiness(BusinessA))
         {
-            var supplier = NewSupplier(BusinessA, "A Supplier");
-            supplier.BusinessId = 0;
-            a.Suppliers.Add(supplier);
+            var category = new Category { Name = "A Category" };
+            a.Categories.Add(category);
             await a.SaveChangesAsync();
 
-            a.Products.Add(new Product { Name = "A Product", UnitPrice = 1m, SupplierId = supplier.Id });
+            a.Products.Add(new Product { Name = "A Product", UnitPrice = 1m, CategoryId = category.Id });
             await a.SaveChangesAsync();
         }
 
         await using var verify = AsBusiness(BusinessA);
         var product = verify.Products.Single();
         Assert.Equal(BusinessA, product.BusinessId);
-        Assert.Equal(verify.Suppliers.Single().Id, product.SupplierId);
+        Assert.Equal(verify.Categories.Single().Id, product.CategoryId);
     }
 
     /// <summary>

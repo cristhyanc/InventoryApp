@@ -64,13 +64,17 @@ public class MachineUseCaseTests
             Time.Calendar);
 
     /// <summary>
-    /// Relational SQLite test: the supplier attached to a machine's product listing must come
+    /// Relational SQLite test: the detail attached to a machine's product listing must come
     /// from an explicit query rather than lazy loading (issue #52), so it is still populated when
     /// read from a context separate from the one that seeded it - matching separate requests. It is
     /// asserted on the serialised response, because that nesting is what the endpoint promises.
+    ///
+    /// <para>Asserted on the product's <strong>category</strong> since issue #787 (A1 of #786)
+    /// removed the product's supplier: the category is loaded by the same <c>Include</c> chain, so
+    /// it is the same regression over the relationship that remains.</para>
     /// </summary>
     [Fact]
-    public async Task GetMachineProducts_ReturnsSupplierWithoutLazyLoading()
+    public async Task GetMachineProducts_ReturnsCategoryWithoutLazyLoading()
     {
         await using var connection = new SqliteConnection("Data Source=:memory:");
         await connection.OpenAsync();
@@ -80,8 +84,8 @@ public class MachineUseCaseTests
 
         await using (var seed = TestAppDbContext.Unrestricted(options))
         {
-            seed.Suppliers.Add(new Supplier { Id = 1, Name = "Acme" });
-            seed.Products.Add(new Product { Id = 200, Name = "px", UnitPrice = 2m, SupplierId = 1 });
+            seed.Categories.Add(new Category { Id = 1, Name = "Drinks" });
+            seed.Products.Add(new Product { Id = 200, Name = "px", UnitPrice = 2m, CategoryId = 1 });
             await seed.SaveChangesAsync();
         }
 
@@ -99,8 +103,8 @@ public class MachineUseCaseTests
 
         var product = ProductRecordResponseMapper.ToResponse(
             Assert.Single(rows), FinancialFigureVisibility.Visible);
-        Assert.NotNull(product.Supplier);
-        Assert.Equal("Acme", product.Supplier!.Name);
+        Assert.NotNull(product.Category);
+        Assert.Equal("Drinks", product.Category!.Name);
     }
 
     [Fact]

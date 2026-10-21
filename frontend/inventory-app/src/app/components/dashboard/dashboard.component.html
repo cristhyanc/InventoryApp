@@ -375,7 +375,6 @@
             <thead class="table-head">
               <tr>
                 <th scope="col" class="table-cell">Product</th>
-                <th scope="col" class="table-cell">Supplier</th>
                 <th scope="col" class="table-cell">Stock</th>
                 <th scope="col" class="table-cell">Low Stock Threshold</th>
                 @if (isMachineNeedShownInReorderAlerts) {
@@ -394,7 +393,6 @@
               @for (p of lowStock; track p.id) {
                 <tr class="table-row">
                   <td class="table-cell">{{ p.name }}</td>
-                  <td class="table-cell">{{ p.supplier?.name || '—' }}</td>
                   <td class="table-cell"><span class="badge badge-danger">{{ p.quantityInStock }}</span></td>
                   <td class="table-cell">{{ p.lowStockThreshold }}</td>
                   @if (isMachineNeedShownInReorderAlerts) {

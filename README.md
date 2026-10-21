@@ -4,7 +4,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Nayax is an optional add-on: inventory, purchasing, expenses and the reports over sales already imported work without it, while the features that read live Nayax data are grouped together in the menu and shown locked until a provider is connected (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
@@ -1048,8 +1048,10 @@ does not manage.
   "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
   the initial restock movement it always did.
 - **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name, selling price and
-  category** as well as the SKU, description, unit, supplier, low-stock threshold, restock target
-  and active flag. **Edit a category** with `PUT /api/categories/{id}`.
+  category** as well as the SKU, description, unit, low-stock threshold, restock target
+  and active flag. There is no supplier among them — see
+  [A product carries no supplier](#a-product-carries-no-supplier). **Edit a category** with
+  `PUT /api/categories/{id}`.
 - **Which fields a provider manages.** For a product the provider's catalogue names, its **name and
   category** come from the provider and are refused with a message naming the provider if you try to
   change them — the next catalogue import would overwrite the local value. Its **price and every
@@ -1118,9 +1120,41 @@ does not manage.
   A category: its **name**. Those become read-only on the Products and Categories screens and are
   updated automatically by every later review, which lists each such change rather than asking about
   it. Everything else stays yours — the **price** (you decide per product whether to keep yours or
-  take Nayax's), the SKU, the **unit/volume**, the supplier, the low-stock threshold, the restock
+  take Nayax's), the SKU, the **unit/volume**, the low-stock threshold, the restock
   target, the active flag and all of your stock, costing and history. Nayax publishes no unit or
   volume label at all, so the review never proposes one.
+
+## A product carries no supplier
+
+A product used to hold one supplier, as a default for ordering. Nothing ever ordered from it: the
+supplier of an order is a decision about that order, and a product you buy from whoever is cheapest
+this month has no single supplier to record. That field and its stored values are gone.
+
+**What changed.**
+
+- The **product form** has no Supplier dropdown. The **All Products** and **Needs Ordering** pages
+  have no "All Suppliers" filter and no Supplier column or sort. The home dashboard's **Reorder
+  Alerts** table has no Supplier column.
+- **Creating a supplier order** still begins with choosing the supplier, and that choice is still
+  required. It now starts **empty** instead of being pre-filled from the selected products, so the
+  supplier on the order is always one somebody picked.
+- `GET /api/products` and `GET /api/products/{id}` no longer return `supplierId` or `supplier`, and
+  neither does the product snapshot nested in a purchase line, a supplier-order line or a machine
+  slot. `POST`/`PUT /api/products` no longer accept `supplierId`; sending one is ignored rather than
+  refused.
+
+**What did not change.** Suppliers themselves, and everything that records one: the supplier on a
+**purchase** and on a **supplier order**, supplier contact details, supplier GST defaults, and
+creating, editing and deleting a supplier. Every purchase and order keeps its supplier, its item
+unit costs, quantities, totals, GST and receipt attachments exactly as recorded, and no cost,
+average cost, inventory value, COGS or reorder figure is recalculated. The per-product **supplier
+price comparison** on the product page is unaffected and in fact says more than the old field did:
+it is derived from the purchases a product was really bought in, so it shows every supplier it came
+from, with the lowest and the most recent unit cost.
+
+**If you relied on the stored product supplier**, it is not recoverable — reverting the release
+restores the column empty, not the values. Use the product's supplier price comparison, which reads
+the purchase history, to see who a product has actually been bought from.
 
 ## Product and supplier GST rules
 

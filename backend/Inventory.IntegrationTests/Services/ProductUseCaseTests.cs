@@ -89,15 +89,6 @@ public class ProductUseCaseTests
         await using (var seed = TestAppDbContext.Unrestricted(options))
         {
             seed.Categories.Add(new Category { Id = 3, Name = "Drinks", Description = "Cold" });
-            seed.Suppliers.Add(new Supplier
-            {
-                Id = 4,
-                Name = "Acme",
-                ContactName = "Pat",
-                Phone = "123",
-                Email = "a@b.c",
-                Address = "1 Road",
-            });
             seed.Products.Add(new Product
             {
                 Id = 1,
@@ -114,7 +105,6 @@ public class ProductUseCaseTests
                 Unit = "can",
                 IsActive = true,
                 CategoryId = 3,
-                SupplierId = 4,
             });
             await seed.SaveChangesAsync();
             seed.StockAdjustments.Add(new StockAdjustment
@@ -152,10 +142,6 @@ public class ProductUseCaseTests
         Assert.Equal(3, product.CategoryId);
         Assert.Equal("Drinks", product.Category!.Name);
         Assert.Equal("Cold", product.Category.Description);
-        Assert.Equal(4, product.SupplierId);
-        Assert.Equal("Acme", product.Supplier!.Name);
-        Assert.Equal("Pat", product.Supplier.ContactName);
-        Assert.Equal("1 Road", product.Supplier.Address);
 
         var adjustment = Assert.Single(product.StockAdjustments);
         Assert.Equal(4, adjustment.QuantityChange);
@@ -185,7 +171,7 @@ public class ProductUseCaseTests
         var useCases = CreateUseCases(db, calculateReorderNeeds);
 
         var created = await useCases.Create.Handle(
-            new ProductCreateFields("p1", null, null, 10m, 5, 1, 10, "unit", null, null, true, null),
+            new ProductCreateFields("p1", null, null, 10m, 5, 1, 10, "unit", null, true, null),
             CancellationToken.None);
 
         Assert.True(created.IsValid);
@@ -200,7 +186,7 @@ public class ProductUseCaseTests
 
         var updated = await useCases.Update.Handle(
             product.Id,
-            new ProductUpdateFields("p1", null, null, 10m, 1, 12, "unit", null, null, true),
+            new ProductUpdateFields("p1", null, null, 10m, 1, 12, "unit", null, true),
             CancellationToken.None);
         Assert.Equal(UpdateProductOutcome.Success, updated.Outcome);
         Assert.Equal(12, (await db.Products.FindAsync(product.Id))!.RestockTo);
@@ -366,9 +352,9 @@ public class ProductUseCaseTests
 
         foreach (var fields in new[]
         {
-            new ProductCreateFields("Coke", null, null, 1m, 0, 10, 9, "unit", null, null, true, null),
-            new ProductCreateFields("Coke", null, null, 1m, 0, -1, 0, "unit", null, null, true, null),
-            new ProductCreateFields("Coke", null, null, 1m, 0, 0, -1, "unit", null, null, true, null),
+            new ProductCreateFields("Coke", null, null, 1m, 0, 10, 9, "unit", null, true, null),
+            new ProductCreateFields("Coke", null, null, 1m, 0, -1, 0, "unit", null, true, null),
+            new ProductCreateFields("Coke", null, null, 1m, 0, 0, -1, "unit", null, true, null),
         })
         {
             var result = await create.Handle(fields, CancellationToken.None);
@@ -390,7 +376,7 @@ public class ProductUseCaseTests
 
         var result = await CreateUseCases(db).Update.Handle(
             1,
-            new ProductUpdateFields("Coke", null, null, 0m, 10, 9, "unit", null, null, true),
+            new ProductUpdateFields("Coke", null, null, 0m, 10, 9, "unit", null, true),
             CancellationToken.None);
 
         Assert.Equal(UpdateProductOutcome.Invalid, result.Outcome);

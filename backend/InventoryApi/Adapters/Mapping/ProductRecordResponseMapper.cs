@@ -57,16 +57,6 @@ public static class ProductRecordResponseMapper
             Category = record.Category is null
                 ? null
                 : new CategoryResponse(record.Category.Id, record.Category.Name, record.Category.Description),
-            SupplierId = record.SupplierId,
-            Supplier = record.Supplier is null
-                ? null
-                : new SupplierResponse(
-                    record.Supplier.Id,
-                    record.Supplier.Name,
-                    record.Supplier.ContactName,
-                    record.Supplier.Phone,
-                    record.Supplier.Email,
-                    record.Supplier.Address),
             StockAdjustments = record.StockAdjustments
                 .Select(adjustment => ToMovementResponse(adjustment, visibility))
                 .ToList(),

@@ -92,8 +92,10 @@ export interface Product {
   updatedAt: string;
   categoryId?: number | null;
   category?: Category | null;
-  supplierId?: number | null;
-  supplier?: Supplier | null;
+  // No `supplierId`/`supplier` (issue #787, A1 of #786): a product carries no supplier. The
+  // supplier of a {@link Purchase} and of a {@link SupplierOrder} is unaffected, and the per-product
+  // supplier price comparison still derives every supplier a product was really bought from out of
+  // the purchase history.
   isActive: boolean;
   isLowStock: boolean;
   isReorderAlert: boolean;
@@ -134,7 +136,6 @@ export interface ProductCreateDto {
   restockTo: number;
   unit?: string | null;
   categoryId?: number | null;
-  supplierId?: number | null;
   isActive: boolean;
   initialUnitCost?: number | null;
 }
@@ -456,7 +457,6 @@ export interface ProductUpdateDto {
   restockTo: number;
   unit?: string | null;
   categoryId?: number | null;
-  supplierId?: number | null;
   isActive: boolean;
 }
 

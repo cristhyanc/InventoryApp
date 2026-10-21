@@ -5,7 +5,6 @@ import { Observable, of, throwError } from 'rxjs';
 import { ProductListComponent } from './product-list.component';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
-import { SupplierService } from '../../services/supplier.service';
 import { ToastService } from '../../services/toast.service';
 import { Product } from '../../models/models';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -39,8 +38,6 @@ function product(overrides: Partial<Product> = {}): Product {
     updatedAt: '2026-01-01T00:00:00Z',
     categoryId: null,
     category: null,
-    supplierId: null,
-    supplier: null,
     isActive: true,
     isLowStock: false,
     isReorderAlert: false,
@@ -63,7 +60,6 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
         provideRouter([]),
         { provide: ProductService, useValue: { getAll: () => of(products) } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
-        { provide: SupplierService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } }
       ]
@@ -121,7 +117,6 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
         id: 7,
         name: 'Widget',
         category: { id: 1, name: 'Snacks' },
-        supplier: { id: 2, name: 'Acme' },
         unitPrice: 3.5,
         quantityInStock: 8,
         unit: 'ea',
@@ -132,7 +127,6 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
 
     expect(host.textContent).toContain('Widget');
     expect(host.textContent).toContain('Snacks');
-    expect(host.textContent).toContain('Acme');
     expect(host.textContent).toContain('$3.50');
     expect(host.textContent).toContain('8 ea');
     expect(host.textContent).toContain('Active');
@@ -150,7 +144,6 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
         provideRouter([]),
         { provide: ProductService, useValue: { getAll: () => of(products), update: () => of(undefined) } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
-        { provide: SupplierService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } }
       ]
@@ -214,8 +207,9 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
   ])('leaves a %s click on a non-action cell to the browser instead of navigating in place', async (_label, init) => {
     const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
 
-    const supplierCell = host.querySelectorAll('tbody tr td')[2] as HTMLTableCellElement;
-    supplierCell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...init }));
+    // The Price cell; it was the Supplier cell at this index until issue #787 removed that column.
+    const plainCell = host.querySelectorAll('tbody tr td')[2] as HTMLTableCellElement;
+    plainCell.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ...init }));
 
     expect(navigate).not.toHaveBeenCalled();
   });
@@ -347,7 +341,6 @@ describe('ProductListComponent write controls during a support session (issue #5
         provideRouter([]),
         { provide: ProductService, useValue: { getAll: () => of(products), update } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
-        { provide: SupplierService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } }
       ]
@@ -422,7 +415,6 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
         provideRouter([]),
         { provide: ProductService, useValue: { getAll: () => of(products), delete: deleteFn } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
-        { provide: SupplierService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: toastService },
         { provide: SupportSessionService, useValue: { active$: of(false) } }
       ]
@@ -623,7 +615,6 @@ describe('ProductListComponent "Show retired" (issue #737)', () => {
         provideRouter([]),
         { provide: ProductService, useValue: { getAll } },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
-        { provide: SupplierService, useValue: { getAll: () => of([]) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } }
       ]
@@ -672,5 +663,20 @@ describe('ProductListComponent "Show retired" (issue #737)', () => {
 
     expect(fixture.componentInstance.includeRetired).toBe(false);
     expect(checkbox.checked).toBe(false);
+  });
+
+  /**
+   * The supplier controls All Products used to carry (issue #787, A1 of #786): the "All Suppliers"
+   * filter, the Supplier column and its sort button. A product carries no supplier, so none of them
+   * can exist - and nothing on the page loads the supplier list either, which is why the TestBed
+   * above provides no `SupplierService`.
+   */
+  it('offers no supplier filter, column or sort', async () => {
+    const { host } = await render(jest.fn(() => of([product({ id: 7, name: 'Widget' })])));
+
+    expect(host.textContent).not.toContain('All Suppliers');
+    expect(
+      Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim())
+    ).toEqual(['Name', 'Category', 'Price', 'Stock', 'Status', '']);
   });
 });
