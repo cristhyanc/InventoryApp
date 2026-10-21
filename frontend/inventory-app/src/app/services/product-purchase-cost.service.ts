@@ -19,7 +19,8 @@ import { ConfigService } from './config.service';
  * The endpoint requires `Dashboard.ViewFinancials` and answers `403` without it, so a caller that
  * may be an Operator must handle that refusal rather than treating an error as "no purchases".
  *
- * No screen uses this yet: the screens are issues #789-#791 (C, D and E of #786).
+ * The home Dashboard's Reorder Alerts table is its first caller (issue #789, C of #786); the Needs
+ * Ordering and All Products screens are issues #790 and #791.
  */
 @Injectable({ providedIn: 'root' })
 export class ProductPurchaseCostService {
