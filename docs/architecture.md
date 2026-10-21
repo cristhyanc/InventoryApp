@@ -6606,13 +6606,15 @@ its own column set.
   ctrl/cmd/middle-click and "copy link address" natively; since issue #790 that anchor is a Google
   search for the product rather than a `routerLink` to the editor (see [Provider-optional dashboard
   and Needs Ordering
-  screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)), and the row click is
-  what opens the editor. `onRowActivate` only extends a plain click on the row itself
-  (`table-row-link` on the `<tr>`, `(click)`/`(keydown.enter)` bound to it) and ignores anything
-  that originated from a nested `a`, `button`, `input`, `select`, `textarea` or `label` — the Name
-  search link, the selection checkbox and the Stock link — or a modified/non-primary click the
-  browser should handle itself (Ctrl/Meta/Shift/Alt, or a non-left mouse button). The row carries
-  no `tabindex` or `role` of its own; the shared `.table-row-link`/`.table-row-anchor` styling
+  screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)), so the editor's own
+  focusable link is the row's `Edit` anchor beside Stock, which #790 restored for exactly that
+  reason, and the row click is a convenience over it. `onRowActivate` only extends a plain click on
+  the row itself (`table-row-link` on the `<tr>`, `(click)`/`(keydown.enter)` bound to it) and
+  ignores anything that originated from a nested `a`, `button`, `input`, `select`, `textarea` or
+  `label` — the Name search link, the selection checkbox, the Stock link and the Edit link — or a
+  modified/non-primary click the browser should handle itself (Ctrl/Meta/Shift/Alt, or a non-left
+  mouse button). The row carries no `tabindex` or `role` of its own; the shared
+  `.table-row-link`/`.table-row-anchor` styling
   (`styles.css`) already supplies the hover cursor, hover underline and `:focus-within` affordance,
   exactly as it does for the Products list and the Sites list.
 - **Stock is unchanged and isolated from row navigation.** The Stock `<a routerLink>` to
@@ -7556,14 +7558,21 @@ and is unchanged.
 
 **What that page shows now (issue #790, D of #786).** Its columns are the checkbox, Name, Category,
 Stock, "Machine need" (in machine-aware mode only), the thresholds, "On order", "Need to order",
-"Last purchase", "Cheapest purchase" and the Stock button - and nothing else:
+"Last purchase", "Cheapest purchase" and the Stock and Edit links - and nothing else:
 
 - **The name looks the product up on Google**, as `https://www.google.com/search?q=<URL-encoded
   name>` in a new tab (`target="_blank"`, `rel="noopener noreferrer"`), labelled "Search Google for
   &lt;name&gt;". The row's own click handler already defers to a nested anchor, so that click does
   not also open the editor in the current tab; clicking anywhere else on the row still opens it, and
-  the checkbox and the Stock button are unchanged. The one accepted cost is that the editor no longer
-  has a focusable link of its own on this page - the row click is how it is reached.
+  the checkbox and the Stock button are unchanged.
+- **The product editor keeps a focusable control of its own**, the row's `Edit`
+  `<a routerLink="/products/:id/edit">` beside Stock, labelled "Edit product &lt;name&gt;". It is
+  there because the Name anchor is no longer the editor's link: a row click is not a keyboard
+  action - the `<tr>` carries no `tabindex` and `onRowActivate` defers to every focusable child - so
+  without it the editor would have been reachable by pointer only, which AGENTS.md § Frontend rules
+  does not allow. Issue #498 had removed that button precisely because the Name anchor was then the
+  editor's own link; with that premise gone the link comes back, while #498's other outcomes - no
+  Delete, no confirmation dialog, and a row click that opens the editor - stand unchanged.
 - **No Price and no Status column.** The price left with issue #792 (a product carries no selling
   price); the Status column, its sort and this page's product-status write left with #790, because
   the list holds **only active products**. `GET /api/products/alerts/low-stock` already excludes
@@ -7614,11 +7623,12 @@ unrecognised code and a reason published beside a machine-aware mode, and
 `provider/nayax-availability.spec.ts` covers what is **not** an availability answer.
 `product-needs-ordering.component.purchase-costs.spec.ts` covers issue #790: the Google URL and its
 encoding (`&`, spaces, accents, `+`, `?`), the name click that does not open the editor and the row
-click that still does, the absent Price and Status columns, the retired product the page refuses to
-list, the one request for the listed ids, loading versus `—` versus "Unavailable", a recorded
-`$0.00`, an unknown supplier, Retry, the superseded response and the superseded failure, the cost
-sorting in both directions with no-history last, and the capability gate that renders no column and
-sends no request.
+click that still does, the Edit link that reaches the editor from the keyboard - focused, Enter
+pressed on it, navigating once - while the Name link still only searches Google, the absent Price
+and Status columns, the retired product the page refuses to list, the one request for the listed
+ids, loading versus `—` versus "Unavailable", a recorded `$0.00`, an unknown supplier, Retry, the
+superseded response and the superseded failure, the cost sorting in both directions with no-history
+last, and the capability gate that renders no column and sends no request.
 
 #### Home dashboard: four headline cards (issue #460)
 

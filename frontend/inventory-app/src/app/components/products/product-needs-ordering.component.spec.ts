@@ -195,14 +195,33 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     expect(statusButton).toBeUndefined();
   });
 
-  it('removes the standalone Edit and Delete buttons from Needs Ordering', async () => {
+  /**
+   * Delete is still gone from this page (issue #498). The Edit link is back, and deliberately so:
+   * #498 removed it because the Name anchor was itself a focusable link to the editor, and issue
+   * #790 pointed that anchor at Google. Without a control of its own the editor would be reachable
+   * only by clicking a row, which no keyboard can do - see the Edit-link specs in
+   * `product-needs-ordering.component.purchase-costs.spec.ts`. What #498 established - no Delete,
+   * no confirmation dialog, and a row click that opens the editor - is unchanged.
+   */
+  it('keeps Delete off Needs Ordering, and offers Edit as a focusable link to the editor', async () => {
     const { host } = await render([product({ id: 9, name: 'Widget' })]);
 
-    const editButton = Array.from(host.querySelectorAll('a, button')).find((el) => el.textContent?.trim() === 'Edit');
-    expect(editButton).toBeUndefined();
     const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete');
     expect(deleteButton).toBeUndefined();
     expect(host.textContent).not.toContain('Confirm delete');
+
+    const editLink = Array.from(host.querySelectorAll('a, button')).find((el) => el.textContent?.trim() === 'Edit');
+    expect(editLink?.tagName).toBe('A');
+    expect(editLink?.getAttribute('href')).toBe('/products/9/edit');
+  });
+
+  it('does not navigate through the row when the Edit link is clicked', async () => {
+    const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
+
+    const editLink = host.querySelector('a[href="/products/9/edit"]') as HTMLAnchorElement;
+    editLink.click();
+
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('sorts by name ascending then descending, with a visible and accessible active sort indicator', async () => {

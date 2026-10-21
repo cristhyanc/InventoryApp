@@ -156,8 +156,20 @@
                     }
                   </td>
                 }
+                <!--
+                  Stock, and the row's own link to the product editor. The editor used to be
+                  reachable through the Name anchor; issue #790 pointed that anchor at Google, which
+                  left the row click as the only way in - and a row click is not something a
+                  keyboard can perform, because the `<tr>` takes no focus and `onRowActivate`
+                  defers to every focusable child. This anchor is that focusable child: it gives
+                  the editor keyboard focus, Enter activation and ctrl/cmd/middle-click natively,
+                  the same way the Products list's Name anchor does.
+                -->
                 <td class="table-cell">
-                  <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
+                  <div class="flex flex-wrap gap-2">
+                    <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
+                    <a [routerLink]="['/products', p.id, 'edit']" class="btn btn-sm btn-secondary" [attr.aria-label]="'Edit product ' + p.name">Edit</a>
+                  </div>
                 </td>
               </tr>
             }

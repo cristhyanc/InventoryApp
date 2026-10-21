@@ -178,6 +178,20 @@ function rowNames(host: HTMLElement): (string | undefined)[] {
   );
 }
 
+function editLink(host: HTMLElement, productId: number): HTMLAnchorElement {
+  return host.querySelector(`tbody tr a[href="/products/${productId}/edit"]`) as HTMLAnchorElement;
+}
+
+/** `routerLink` navigates through `navigateByUrl`, so that is where a followed link shows up. */
+function spyOnNavigateByUrl() {
+  return jest.spyOn(TestBed.inject(Router), 'navigateByUrl').mockResolvedValue(true);
+}
+
+function navigatedUrls(spy: ReturnType<typeof spyOnNavigateByUrl>): string[] {
+  const router = TestBed.inject(Router);
+  return spy.mock.calls.map(([url]) => (typeof url === 'string' ? url : router.serializeUrl(url)));
+}
+
 function retryButton(host: HTMLElement): HTMLButtonElement | undefined {
   return Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(
     (button) => button.textContent?.trim() === 'Retry'
@@ -222,6 +236,61 @@ describe('Needs Ordering: the product name searches Google (issue #790)', () => 
     (host.querySelectorAll('tbody tr td')[2] as HTMLTableCellElement).click();
 
     expect(navigate).toHaveBeenCalledWith(['/products', 9, 'edit']);
+  });
+});
+
+/**
+ * The editor stays reachable from the keyboard (issue #790, review correction). Pointing the Name
+ * anchor at Google left the row click as the only way into the product editor, and a row click is
+ * not a keyboard action: the `<tr>` carries no `tabindex` and `onRowActivate` defers to every
+ * focusable child. The row's own `Edit` anchor is the focusable control that reaches it, and the
+ * Name anchor still only searches Google.
+ */
+describe('Needs Ordering keeps a keyboard-accessible route to the product editor (issue #790)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('renders an Edit link to the product editor, focusable and labelled, on every row', async () => {
+    const { host } = await render([product({ id: 9, name: 'Widget' })]);
+
+    const link = editLink(host, 9);
+    expect(link).not.toBeNull();
+    expect(link.textContent?.trim()).toBe('Edit');
+    expect(link.getAttribute('aria-label')).toBe('Edit product Widget');
+    expect(link.hasAttribute('target')).toBe(false);
+
+    link.focus();
+    expect(document.activeElement).toBe(link);
+  });
+
+  it('opens the product editor when Enter is pressed on the focused Edit link, and only once', async () => {
+    const { fixture, host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
+    const navigateByUrl = spyOnNavigateByUrl();
+
+    const link = editLink(host, 9);
+    link.focus();
+    link.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    link.click(); // the browser's own activation of a focused anchor on Enter
+    fixture.detectChanges();
+
+    expect(navigatedUrls(navigateByUrl)).toEqual(['/products/9/edit']);
+    // The row handler must not navigate as well: the Edit anchor is one of its nested controls.
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Name link a Google search only, while the Edit link is what opens the editor', async () => {
+    const { host, navigate } = await render([product({ id: 9, name: 'Widget' })]);
+    const navigateByUrl = spyOnNavigateByUrl();
+
+    const name = nameLink(host);
+    name.focus();
+    expect(document.activeElement).toBe(name);
+    name.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    name.click();
+
+    expect(name.getAttribute('href')).toBe('https://www.google.com/search?q=Widget');
+    expect(navigateByUrl).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(editLink(host, 9).getAttribute('href')).toBe('/products/9/edit');
   });
 });
 

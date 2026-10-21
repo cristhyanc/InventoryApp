@@ -377,9 +377,13 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
 
   /**
    * Row click/Enter navigates to the product editor, unless it originated from a nested control
-   * (the name's Google search link, the checkbox, Stock) or is a modified/non-primary click the
-   * browser should handle. Since issue #790 the name anchor is a Google search for the product, so
-   * deferring to it is what keeps one click from doing two things.
+   * (the name's Google search link, the checkbox, Stock, Edit) or is a modified/non-primary click
+   * the browser should handle. Since issue #790 the name anchor is a Google search for the product,
+   * so deferring to it is what keeps one click from doing two things.
+   *
+   * This is a convenience over the row, never the only way to the editor: a keyboard cannot click a
+   * row - the `<tr>` takes no focus and every focusable child is deferred to - so the row's own
+   * `Edit` anchor is what reaches the editor from the keyboard.
    */
   onRowActivate(product: Product, rowEvent: Event): void {
     // Bound to (click) and (keydown.enter) only; Angular types both template $events as Event.
