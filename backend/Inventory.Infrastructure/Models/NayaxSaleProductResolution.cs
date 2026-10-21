@@ -20,6 +20,15 @@ public enum NayaxSaleProductResolutionRule
     /// between them automatically. Applied by the <c>resolve-nayax-sale-products</c> command.
     /// </summary>
     OperatorDecision = 2,
+
+    /// <summary>
+    /// A human linked the sale's provider product id to a local product in the catalogue review and
+    /// then explicitly asked for the sales carrying it to be resolved (issue #738). The provider id
+    /// is the match - never the name - and the sale's own stored id had to carry known raw
+    /// provenance (<c>NayaxSales.ProviderProductIdIsRaw</c>), so nothing provenance-unknown is read
+    /// as an identifier. Applied by <c>POST api/catalogue-review/unresolved-sales/apply</c>.
+    /// </summary>
+    ProviderCatalogueLink = 3,
 }
 
 /// <summary>

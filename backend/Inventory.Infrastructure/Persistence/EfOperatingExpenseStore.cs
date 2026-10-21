@@ -11,6 +11,12 @@ namespace Inventory.Infrastructure.Persistence;
 /// Inventory.Infrastructure beside the <see cref="AppDbContext"/> and the
 /// <see cref="OperatingExpense"/> entity it reads, which moved there in issue #307; this adapter
 /// followed them in issue #309 (Persistence 8/8 of #153).
+///
+/// <para>Since issue #780 the machine it stores, returns and filters on is the business's own
+/// machine row (<c>Machines.Id</c>) rather than the provider's machine number. Nothing here
+/// translates it - the value travels unchanged from the use case to the column and back - and the
+/// check that it is a machine of this business belongs to the create/update use cases, with the
+/// <c>(BusinessId, MachineId)</c> foreign key as the structural backstop.</para>
 /// </summary>
 public sealed class EfOperatingExpenseStore : IOperatingExpenseStore
 {

@@ -58,12 +58,15 @@
     <Compile Include="..\Inventory.UnitTests\Application\CatalogReconciliation\FakeCatalogSnapshotProviders.cs" Link="Application\CatalogReconciliation\FakeCatalogSnapshotProviders.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Categories\FakeCategoryStore.cs" Link="Application\Categories\FakeCategoryStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Gst\FakeCurrentBusinessProvider.cs" Link="Application\Gst\FakeCurrentBusinessProvider.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Machines\FakeLocalMachineStore.cs" Link="Application\Machines\FakeLocalMachineStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberInviteAudit.cs" Link="Application\Members\FakeMemberInviteAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Members\FakeMemberManagementAudit.cs" Link="Application\Members\FakeMemberManagementAudit.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Nayax\FakeNayaxMachineLinkStore.cs" Link="Application\Nayax\FakeNayaxMachineLinkStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Nayax\FakeNayaxProductLinkStore.cs" Link="Application\Nayax\FakeNayaxProductLinkStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" Link="Application\NayaxFeeSettings\FakeNayaxFeeRateStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeBusinessApplicationAudit.cs" Link="Application\Onboarding\FakeBusinessApplicationAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" Link="Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\PickList\FakePickListRefillStore.cs" Link="Application\PickList\FakePickListRefillStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakePlatformBusinessDecisionAudit.cs" Link="Application\PlatformAdmin\FakePlatformBusinessDecisionAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakePlatformBusinessLifecycleAudit.cs" Link="Application\PlatformAdmin\FakePlatformBusinessLifecycleAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Products\FakeSiteFactsStore.cs" Link="Application\Products\FakeSiteFactsStore.cs" />

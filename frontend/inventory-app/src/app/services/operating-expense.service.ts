@@ -15,6 +15,11 @@ export enum OperatingExpenseCategory {
   Other
 }
 
+/**
+ * A recorded operating expense. `machineId` is the business's **own** machine record's id
+ * (`Machine.localMachineId`, issue #780), not the provider's machine number: the API accepts and
+ * returns a local machine id and rejects anything that is not a machine of the current business.
+ */
 export interface OperatingExpense {
   id: number;
   expenseDate: string;
@@ -36,6 +41,7 @@ export interface OperatingExpense {
   notes?: string | null;
 }
 
+/** What create and update submit. `machineId` is a local machine id, as above. */
 export interface OperatingExpensePayload {
   expenseDate: string;
   category: OperatingExpenseCategory;

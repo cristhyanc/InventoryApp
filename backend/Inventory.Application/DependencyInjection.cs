@@ -1,6 +1,7 @@
 using Inventory.Application.Access;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
+using Inventory.Application.CatalogueReview;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
@@ -220,6 +221,16 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetNayaxCatalogReconciliation>();
         services.AddScoped<GetSiteSummaries>();
         services.AddScoped<GetSiteProducts>();
+        // The business's own machine records (issue #740), which work with no provider at all. They
+        // are deliberately separate from the live-fleet use cases below.
+        services.AddScoped<ListLocalMachines>();
+        services.AddScoped<GetLocalMachine>();
+        services.AddScoped<CreateLocalMachine>();
+        services.AddScoped<RenameLocalMachine>();
+        services.AddScoped<SetLocalMachineActivation>();
+        // The route id of every api/machines/{id} endpoint is a local machine (issue #741); this is
+        // the one place it becomes the pair of ids the features behind those routes need.
+        services.AddScoped<ResolveMachineIdentity>();
         services.AddScoped<ListMachineDashboard>();
         services.AddScoped<GetMachineDashboard>();
         services.AddScoped<ListMachineProducts>();
@@ -263,6 +274,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<SetProductGstRule>();
         services.AddScoped<ResolveMachineProductPricing>();
         services.AddScoped<GetPickList>();
+        // The pick list's batch refill (issue #743): one request, one write-locked transaction, all
+        // rows or none.
+        services.AddScoped<RecordPickListRefill>();
         services.AddScoped<RecordInventoryMovement>();
         services.AddScoped<IRecordInventoryMovement>(sp => sp.GetRequiredService<RecordInventoryMovement>());
         services.AddScoped<RebuildProductCost>();
@@ -284,7 +298,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<PreviewHistoricalGstClassification>();
         services.AddScoped<ApplyHistoricalGstClassification>();
         services.AddScoped<ApplyInventoryCount>();
-        services.AddScoped<ImportNayaxProductCatalog>();
+        // The provider catalogue review (issue #738), which since issue #739 is the product
+        // catalogue import: the direct write-through import it replaced is gone, for every business.
+        services.AddScoped<StartCatalogueReview>();
+        services.AddScoped<ApplyCatalogueReview>();
+        services.AddScoped<ResolveLinkedProviderSales>();
         services.AddScoped<ImportNayaxSales>();
         services.AddScoped<ImportPendingReimbursementXmlFiles>();
         services.AddScoped<GetStockHistory>();

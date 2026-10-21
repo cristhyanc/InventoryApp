@@ -26,6 +26,16 @@ public enum OperatingExpenseCategory
     Other
 }
 
+/// <summary>
+/// What a create or an update submits.
+///
+/// <para><c>MachineId</c> is the business's <b>own</b> machine record's id (<c>Machines.Id</c>,
+/// issue #780) and no longer the provider's machine number. It is the value
+/// <c>GET api/machines</c> publishes as <c>localMachineId</c>; a machine that is not one of the
+/// current business's machines - another business's, one that no longer exists, or a provider
+/// machine number from a stale client - is rejected with <c>400</c> and nothing is stored. The
+/// property's name and JSON type are unchanged, so the published schema is the same.</para>
+/// </summary>
 public record OperatingExpenseDto(
     DateTime ExpenseDate,
     OperatingExpenseCategory Category,
@@ -71,6 +81,8 @@ public record OperatingExpenseReportDto(
 /// the controller used to serialize directly. Field names, order, and the embedded
 /// <see cref="SupplierResponse"/> shape match that entity's own serializable surface exactly, so
 /// this is not a contract change.
+///
+/// <para><c>MachineId</c> is the local machine id, as on <see cref="OperatingExpenseDto"/>.</para>
 /// </summary>
 public record OperatingExpenseResponse(
     int Id,

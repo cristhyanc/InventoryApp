@@ -8,6 +8,16 @@ namespace Inventory.Domain.Expenses;
 /// </summary>
 public sealed class OperatingExpenseDetails
 {
+    /// <summary>
+    /// What a caller is told when the expense names a machine that is not one of this business's
+    /// machines (issue #780). The rule itself is not deterministic over the submitted fields - it
+    /// needs the business's machines - so it is applied by the create/update use cases; the message
+    /// lives here because this is where an operating expense's refusals are written, and because
+    /// both use cases have to give the same one. It names no machine and no business.
+    /// </summary>
+    public const string UnknownMachineMessage =
+        "The selected machine is not a machine of this business.";
+
     public const string DescriptionRequiredMessage = "Description is required.";
     public const string NegativeAmountsMessage = "Expense amounts cannot be negative.";
     public const string ServicePeriodOrderMessage = "Service period end must not be before its start.";

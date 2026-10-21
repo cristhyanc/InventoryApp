@@ -814,6 +814,39 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("InventoryCostTransitionPreviewDrafts");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.LocalMachine", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ExternalMachineId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("Name");
+
+                    b.HasIndex("BusinessId", "ExternalMachineId")
+                        .IsUnique()
+                        .HasFilter("\"ExternalMachineId\" IS NOT NULL");
+
+                    b.ToTable("Machines", (string)null);
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.MachineStockCount", b =>
                 {
                     b.Property<int>("Id")
@@ -1382,7 +1415,82 @@ namespace Inventory.Infrastructure.Migrations
 
                     b.HasIndex("SupplierId");
 
+                    b.HasIndex("BusinessId", "MachineId");
+
                     b.ToTable("OperatingExpenses");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefill", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("MachineId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(500)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RecordedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RequestFingerprint")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("BusinessId", "MachineId");
+
+                    b.ToTable("PickListRefills");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefillLine", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("ProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("QuantityTaken")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("RefillId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("StockAdjustmentId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("RefillId");
+
+                    b.HasIndex("BusinessId", "RefillId", "Id");
+
+                    b.ToTable("PickListRefillLines");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Product", b =>
@@ -1500,6 +1608,136 @@ namespace Inventory.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("ProductExternalIds");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueFieldDecision", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("DecidedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Decision")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Field")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("ProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProviderValue")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("BusinessId", "ProductId", "Field")
+                        .IsUnique();
+
+                    b.ToTable("ProviderCatalogueFieldDecisions");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueReview", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("AppliedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AppliedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("StartedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex(new[] { "BusinessId" }, "IX_ProviderCatalogueReviews_BusinessId_Pending")
+                        .IsUnique()
+                        .HasFilter("\"AppliedAtUtc\" IS NULL");
+
+                    b.ToTable("ProviderCatalogueReviews");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueReviewItem", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BusinessId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ExternalId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Kind")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("LinkedCategoryId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("LinkedProductId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProviderGroupExternalId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderName")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderUnitPrice")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderUnitVolume")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ReviewId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("UnresolvedSaleCount")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BusinessId");
+
+                    b.HasIndex("ReviewId");
+
+                    b.HasIndex("BusinessId", "LinkedCategoryId");
+
+                    b.HasIndex("BusinessId", "LinkedProductId");
+
+                    b.HasIndex("BusinessId", "ReviewId", "Kind");
+
+                    b.ToTable("ProviderCatalogueReviewItems");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderDataCoverage", b =>
@@ -1753,6 +1991,8 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("ProductId");
 
                     b.HasIndex("ReceiptItemId");
+
+                    b.HasIndex("BusinessId", "MachineId");
 
                     b.ToTable("StockAdjustments");
                 });
@@ -2079,6 +2319,13 @@ namespace Inventory.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("Inventory.Infrastructure.Models.LocalMachine", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "MachineId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
                     b.Navigation("Product");
                 });
 
@@ -2123,7 +2370,33 @@ namespace Inventory.Infrastructure.Migrations
                         .HasForeignKey("SupplierId")
                         .OnDelete(DeleteBehavior.SetNull);
 
+                    b.HasOne("Inventory.Infrastructure.Models.LocalMachine", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "MachineId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("Supplier");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefill", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.LocalMachine", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "MachineId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefillLine", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.PickListRefill", "Refill")
+                        .WithMany("Lines")
+                        .HasForeignKey("RefillId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Refill");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Product", b =>
@@ -2153,6 +2426,39 @@ namespace Inventory.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Product");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueFieldDecision", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.Product", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "ProductId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueReviewItem", b =>
+                {
+                    b.HasOne("Inventory.Infrastructure.Models.ProviderCatalogueReview", "Review")
+                        .WithMany("Items")
+                        .HasForeignKey("ReviewId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Inventory.Infrastructure.Models.Category", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "LinkedCategoryId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("Inventory.Infrastructure.Models.Product", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "LinkedProductId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.Navigation("Review");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Purchase", b =>
@@ -2196,6 +2502,12 @@ namespace Inventory.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("ReceiptItemId")
                         .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Inventory.Infrastructure.Models.LocalMachine", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "MachineId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Product");
 
@@ -2281,9 +2593,19 @@ namespace Inventory.Infrastructure.Migrations
                     b.Navigation("MachineStocks");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PickListRefill", b =>
+                {
+                    b.Navigation("Lines");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.Product", b =>
                 {
                     b.Navigation("StockAdjustments");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.ProviderCatalogueReview", b =>
+                {
+                    b.Navigation("Items");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.Purchase", b =>

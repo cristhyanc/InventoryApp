@@ -1,6 +1,7 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { Observable, of } from 'rxjs';
+import { Observable, of, throwError } from 'rxjs';
 import { ProductListComponent } from './product-list.component';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
@@ -43,6 +44,11 @@ function product(overrides: Partial<Product> = {}): Product {
     isActive: true,
     isLowStock: false,
     isReorderAlert: false,
+    // What the catalogue listing answers for an ordinary product nothing refers to (issue #737):
+    // the delete is allowed and there is no refusal to show. The tests about an ineligible product
+    // override it below.
+    canDelete: true,
+    deletionRefusal: null,
     ...overrides
   };
 }
@@ -383,5 +389,288 @@ describe('ProductListComponent write controls during a support session (issue #5
     expect(component.confirmingProduct).toBeNull();
     expect(update).not.toHaveBeenCalled();
     expect(host.textContent).not.toContain('Confirm delete');
+  });
+});
+
+/**
+ * Delete is offered only where the API says it is allowed (issue #737).
+ *
+ * The catalogue listing publishes `canDelete` and, when it is false, the refusal the delete itself
+ * would answer with - decided by the one `Inventory.Domain.Products.ProductDeletionPolicy`, over a
+ * provider link and over the six kinds of history that refer to a product. So the row renders
+ * Delete on `true` and, on anything else, the server's own reason plus the name of the control that
+ * retires the product instead. An absent `canDelete` is not permission either: a response that did
+ * not resolve the question gets the retirement path, which is always available.
+ *
+ * The answer is advisory - as fresh as the last fetch - so a delete the page offered can still be
+ * refused, and that refusal has to reach the operator with the row left in place.
+ */
+describe('ProductListComponent delete vs deactivate (issue #737)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  function deleteButtonOf(host: HTMLElement): HTMLButtonElement | undefined {
+    return Array.from(host.querySelectorAll('tbody button')).find((b) => b.textContent?.trim() === 'Delete') as
+      | HTMLButtonElement
+      | undefined;
+  }
+
+  async function render(deleteFn: jest.Mock, products: Product[] = [product({ id: 1, name: 'Widget' })]) {
+    const toastService = { success: jest.fn(), error: jest.fn() };
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll: () => of(products), delete: deleteFn } },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: toastService },
+        { provide: SupportSessionService, useValue: { active$: of(false) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement, toastService };
+  }
+
+  it('offers Delete for a product the API can allow it for, and removes it from the list on success', async () => {
+    const deleteFn = jest.fn(() => of(undefined));
+    const { fixture, host } = await render(deleteFn, [
+      product({ id: 1, name: 'Widget', canDelete: true, providerManagedFields: [] })
+    ]);
+
+    expect(deleteButtonOf(host)).toBeDefined();
+
+    const deleteButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Delete') as HTMLButtonElement;
+    deleteButton.click();
+    fixture.detectChanges();
+    const confirmButton = Array.from(host.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Delete' && b.closest('.confirm-modal')
+    ) as HTMLButtonElement;
+    confirmButton.click();
+
+    expect(deleteFn).toHaveBeenCalledWith(1);
+  });
+
+  it("explains why, through a toast, and keeps the product on screen when the API refuses the delete", async () => {
+    const deleteFn = jest.fn(() =>
+      throwError(
+        () =>
+          new HttpErrorResponse({
+            status: 409,
+            error:
+              'This product cannot be deleted because its history refers to it (1 stock movement). ' +
+              'Deactivate it instead - a deactivated product keeps its history, stays out of the reorder ' +
+              'alerts and can be reactivated. Nothing was deleted.'
+          })
+      )
+    );
+    const { fixture, host, toastService } = await render(deleteFn);
+    const component = fixture.componentInstance;
+
+    component.confirmDelete(product({ id: 1, name: 'Widget' }));
+    component.deleteConfirmed();
+    fixture.detectChanges();
+
+    expect(toastService.error).toHaveBeenCalledWith(
+      'This product cannot be deleted because its history refers to it (1 stock movement). ' +
+        'Deactivate it instead - a deactivated product keeps its history, stays out of the reorder ' +
+        'alerts and can be reactivated. Nothing was deleted.'
+    );
+    expect(host.textContent).toContain('Widget');
+  });
+
+  it('does not offer Delete for a product whose history blocks it, and explains why in the server’s words', async () => {
+    const deleteFn = jest.fn(() => of(undefined));
+    const { host } = await render(deleteFn, [
+      product({
+        id: 1,
+        name: 'Widget',
+        isActive: true,
+        canDelete: false,
+        deletionRefusal:
+          'This product cannot be deleted because its history refers to it (1 stock movement). ' +
+          'Deactivate it instead - a deactivated product keeps its history, stays out of the reorder ' +
+          'alerts and can be reactivated. Nothing was deleted.'
+      })
+    ]);
+
+    expect(deleteButtonOf(host)).toBeUndefined();
+    expect(host.textContent).toContain('its history refers to it (1 stock movement)');
+    expect(host.textContent).toContain('Use the Status toggle to deactivate it.');
+    // The retirement control the note points at is the row's own toggle, still offered and usable.
+    const statusButton = Array.from(host.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Active'
+    ) as HTMLButtonElement;
+    expect(statusButton.disabled).toBe(false);
+  });
+
+  it('does not offer Delete for a provider-linked product, and names Deactivate instead', async () => {
+    const deleteFn = jest.fn(() => of(undefined));
+    const { host } = await render(deleteFn, [
+      product({
+        id: 1,
+        name: 'Coke',
+        isActive: true,
+        providerManagedFields: ['name', 'categoryId'],
+        canDelete: false,
+        deletionRefusal:
+          'This product is managed by Nayax and cannot be deleted: the next catalogue import would ' +
+          'create it again. Deactivate it instead - a deactivated product keeps its history, stays ' +
+          'out of the reorder alerts and can be reactivated. Nothing was deleted.'
+      })
+    ]);
+
+    expect(deleteButtonOf(host)).toBeUndefined();
+    expect(host.textContent).toContain('managed by Nayax and cannot be deleted');
+    expect(host.textContent).toContain('Use the Status toggle to deactivate it.');
+    const statusButton = Array.from(host.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Active'
+    ) as HTMLButtonElement;
+    expect(statusButton.disabled).toBe(false);
+  });
+
+  it('names Reactivate for an undeletable product that is already retired', async () => {
+    const deleteFn = jest.fn(() => of(undefined));
+    const { host } = await render(deleteFn, [
+      product({
+        id: 1,
+        name: 'Coke',
+        isActive: false,
+        canDelete: false,
+        deletionRefusal: 'This product cannot be deleted because its history refers to it (2 sales).'
+      })
+    ]);
+
+    expect(deleteButtonOf(host)).toBeUndefined();
+    expect(host.textContent).toContain('It is deactivated; use the Status toggle to reactivate it.');
+    expect(
+      Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Inactive')
+    ).toBeDefined();
+  });
+
+  /**
+   * A response that never resolved the question (a reorder listing, an older server) says nothing,
+   * and nothing is not permission: the row offers the retirement path rather than a delete whose
+   * outcome is unknown.
+   */
+  it('does not offer Delete when the response did not say whether the product may be deleted', async () => {
+    const deleteFn = jest.fn(() => of(undefined));
+    const unanswered = product({ id: 1, name: 'Widget', canDelete: undefined, deletionRefusal: undefined });
+    const { fixture, host } = await render(deleteFn, [unanswered]);
+
+    expect(deleteButtonOf(host)).toBeUndefined();
+    expect(host.textContent).toContain('This product cannot be deleted. Use the Status toggle to deactivate it.');
+
+    fixture.componentInstance.confirmDelete(unanswered);
+    expect(deleteFn).not.toHaveBeenCalled();
+  });
+
+  it('refuses to open the delete confirmation for an undeletable product, so the write is unavailable rather than merely hidden', async () => {
+    const deleteFn = jest.fn(() => of(undefined));
+    const blocked = product({
+      id: 1,
+      name: 'Coke',
+      canDelete: false,
+      deletionRefusal: 'This product cannot be deleted because its history refers to it (1 sale).'
+    });
+    const { fixture, host } = await render(deleteFn, [blocked]);
+    const component = fixture.componentInstance;
+
+    component.confirmDelete(blocked);
+    fixture.detectChanges();
+
+    expect(component.confirmingProduct).toBeNull();
+    expect(host.textContent).not.toContain('Confirm delete');
+    expect(deleteFn).not.toHaveBeenCalled();
+  });
+
+  it('still surfaces the server refusal when a product that looked deletable is refused, because the eligibility it rendered can be stale', async () => {
+    // The row was fetched while it was still deletable - `canDelete: true` - and then gained a sale
+    // (or the provider's catalogue import named it). The server counts again inside the delete's own
+    // transaction and refuses, which is why that recheck is kept and why its message must be shown.
+    const refusal =
+      'This product is managed by Nayax and cannot be deleted: the next catalogue import would ' +
+      'create it again. Deactivate it instead - a deactivated product keeps its history, stays out ' +
+      'of the reorder alerts and can be reactivated. Nothing was deleted.';
+    const deleteFn = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 409, error: refusal })));
+    const stale = product({ id: 1, name: 'Widget', canDelete: true, providerManagedFields: [] });
+    const { fixture, host, toastService } = await render(deleteFn, [stale]);
+
+    expect(deleteButtonOf(host)).toBeDefined();
+    fixture.componentInstance.confirmDelete(stale);
+    fixture.componentInstance.deleteConfirmed();
+    fixture.detectChanges();
+
+    expect(deleteFn).toHaveBeenCalledWith(1);
+    expect(toastService.error).toHaveBeenCalledWith(refusal);
+    expect(host.textContent).toContain('Widget');
+  });
+});
+
+/**
+ * "Show retired" (issue #737): off by default so the catalogue page still answers the working
+ * catalogue, and on demand so a product just deactivated through the Active/Inactive toggle stays
+ * reachable to reactivate instead of disappearing from the only screen that can flip it back.
+ */
+describe('ProductListComponent "Show retired" (issue #737)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(getAll: jest.Mock) {
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll } },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement };
+  }
+
+  it('lists only active products by default', async () => {
+    const getAll = jest.fn(() => of([]));
+    await render(getAll);
+
+    expect(getAll).toHaveBeenCalledWith(expect.objectContaining({ includeRetired: false }));
+  });
+
+  it('asks for retired products too once "Show retired" is checked', async () => {
+    const getAll = jest.fn(() => of([]));
+    const { fixture, host } = await render(getAll);
+
+    const checkbox = host.querySelector('[name="includeRetired"]') as HTMLInputElement;
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+
+    expect(getAll).toHaveBeenCalledWith(expect.objectContaining({ includeRetired: true }));
+  });
+
+  it('resets "Show retired" back off along with the other filters', async () => {
+    const getAll = jest.fn(() => of([]));
+    const { fixture, host } = await render(getAll);
+    const checkbox = host.querySelector('[name="includeRetired"]') as HTMLInputElement;
+
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    expect(fixture.componentInstance.includeRetired).toBe(true);
+
+    (Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Reset') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    // NgModel's model-to-view write for a standalone control is a deferred microtask (to avoid
+    // ExpressionChangedAfterItHasBeenCheckedError), so the unchecked state needs one more tick.
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.includeRetired).toBe(false);
+    expect(checkbox.checked).toBe(false);
   });
 });

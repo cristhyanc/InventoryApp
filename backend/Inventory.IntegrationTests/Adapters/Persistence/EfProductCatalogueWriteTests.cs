@@ -553,6 +553,8 @@ public class EfProductCatalogueWriteTests : IDisposable
                 });
                 break;
             case HistoryKind.MachineStockCount:
+                // A count names a local machine (issue #741), so the machine exists.
+                seed.Machines.Add(new LocalMachine { Id = 10, Name = "Machine A" });
                 seed.MachineStockCounts.Add(new MachineStockCount
                 {
                     MachineId = 10,

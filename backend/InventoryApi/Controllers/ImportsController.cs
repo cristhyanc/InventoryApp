@@ -8,12 +8,20 @@ using Microsoft.Identity.Web.Resource;
 namespace InventoryApi.Controllers;
 
 /// <summary>
-/// The sales, reimbursement and product-catalogue imports behind Admin → Imports.
+/// The sales and reimbursement imports behind Admin → Imports.
 ///
 /// Every action requires <c>Imports.Run</c> (issue #526). An import is what puts the raw financial
 /// facts every report is then calculated from into the business's records - a duplicated or
 /// mis-timed import is a reconciliation problem, not a display one - so #328's table gives running
 /// one to a Manager and an Owner.
+///
+/// <para><strong>The product catalogue is no longer imported from here</strong> (issue #739, parent
+/// #329 decision C2). <c>POST api/imports/products</c> wrote the provider's catalogue straight
+/// through: it created a row for every entry it did not recognise and overwrote four fields on every
+/// one it did, which is why it had to be refused outright for a business holding products of its own
+/// (issue #736). <c>CatalogueReviewController</c> replaced it for every business - the same import,
+/// previewed as a review and decided per entry - and carries the same <c>Imports.Run</c>
+/// capability.</para>
 /// </summary>
 [ApiController]
 [Route("api/imports")]
@@ -22,29 +30,15 @@ namespace InventoryApi.Controllers;
 [RequireCapability(Capability.ImportsRun)]
 public sealed class ImportsController : ControllerBase
 {
-    private readonly ImportNayaxProductCatalog _importProductCatalog;
     private readonly ImportNayaxSales _importNayaxSales;
     private readonly ImportPendingReimbursementXmlFiles _importPendingXmlFiles;
 
     public ImportsController(
-        ImportNayaxProductCatalog importProductCatalog,
         ImportNayaxSales importNayaxSales,
         ImportPendingReimbursementXmlFiles importPendingXmlFiles)
     {
-        _importProductCatalog = importProductCatalog;
         _importNayaxSales = importNayaxSales;
         _importPendingXmlFiles = importPendingXmlFiles;
-    }
-
-    [HttpPost("products")]
-    public async Task<ActionResult<bool>> ImportProducts(CancellationToken cancellationToken)
-    {
-        await _importProductCatalog.Handle(cancellationToken);
-
-        // This endpoint has always answered a constant `true`; a failed import surfaces as an
-        // exception, never as `false`. The use case therefore reports no result of its own and the
-        // response body is kept exactly as it was.
-        return Ok(true);
     }
 
     [HttpPost("nayax-sales")]

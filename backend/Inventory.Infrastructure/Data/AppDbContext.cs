@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.MachineStock;
 using Inventory.Domain.Providers;
+using Inventory.Domain.Stock;
 using Inventory.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Inventory.Infrastructure.Models;
@@ -80,6 +81,13 @@ public class AppDbContext : DbContext
     public DbSet<Product> Products => Set<Product>();
 
     /// <summary>
+    /// The machines this business operates, as rows this application owns (issue #740). Ordinary
+    /// tenant-owned data; see <see cref="LocalMachine"/> for why a machine is persisted at all now
+    /// and why its provider id sits on the row.
+    /// </summary>
+    public DbSet<LocalMachine> Machines => Set<LocalMachine>();
+
+    /// <summary>
     /// Each provider's own identifier for a local product, and the same for a category (issue
     /// #732). Ordinary tenant-owned data; see <see cref="ProductExternalId"/> for why a provider id
     /// lives beside the local row instead of being its key.
@@ -94,6 +102,16 @@ public class AppDbContext : DbContext
     /// </summary>
     public DbSet<ProviderDataCoverage> ProviderDataCoverages => Set<ProviderDataCoverage>();
     public DbSet<StockAdjustment> StockAdjustments => Set<StockAdjustment>();
+
+    /// <summary>
+    /// The identity of each batch refill recorded from the pick list (issue #743): which submission
+    /// recorded which movements, so a retry is answered with the original result instead of
+    /// deducting storage twice. The movements themselves are ordinary
+    /// <see cref="StockAdjustment"/> rows; see <see cref="PickListRefill"/>.
+    /// </summary>
+    public DbSet<PickListRefill> PickListRefills => Set<PickListRefill>();
+
+    public DbSet<PickListRefillLine> PickListRefillLines => Set<PickListRefillLine>();
     public DbSet<Purchase> Receipts => Set<Purchase>();
     public DbSet<NayaxSales> NayaxSales => Set<NayaxSales>();
 
@@ -169,6 +187,24 @@ public class AppDbContext : DbContext
         Set<NayaxSaleTimestampRepairPreviewDraft>();
 
     /// <summary>
+    /// The provider catalogue reviews a link-or-create apply is authorised by (issue #738). At most
+    /// one of a business's rows is pending; an applied one is the record of what was decided and is
+    /// never rewritten. See <see cref="ConfigureProviderCatalogueReview"/>.
+    /// </summary>
+    public DbSet<ProviderCatalogueReview> ProviderCatalogueReviews => Set<ProviderCatalogueReview>();
+
+    /// <summary>The provider products and groups inside those reviews (issue #738).</summary>
+    public DbSet<ProviderCatalogueReviewItem> ProviderCatalogueReviewItems =>
+        Set<ProviderCatalogueReviewItem>();
+
+    /// <summary>
+    /// The last provider value each negotiable catalogue field was decided about (issue #738) - the
+    /// rows that stop a skipped value being proposed again until the provider changes it.
+    /// </summary>
+    public DbSet<ProviderCatalogueFieldDecision> ProviderCatalogueFieldDecisions =>
+        Set<ProviderCatalogueFieldDecision>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -220,8 +256,10 @@ public class AppDbContext : DbContext
         ConfigureSupportSessions(modelBuilder);
         ConfigureProviderLinks(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
+        ConfigureMachines(modelBuilder);
         ConfigureProviderDataCoverage(modelBuilder);
         ConfigureSaleProductAssociation(modelBuilder);
+        ConfigureProviderCatalogueReview(modelBuilder);
 
         modelBuilder.Entity<Product>()
             .Property(p => p.UnitPrice)
@@ -524,6 +562,80 @@ public class AppDbContext : DbContext
             .HasForeignKey(count => count.ProductId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        // The machine a count was taken in, and the machine a stock movement went to, are local
+        // machines (issue #741), with the same composite foreign key the operating expense uses
+        // (issue #780, see below): (BusinessId, MachineId) against the (BusinessId, Id) key on
+        // Machines, so SQLite itself refuses a reference to another business's machine. Restrict,
+        // never cascade: a count and a movement are inventory history, and there is no machine
+        // delete path at all - a machine is deactivated instead. No navigation property, for the
+        // same reason as the expense.
+        modelBuilder.Entity<MachineStockCount>()
+            .HasOne<LocalMachine>()
+            .WithMany()
+            .HasForeignKey(count => new { count.BusinessId, count.MachineId })
+            .HasPrincipalKey(machine => new { machine.BusinessId, machine.Id })
+            .OnDelete(DeleteBehavior.Restrict);
+
+        modelBuilder.Entity<StockAdjustment>()
+            .HasOne<LocalMachine>()
+            .WithMany()
+            .HasForeignKey(adjustment => new { adjustment.BusinessId, adjustment.MachineId })
+            .HasPrincipalKey(machine => new { machine.BusinessId, machine.Id })
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // The batch refill of issue #743. Its machine is the same local machine reference, with the
+        // same composite key and the same Restrict, for the same reasons as above.
+        modelBuilder.Entity<PickListRefill>()
+            .HasOne<LocalMachine>()
+            .WithMany()
+            .HasForeignKey(refill => new { refill.BusinessId, refill.MachineId })
+            .HasPrincipalKey(machine => new { machine.BusinessId, machine.Id })
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // What makes the key idempotent: one refill per key per business, enforced by the database
+        // rather than only by the claim the use case makes inside its write transaction. Per
+        // business, because two businesses may legitimately choose the same string (AGENTS.md §
+        // Tenant ownership and data isolation).
+        modelBuilder.Entity<PickListRefill>()
+            .HasIndex(refill => new { refill.BusinessId, refill.IdempotencyKey })
+            .IsUnique();
+
+        modelBuilder.Entity<PickListRefill>()
+            .Property(refill => refill.IdempotencyKey)
+            .IsRequired()
+            .HasMaxLength(PickListRefillPolicy.MaximumIdempotencyKeyLength);
+
+        // Lowercase hexadecimal SHA-256, so the column is exactly as long as the rendering it holds.
+        modelBuilder.Entity<PickListRefill>()
+            .Property(refill => refill.RequestFingerprint)
+            .IsRequired()
+            .HasMaxLength(64);
+
+        modelBuilder.Entity<PickListRefill>()
+            .Property(refill => refill.Notes)
+            .HasMaxLength(PickListRefillPolicy.MaximumNotesLength);
+
+        // RecordedAtUtc is written from the IClock port as a UTC instant, and the SQLite provider
+        // does not round-trip DateTimeKind - see the StockAdjustment.CreatedAt comment below for the
+        // complete explanation - so it is marked UTC on every read. Without this a replayed refill's
+        // instant serialises with no "Z" and a client would read it as its own local time.
+        modelBuilder.Entity<PickListRefill>()
+            .Property(refill => refill.RecordedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+
+        modelBuilder.Entity<PickListRefillLine>()
+            .HasOne(line => line.Refill)
+            .WithMany(refill => refill.Lines)
+            .HasForeignKey(line => line.RefillId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Read by batch, in the order the operator submitted them, which is the row order a replay
+        // has to answer in.
+        modelBuilder.Entity<PickListRefillLine>()
+            .HasIndex(line => new { line.BusinessId, line.RefillId, line.Id });
+
         modelBuilder.Entity<Product>()
             .HasOne(p => p.Category)
             .WithMany(c => c.Products)
@@ -676,6 +788,21 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.Category);
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.SupplierId);
         modelBuilder.Entity<OperatingExpense>().HasIndex(e => e.MachineId);
+        // The machine an expense is attributed to is a local machine (issue #780), and the foreign
+        // key is the pair (BusinessId, MachineId) against the (BusinessId, Id) alternate key on
+        // Machines, for the reason NayaxSales.ProductId uses one: it makes "an expense names a
+        // machine of its own business" something SQLite enforces on every insert and update rather
+        // than a rule only BusinessOwnershipEnforcer applies. Restrict, never cascade and never
+        // set-null: an expense is financial data, so deleting the machine it belongs to must fail
+        // loudly - and there is no machine delete path at all, a machine is deactivated instead.
+        // No navigation property: an expense carries the id, and a reader that wants the machine
+        // reads it through the machine queries.
+        modelBuilder.Entity<OperatingExpense>()
+            .HasOne<LocalMachine>()
+            .WithMany()
+            .HasForeignKey(e => new { e.BusinessId, e.MachineId })
+            .HasPrincipalKey(machine => new { machine.BusinessId, machine.Id })
+            .OnDelete(DeleteBehavior.Restrict);
         modelBuilder.Entity<NayaxProcessingFeeRate>().Property(r => r.FeeExGst).HasColumnType("decimal(18,4)");
         // Each business configures its own effective-dated fee rates.
         modelBuilder.Entity<NayaxProcessingFeeRate>().HasIndex(r => new { r.BusinessId, r.EffectiveFrom }).IsUnique();
@@ -989,6 +1116,53 @@ public class AppDbContext : DbContext
     }
 
     /// <summary>
+    /// Maps the machines a business operates (issue #740, parent #329 child G1).
+    ///
+    /// <para><strong>The table is <c>Machines</c>, and the entity is
+    /// <see cref="LocalMachine"/></strong>: the type name <c>Machine</c> is still occupied by the
+    /// retired response shape the machine wire-contract test compares against, and removing that
+    /// belongs to issue #153. The table name is declared explicitly so it does not depend on which
+    /// type happens to own it.</para>
+    ///
+    /// <para><strong>The provider id is the same column shape as a product's</strong>
+    /// (<see cref="ConfigureProviderIdentityColumns"/>, issue #759): opaque text bounded by
+    /// <see cref="ExternalId.MaxLength"/>, unique per business among the rows that have one, with the
+    /// index filtered on <c>IS NOT NULL</c> because "this machine has no provider id" is the normal
+    /// state of every machine of a business with no provider and a plain unique index would allow
+    /// exactly one of them. Scoped by business for the reason every constraint over an externally
+    /// supplied value is: two operators' fleets may legitimately both contain machine 7.</para>
+    ///
+    /// <para>A machine is ordinary tenant-owned data, so <see cref="ConfigureBusinessOwnership"/>
+    /// gives it its required business key, its <c>BusinessId</c> index and its global query filter;
+    /// what is declared here is everything specific to a machine.</para>
+    ///
+    /// <para><strong>The <c>(BusinessId, Id)</c> alternate key is the principal side of every
+    /// reference to a machine</strong> (issue #780). It is declared here rather than left for
+    /// <c>HasPrincipalKey</c> to infer, for the reason the product and category ones are
+    /// (<see cref="ConfigureProviderLinks"/>): "(business, local id) identifies one machine" is a
+    /// constraint on <c>Machines</c> in its own right, and the migration that added it rebuilt the
+    /// table to state it.</para>
+    /// </summary>
+    private static void ConfigureMachines(ModelBuilder modelBuilder)
+    {
+        var machine = modelBuilder.Entity<LocalMachine>();
+
+        machine.ToTable("Machines");
+        machine.Property(x => x.Name).IsRequired();
+
+        // The machine lists are ordered by name, exactly as the category list is.
+        machine.HasIndex(x => x.Name);
+
+        machine.Property(x => x.ExternalMachineId).HasMaxLength(ExternalId.MaxLength);
+        machine
+            .HasIndex(x => new { x.BusinessId, x.ExternalMachineId })
+            .IsUnique()
+            .HasFilter(@"""ExternalMachineId"" IS NOT NULL");
+
+        machine.HasAlternateKey(x => new { x.BusinessId, x.Id });
+    }
+
+    /// <summary>
     /// Maps the provider identity link tables of issue #732 (parent #329 decision P1).
     ///
     /// <para><strong>Nothing reads or writes them since issue #759</strong>, which moved a provider
@@ -1118,6 +1292,114 @@ public class AppDbContext : DbContext
         resolution.Property(x => x.CandidateProductIds).HasMaxLength(64);
         resolution.Property(x => x.DecidedBy).HasMaxLength(256);
         resolution.HasIndex(x => new { x.BusinessId, x.NayaxSaleId });
+    }
+
+    /// <summary>
+    /// Maps the provider catalogue review and the last-decided provider field values (issue #738,
+    /// parent #329 decision C1).
+    ///
+    /// <para><strong>Three additive tables, and nothing existing changes.</strong> A business with a
+    /// usable provider connection that never starts a review has three empty tables and identical
+    /// behaviour, which is what lets this ship on its own while Production applies migrations at
+    /// startup.</para>
+    ///
+    /// <para><strong>The link columns are foreign keys on the business key, and they cascade.</strong>
+    /// A review item's <c>LinkedProductId</c>/<c>LinkedCategoryId</c> and a field decision's
+    /// <c>ProductId</c> are pairs with <c>BusinessId</c> against the <c>(BusinessId, Id)</c> alternate
+    /// keys on <c>Products</c>/<c>Categories</c>, for the reason <c>NayaxSales.ProductId</c> is
+    /// (<see cref="ConfigureSaleProductAssociation"/>): "this draft names a row of its own business"
+    /// becomes something SQLite enforces on every insert rather than a rule only
+    /// <see cref="BusinessOwnershipEnforcer"/> applies. The delete behaviour is
+    /// <see cref="DeleteBehavior.Cascade"/> rather than <c>Restrict</c>, which is the one place this
+    /// differs from a sale: a review is a draft about the catalogue and a field decision is a note
+    /// about what was last asked, so neither is historical financial data and neither may be a reason
+    /// a product cannot be deleted.</para>
+    ///
+    /// <para><strong>At most one pending review per business, enforced by the database.</strong> The
+    /// filtered unique index over <c>(BusinessId)</c> where <c>AppliedAtUtc IS NULL</c> is what makes
+    /// "the business's pending review" a single row rather than whichever one a query happened to
+    /// order first. It is filtered for the same reason the external id indexes are: an applied review
+    /// is a normal, repeatable state, so a plain unique index would allow exactly one of those.</para>
+    ///
+    /// <para><strong>One decision per product and field.</strong> That unique index is what makes the
+    /// upsert an upsert: the answer to "what did we last ask about this field?" is single-valued, so a
+    /// second row for the same pair would make the skip rule depend on which one was read.</para>
+    /// </summary>
+    private static void ConfigureProviderCatalogueReview(ModelBuilder modelBuilder)
+    {
+        var review = modelBuilder.Entity<ProviderCatalogueReview>();
+
+        review.Property(x => x.Provider).IsRequired();
+        review.Property(x => x.AppliedBy).HasMaxLength(256);
+
+        // Both instants are persisted UTC and both are reported by the review API, so each is marked
+        // UTC on the way out - the SQLite provider otherwise reads them back as Unspecified. The
+        // conversion changes no stored byte and no comparison.
+        review.Property(x => x.StartedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        review.Property(x => x.AppliedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => fromProvider.HasValue
+                ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                : fromProvider);
+        // Declared with a name of its own so it is a *second* index over BusinessId rather than a
+        // reconfiguration of the tenant index ConfigureBusinessOwnership adds to every owned entity:
+        // that one is what every scoped read uses, and this one is a constraint. The filter cannot be
+        // moved into the key either - SQLite treats NULLs as distinct in a unique index, so
+        // UNIQUE(BusinessId, AppliedAtUtc) would permit exactly the two pending reviews it is meant
+        // to refuse.
+        review
+            .HasIndex(x => x.BusinessId, "IX_ProviderCatalogueReviews_BusinessId_Pending")
+            .IsUnique()
+            .HasFilter(@"""AppliedAtUtc"" IS NULL");
+
+        var item = modelBuilder.Entity<ProviderCatalogueReviewItem>();
+
+        item.Property(x => x.Kind).IsRequired();
+        item.Property(x => x.ExternalId).IsRequired().HasMaxLength(ExternalId.MaxLength);
+        item.Property(x => x.ProviderName).IsRequired().HasMaxLength(512);
+        item.Property(x => x.ProviderGroupExternalId).HasMaxLength(ExternalId.MaxLength);
+        item.Property(x => x.ProviderUnitPrice).HasMaxLength(64);
+        item.Property(x => x.ProviderUnitVolume).HasMaxLength(64);
+        item.HasIndex(x => new { x.BusinessId, x.ReviewId, x.Kind });
+
+        item
+            .HasOne(x => x.Review)
+            .WithMany(x => x.Items)
+            .HasForeignKey(x => x.ReviewId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        item
+            .HasOne<Product>()
+            .WithMany()
+            .HasForeignKey(x => new { x.BusinessId, x.LinkedProductId })
+            .HasPrincipalKey(product => new { product.BusinessId, product.Id })
+            .OnDelete(DeleteBehavior.Cascade);
+
+        item
+            .HasOne<Category>()
+            .WithMany()
+            .HasForeignKey(x => new { x.BusinessId, x.LinkedCategoryId })
+            .HasPrincipalKey(category => new { category.BusinessId, category.Id })
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var decision = modelBuilder.Entity<ProviderCatalogueFieldDecision>();
+
+        decision.Property(x => x.Field).IsRequired();
+        decision.Property(x => x.Decision).IsRequired();
+        decision.Property(x => x.ProviderValue).IsRequired().HasMaxLength(64);
+        decision.Property(x => x.DecidedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        decision.HasIndex(x => new { x.BusinessId, x.ProductId, x.Field }).IsUnique();
+
+        decision
+            .HasOne<Product>()
+            .WithMany()
+            .HasForeignKey(x => new { x.BusinessId, x.ProductId })
+            .HasPrincipalKey(product => new { product.BusinessId, product.Id })
+            .OnDelete(DeleteBehavior.Cascade);
     }
 
     /// <summary>

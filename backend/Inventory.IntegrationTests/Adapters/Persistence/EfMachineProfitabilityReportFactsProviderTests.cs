@@ -1,6 +1,8 @@
 using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Application.Commissions;
 using Inventory.Domain.FinancialConfiguration;
+using Inventory.Domain.Providers;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.Data.Sqlite;
@@ -80,23 +82,80 @@ public class EfMachineProfitabilityReportFactsProviderTests
         Assert.Equal(10m, machine.Sales);
     }
 
+    /// <summary>
+    /// Since issue #780 an expense records the local machine row, not the provider's machine
+    /// number, and this report's machine keys are deliberately still the provider's numbers. So the
+    /// grouping has to go through <c>LocalMachine.ExternalMachineId</c> - and the total has to be
+    /// the same as it was before the repoint, which is what the <c>6m</c> here is: the machine's
+    /// own expense, and not the whole-business one beside it.
+    /// </summary>
     [Fact]
     public async Task Operating_expenses_are_grouped_by_machine_and_unassigned_expenses_are_excluded()
     {
         await using var connection = await CreateSqliteAsync();
         await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
         var date = new DateTime(2025, 8, 1);
-        db.NayaxSales.Add(new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = date, TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m });
+        db.Businesses.Add(new Business
+        {
+            Id = 1,
+            Name = "Vending A",
+            Status = BusinessStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+            SalesProvider = ExternalProvider.Nayax,
+        });
+        // The local machine the AddMachines backfill would have created for provider machine 10,
+        // with a local key that is deliberately not that number.
+        var machine10 = new LocalMachine { BusinessId = 1, Name = "Machine 10", ExternalMachineId = "10" };
+        db.Machines.Add(machine10);
+        db.NayaxSales.Add(new NayaxSales { BusinessId = 1, TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = date, TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m });
+        await db.SaveChangesAsync();
         db.OperatingExpenses.AddRange(
-            new OperatingExpense { ExpenseDate = date, MachineId = 10, TotalAmount = 6m },
-            new OperatingExpense { ExpenseDate = date, TotalAmount = 20m });
+            new OperatingExpense { BusinessId = 1, ExpenseDate = date, MachineId = machine10.Id, TotalAmount = 6m },
+            new OperatingExpense { BusinessId = 1, ExpenseDate = date, TotalAmount = 20m });
         await db.SaveChangesAsync();
         var provider = new EfMachineProfitabilityReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(date, date, null, CancellationToken.None);
 
         var machine = Assert.Single(facts.Machines);
+        Assert.Equal(10, machine.MachineId);
         Assert.Equal(6m, machine.OperatingExpenses);
+    }
+
+    /// <summary>
+    /// A machine the provider reports that this business has recorded no machine for contributes no
+    /// operating expenses - and must not pick up another machine's, which is what grouping by a raw
+    /// number would risk once the column holds local keys.
+    /// </summary>
+    [Fact]
+    public async Task A_machine_with_no_local_record_reports_no_operating_expenses()
+    {
+        await using var connection = await CreateSqliteAsync();
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        var date = new DateTime(2025, 8, 1);
+        db.Businesses.Add(new Business
+        {
+            Id = 1,
+            Name = "Vending A",
+            Status = BusinessStatus.Active,
+            CreatedAtUtc = DateTime.UtcNow,
+            SalesProvider = ExternalProvider.Nayax,
+        });
+        var machine10 = new LocalMachine { BusinessId = 1, Name = "Machine 10", ExternalMachineId = "10" };
+        db.Machines.Add(machine10);
+        db.NayaxSales.AddRange(
+            new NayaxSales { BusinessId = 1, TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = date, TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m },
+            new NayaxSales { BusinessId = 1, TransactionID = 2, MachineID = 11, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = date, TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m });
+        await db.SaveChangesAsync();
+        db.OperatingExpenses.Add(
+            new OperatingExpense { BusinessId = 1, ExpenseDate = date, MachineId = machine10.Id, TotalAmount = 6m });
+        await db.SaveChangesAsync();
+        var provider = new EfMachineProfitabilityReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var facts = await provider.GetFactsAsync(date, date, null, CancellationToken.None);
+
+        Assert.Equal(6m, Assert.Single(facts.Machines, x => x.MachineId == 10).OperatingExpenses);
+        Assert.Equal(0m, Assert.Single(facts.Machines, x => x.MachineId == 11).OperatingExpenses);
     }
 
     [Fact]

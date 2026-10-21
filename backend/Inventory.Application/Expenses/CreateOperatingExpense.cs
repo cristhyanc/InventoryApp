@@ -1,4 +1,5 @@
 using Inventory.Application.Documents;
+using Inventory.Application.Machines;
 using Inventory.Domain.Expenses;
 
 namespace Inventory.Application.Expenses;
@@ -7,11 +8,14 @@ public sealed class CreateOperatingExpense
 {
     private readonly IOperatingExpenseStore _store;
     private readonly IDocumentStorage _documents;
+    private readonly ILocalMachineStore _machines;
 
-    public CreateOperatingExpense(IOperatingExpenseStore store, IDocumentStorage documents)
+    public CreateOperatingExpense(
+        IOperatingExpenseStore store, IDocumentStorage documents, ILocalMachineStore machines)
     {
         _store = store;
         _documents = documents;
+        _machines = machines;
     }
 
     public async Task<CreateOperatingExpenseResult> Handle(
@@ -21,6 +25,14 @@ public sealed class CreateOperatingExpense
                 fields.Description, fields.AmountExGst, fields.GstAmount, fields.TotalAmount,
                 fields.ServicePeriodStart, fields.ServicePeriodEnd, out var details, out var validationError))
             return CreateOperatingExpenseResult.Invalid(validationError!);
+
+        // The machine is this business's own machine row (issue #780), so it is checked against the
+        // business's machines before anything is stored or any attachment is written. The machine
+        // store reads through the ordinary tenant filters, so another business's machine is simply
+        // not there; the foreign key refuses the same thing at the write, but a caller deserves the
+        // reason rather than a constraint violation.
+        if (!await OperatingExpenseMachine.IsThisBusinessesAsync(_machines, fields.MachineId, cancellationToken))
+            return CreateOperatingExpenseResult.Invalid(OperatingExpenseDetails.UnknownMachineMessage);
 
         fields = fields with { Description = details!.Description };
 

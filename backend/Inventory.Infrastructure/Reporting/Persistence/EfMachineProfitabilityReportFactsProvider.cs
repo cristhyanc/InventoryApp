@@ -64,7 +64,8 @@ public sealed class EfMachineProfitabilityReportFactsProvider : IMachineProfitab
 
         var commissions = await EfReportingSharedQueries.GetMachineCommissionsAsync(
             _db, _siteCommissions, from, to, endExclusive, machineId, cancellationToken);
-        var operatingExpensesByMachine = await OperatingExpensesByMachineAsync(from, endExclusive, cancellationToken);
+        var operatingExpensesByMachine = await OperatingExpensesByMachineAsync(
+            from, endExclusive, machineGroups.Select(group => group.MachineID).ToList(), cancellationToken);
 
         var machines = new List<MachineProfitabilityMachineFacts>();
         var missingFeeRateTransactions = 0;
@@ -97,10 +98,36 @@ public sealed class EfMachineProfitabilityReportFactsProvider : IMachineProfitab
         };
     }
 
-    private async Task<Dictionary<long, decimal>> OperatingExpensesByMachineAsync(DateTime from, DateTime endExclusive, CancellationToken cancellationToken) =>
-        await _db.OperatingExpenses.AsNoTracking()
-            .Where(x => x.ExpenseDate >= from && x.ExpenseDate < endExclusive && x.MachineId.HasValue)
+    /// <summary>
+    /// The operating expenses of each of <paramref name="providerMachineIds"/> in the period, keyed
+    /// by the <em>provider's</em> machine number - which is what this report's rows are keyed by and
+    /// what its filter speaks, and which issue #780 deliberately left unchanged.
+    ///
+    /// <para>Since issue #780 an expense records the local machine (<c>Machines.Id</c>), not the
+    /// provider's number, so the numbers are resolved to local machine ids first through the one
+    /// lookup (<see cref="EfMachineLinkQueries"/>) and the expenses are grouped by those. Every
+    /// total is the same as before: the <c>AddMachines</c> backfill gave each referenced number
+    /// exactly one machine per business, and the repoint migration refused to run unless every
+    /// attributed expense matched one. A machine this business has recorded none for contributes
+    /// nothing, which is the same answer the unknown-machine case always gave.</para>
+    /// </summary>
+    private async Task<Dictionary<long, decimal>> OperatingExpensesByMachineAsync(
+        DateTime from, DateTime endExclusive, IReadOnlyCollection<long> providerMachineIds,
+        CancellationToken cancellationToken)
+    {
+        var localMachineIds = await EfMachineLinkQueries.LocalMachineIdsByNayaxIdAsync(
+            _db, providerMachineIds, cancellationToken);
+        if (localMachineIds.Count == 0) return [];
+
+        var machineIds = localMachineIds.Values.ToList();
+        var totalsByLocalMachine = await _db.OperatingExpenses.AsNoTracking()
+            .Where(x => x.ExpenseDate >= from && x.ExpenseDate < endExclusive
+                && x.MachineId.HasValue && machineIds.Contains(x.MachineId.Value))
             .GroupBy(x => x.MachineId!.Value)
             .Select(g => new { MachineId = g.Key, Total = g.Sum(x => x.TotalAmount) })
             .ToDictionaryAsync(x => x.MachineId, x => x.Total, cancellationToken);
+
+        return localMachineIds.ToDictionary(
+            link => link.Key, link => totalsByLocalMachine.GetValueOrDefault(link.Value));
+    }
 }

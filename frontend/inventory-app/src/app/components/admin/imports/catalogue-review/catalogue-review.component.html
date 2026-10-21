@@ -1,0 +1,387 @@
+<!--
+  The provider catalogue review (issue #739). Two ordered steps - the provider's groups, then its
+  products - because a product's category is the local category carrying the provider's group id,
+  which step one is what settles.
+
+  Nothing here computes a catalogue value. Every name, price, group and link is the API's own, and
+  the only inputs are the operator's three actions and the one keep-or-take answer about the price.
+-->
+<section class="card mt-5" data-testid="catalogue-review">
+  <div class="card-header flex flex-wrap items-start justify-between gap-3">
+    <div>
+      <h2 class="card-title">Import products: review the Nayax catalogue</h2>
+      @if (review) {
+        <p class="mt-1 text-sm value-muted">
+          @if (step === 'categories') {
+            Step 1 of 2 &mdash; categories. Decide these first: a product's category is whichever of
+            your categories carries its Nayax group.
+          } @else {
+            Step 2 of 2 &mdash; products.
+          }
+        </p>
+      }
+    </div>
+    <button type="button" class="btn btn-secondary" (click)="close()">Close</button>
+  </div>
+
+  <div class="card-body">
+    @if (starting) {
+      <p class="text-sm value-muted">Reading the Nayax catalogue&hellip;</p>
+    } @else if (applied) {
+      <div class="rounded-lg border border-md-gray-200 p-4">
+        <h3 class="text-sm font-semibold text-md-gray-800">What this import did</h3>
+        @if (applied.alreadyApplied) {
+          <p class="mt-2 text-sm">
+            This review had already been applied, so nothing was changed. Start a new review to
+            decide about the Nayax catalogue again.
+          </p>
+        } @else {
+          <div class="mt-2 grid gap-2 text-sm text-md-gray-800 sm:grid-cols-2">
+            <div>Created {{ applied.createdCount }} new row(s)</div>
+            <div>Linked {{ applied.linkedCount }} existing row(s)</div>
+            <div>Changes applied automatically: {{ applied.automaticChanges.length }}</div>
+            <div>Price changes accepted: {{ applied.acceptedChanges.length }}</div>
+            <div>Price changes skipped: {{ applied.skippedChanges.length }}</div>
+            <div>Sales a link would explain: {{ applied.unresolvedSaleCount }}</div>
+          </div>
+          @if (applied.links.length > 0) {
+            <ul class="mt-3 list-disc pl-5 text-sm text-md-gray-800">
+              @for (link of applied.links; track link.kind + link.externalId) {
+                <li>
+                  {{ link.created ? 'Created' : 'Linked' }} {{ link.kind | lowercase }}
+                  <strong>{{ link.name }}</strong> (Nayax {{ link.externalId }})
+                </li>
+              }
+            </ul>
+          }
+          @if (applied.unresolvedSaleCount > 0) {
+            <p class="mt-3 text-sm value-muted">
+              {{ applied.unresolvedSaleCount }} stored sale(s) carry a Nayax product id these links
+              now explain. Nothing here changed a sale: attributing them is the separate, confirmed
+              step on the Admin page, because it replays those products' cost history.
+            </p>
+          }
+        }
+        <div class="mt-4 flex flex-wrap gap-2">
+          <button type="button" class="btn btn-secondary" [disabled]="loading || sessionActive" (click)="restart()">
+            Start another review
+          </button>
+          <button type="button" class="btn btn-primary" (click)="close()">Done</button>
+        </div>
+      </div>
+    } @else if (!review) {
+      <p class="text-sm value-muted">
+        No review is open. Close this panel and choose <strong>Import products</strong> again.
+      </p>
+    } @else {
+      <p class="text-sm value-muted">
+        Nothing is written until you press Apply, and an entry you leave on <strong>Skip</strong> is
+        left exactly as it is. {{ review.unitVolumeNote }}
+      </p>
+
+      @if (step === 'categories') {
+        <h3 class="mt-4 text-sm font-semibold text-md-gray-800">
+          Nayax product groups ({{ review.unlinkedCategoryCount }} not linked to a category of yours)
+        </h3>
+
+        @if (categoryEntries.length === 0) {
+          <p class="mt-2 text-sm value-muted">Nayax reports no product groups.</p>
+        }
+
+        @for (entry of categoryEntries; track entry.itemId) {
+          <div class="mt-3 rounded-lg border border-md-gray-200 p-4" [attr.data-testid]="'review-entry-' + entry.itemId">
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+              <h4 class="text-sm font-semibold text-md-gray-800">{{ entry.providerName }}</h4>
+              <span class="text-xs value-muted">Nayax group {{ entry.externalId }}</span>
+            </div>
+
+            @if (entry.isLinked) {
+              <p class="mt-1 text-sm text-md-gray-800">
+                Already linked to your category <strong>{{ entry.localName }}</strong>.
+              </p>
+              @if (entry.automaticChanges.length > 0) {
+                <ul class="mt-2 list-disc pl-5 text-sm text-md-gray-800">
+                  @for (change of entry.automaticChanges; track change.field) {
+                    <li>
+                      Applied automatically &mdash; {{ fieldLabel(change.field) }}:
+                      {{ change.localValue ?? 'none' }} &rarr; <strong>{{ change.providerValue ?? 'none' }}</strong>
+                    </li>
+                  }
+                </ul>
+              } @else {
+                <p class="mt-2 text-sm value-muted">Nothing about it has changed in Nayax.</p>
+              }
+            } @else {
+              <fieldset class="mt-2">
+                <legend class="field-label">What should this group be?</legend>
+                <div class="mt-1 grid gap-1">
+                  <label class="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      [name]="'category-action-' + entry.itemId"
+                      class="h-4 w-4"
+                      [checked]="answer(entry.itemId).action === actions.Defer"
+                      (change)="setAction(entry.itemId, actions.Defer)"
+                    />
+                    <span>Skip for now</span>
+                  </label>
+                  <label class="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      [name]="'category-action-' + entry.itemId"
+                      class="h-4 w-4"
+                      [checked]="answer(entry.itemId).action === actions.LinkExisting"
+                      (change)="setAction(entry.itemId, actions.LinkExisting)"
+                    />
+                    <span>Link it to one of my categories</span>
+                  </label>
+                  <label class="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      [name]="'category-action-' + entry.itemId"
+                      class="h-4 w-4"
+                      [checked]="answer(entry.itemId).action === actions.CreateNew"
+                      (change)="setAction(entry.itemId, actions.CreateNew)"
+                    />
+                    <span>Create a new category</span>
+                  </label>
+                </div>
+              </fieldset>
+
+              @if (answer(entry.itemId).action === actions.LinkExisting) {
+                <div class="mt-3 grid gap-2 sm:grid-cols-2">
+                  <label class="field">
+                    <span class="field-label">Search my categories</span>
+                    <input
+                      type="search"
+                      [value]="answer(entry.itemId).search"
+                      (input)="setSearch(entry.itemId, $any($event.target).value)"
+                      placeholder="Part of the name"
+                    />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">Link to</span>
+                    <select
+                      [value]="answer(entry.itemId).localRowId ?? ''"
+                      (change)="setLocalRow(entry.itemId, $any($event.target).value)"
+                    >
+                      <option value="">Choose one of my categories&hellip;</option>
+                      @for (candidate of categoryCandidates(entry.itemId); track candidate.id) {
+                        <option [value]="candidate.id">{{ candidate.name }}</option>
+                      }
+                    </select>
+                  </label>
+                </div>
+                @if (categoryCandidates(entry.itemId).length === 0) {
+                  <p class="mt-1 text-sm value-muted">
+                    No category of yours matches, and a category Nayax already manages cannot be
+                    linked again.
+                  </p>
+                }
+                <p class="alert alert-warning mt-2">{{ categoryLinkNotice }}</p>
+              }
+
+              @if (answer(entry.itemId).action === actions.CreateNew) {
+                <p class="mt-2 text-sm value-muted">{{ createNotice }}</p>
+              }
+            }
+          </div>
+        }
+
+        <div class="mt-5 flex flex-wrap gap-2">
+          <button type="button" class="btn btn-primary" (click)="goToProducts()">Continue to products</button>
+        </div>
+      } @else {
+        <h3 class="mt-4 text-sm font-semibold text-md-gray-800">
+          Nayax products ({{ review.unlinkedProductCount }} not linked to a product of yours)
+        </h3>
+
+        @if (productEntries.length === 0) {
+          <p class="mt-2 text-sm value-muted">Nayax reports no products.</p>
+        }
+
+        @for (entry of productEntries; track entry.itemId) {
+          <div class="mt-3 rounded-lg border border-md-gray-200 p-4" [attr.data-testid]="'review-entry-' + entry.itemId">
+            <div class="flex flex-wrap items-baseline justify-between gap-2">
+              <h4 class="text-sm font-semibold text-md-gray-800">{{ entry.providerName }}</h4>
+              <span class="text-xs value-muted">Nayax product {{ entry.externalId }}</span>
+            </div>
+
+            <p class="mt-1 text-sm text-md-gray-800">
+              Category after this import:
+              <strong>{{ categoryAfterImport(entry) ?? 'none' }}</strong>
+              @if (categorySourceAfterImport(entry)) {
+                <span class="value-muted">({{ categorySourceAfterImport(entry) }})</span>
+              }
+              @if (!categoryAfterImport(entry)) {
+                <span class="value-muted">
+                  &mdash; its Nayax group is linked to no category of yours, so the product is left
+                  uncategorised.
+                </span>
+              }
+            </p>
+
+            @if (entry.isLinked) {
+              <p class="mt-1 text-sm text-md-gray-800">
+                Already linked to your product <strong>{{ entry.localName }}</strong>.
+              </p>
+              @if (entry.automaticChanges.length > 0) {
+                <ul class="mt-2 list-disc pl-5 text-sm text-md-gray-800">
+                  @for (change of entry.automaticChanges; track change.field) {
+                    <li>
+                      Applied automatically &mdash; {{ fieldLabel(change.field) }}:
+                      {{ change.localValue ?? 'none' }} &rarr; <strong>{{ change.providerValue ?? 'none' }}</strong>
+                    </li>
+                  }
+                </ul>
+              }
+            } @else {
+              <fieldset class="mt-2">
+                <legend class="field-label">What should this product be?</legend>
+                <div class="mt-1 grid gap-1">
+                  <label class="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      [name]="'product-action-' + entry.itemId"
+                      class="h-4 w-4"
+                      [checked]="answer(entry.itemId).action === actions.Defer"
+                      (change)="setAction(entry.itemId, actions.Defer)"
+                    />
+                    <span>Skip for now</span>
+                  </label>
+                  <label class="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      [name]="'product-action-' + entry.itemId"
+                      class="h-4 w-4"
+                      [checked]="answer(entry.itemId).action === actions.LinkExisting"
+                      (change)="setAction(entry.itemId, actions.LinkExisting)"
+                    />
+                    <span>Link it to one of my products</span>
+                  </label>
+                  <label class="flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      [name]="'product-action-' + entry.itemId"
+                      class="h-4 w-4"
+                      [checked]="answer(entry.itemId).action === actions.CreateNew"
+                      (change)="setAction(entry.itemId, actions.CreateNew)"
+                    />
+                    <span>Create a new product</span>
+                  </label>
+                </div>
+              </fieldset>
+
+              @if (answer(entry.itemId).action === actions.LinkExisting) {
+                <div class="mt-3 grid gap-2 sm:grid-cols-2">
+                  <label class="field">
+                    <span class="field-label">Search my products</span>
+                    <input
+                      type="search"
+                      [value]="answer(entry.itemId).search"
+                      (input)="setSearch(entry.itemId, $any($event.target).value)"
+                      placeholder="Part of the name or SKU"
+                    />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">Link to</span>
+                    <select
+                      [value]="answer(entry.itemId).localRowId ?? ''"
+                      (change)="setLocalRow(entry.itemId, $any($event.target).value)"
+                    >
+                      <option value="">Choose one of my products&hellip;</option>
+                      @for (candidate of productCandidates(entry.itemId); track candidate.id) {
+                        <option [value]="candidate.id">
+                          {{ candidate.name }}{{ candidate.isActive ? '' : ' (retired)' }}
+                        </option>
+                      }
+                    </select>
+                  </label>
+                </div>
+                @if (productCandidates(entry.itemId).length === 0) {
+                  <p class="mt-1 text-sm value-muted">
+                    No product of yours matches, and a product Nayax already manages cannot be linked
+                    again.
+                  </p>
+                }
+                <p class="alert alert-warning mt-2">{{ productLinkNotice }}</p>
+              }
+
+              @if (answer(entry.itemId).action === actions.CreateNew) {
+                <p class="mt-2 text-sm value-muted">{{ createNotice }}</p>
+              }
+            }
+
+            @if (priceChoice(entry); as price) {
+              @if (entry.isLinked || answer(entry.itemId).action === actions.LinkExisting) {
+                <fieldset class="mt-3" data-testid="price-choice">
+                  <legend class="field-label">
+                    @if (entry.isLinked) {
+                      Nayax has changed this product's price
+                    } @else {
+                      The price for the product you link
+                    }
+                  </legend>
+                  <!--
+                    "Mine" is the price of the row this decision is actually about: the linked row's
+                    for a linked entry, and the product the operator just named for one they are
+                    linking now. The review reports no local value for the latter, because the local
+                    row did not exist when it was read.
+                  -->
+                  <p class="mt-1 text-sm text-md-gray-800" data-testid="price-comparison">
+                    Mine: <strong>{{ localPrice(entry, price) ?? 'none yet' }}</strong> &middot; Nayax:
+                    <strong>{{ price.providerValue }}</strong>
+                  </p>
+                  <div class="mt-1 grid gap-1">
+                    <label class="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        [name]="'product-price-' + entry.itemId"
+                        class="h-4 w-4"
+                        [checked]="answer(entry.itemId).price === decisions.TakeProvider"
+                        (change)="setPrice(entry.itemId, decisions.TakeProvider)"
+                      />
+                      <span>{{ entry.isLinked ? 'Accept the Nayax price' : "Take the Nayax price" }}</span>
+                    </label>
+                    <label class="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        [name]="'product-price-' + entry.itemId"
+                        class="h-4 w-4"
+                        [checked]="answer(entry.itemId).price === decisions.KeepLocal"
+                        (change)="setPrice(entry.itemId, decisions.KeepLocal)"
+                      />
+                      <span>{{ entry.isLinked ? 'Skip it and keep my price' : 'Keep my own price' }}</span>
+                    </label>
+                  </div>
+                  <p class="mt-1 text-sm value-muted">
+                    Either answer is remembered, so this Nayax price is not proposed again until Nayax
+                    changes it. Leaving both unanswered leaves your price alone and asks again next
+                    review.
+                  </p>
+                </fieldset>
+              }
+            }
+
+            @if (entry.unresolvedSaleCount > 0) {
+              <p class="mt-2 text-sm value-muted">
+                {{ entry.unresolvedSaleCount }} stored sale(s) carry this Nayax product id and are
+                still unresolved. Linking it changes none of them.
+              </p>
+            }
+          </div>
+        }
+
+        <div class="mt-5 flex flex-wrap gap-2">
+          <button type="button" class="btn btn-secondary" (click)="backToCategories()">Back to categories</button>
+          <button
+            type="button"
+            class="btn btn-primary"
+            [disabled]="loading || sessionActive"
+            (click)="applyDecisions()"
+          >Apply {{ decidedCount }} decision(s)</button>
+        </div>
+      }
+    }
+  </div>
+</section>

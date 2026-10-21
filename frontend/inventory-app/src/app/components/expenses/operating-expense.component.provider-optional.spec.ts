@@ -57,7 +57,9 @@ async function render(options: {
       {
         provide: MachineService,
         useValue: {
-          getAll: jest.fn(() => options.machines ?? of([{ machineID: 9, machineName: 'Lobby' } as Machine]))
+          getAll: jest.fn(
+            () => options.machines ?? of([{ machineID: 9, localMachineId: 41, machineName: 'Lobby' } as Machine])
+          )
         }
       },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
@@ -149,6 +151,35 @@ describe('OperatingExpenseComponent provider-optional form (issue #728)', () => 
   it('hides the machine field when the machine read itself is refused', async () => {
     const { component } = await render({ status: 'unreadable', machines: throwError(() => notConnected()) });
 
+    expect(component.machineFieldShown).toBe(false);
+    expect(component.machinesError).toBe('');
+  });
+
+  /**
+   * Issue #780: an expense stores the business's own machine record, so the option's value is the
+   * machine's `localMachineId` and not the provider's `machineID`, and a listed machine with no
+   * local record is not offered at all - there is nothing to store for it.
+   */
+  it('offers the local machine id as the machine option value', async () => {
+    const { component, fixture, host } = await render();
+    component.startCreate();
+    fixture.detectChanges();
+
+    // The machine is offered, under its own name, and what it carries is the local id.
+    expect(Array.from(host.querySelectorAll('option')).map((option) => option.textContent?.trim())).toContain('Lobby');
+    expect(component.machineOptions.map((machine) => machine.machineID)).toEqual([9]);
+    expect(component.machineOptions.map((machine) => machine.localMachineId)).toEqual([41]);
+
+    // Selecting it puts the local id - not the provider's number 9 - on the submitted form.
+    component.form.machineId = component.machineOptions[0].localMachineId ?? null;
+    expect(component.form.machineId).toBe(41);
+  });
+
+  it('hides the machine field when no listed machine has a local record', async () => {
+    const { component } = await render({ machines: of([{ machineID: 9, machineName: 'Lobby' } as Machine]) });
+
+    expect(component.machines).toHaveLength(1);
+    expect(component.machineOptions).toEqual([]);
     expect(component.machineFieldShown).toBe(false);
     expect(component.machinesError).toBe('');
   });

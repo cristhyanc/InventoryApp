@@ -399,8 +399,8 @@ These tiers apply only to the initial implementation invocation. Architecture ch
 | Human readiness label | Implementation selection |
 | --- | --- |
 | `agent-ready-claude-low` | Claude `haiku`, at most 300 turns; no triage |
-| `agent-ready-claude` | A short read-only Haiku triage chooses `haiku` (300 turns), `sonnet` (250 turns) or `opus` (400 turns) |
-| `agent-ready-claude-high` | Claude `opus`, at most 400 turns; no triage |
+| `agent-ready-claude` | A short read-only Haiku triage chooses `haiku` (300 turns), `sonnet` (400 turns) or `opus` (500 turns) |
+| `agent-ready-claude-high` | Claude `opus`, at most 500 turns; no triage |
 
 The existing labels remain the default tier. Apply exactly one readiness label per issue (the three labels above and the `agent-ready-full-claude` fallback label all count; the full label has no fixed tier and uses the same Haiku triage as the unsuffixed label); remove an existing readiness/state label before choosing another. The default tier selects low, standard or high automatically, choosing the least expensive tier adequate for the task; high is chosen for complex cross-cutting design, broad structural changes, or difficult concurrency, security or data correctness. Needing a stronger model is not a reason to stop. Triage returns `clarification-required` only when the requirements, acceptance criteria or exclusions are materially ambiguous; the selection job then fails before implementation or label mutation, and the run log gives the reason. Clarify the issue, then remove and re-apply the readiness label. Use the explicit `-low` or `-high` label to skip triage. A low-tier agent that cannot finish within its model must report the limitation and stop for a human; it cannot upgrade itself. Model tier does not lower the task's risk classification, testing requirements or review gate.
 

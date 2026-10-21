@@ -83,6 +83,10 @@ public class EfStockHistoryQueryTests
     {
         await using (var seed = TestAppDbContext.For(options, BusinessA))
         {
+            // The movements' machines are local machines (issue #741), so each one exists.
+            seed.Machines.AddRange(
+                new LocalMachine { Id = 9, Name = "Machine 9" },
+                new LocalMachine { Id = 11, Name = "Machine 11" });
             seed.Products.AddRange(
                 new Product { Id = 1, Name = "Coke", QuantityInStock = 10 },
                 new Product { Id = 2, Name = "Chips", QuantityInStock = 10 });
@@ -95,8 +99,9 @@ public class EfStockHistoryQueryTests
         }
 
         await using var seedB = TestAppDbContext.For(options, BusinessB);
+        seedB.Machines.Add(new LocalMachine { Id = 12, Name = "Business B machine" });
         seedB.Products.Add(new Product { Id = 3, Name = "Other business product", QuantityInStock = 1 });
-        seedB.StockAdjustments.Add(Movement(3, Noon, 1, StockAdjustmentReason.Restock, machineId: 9));
+        seedB.StockAdjustments.Add(Movement(3, Noon, 1, StockAdjustmentReason.Restock, machineId: 12));
         await seedB.SaveChangesAsync();
     }
 

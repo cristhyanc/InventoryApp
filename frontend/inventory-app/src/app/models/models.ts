@@ -35,6 +35,18 @@ export interface Category {
   id: number;
   name: string;
   description?: string | null;
+  /**
+   * The fields this business's sales provider manages on this category (issue #736/#737):
+   * `["name"]` for a category the provider named, an empty array (or absent, from an older
+   * response) for one the business maintains itself. A client locks exactly these inputs.
+   */
+  providerManagedFields?: string[] | null;
+}
+
+/** The category a client posts to `POST /api/categories` or puts to `PUT /api/categories/{id}` (issue #737). */
+export interface CategoryWriteDto {
+  name: string;
+  description?: string | null;
 }
 
 export interface Supplier {
@@ -85,6 +97,46 @@ export interface Product {
   isActive: boolean;
   isLowStock: boolean;
   isReorderAlert: boolean;
+  /**
+   * The fields this business's sales provider manages on this product (issue #736/#737):
+   * `["name", "categoryId"]` for a product the provider named, an empty array (or absent, from an
+   * older response) for one the business maintains itself. A client locks exactly these inputs -
+   * the price and every other field stay editable either way.
+   */
+  providerManagedFields?: string[] | null;
+  /**
+   * Whether `DELETE /api/products/{id}` would allow this product to be deleted (issue #737), from
+   * the catalogue listing and the single-product read. `false` means the server would refuse it and
+   * {@link deletionRefusal} says why; **absent** means the read never resolved the question (a
+   * reorder listing, a machine slot, a nested snapshot) and is not permission - a screen that
+   * offers Delete only on `true` never offers one that must fail.
+   *
+   * It is advisory: the delete counts again inside its own transaction, so a refusal can still come
+   * back for a product this said was deletable, and that refusal must still be shown.
+   */
+  canDelete?: boolean;
+  /**
+   * Why this product may not be deleted, in the server's own words - the message the delete would
+   * answer `409` with, naming what is in the way and pointing at deactivation. Absent when the
+   * product may be deleted, and when the read did not resolve the question.
+   */
+  deletionRefusal?: string | null;
+}
+
+/** The product a client posts to `POST /api/products` (issue #737). */
+export interface ProductCreateDto {
+  name: string;
+  sku?: string | null;
+  description?: string | null;
+  unitPrice: number;
+  quantityInStock: number;
+  lowStockThreshold: number;
+  restockTo: number;
+  unit?: string | null;
+  categoryId?: number | null;
+  supplierId?: number | null;
+  isActive: boolean;
+  initialUnitCost?: number | null;
 }
 
 /**
@@ -301,6 +353,22 @@ export interface ProductPriceComparison {
 }
 
 /**
+ * One of the business's **own** machine records, as `/api/local-machines` publishes it (issue #740,
+ * parent #329 child G1). It exists with or without a sales provider and carries no live figure at
+ * all, which is what makes it a different thing from {@link Machine} - that one is the live Nayax
+ * fleet with this business's sales and costs resolved onto it.
+ *
+ * `isProviderNamed` is whether the business's sales provider names the machine - the fact, never the
+ * identifier, which is deliberately not on the wire. Nothing a client sends can change it.
+ */
+export interface LocalMachine {
+  id: number;
+  name: string;
+  isActive: boolean;
+  isProviderNamed: boolean;
+}
+
+/**
  * Every revenue, direct-profit and profitability-status figure is optional and nullable: a role
  * without `Dashboard.ViewFinancials` is not shown them at all, by the frontend-level check this
  * page and the Machines list/detail apply (issue #699), and the API itself is expected to start
@@ -309,6 +377,15 @@ export interface ProductPriceComparison {
  */
 export interface Machine {
   machineID: number;
+  /**
+   * This business's own machine record for the same machine (issue #780), or `null`/absent when it
+   * has recorded none. Since issue #741 it is the id every machine page and stock workflow speaks:
+   * the `api/machines/{id}` routes take it, a stock movement and a machine count record it, and the
+   * stock history filters by it. `machineID` stays the provider's own number, which the pick list
+   * and the report filters still speak. The two are never interchangeable: a local id equal to a
+   * provider number is a coincidence. A machine without one cannot be opened or attributed.
+   */
+  localMachineId?: number | null;
   machineName?: string | null;
   machineNumber?: string | null;
   todayGrossRevenue?: number | null;
@@ -781,6 +858,44 @@ export interface PickListProduct {
 /** The complete read-only Pick List projection for the requested machines. */
 export interface PickListResult {
   products: PickListProduct[];
+}
+
+/**
+ * One row of a `POST /api/pick-list/refills` request (issue #743, frontend #744): a product of the
+ * caller's own catalogue and the whole number of units taken out of storage for it.
+ */
+export interface PickListRefillRowRequest {
+  productId: number;
+  quantityTaken: number;
+}
+
+/**
+ * A batch refill request (issue #743): one request recording everything a worker took out of
+ * storage. `machineId` is omitted here while #746 (the local machine selector) has not shipped, so
+ * every submission from this frontend records a refill with no machine.
+ */
+export interface PickListRefillRequest {
+  idempotencyKey: string;
+  machineId?: number | null;
+  notes?: string | null;
+  rows: PickListRefillRowRequest[];
+}
+
+/** One recorded row of a batch refill: the product, the units taken, and the movement it created. */
+export interface PickListRefillRecordedRow {
+  productId: number;
+  quantityTaken: number;
+  stockAdjustmentId: number;
+}
+
+/** What `POST /api/pick-list/refills` answers, for a newly recorded refill and a replayed retry alike. */
+export interface PickListRefillResponse {
+  idempotencyKey: string;
+  replayed: boolean;
+  machineId: number | null;
+  notes: string | null;
+  recordedAtUtc: string;
+  rows: PickListRefillRecordedRow[];
 }
 
 /** Whether a Take Inventory Apply request created a stock movement (issue #245). */

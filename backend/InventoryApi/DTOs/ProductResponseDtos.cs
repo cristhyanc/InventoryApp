@@ -138,6 +138,38 @@ public sealed record ProductResponse
     /// </summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public IReadOnlyList<string>? ProviderManagedFields { get; init; }
+
+    /// <summary>
+    /// Whether <c>DELETE /api/products/{id}</c> would allow this product to be deleted (issue #737,
+    /// parent #329 decision P2): <see langword="true"/> when nothing refers to it and no provider
+    /// names it, <see langword="false"/> when the server would refuse - in which case
+    /// <see cref="DeletionRefusal"/> says why, in the server's own words. A client offers
+    /// <strong>Delete</strong> only on <see langword="true"/> and offers the retirement path
+    /// (<c>isActive</c>) with the reason otherwise.
+    ///
+    /// <para><strong>It is advisory.</strong> It describes the rows that existed when the product was
+    /// read; the delete counts them again inside its own transaction and decides there, so a client
+    /// must still show the refusal a delete it thought was allowed comes back with. That recheck is
+    /// what makes the delete safe, and nothing here weakens it.</para>
+    ///
+    /// <para><see langword="null"/> - and omitted from the JSON - wherever the read did not resolve
+    /// it: the reorder listing (<c>lowStockOnly=true</c>), a machine slot's product and the product
+    /// snapshots nested in a purchase or a supplier order. Those are ranking or snapshot payloads,
+    /// not surfaces a product is deleted from, and they say nothing rather than guessing. An absent
+    /// key is never permission.</para>
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? CanDelete { get; init; }
+
+    /// <summary>
+    /// Why this product may not be deleted, when <see cref="CanDelete"/> is <see langword="false"/>:
+    /// the very message <c>DELETE /api/products/{id}</c> would answer <c>409</c> with, from
+    /// <c>Inventory.Domain.Products.ProductDeletionPolicy</c>, naming what is in the way and pointing
+    /// at deactivation. Absent when the product may be deleted, and absent with
+    /// <see cref="CanDelete"/> when the read did not resolve the question.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DeletionRefusal { get; init; }
 }
 
 /// <summary>

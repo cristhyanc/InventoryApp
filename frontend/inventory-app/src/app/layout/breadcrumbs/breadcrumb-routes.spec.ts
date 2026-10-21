@@ -166,6 +166,55 @@ describe('buildBreadcrumbTrail', () => {
   });
 });
 
+/**
+ * The menu changes of issue #729 (child E2 of issue #329) deliberately leave the breadcrumbs alone:
+ * a breadcrumb parent is the real page that owns the child route, and the sidebar's group headings
+ * are not pages, so renaming the `Products` group `Inventory` and moving the site commission report
+ * into its own menu section changes no trail. The one label that did change is the destination whose
+ * own name the issue changes, and its URL is untouched.
+ */
+describe('breadcrumbs across the issue #729 menu changes', () => {
+  it('keeps Products as the parent page of its own child routes, under the renamed group', () => {
+    expect(buildBreadcrumbTrail('/products/42/edit', null)).toEqual([
+      { label: 'Products', path: '/products', current: false },
+      { label: 'Edit product', current: true }
+    ]);
+    expect(breadcrumbRoutes.map((entry) => entry.parent?.label)).not.toContain('Inventory');
+  });
+
+  it('keeps Reports as the parent of the site commission report, which left the Reports menu group', () => {
+    expect(buildBreadcrumbTrail('/reports/site-commissions', null)).toEqual([
+      { label: 'Reports', path: '/reports', current: false },
+      { label: 'Site Commissions', current: true }
+    ]);
+  });
+
+  it('keeps every report trail exactly as it was, with no provider state in it', () => {
+    for (const path of [
+      '/reports/bookkeeping',
+      '/reports/daily',
+      '/reports/transactions',
+      '/reports/reconciliation',
+      '/reports/machines'
+    ]) {
+      expect(buildBreadcrumbTrail(path, null)[0]).toEqual({ label: 'Reports', path: '/reports', current: false });
+    }
+  });
+
+  it('renames only the destination the issue renames, leaving its URL alone', () => {
+    expect(buildBreadcrumbTrail('/admin/nayax-settings', null)).toEqual([
+      { label: 'Admin', path: '/admin', current: false },
+      { label: 'Integrations', current: true }
+    ]);
+  });
+
+  /** The "needs a provider" page is reached from a guard, not from a hierarchy, so it has no trail. */
+  it('renders no trail for the needs-a-provider page', () => {
+    expect(buildBreadcrumbTrail('/needs-provider', null)).toEqual([]);
+    expect(buildBreadcrumbTrail('/needs-provider?from=%2Fmachines', null)).toEqual([]);
+  });
+});
+
 describe('buildTrailFrom (non-routable group)', () => {
   const entries: readonly BreadcrumbRouteEntry[] = [
     { pattern: '/widgets/:id', label: 'Widget details', parent: { label: 'Widgets' } }

@@ -32,8 +32,10 @@ public class MachineStockCount : IBusinessOwned
     public int Id { get; set; }
 
     /// <summary>
-    /// The Nayax machine the count was taken on. A remote identity, exactly as
-    /// <see cref="StockAdjustment.MachineId"/> is: machines are not persisted by this application.
+    /// The machine the count was taken in: a local machine, <c>Machines.Id</c> (issue #741), never
+    /// the provider's machine number. The pair <c>(BusinessId, MachineId)</c> is a foreign key on the
+    /// machines' <c>(BusinessId, Id)</c> key, restricted on delete; the
+    /// <c>RepointStockMachineReferences</c> migration moved every count onto its machine's local row.
     /// </summary>
     public long MachineId { get; set; }
 

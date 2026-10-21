@@ -69,7 +69,7 @@ const ALL_ADMIN_ROUTES = [
 ];
 
 describe('AdminComponent Admin split (issue #388)', () => {
-  it('links to the dedicated Nayax Settings and Site Commission Agreements pages instead of embedding their forms', async () => {
+  it('links to the dedicated Integrations and Site Commission Agreements pages instead of embedding their forms', async () => {
     const { host } = await render();
 
     expect(link(host, '/admin/nayax-settings')).not.toBeNull();
@@ -166,7 +166,7 @@ describe('AdminComponent capability-driven cards (issue #674)', () => {
     for (const route of ALL_ADMIN_ROUTES) {
       expect(link(host, route)).toBeNull();
     }
-    expect(host.textContent).not.toContain('Nayax Settings');
+    expect(host.textContent).not.toContain('Integrations');
   });
 
   it('offers an Owner every destination the sidebar offers', async () => {

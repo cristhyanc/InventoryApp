@@ -1,3 +1,4 @@
+using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Nayax;
@@ -102,7 +103,7 @@ public class MachineStockSyncNayaxLinkTests
         SeedProduct(db, LocalProductId, ProductName, NayaxProductId);
         await db.SaveChangesAsync();
 
-        var preview = await UseCase(db).Handle(MachineId, CancellationToken.None);
+        var preview = await UseCase(db).Handle(new MachineIdentity(LocalMachineId: 31, NayaxMachineId: MachineId), CancellationToken.None);
 
         var evt = Assert.Single(preview.Events);
         Assert.Equal(NayaxStockEventMatchStatus.Matched, evt.MatchStatus);
@@ -123,7 +124,7 @@ public class MachineStockSyncNayaxLinkTests
         SeedProduct(db, NayaxProductId, ProductName);
         await db.SaveChangesAsync();
 
-        var preview = await UseCase(db).Handle(MachineId, CancellationToken.None);
+        var preview = await UseCase(db).Handle(new MachineIdentity(LocalMachineId: 31, NayaxMachineId: MachineId), CancellationToken.None);
 
         var evt = Assert.Single(preview.Events);
         Assert.Equal(NayaxStockEventMatchStatus.NeedsReview, evt.MatchStatus);

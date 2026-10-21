@@ -1,29 +1,15 @@
 import { Component, Input } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import {
-  NayaxConnectionCheckFailureName,
-  NayaxConnectionCheckLine,
-  NayaxConnectionCheckName
-} from '../../../services/nayax-connection.service';
+import { nayaxConnectionAreaLabel } from '../../../provider/nayax-read-areas';
+import { NayaxConnectionCheckFailureName, NayaxConnectionCheckLine } from '../../../services/nayax-connection.service';
 
 /**
- * The area each declared check proves, in an operator's language with the Nayax endpoint it calls
- * named beside it, because that endpoint is what a support request has to ask for.
- *
- * It mirrors `Inventory.Domain.Nayax.NayaxConnectionCheck` (issue #536) and is the **one**
- * vocabulary for both the checklist of step 4 and the support request of step 5: two wordings for
- * one refusal is how a screen ends up asking Nayax for the wrong permission.
+ * The area label this checklist renders. The vocabulary itself moved to
+ * `provider/nayax-read-areas.ts` when issue #729's locked menu item and "needs a provider" page
+ * became its second reader: one refusal must be worded once, wherever it is shown. It is re-exported
+ * here because this is the module the wizard and its specs already name.
  */
-const AREA_LABELS: Record<NayaxConnectionCheckName, string> = {
-  SignIn: 'Signing in (GET devices)',
-  Machines: 'Machine list (GET machines)',
-  Machine: 'Machine details (GET machines/{id})',
-  ProductCatalogue: 'Operator product catalogue (GET operators/{operatorId}/products)',
-  ProductGroups: 'Operator product groups (GET operators/{operatorId}/productGroups)',
-  MachineProducts: 'Machine product map (GET machines/{id}/machineProducts)',
-  MachineLastSales: 'Machine recent sales (GET machines/{id}/lastSales)',
-  MachineLastAlerts: 'Machine recent alerts (GET machines/{id}/lastAlerts)'
-};
+export { nayaxConnectionAreaLabel };
 
 /**
  * What one failure cause means, in Nayax's own documented vocabulary as
@@ -38,11 +24,6 @@ const FAILURE_SENTENCES: Record<NayaxConnectionCheckFailureName, string> = {
   NayaxUnavailable: 'Nayax could not be reached, so nothing was learned about this area.',
   UnexpectedResponse: 'Nayax answered something this application does not recognise.'
 };
-
-/** The published area label, or the raw name for a check a newer deployment reports. */
-export function nayaxConnectionAreaLabel(check: NayaxConnectionCheckName): string {
-  return AREA_LABELS[check] ?? check;
-}
 
 /**
  * The cause sentence, or a sentence that claims nothing for a cause this bundle does not know.

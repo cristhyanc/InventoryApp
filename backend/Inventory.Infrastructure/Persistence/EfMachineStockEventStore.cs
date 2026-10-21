@@ -1,4 +1,5 @@
 using Inventory.Application.Costing;
+using Inventory.Application.Machines;
 using Inventory.Application.MachineStockSync;
 using Inventory.Domain.Nayax;
 using Inventory.Infrastructure.Data;
@@ -35,10 +36,10 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
     }
 
     public async Task<IReadOnlyList<long>> GetImportedNayaxEventLogIdsAsync(
-        long machineId, CancellationToken cancellationToken) =>
+        long nayaxMachineId, CancellationToken cancellationToken) =>
         await _db.NayaxMachineStockEvents
             .AsNoTracking()
-            .Where(e => e.MachineId == machineId)
+            .Where(e => e.MachineId == nayaxMachineId)
             .Select(e => e.NayaxEventLogId)
             .ToListAsync(cancellationToken);
 
@@ -89,14 +90,14 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
     }
 
     public async Task<MachineStockEventsPage> GetUnprocessedEventsAsync(
-        long machineId,
+        long nayaxMachineId,
         CancellationToken cancellationToken,
         DateTime? fromDateGmt = null,
         bool includeReconciled = false)
     {
         var query = _db.NayaxMachineStockEvents
             .AsNoTracking()
-            .Where(e => e.MachineId == machineId
+            .Where(e => e.MachineId == nayaxMachineId
                 && e.ProcessingStatus == NayaxStockEventProcessingStatus.Unprocessed);
 
         if (fromDateGmt is DateTime from)
@@ -135,11 +136,11 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
     }
 
     public async Task<IReadOnlyList<ManualRefillEvidence>> GetManualMachineRefillsAsync(
-        long machineId, CancellationToken cancellationToken)
+        long localMachineId, CancellationToken cancellationToken)
     {
         var refills = await _db.StockAdjustments
             .AsNoTracking()
-            .Where(sa => sa.MachineId == machineId
+            .Where(sa => sa.MachineId == localMachineId
                 && sa.Reason == StockAdjustmentReason.MachineRefill
                 && sa.Source == StockAdjustmentSource.Manual)
             .Select(sa => new { sa.Id, sa.ProductId, sa.QuantityChange, sa.EffectiveAt })
@@ -151,10 +152,10 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
     }
 
     public async Task<MachineStockEventState?> FindEventAsync(
-        long machineId, int eventId, CancellationToken cancellationToken) =>
+        long nayaxMachineId, int eventId, CancellationToken cancellationToken) =>
         await _db.NayaxMachineStockEvents
             .AsNoTracking()
-            .Where(e => e.Id == eventId && e.MachineId == machineId)
+            .Where(e => e.Id == eventId && e.MachineId == nayaxMachineId)
             .Select(e => new MachineStockEventState(
                 e.Id,
                 e.NayaxEventLogId,
@@ -182,7 +183,7 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
 
     public async Task<MachineRefillApplication> ApplyRefillAsync(
         int eventId,
-        long machineId,
+        MachineIdentity machine,
         long nayaxEventLogId,
         long productId,
         int quantity,
@@ -190,8 +191,13 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
         int? matchedManualStockAdjustmentId,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(machine);
+
+        // The event is the provider's own row, found by the provider's machine number; the movement
+        // below is this application's and records the local machine (issue #741).
+        var nayaxMachineId = machine.RequiredNayaxMachineId;
         var entity = await _db.NayaxMachineStockEvents
-            .FirstOrDefaultAsync(e => e.Id == eventId && e.MachineId == machineId, cancellationToken);
+            .FirstOrDefaultAsync(e => e.Id == eventId && e.MachineId == nayaxMachineId, cancellationToken);
         if (entity is null)
             return new MachineRefillApplication(false, null);
 
@@ -204,7 +210,7 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
                 new InventoryMovement(
                     productId, -quantity, DomainStock.StockAdjustmentReason.MachineRefill,
                     $"Nayax Sync Restock (EventLogID {nayaxEventLogId})",
-                    MachineId: machineId,
+                    MachineId: machine.LocalMachineId,
                     Source: DomainStock.StockAdjustmentSource.Nayax),
                 cancellationToken);
 
@@ -239,10 +245,10 @@ public sealed class EfMachineStockEventStore : IMachineStockEventStore
     }
 
     public async Task<bool> ReconcileAsManualDuplicateAsync(
-        int eventId, long machineId, int? matchedManualStockAdjustmentId, CancellationToken cancellationToken)
+        int eventId, long nayaxMachineId, int? matchedManualStockAdjustmentId, CancellationToken cancellationToken)
     {
         var entity = await _db.NayaxMachineStockEvents
-            .FirstOrDefaultAsync(e => e.Id == eventId && e.MachineId == machineId, cancellationToken);
+            .FirstOrDefaultAsync(e => e.Id == eventId && e.MachineId == nayaxMachineId, cancellationToken);
         if (entity is null)
             return false;
 

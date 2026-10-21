@@ -43,7 +43,7 @@
     <!-- Sync Restock stays a section of its own, outside the two tab panels (issue #768): it is a
          write workflow rather than one of the page's two views of this machine. -->
     <app-machine-restock-sync
-      [machineId]="machine?.machineID"
+      [machineId]="machine?.localMachineId"
       (restockApplied)="refreshProducts()">
     </app-machine-restock-sync>
 
@@ -81,7 +81,7 @@
         data-testid="machine-panel-sales"
         class="mt-4"
         [hidden]="activeTab !== 'sales'">
-        <app-machine-latest-sales [machineId]="machine?.machineID"></app-machine-latest-sales>
+        <app-machine-latest-sales [machineId]="machine?.localMachineId"></app-machine-latest-sales>
       </section>
 
       <section

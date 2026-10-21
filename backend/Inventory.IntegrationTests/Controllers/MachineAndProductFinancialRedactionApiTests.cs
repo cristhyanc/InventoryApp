@@ -61,10 +61,10 @@ public sealed class MachineAndProductFinancialRedactionApiTests
     private const string ProductsUri = "/api/products";
 
     private static readonly string CostedMachineUri =
-        $"{MachinesUri}/{ApiFactory.CostedMachineId.ToString(CultureInfo.InvariantCulture)}";
+        $"{MachinesUri}/{ApiFactory.CostedLocalMachineId.ToString(CultureInfo.InvariantCulture)}";
 
     private static readonly string UncostedMachineUri =
-        $"{MachinesUri}/{ApiFactory.UncostedMachineId.ToString(CultureInfo.InvariantCulture)}";
+        $"{MachinesUri}/{ApiFactory.UncostedLocalMachineId.ToString(CultureInfo.InvariantCulture)}";
 
     private static readonly string MachineProductsUri =
         $"{CostedMachineUri}/products";
@@ -371,6 +371,13 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         /// <summary>The unmapped machine whose completed sale has no COGS.</summary>
         public const long UncostedMachineId = 56;
 
+        /// <summary>
+        /// The two machines' local ids (issue #741), which the <c>api/machines/{id}</c> routes take;
+        /// the provider numbers above are what the fleet read and the stored sales carry.
+        /// </summary>
+        public const long CostedLocalMachineId = 701;
+        public const long UncostedLocalMachineId = 702;
+
         public const long ProductId = 100;
 
         public const decimal InventoryValue = 777.77m;
@@ -446,6 +453,22 @@ public sealed class MachineAndProductFinancialRedactionApiTests
                 Membership(OwnerObjectId, BusinessRole.Owner),
                 Membership(ManagerObjectId, BusinessRole.Manager),
                 Membership(OperatorObjectId, BusinessRole.Operator));
+
+            db.Machines.AddRange(
+                new LocalMachine
+                {
+                    BusinessId = BusinessId,
+                    Id = CostedLocalMachineId,
+                    Name = "Costed",
+                    ExternalMachineId = NayaxExternalId.From(CostedMachineId),
+                },
+                new LocalMachine
+                {
+                    BusinessId = BusinessId,
+                    Id = UncostedLocalMachineId,
+                    Name = "Uncosted",
+                    ExternalMachineId = NayaxExternalId.From(UncostedMachineId),
+                });
 
             db.Products.Add(new Product
             {

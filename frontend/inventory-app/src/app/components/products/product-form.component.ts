@@ -10,6 +10,7 @@ import { Category, Supplier } from '../../models/models';
 import { ProductPriceHistoryComponent } from './product-price-history/product-price-history.component';
 import { ProductGstRuleComponent } from './product-gst-rule/product-gst-rule.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { apiErrorMessage } from '../shared/api-error-message';
 
 @Component({
   selector: 'app-product-form',
@@ -32,6 +33,13 @@ export class ProductFormComponent implements OnInit, OnDestroy {
    */
   sessionActive = false;
 
+  /**
+   * The fields this business's sales provider manages on the loaded product (issue #737):
+   * `["name", "categoryId"]` for a product the provider named, empty for a new product or one this
+   * business maintains itself. See `Inventory.Domain.Providers.ProviderManagedCatalogueFields`.
+   */
+  providerManagedFields: string[] = [];
+
   private readonly sessionActiveSubscription: Subscription;
 
   form = {
@@ -39,6 +47,8 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     sku: '',
     description: '',
     unitPrice: 0,
+    quantityInStock: 0,
+    initialUnitCost: null as number | null,
     lowStockThreshold: 5,
     restockTo: 5,
     unit: 'unit',
@@ -70,11 +80,14 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     if (idParam) {
       this.productId = Number(idParam);
       this.productService.get(this.productId).subscribe((p) => {
+        this.providerManagedFields = p.providerManagedFields ?? [];
         this.form = {
           name: p.name,
           sku: p.sku ?? '',
           description: p.description ?? '',
           unitPrice: p.unitPrice,
+          quantityInStock: p.quantityInStock,
+          initialUnitCost: null,
           lowStockThreshold: p.lowStockThreshold,
           restockTo: p.restockTo,
           unit: p.unit ?? 'unit',
@@ -86,6 +99,30 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     }
   }
 
+  /** Whether the provider names this product, so its name may not be edited here (issue #737). */
+  get nameLocked(): boolean {
+    return this.providerManagedFields.includes('name');
+  }
+
+  /** Whether the provider names this product's category, so it may not be changed here (issue #737). */
+  get categoryLocked(): boolean {
+    return this.providerManagedFields.includes('categoryId');
+  }
+
+  /** The note explaining which fields are locked, or `null` while nothing here is provider-managed. */
+  get providerManagedNote(): string | null {
+    if (this.nameLocked && this.categoryLocked) {
+      return 'Name and category are managed by Nayax and cannot be edited here.';
+    }
+    if (this.nameLocked) {
+      return 'Name is managed by Nayax and cannot be edited here.';
+    }
+    if (this.categoryLocked) {
+      return 'Category is managed by Nayax and cannot be edited here.';
+    }
+    return null;
+  }
+
   save(): void {
     // Checked here as well as disabled in the template, so the write is actually unavailable
     // rather than merely inert - the endpoint refuses it either way.
@@ -93,7 +130,15 @@ export class ProductFormComponent implements OnInit, OnDestroy {
       return;
     }
     if (!this.form.name.trim()) {
-      this.error = 'Name is required.';
+      this.error = 'Product name is required.';
+      return;
+    }
+    if (this.form.unitPrice < 0) {
+      this.error = 'Unit price cannot be negative.';
+      return;
+    }
+    if (!this.productId && this.form.initialUnitCost !== null && this.form.initialUnitCost < 0) {
+      this.error = 'Initial unit cost cannot be negative.';
       return;
     }
     if (this.form.lowStockThreshold < 0) {
@@ -127,7 +172,22 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     if (this.productId) {
       this.productService.update(this.productId, base).subscribe({
         next: () => this.router.navigate(['/products']),
-        error: () => { this.error = 'Failed to update product.'; this.saving = false; }
+        error: (error: unknown) => {
+          this.error = apiErrorMessage(error, 'Failed to update product.');
+          this.saving = false;
+        }
+      });
+    } else {
+      this.productService.create({
+        ...base,
+        quantityInStock: this.form.quantityInStock,
+        initialUnitCost: this.form.initialUnitCost
+      }).subscribe({
+        next: () => this.router.navigate(['/products']),
+        error: (error: unknown) => {
+          this.error = apiErrorMessage(error, 'Failed to create product.');
+          this.saving = false;
+        }
       });
     }
   }

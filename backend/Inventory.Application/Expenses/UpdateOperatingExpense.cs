@@ -1,4 +1,5 @@
 using Inventory.Application.Documents;
+using Inventory.Application.Machines;
 using Inventory.Domain.Expenses;
 
 namespace Inventory.Application.Expenses;
@@ -7,11 +8,14 @@ public sealed class UpdateOperatingExpense
 {
     private readonly IOperatingExpenseStore _store;
     private readonly IDocumentStorage _documents;
+    private readonly ILocalMachineStore _machines;
 
-    public UpdateOperatingExpense(IOperatingExpenseStore store, IDocumentStorage documents)
+    public UpdateOperatingExpense(
+        IOperatingExpenseStore store, IDocumentStorage documents, ILocalMachineStore machines)
     {
         _store = store;
         _documents = documents;
+        _machines = machines;
     }
 
     public async Task<UpdateOperatingExpenseResult> Handle(
@@ -21,6 +25,12 @@ public sealed class UpdateOperatingExpense
                 fields.Description, fields.AmountExGst, fields.GstAmount, fields.TotalAmount,
                 fields.ServicePeriodStart, fields.ServicePeriodEnd, out var details, out var validationError))
             return UpdateOperatingExpenseResult.Invalid(validationError!);
+
+        // The submitted machine is this business's own machine row (issue #780). Checked with the
+        // other field rules, before the expense is read or an attachment is written, so a rejected
+        // machine leaves the stored expense and its document exactly as they were.
+        if (!await OperatingExpenseMachine.IsThisBusinessesAsync(_machines, fields.MachineId, cancellationToken))
+            return UpdateOperatingExpenseResult.Invalid(OperatingExpenseDetails.UnknownMachineMessage);
 
         fields = fields with { Description = details!.Description };
 

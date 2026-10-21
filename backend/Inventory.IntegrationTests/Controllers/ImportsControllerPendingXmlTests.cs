@@ -39,10 +39,6 @@ public class ImportsControllerPendingXmlTests
         var store = new Mock<IImportedReimbursementStore>();
         store.Setup(x => x.HasFileWithContentHashAsync("HASH-A", It.IsAny<CancellationToken>())).ReturnsAsync(false);
         var controller = new ImportsController(
-            new ImportNayaxProductCatalog(
-                Mock.Of<Inventory.Application.Nayax.INayaxLynxClient>(),
-                Mock.Of<INayaxProductCatalogImportStore>(),
-                Mock.Of<IClock>()),
             new ImportNayaxSales(
                 Mock.Of<INayaxSalesWorkbookReader>(),
                 Mock.Of<INayaxSalesImportStore>(),

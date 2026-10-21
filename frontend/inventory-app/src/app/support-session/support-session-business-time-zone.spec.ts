@@ -14,6 +14,7 @@ import { AppComponent } from '../app.component';
 import { BusinessDateTimePipe } from '../formatting/business-date-time.pipe';
 import { BusinessTimeZoneService } from '../formatting/business-time-zone.service';
 import { ConfigService } from '../services/config.service';
+import { provideNayaxConnectionStatus } from '../provider/provider-availability.spec-helpers';
 import { PlatformDiagnosticsAccessService } from '../services/platform-diagnostics-access.service';
 import { SuperAdminBusinessesService } from '../services/super-admin-businesses.service';
 import {
@@ -123,7 +124,11 @@ async function render(options: { accountState?: AccountStateName } = {}): Promis
         }
       },
       { provide: PlatformDiagnosticsAccessService, useValue: { granted$: of(false), isGranted: () => of(false) } },
-      { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } }
+      { provide: SuperAdminBusinessesService, useValue: { pendingCount: () => of(0), changed$: NEVER } },
+      // The sidebar reads the shared provider-availability status, which decides what issue #729's
+      // menu locks; it is stubbed as a connected business so the requests this spec asserts on stay
+      // the ones it is about.
+      provideNayaxConnectionStatus()
     ]
   }).compileComponents();
 

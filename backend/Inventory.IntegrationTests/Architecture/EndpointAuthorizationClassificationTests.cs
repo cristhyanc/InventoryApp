@@ -312,6 +312,13 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/dashboard/summary", "GET", Capability.DashboardView)]
     [InlineData("api/business/current", "GET", Capability.DashboardView)]
     [InlineData("api/pick-list", "GET", Capability.PickListView)]
+
+    // The pick list's batch refill (issue #743). It is a stock write, so it declares
+    // Inventory.Operate on the action beside the controller's PickList.View; requirements
+    // accumulate, so it needs both and the read's rule is unchanged. Both rows are asserted, which
+    // is what would fail if a later change moved the write onto the read's capability alone.
+    [InlineData("api/pick-list/refills", "POST", Capability.PickListView)]
+    [InlineData("api/pick-list/refills", "POST", Capability.InventoryOperate)]
     [InlineData("api/Products", "GET", Capability.InventoryOperate)]
     [InlineData("api/Products/{id:long}", "PUT", Capability.InventoryOperate)]
     [InlineData("api/Products/{id:long}/gst-rule", "PUT", Capability.InventoryOperate)]
@@ -330,6 +337,17 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/stock-history", "GET", Capability.InventoryOperate)]
     [InlineData("api/Machines", "GET", Capability.InventoryOperate)]
     [InlineData("api/Machines/{id:long}/sync-restock", "POST", Capability.InventoryOperate)]
+
+    // The business's own machine records (issue #740): recording the machines you refill is the same
+    // day-to-day inventory work as refilling them, so this surface declares the capability the fleet
+    // reads already declare rather than introducing one. Which also means a read-only support
+    // session is refused every write here by the central GET/HEAD rule of issue #551.
+    [InlineData("api/local-machines", "GET", Capability.InventoryOperate)]
+    [InlineData("api/local-machines", "POST", Capability.InventoryOperate)]
+    [InlineData("api/local-machines/{id:long}", "GET", Capability.InventoryOperate)]
+    [InlineData("api/local-machines/{id:long}", "PUT", Capability.InventoryOperate)]
+    [InlineData("api/local-machines/{id:long}/deactivate", "POST", Capability.InventoryOperate)]
+    [InlineData("api/local-machines/{id:long}/reactivate", "POST", Capability.InventoryOperate)]
     [InlineData("api/Sites", "GET", Capability.InventoryOperate)]
     [InlineData("api/purchases", "POST", Capability.PurchasingOperate)]
     [InlineData("api/purchases/{id:int}/file", "GET", Capability.PurchasingOperate)]
@@ -367,7 +385,12 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/reports/dashboard", "GET", Capability.ReportsView)]
     [InlineData("api/reports/transactions", "GET", Capability.ReportsView)]
     [InlineData("api/reports/{report}/export", "GET", Capability.ReportsView)]
-    [InlineData("api/imports/products", "POST", Capability.ImportsRun)]
+    // The catalogue import, which is the catalogue review since issue #739: starting and applying
+    // one is running the import, decided row by row, so both carry the import capability. Resolving
+    // the sales a link explains is Owner-only, because it replays cost history (issue #738).
+    [InlineData("api/catalogue-review", "POST", Capability.ImportsRun)]
+    [InlineData("api/catalogue-review/apply", "POST", Capability.ImportsRun)]
+    [InlineData("api/catalogue-review/unresolved-sales/apply", "POST", Capability.DataRepair)]
     [InlineData("api/imports/nayax-sales", "POST", Capability.ImportsRun)]
     [InlineData("api/imports/pending-xml", "POST", Capability.ImportsRun)]
     [InlineData("api/site-commissions", "GET", Capability.SiteCommissionsManage)]

@@ -1,3 +1,4 @@
+using Inventory.Application.Machines;
 using Inventory.Domain.Nayax;
 
 namespace Inventory.Application.MachineStockSync;
@@ -18,27 +19,34 @@ public sealed class ApplyMachineStockSync
         _store = store;
     }
 
+    /// <summary>
+    /// Applies the accepted events of <paramref name="machine"/>: its events are the provider's and
+    /// are found by its Nayax number, and its manual refills and the movements written here name its
+    /// local id (issue #741).
+    /// </summary>
     public async Task<NayaxMachineStockApplyResponseDto> Handle(
-        long machineId, IReadOnlyList<int> eventIds, CancellationToken cancellationToken)
+        MachineIdentity machine, IReadOnlyList<int> eventIds, CancellationToken cancellationToken)
     {
-        var manualRefills = await _store.GetManualMachineRefillsAsync(machineId, cancellationToken);
+        ArgumentNullException.ThrowIfNull(machine);
+
+        var manualRefills = await _store.GetManualMachineRefillsAsync(machine.LocalMachineId, cancellationToken);
         var results = new List<NayaxStockEventApplyResultDto>();
 
         foreach (var eventId in eventIds.Distinct())
         {
-            results.Add(await ApplyOneAsync(machineId, eventId, manualRefills, cancellationToken));
+            results.Add(await ApplyOneAsync(machine, eventId, manualRefills, cancellationToken));
         }
 
         return new NayaxMachineStockApplyResponseDto(results);
     }
 
     private async Task<NayaxStockEventApplyResultDto> ApplyOneAsync(
-        long machineId,
+        MachineIdentity machine,
         int eventId,
         IReadOnlyList<ManualRefillEvidence> manualRefills,
         CancellationToken cancellationToken)
     {
-        var state = await _store.FindEventAsync(machineId, eventId, cancellationToken);
+        var state = await _store.FindEventAsync(machine.RequiredNayaxMachineId, eventId, cancellationToken);
         if (state is null)
             return new(eventId, NayaxStockEventApplyOutcome.Error, "Event not found for this machine.", null);
 
@@ -88,7 +96,7 @@ public sealed class ApplyMachineStockSync
             default:
                 var application = await _store.ApplyRefillAsync(
                     state.Id,
-                    machineId,
+                    machine,
                     state.NayaxEventLogId,
                     state.MatchedProductId!.Value,
                     state.ParsedQuantity!.Value,

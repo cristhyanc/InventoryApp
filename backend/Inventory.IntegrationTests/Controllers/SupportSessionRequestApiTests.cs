@@ -140,7 +140,7 @@ public class SupportSessionRequestApiTests
     [InlineData("Expenses.Manage", "POST", "/api/operating-expenses")]
     [InlineData("Expenses.Manage", "PUT", "/api/operating-expenses/999999")]
     [InlineData("Expenses.Manage", "DELETE", "/api/operating-expenses/999999")]
-    [InlineData("Imports.Run", "POST", "/api/imports/products")]
+    [InlineData("Imports.Run", "POST", "/api/catalogue-review")]
     [InlineData("SiteCommissions.Manage", "POST", "/api/site-commissions/agreements")]
     [InlineData("Integration.Manage", "POST", "/api/settings/nayax-processing-fee-rates")]
     [InlineData("Data.Repair", "POST", "/api/admin/historical-gst-classification/preview")]

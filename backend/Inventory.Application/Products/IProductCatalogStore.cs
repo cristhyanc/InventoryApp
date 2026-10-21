@@ -33,7 +33,10 @@ public sealed record ProductCatalogFilter(
 public interface IProductCatalogStore
 {
     /// <summary>
-    /// The filtered catalogue ordered by name, with category, supplier and stock-adjustment detail.
+    /// The filtered catalogue ordered by name, with category, supplier and stock-adjustment detail,
+    /// and with each product's <see cref="ProductRecord.DeletionEligibility"/> resolved (issue #737):
+    /// this is the listing a person maintains the catalogue from, so it says which of its products
+    /// may actually be deleted rather than leaving a client to attempt one that must fail.
     /// </summary>
     Task<IReadOnlyList<ProductRecord>> ListOrderedByNameAsync(
         ProductCatalogFilter filter, CancellationToken cancellationToken);
@@ -41,6 +44,10 @@ public interface IProductCatalogStore
     /// <summary>
     /// The filtered catalogue in no particular order, for a caller that ranks or enriches the rows
     /// itself (<see cref="ListLowStockProducts"/>, <c>Inventory.Application.Machines.ListMachineProducts</c>).
+    ///
+    /// <para><see cref="ProductRecord.DeletionEligibility"/> is deliberately <strong>not</strong>
+    /// resolved here: none of those callers deletes a product, and the answer costs a count of every
+    /// kind of row that refers to one. A caller that needs it asks one of the other two reads.</para>
     /// </summary>
     Task<IReadOnlyList<ProductRecord>> ListUnorderedAsync(
         ProductCatalogFilter filter, CancellationToken cancellationToken);
@@ -52,6 +59,10 @@ public interface IProductCatalogStore
     /// a retired product's history and its reactivation reachable while the listings leave it out:
     /// retirement decides what a listing offers to work with, never what the business may look
     /// at.</para>
+    ///
+    /// <para><see cref="ProductRecord.DeletionEligibility"/> is resolved here too (issue #737), for
+    /// the same reason it is on the ordered listing: this read is the other surface a product is
+    /// maintained from.</para>
     /// </summary>
     Task<ProductRecord?> FindAsync(long id, CancellationToken cancellationToken);
 }

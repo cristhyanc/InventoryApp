@@ -2,6 +2,7 @@ using Azure.Identity;
 using Azure.Storage.Blobs;
 using Inventory.Application.Businesses;
 using Inventory.Application.CatalogReconciliation;
+using Inventory.Application.CatalogueReview;
 using Inventory.Application.Categories;
 using Inventory.Application.Commissions;
 using Inventory.Application.Costing;
@@ -207,6 +208,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<INayaxConnectionSaveTransactions, EfNayaxConnectionSaveTransactions>();
         services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
         services.AddScoped<ICategoryStore, EfCategoryStore>();
+        services.AddScoped<ILocalMachineStore, EfLocalMachineStore>();
         services.AddScoped<ISupplierStore, EfSupplierStore>();
         services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
         services.AddScoped<IProductStore, EfProductStore>();
@@ -234,12 +236,24 @@ public static class InfrastructureServiceCollectionExtensions
         // How a Nayax product id becomes a local product id (issue #733): Product.ExternalProductId
         // (issue #759), read by every feature that matches live Nayax machine data to the catalogue.
         services.AddScoped<INayaxProductLinkStore, EfNayaxProductLinkStore>();
+        // And how a Nayax machine number becomes a local machine id (issue #780):
+        // LocalMachine.ExternalMachineId, the machine half of the same lookup.
+        services.AddScoped<INayaxMachineLinkStore, EfNayaxMachineLinkStore>();
         services.AddScoped<IOutstandingSupplierOrderQuantityStore, EfOutstandingSupplierOrderQuantityStore>();
         services.AddScoped<IPickListStorageStockStore, EfPickListStorageStockStore>();
+        // The batch refill's own write path (issue #743). Scoped like every other adapter here: the
+        // BEGIN IMMEDIATE transaction it opens is on the request's own AppDbContext, which is what
+        // puts the key claim, the storage check and the deductions inside one write lock.
+        services.AddScoped<IPickListRefillStore, EfPickListRefillStore>();
         services.AddScoped<ILatestNayaxSalesStore, EfLatestNayaxSalesStore>();
         services.AddScoped<IInventoryCountAdjustmentStore, EfInventoryCountAdjustmentStore>();
         services.AddScoped<IImportedReimbursementStore, EfImportedReimbursementStore>();
-        services.AddScoped<INayaxProductCatalogImportStore, EfNayaxProductCatalogImportStore>();
+        // The provider catalogue review (issue #738), the catalogue import's one persistence
+        // adapter since issue #739. Scoped like every other adapter here: both
+        // operations read and write one caller's resolved business through the request's own
+        // AppDbContext, and the review's link-or-create apply is decided inside its transaction.
+        services.AddScoped<ICatalogueReviewStore, EfCatalogueReviewStore>();
+        services.AddScoped<ILinkedProviderSaleResolutionStore, EfLinkedProviderSaleResolutionStore>();
         services.AddScoped<INayaxSalesImportStore, EfNayaxSalesImportStore>();
         services.AddScoped<IProviderDataCoverageStore, EfProviderDataCoverageStore>();
         services.AddScoped<IDashboardSummarySalesFactsProvider, EfDashboardSummarySalesFactsProvider>();

@@ -3,15 +3,26 @@ import { provideRouter } from '@angular/router';
 import { of, throwError } from 'rxjs';
 import { MachineListComponent } from './machine-list.component';
 import { MachineService } from '../../services/machine.service';
+import { LocalMachineService } from '../../services/local-machine.service';
 import { Machine } from '../../models/models';
 import { AccessService } from '../../access/access.service';
-import { NayaxConnectionService } from '../../services/nayax-connection.service';
+import { SupportSessionService } from '../../support-session/support-session.service';
+import {
+  provideNayaxConnectionStatus,
+  providerAvailabilityDouble
+} from '../../provider/provider-availability.spec-helpers';
 
-/** The banner (issue #539) is composed by this page; it is stubbed `Ready` so it stays hidden. */
-function nayaxStatusBannerProviders(status: 'Ready' | 'NotConfigured' = 'Ready', canViewFinancials = true) {
+/**
+ * The providers this page's children need: the status banner (issue #539) and the shared
+ * availability signal the live fleet section reads (issue #728), plus the business's own machine
+ * list composed into the page since issue #740.
+ */
+function machinePageProviders(status: 'Ready' | 'NotConfigured' = 'Ready', canViewFinancials = true) {
   return [
-    { provide: NayaxConnectionService, useValue: { status: () => of({ status, machineChecksPending: false }) } },
-    { provide: AccessService, useValue: { allows: () => of(canViewFinancials) } }
+    provideNayaxConnectionStatus(status),
+    { provide: AccessService, useValue: { allows: () => of(canViewFinancials) } },
+    { provide: LocalMachineService, useValue: { getAll: () => of([]) } },
+    { provide: SupportSessionService, useValue: { active$: of(false) } }
   ];
 }
 
@@ -42,13 +53,13 @@ function machine(overrides: Partial<Machine>): Machine {
   };
 }
 
-const MACHINE_A = machine({ machineID: 10, machineName: 'Front Lobby Snacks', machineNumber: 'A-100', todayGrossRevenue: 12.5, todayDirectProfit: 5 });
-const MACHINE_B = machine({ machineID: 20, machineName: 'Gym Drinks', machineNumber: 'B-200', todayGrossRevenue: 30, todayDirectProfit: null });
+const MACHINE_A = machine({ machineID: 10, localMachineId: 110, machineName: 'Front Lobby Snacks', machineNumber: 'A-100', todayGrossRevenue: 12.5, todayDirectProfit: 5 });
+const MACHINE_B = machine({ machineID: 20, localMachineId: 120, machineName: 'Gym Drinks', machineNumber: 'B-200', todayGrossRevenue: 30, todayDirectProfit: null });
 
 describe('MachineListComponent loading', () => {
   it('loads machines from MachineService.getAll on init', () => {
     const getAll = jest.fn(() => of([MACHINE_A, MACHINE_B]));
-    const component = new MachineListComponent({ getAll } as unknown as MachineService, accessServiceStub());
+    const component = new MachineListComponent({ getAll } as unknown as MachineService, providerAvailabilityDouble(), accessServiceStub());
 
     component.ngOnInit();
 
@@ -59,21 +70,27 @@ describe('MachineListComponent loading', () => {
     expect(component.loadState.loadFailed).toBe(false);
   });
 
-  it('flags the load as failed when MachineService.getAll errors, without fabricating data', () => {
+  /**
+   * An outage is reported as an outage (issue #740, over issue #728's shared path): the live fleet
+   * section is replaced by an error rather than by an empty list, and no machine is fabricated.
+   */
+  it('reports an error in place of the fleet when MachineService.getAll fails, without fabricating data', () => {
     const getAll = jest.fn(() => throwError(() => new Error('network error')));
-    const component = new MachineListComponent({ getAll } as unknown as MachineService, accessServiceStub());
+    const component = new MachineListComponent({ getAll } as unknown as MachineService, providerAvailabilityDouble(), accessServiceStub());
 
     component.ngOnInit();
 
-    expect(component.loadState.loadFailed).toBe(true);
-    expect(component.loadState.loaded).toBe(false);
+    expect(component.fleetError).toContain('could not be loaded from Nayax');
     expect(component.machines).toEqual([]);
+    // The section is still "shown": an outage is not an unavailable provider, so the page says so
+    // instead of silently dropping the part of itself the provider feeds.
+    expect(component.fleetShown).toBe(true);
   });
 });
 
 describe('MachineListComponent search/filter', () => {
   it('filters by machine name, case-insensitively', () => {
-    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, accessServiceStub());
+    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, providerAvailabilityDouble(), accessServiceStub());
     component.ngOnInit();
 
     component.onSearchChange('gym');
@@ -82,7 +99,7 @@ describe('MachineListComponent search/filter', () => {
   });
 
   it('filters by machine number', () => {
-    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, accessServiceStub());
+    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, providerAvailabilityDouble(), accessServiceStub());
     component.ngOnInit();
 
     component.onSearchChange('a-100');
@@ -91,7 +108,7 @@ describe('MachineListComponent search/filter', () => {
   });
 
   it('shows no matches for an unmatched search term, without discarding the full machine list', () => {
-    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, accessServiceStub());
+    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, providerAvailabilityDouble(), accessServiceStub());
     component.ngOnInit();
 
     component.onSearchChange('does-not-exist');
@@ -101,7 +118,7 @@ describe('MachineListComponent search/filter', () => {
   });
 
   it('clearing the search restores the full list', () => {
-    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, accessServiceStub());
+    const component = new MachineListComponent({ getAll: () => of([MACHINE_A, MACHINE_B]) } as unknown as MachineService, providerAvailabilityDouble(), accessServiceStub());
     component.ngOnInit();
     component.onSearchChange('gym');
 
@@ -120,7 +137,7 @@ describe('MachineListComponent rendering', () => {
       providers: [
         provideRouter([]),
         { provide: MachineService, useValue: { getAll: () => of(machines) } },
-        ...nayaxStatusBannerProviders()
+        ...machinePageProviders()
       ]
     }).compileComponents();
 
@@ -171,23 +188,34 @@ describe('MachineListComponent rendering', () => {
       providers: [
         provideRouter([]),
         { provide: MachineService, useValue: { getAll: () => throwError(() => new Error('boom')) } },
-        ...nayaxStatusBannerProviders()
+        ...machinePageProviders()
       ]
     }).compileComponents();
     const fixture = TestBed.createComponent(MachineListComponent);
     fixture.detectChanges();
     const host = fixture.nativeElement as HTMLElement;
 
-    expect(host.textContent).toContain('Failed to load machines.');
+    expect(host.textContent).toContain('The live machine list could not be loaded from Nayax.');
   });
 
   it('links each machine to its existing machine detail route', async () => {
     const fixture = await renderList([MACHINE_A]);
     const host = fixture.nativeElement as HTMLElement;
 
-    const link = host.querySelector('a[href="/machines/10"]');
+    const link = host.querySelector('a[href="/machines/110"]');
     expect(link).not.toBeNull();
     expect(link?.textContent).toContain('Front Lobby Snacks');
+  });
+
+  it('links a machine by its local id, and does not link one the business has no local record for (issue #741)', async () => {
+    const unrecorded = machine({ machineID: 30, localMachineId: null, machineName: 'Not yet recorded' });
+    const fixture = await renderList([MACHINE_A, unrecorded]);
+    const host = fixture.nativeElement as HTMLElement;
+
+    expect(host.querySelector('a[href="/machines/10"]')).toBeNull();
+    const cards = Array.from(host.querySelectorAll('a')).filter((a) => a.textContent?.includes('Not yet recorded'));
+    expect(cards).toHaveLength(1);
+    expect(cards[0].getAttribute('href')).toBeNull();
   });
 
   it('shows the Nayax status banner when the connection is not Ready (issue #539)', async () => {
@@ -196,7 +224,7 @@ describe('MachineListComponent rendering', () => {
       providers: [
         provideRouter([]),
         { provide: MachineService, useValue: { getAll: () => of([MACHINE_A]) } },
-        ...nayaxStatusBannerProviders('NotConfigured')
+        ...machinePageProviders('NotConfigured')
       ]
     }).compileComponents();
     const fixture = TestBed.createComponent(MachineListComponent);
@@ -238,7 +266,7 @@ describe('MachineListComponent financial figures gated on Dashboard.ViewFinancia
       providers: [
         provideRouter([]),
         { provide: MachineService, useValue: { getAll: () => of(machines) } },
-        ...nayaxStatusBannerProviders('Ready', canViewFinancials)
+        ...machinePageProviders('Ready', canViewFinancials)
       ]
     }).compileComponents();
 
