@@ -44,7 +44,6 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     name: '',
     sku: '',
     description: '',
-    unitPrice: 0,
     quantityInStock: 0,
     initialUnitCost: null as number | null,
     lowStockThreshold: 5,
@@ -82,7 +81,6 @@ export class ProductFormComponent implements OnInit, OnDestroy {
           name: p.name,
           sku: p.sku ?? '',
           description: p.description ?? '',
-          unitPrice: p.unitPrice,
           quantityInStock: p.quantityInStock,
           initialUnitCost: null,
           lowStockThreshold: p.lowStockThreshold,
@@ -129,10 +127,6 @@ export class ProductFormComponent implements OnInit, OnDestroy {
       this.error = 'Product name is required.';
       return;
     }
-    if (this.form.unitPrice < 0) {
-      this.error = 'Unit price cannot be negative.';
-      return;
-    }
     if (!this.productId && this.form.initialUnitCost !== null && this.form.initialUnitCost < 0) {
       this.error = 'Initial unit cost cannot be negative.';
       return;
@@ -156,7 +150,6 @@ export class ProductFormComponent implements OnInit, OnDestroy {
       name: this.form.name.trim(),
       sku: this.form.sku || null,
       description: this.form.description || null,
-      unitPrice: this.form.unitPrice,
       lowStockThreshold: this.form.lowStockThreshold,
       restockTo: this.form.restockTo,
       unit: this.form.unit || null,

@@ -42,7 +42,6 @@ public static class ProductRecordResponseMapper
             Name = record.Name,
             Sku = record.Sku,
             Description = record.Description,
-            UnitPrice = record.UnitPrice,
             AverageUnitCost = record.AverageUnitCost,
             CostingQuantity = record.CostingQuantity,
             InventoryValue = visibility.Withhold(record.InventoryValue),

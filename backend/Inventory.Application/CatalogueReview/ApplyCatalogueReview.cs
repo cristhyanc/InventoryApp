@@ -28,8 +28,16 @@ namespace Inventory.Application.CatalogueReview;
 /// answer honest at the row level too.</para>
 ///
 /// <para><strong>Nothing a caller submits is written.</strong> The request carries item keys, three
-/// actions and two field answers. Every provider name, price and group id comes from the stored
+/// actions and the negotiable field answers. Every provider name and group id comes from the stored
 /// review's own items, and every local value from the rows read inside the transaction.</para>
+///
+/// <para><strong>A pre-#792 review is refused outright.</strong> A review stored before the product
+/// selling price was removed still carries the provider prices it meant to negotiate, so applying
+/// it would carry out only part of the plan the operator was answering. The adapter refuses it on
+/// the authoritative row, inside this transaction and before anything is staged, with
+/// <see cref="StaleSellingPriceReviewMessage"/>; a decision that still names the retired price
+/// field is refused here, with <see cref="RetiredSellingPriceDecisionMessage"/>. Both leave the
+/// catalogue exactly as it was.</para>
 ///
 /// <para><strong>It touches no sale and recosts nothing.</strong> Linking a provider product id to a
 /// local product changes no stored sale's <c>ProductId</c> and replays no costing: sales already
@@ -43,6 +51,28 @@ public sealed class ApplyCatalogueReview
     /// <summary>The caller-safe refusal when the named review is not one this business holds.</summary>
     public const string UnknownReviewMessage =
         "This catalogue review does not exist. Start the review again.";
+
+    /// <summary>
+    /// The refusal for a review stored before issue #792 removed the product selling price.
+    ///
+    /// <para>Such a review was read against a catalogue field that no longer exists, and its entries
+    /// still carry the provider prices it was going to negotiate. Applying it would mean carrying
+    /// out half a plan - the links and the provider-owned names and categories, but not the price
+    /// decisions the operator was answering - so the whole apply is refused before anything is
+    /// written, and the operator is asked for a reading of the catalogue as it is now.</para>
+    /// </summary>
+    public const string StaleSellingPriceReviewMessage =
+        "This catalogue review was started before product prices were removed, so it cannot be "
+            + "applied. Nothing was changed. Start the review again.";
+
+    /// <summary>
+    /// The refusal for a decision about the retired selling-price field. A product carries no price
+    /// since issue #792, so there is nothing to keep or take; an older client that still sends one
+    /// is refused outright rather than having it silently dropped, because an apply that reported
+    /// success would say the operator's price answer had been carried out.
+    /// </summary>
+    public const string RetiredSellingPriceDecisionMessage =
+        "a product's price is no longer part of the catalogue, so it cannot be decided here.";
 
     private readonly ICatalogueReviewStore _store;
     private readonly IAuthenticatedActorAccessor _actors;
@@ -111,47 +141,14 @@ public sealed class ApplyCatalogueReview
 
         foreach (var decision in submitted)
         {
-            if (!itemsByKey.TryGetValue(decision.ItemId, out var item))
+            var refusal = RefuseDecision(decision, itemsByKey, seen, out var accepted);
+            if (refusal is not null)
             {
-                refusals.Add($"Entry {decision.ItemId} is not part of this review.");
+                refusals.Add(refusal);
                 continue;
             }
 
-            if (!seen.Add(decision.ItemId))
-            {
-                refusals.Add($"Entry {decision.ItemId} was decided more than once.");
-                continue;
-            }
-
-            var alreadyLinked = item.Entry.LinkedProductId.HasValue || item.Entry.LinkedCategoryId.HasValue;
-            if (CatalogueReviewPolicy.DecisionRefusal(decision.Action, decision.LocalRowId, alreadyLinked)
-                is { } refusal)
-            {
-                refusals.Add($"Entry {decision.ItemId}: {refusal}");
-                continue;
-            }
-
-            var fields = decision.Fields ?? [];
-            if (fields.Select(field => field.Field).Distinct().Count() != fields.Count)
-            {
-                refusals.Add($"Entry {decision.ItemId}: a field was decided more than once.");
-                continue;
-            }
-
-            if (item.Entry.Kind == ProviderCatalogueEntryKind.Category && fields.Count > 0)
-            {
-                refusals.Add(
-                    $"Entry {decision.ItemId}: a category has no negotiable fields - the provider owns "
-                        + "its name and nothing else of it is imported.");
-                continue;
-            }
-
-            decisions.Add(new CatalogueReviewApplyDecision(
-                decision.ItemId,
-                decision.Action,
-                decision.LocalRowId,
-                FieldDecision(fields, NegotiableCatalogueField.UnitPrice),
-                FieldDecision(fields, NegotiableCatalogueField.UnitVolume)));
+            decisions.Add(accepted!);
         }
 
         if (refusals.Count > 0)
@@ -159,6 +156,49 @@ public sealed class ApplyCatalogueReview
                 "Nothing was applied. " + string.Join(" ", refusals));
 
         return decisions;
+    }
+
+    /// <summary>
+    /// Validates one submitted decision against the stored review's items and this apply's
+    /// already-seen set. Returns the caller-safe refusal text with <paramref name="accepted"/> left
+    /// null, or null with <paramref name="accepted"/> set to the plan entry.
+    /// </summary>
+    private static string? RefuseDecision(
+        CatalogueReviewDecisionRequest decision,
+        IReadOnlyDictionary<long, PersistedCatalogueReviewItem> itemsByKey,
+        HashSet<long> seen,
+        out CatalogueReviewApplyDecision? accepted)
+    {
+        accepted = null;
+
+        if (!itemsByKey.TryGetValue(decision.ItemId, out var item))
+            return $"Entry {decision.ItemId} is not part of this review.";
+
+        if (!seen.Add(decision.ItemId))
+            return $"Entry {decision.ItemId} was decided more than once.";
+
+        var alreadyLinked = item.Entry.LinkedProductId.HasValue || item.Entry.LinkedCategoryId.HasValue;
+        if (CatalogueReviewPolicy.DecisionRefusal(decision.Action, decision.LocalRowId, alreadyLinked)
+            is { } refusal)
+            return $"Entry {decision.ItemId}: {refusal}";
+
+        var fields = decision.Fields ?? [];
+        if (fields.Select(field => field.Field).Distinct().Count() != fields.Count)
+            return $"Entry {decision.ItemId}: a field was decided more than once.";
+
+        if (item.Entry.Kind == ProviderCatalogueEntryKind.Category && fields.Count > 0)
+            return $"Entry {decision.ItemId}: a category has no negotiable fields - the provider owns "
+                + "its name and nothing else of it is imported.";
+
+        if (fields.Any(field => field.Field == NegotiableCatalogueField.UnitPrice))
+            return $"Entry {decision.ItemId}: {RetiredSellingPriceDecisionMessage}";
+
+        accepted = new CatalogueReviewApplyDecision(
+            decision.ItemId,
+            decision.Action,
+            decision.LocalRowId,
+            FieldDecision(fields, NegotiableCatalogueField.UnitVolume));
+        return null;
     }
 
     private static ProviderFieldDecision? FieldDecision(

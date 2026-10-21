@@ -13,10 +13,12 @@ namespace InventoryApi.Tests.Adapters.Persistence;
 /// key and its index, and the stored product → supplier associations go with it. The owner approved
 /// that deletion on 21 October 2026, so what this test has to prove is the boundary of it.
 ///
-/// <para><strong>Nothing else about a product moves.</strong> Every other column keeps its value -
-/// the selling price <c>UnitPrice</c> explicitly, because removing it belongs to issue #792 and not
-/// to this change - and the table keeps its own key, its category foreign key and the rest of its
-/// indexes, including the filtered unique index on the provider's external id.</para>
+/// <para><strong>Nothing else about a product moves.</strong> Every other column keeps its value,
+/// and the table keeps its own key, its category foreign key and the rest of its indexes, including
+/// the filtered unique index on the provider's external id. The selling price this test originally
+/// asserted alongside them is no longer readable through the EF model: issue #792 dropped
+/// <c>Products.UnitPrice</c> in the next migration, and the surviving costing fields stand for the
+/// same point.</para>
 ///
 /// <para><strong>Every independent supplier survives.</strong> A purchase's supplier, a supplier
 /// order's supplier, the suppliers themselves and the unit costs, quantities and totals recorded
@@ -104,11 +106,11 @@ public class RemoveProductSupplierMigrationTests
 
         await using var after = TestAppDbContext.Unrestricted(options);
 
-        // Every other product field, the selling price included: #792 removes that, not this change.
+        // Every other product field, the costing ones above all.
         var product = await after.Products.SingleAsync();
         Assert.Equal(
-            (7L, "Chips", "CHIP-1", "A bag", 3.50m, 1.10m, 12, 13.20m),
-            (product.Id, product.Name, product.Sku, product.Description, product.UnitPrice,
+            (7L, "Chips", "CHIP-1", "A bag", 1.10m, 12, 13.20m),
+            (product.Id, product.Name, product.Sku, product.Description,
                 product.AverageUnitCost, product.CostingQuantity, product.InventoryValue));
         Assert.Equal(
             (12, 2, 20, "unit", true, 3L, "4321"),
@@ -162,7 +164,7 @@ public class RemoveProductSupplierMigrationTests
 
         await using var after = TestAppDbContext.Unrestricted(options);
         var product = await after.Products.SingleAsync();
-        Assert.Equal((7L, "Chips", 3.50m, 3L), (product.Id, product.Name, product.UnitPrice, product.CategoryId));
+        Assert.Equal((7L, "Chips", 1.10m, 3L), (product.Id, product.Name, product.AverageUnitCost, product.CategoryId));
         Assert.Equal(2, (await after.Receipts.SingleAsync()).SupplierId);
         Assert.Equal(2, (await after.SupplierOrders.SingleAsync()).SupplierId);
         Assert.Empty(await ForeignKeyViolationsAsync(connection));

@@ -28,7 +28,7 @@
       <!--
         The Actions column is pinned to the right edge of this scroll area (rather than the whole
         table) so Edit/Stock/Delete stay visible and usable without scrolling to discover them when
-        long product names or a populated Category/Price/Stock/Status set of columns push
+        long product names or a populated Category/Stock/Status set of columns push
         the table wider than the viewport. Each sticky cell carries its own opaque #410 token
         background, because a transparent cell would let scrolled columns show through underneath it.
       -->
@@ -41,9 +41,6 @@
               </th>
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('category')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('category')">{{ sortLabel('Category', 'category') }}</button>
-              </th>
-              <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('price')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('price')">{{ sortLabel('Price', 'price') }}</button>
               </th>
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('stock')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('stock')">{{ sortLabel('Stock', 'stock') }}</button>
@@ -64,7 +61,6 @@
                     [attr.aria-label]="'Edit product ' + p.name">{{ p.name }}</a>
                 </td>
                 <td class="table-cell">{{ p.category?.name }}</td>
-                <td class="table-cell table-num">${{ p.unitPrice.toFixed(2) }}</td>
                 <td class="table-cell">
                   <span class="badge" [ngClass]="p.isActive ? (p.isLowStock ? 'badge-danger' : 'badge-success') : 'badge-neutral'">
                     {{ p.quantityInStock }} {{ p.unit }}

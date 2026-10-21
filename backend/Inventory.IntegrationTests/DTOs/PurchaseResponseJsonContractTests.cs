@@ -39,7 +39,6 @@ public class PurchaseResponseJsonContractTests
         "Coke",
         "SKU-1",
         "A can",
-        3.50m,
         1.25m,
         7,
         8.75m,
@@ -126,7 +125,6 @@ public class PurchaseResponseJsonContractTests
                     Name = item.Product.Name,
                     Sku = item.Product.Sku,
                     Description = item.Product.Description,
-                    UnitPrice = item.Product.UnitPrice,
                     AverageUnitCost = item.Product.AverageUnitCost,
                     CostingQuantity = item.Product.CostingQuantity,
                     InventoryValue = item.Product.InventoryValue,
@@ -242,11 +240,16 @@ public class PurchaseResponseJsonContractTests
             PurchaseResponseMapper.ToResponse(FullyPopulatedRecord(), Visible), WebDefaults);
 
         using var document = JsonDocument.Parse(json);
-        var product = document.RootElement.GetProperty("items")[0].GetProperty("product");
+        var item = document.RootElement.GetProperty("items")[0];
+        var product = item.GetProperty("product");
         Assert.False(product.TryGetProperty("supplierId", out _));
         Assert.False(product.TryGetProperty("supplier", out _));
+        // And no selling price since issue #792 (A2 of #786) - while the line's own recorded
+        // `unitCost`, which is a cost, is untouched.
+        Assert.False(product.TryGetProperty("unitPrice", out _));
+        Assert.True(item.TryGetProperty("unitCost", out _));
         Assert.Equal("Coke", product.GetProperty("name").GetString());
-        Assert.Equal(3.50m, product.GetProperty("unitPrice").GetDecimal());
+        Assert.Equal(1.25m, product.GetProperty("averageUnitCost").GetDecimal());
         Assert.Equal((long?)5, product.GetProperty("categoryId").GetInt64());
 
         Assert.Equal(

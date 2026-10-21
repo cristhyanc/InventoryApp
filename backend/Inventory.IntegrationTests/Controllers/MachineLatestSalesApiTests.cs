@@ -582,7 +582,6 @@ public sealed class MachineLatestSalesApiTests : IClassFixture<MachineLatestSale
             {
                 BusinessId = BusinessId,
                 Name = "Coke",
-                UnitPrice = 3.5m,
                 AverageUnitCost = 1.25m,
                 CostingQuantity = 40,
                 InventoryValue = 50m,

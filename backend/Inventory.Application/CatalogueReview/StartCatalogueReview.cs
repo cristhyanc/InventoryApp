@@ -10,9 +10,13 @@ namespace Inventory.Application.CatalogueReview;
 /// store the result as the business's pending review.
 ///
 /// <para><strong>It is a preview of a catalogue import, not an import.</strong> No product, category,
-/// price, name or sale is written. The one thing it writes is the review itself, because the apply is
-/// authorised by a stored review rather than by a payload - every provider name, price and group id
-/// the apply writes comes from these rows.</para>
+/// name or sale is written. The one thing it writes is the review itself, because the apply is
+/// authorised by a stored review rather than by a payload - every provider name and group id the
+/// apply writes comes from these rows.</para>
+///
+/// <para><strong>It proposes no selling price</strong> (issue #792, A2 of #786). A product carries
+/// none, so the provider's <c>ProductDefaultRetailPrice</c> is not read, no entry records a provider
+/// price, and no product is offered a keep-or-take price choice.</para>
 ///
 /// <para><strong>Nothing is linked by name.</strong> A provider entry resolves to a local row only
 /// through that row's <c>ExternalProductId</c>/<c>ExternalCategoryId</c>. Two rows that happen to
@@ -117,7 +121,6 @@ public sealed class StartCatalogueReview
                 externalId,
                 group.ProductGroupName,
                 ProviderGroupExternalId: null,
-                ProviderUnitPrice: null,
                 ProviderUnitVolume: null,
                 LinkedProductId: null,
                 LinkedCategoryId: linkedCategory?.CategoryId,
@@ -156,9 +159,10 @@ public sealed class StartCatalogueReview
                 externalId,
                 product.ProductName,
                 product.ProductGroupId is long groupId ? NayaxExternalId.From(groupId) : null,
-                ProviderCatalogueFieldValue.FromPrice(product.ProductDefaultRetailPrice),
                 // No provider value, and deliberately so: the authoritative Lynx contract publishes
                 // no unit or volume label - see CatalogueReviewPolicy.UnitVolumeUnavailableNote.
+                // The provider's ProductDefaultRetailPrice is deliberately not read either: there is
+                // no local selling price for it to be proposed against since issue #792.
                 ProviderUnitVolume: null,
                 LinkedProductId: linkedProduct?.ProductId,
                 LinkedCategoryId: null,
@@ -202,7 +206,8 @@ public sealed class StartCatalogueReview
     /// A product entry. Its provider-owned fields - the name and the category - are listed as
     /// automatic changes for a linked product; its negotiable ones are offered only while the
     /// provider value differs from both the local value and the value this field was last decided
-    /// about.
+    /// about. Since issue #792 the only negotiable field left is the unit/volume, which carries no
+    /// provider value, so in practice a product entry offers no choice at all.
     /// </summary>
     private static CatalogueReviewProductDto ToProductDto(
         PersistedCatalogueReviewItem item,
@@ -237,7 +242,6 @@ public sealed class StartCatalogueReview
                 automatic.Add(new CatalogueReviewAutomaticChangeDto(
                     ProviderManagedCatalogueFields.CategoryId, localCategoryName, providerCategory?.Name));
 
-            AddChoice(choices, NegotiableCatalogueField.UnitPrice, linked, item, lastDecided);
             AddChoice(choices, NegotiableCatalogueField.UnitVolume, linked, item, lastDecided);
         }
         else
@@ -246,7 +250,6 @@ public sealed class StartCatalogueReview
             // remember: the offer is simply the provider's value, and the operator's keep-or-take
             // answer is what the apply writes onto the row they name. A created row has nothing to
             // keep and takes the provider value.
-            AddUnlinkedChoice(choices, NegotiableCatalogueField.UnitPrice, item.Entry.ProviderUnitPrice);
             AddUnlinkedChoice(choices, NegotiableCatalogueField.UnitVolume, item.Entry.ProviderUnitVolume);
         }
 
@@ -284,11 +287,14 @@ public sealed class StartCatalogueReview
             choices.Add(new CatalogueReviewFieldDto(field.ToString(), null, providerValue));
     }
 
+    // One negotiable field is left since issue #792 removed the selling price, so both sides are a
+    // single answer rather than a switch. The field argument stays, because what makes this a
+    // mechanism rather than a special case is that the next field slots in beside the unit/volume.
     private static string? LocalValue(NegotiableCatalogueField field, LocalCatalogueProduct product) =>
-        field == NegotiableCatalogueField.UnitPrice
-            ? ProviderCatalogueFieldValue.FromPrice(product.UnitPrice)
-            : ProviderCatalogueFieldValue.FromLabel(product.Unit);
+        field == NegotiableCatalogueField.UnitVolume
+            ? ProviderCatalogueFieldValue.FromLabel(product.Unit)
+            : null;
 
     private static string? ProviderValue(NegotiableCatalogueField field, CatalogueReviewEntry entry) =>
-        field == NegotiableCatalogueField.UnitPrice ? entry.ProviderUnitPrice : entry.ProviderUnitVolume;
+        field == NegotiableCatalogueField.UnitVolume ? entry.ProviderUnitVolume : null;
 }

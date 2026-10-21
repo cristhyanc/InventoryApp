@@ -18,10 +18,11 @@ import { ToastService } from '../../services/toast.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
+// No `price` column since issue #792 (A2 of #786): a product carries no selling price. The reorder
+// arithmetic - machine need, thresholds, on-order and need-to-order - is unchanged.
 type NeedsOrderingSortColumn =
   | 'name'
   | 'category'
-  | 'price'
   | 'stock'
   | 'machineNeed'
   | 'lowStockThreshold'
@@ -311,8 +312,6 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
         return product.name;
       case 'category':
         return product.category?.name ?? null;
-      case 'price':
-        return product.unitPrice;
       case 'stock':
         return product.quantityInStock;
       case 'machineNeed':
@@ -338,7 +337,6 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
       name: product.name,
       sku: product.sku ?? null,
       description: product.description ?? null,
-      unitPrice: product.unitPrice,
       lowStockThreshold: product.lowStockThreshold,
       restockTo: product.restockTo,
       unit: product.unit ?? null,

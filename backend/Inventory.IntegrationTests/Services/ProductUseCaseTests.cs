@@ -95,7 +95,6 @@ public class ProductUseCaseTests
                 Name = "Coke",
                 Sku = "SKU-1",
                 Description = "A can",
-                UnitPrice = 3.50m,
                 AverageUnitCost = 1.25m,
                 CostingQuantity = 7,
                 InventoryValue = 8.75m,
@@ -130,7 +129,6 @@ public class ProductUseCaseTests
         Assert.Equal("Coke", product.Name);
         Assert.Equal("SKU-1", product.Sku);
         Assert.Equal("A can", product.Description);
-        Assert.Equal(3.50m, product.UnitPrice);
         Assert.Equal(1.25m, product.AverageUnitCost);
         Assert.Equal(7, product.CostingQuantity);
         Assert.Equal(8.75m, product.InventoryValue);
@@ -171,7 +169,7 @@ public class ProductUseCaseTests
         var useCases = CreateUseCases(db, calculateReorderNeeds);
 
         var created = await useCases.Create.Handle(
-            new ProductCreateFields("p1", null, null, 10m, 5, 1, 10, "unit", null, true, null),
+            new ProductCreateFields("p1", null, null, 5, 1, 10, "unit", null, true, null),
             CancellationToken.None);
 
         Assert.True(created.IsValid);
@@ -186,7 +184,7 @@ public class ProductUseCaseTests
 
         var updated = await useCases.Update.Handle(
             product.Id,
-            new ProductUpdateFields("p1", null, null, 10m, 1, 12, "unit", null, true),
+            new ProductUpdateFields("p1", null, null, 1, 12, "unit", null, true),
             CancellationToken.None);
         Assert.Equal(UpdateProductOutcome.Success, updated.Outcome);
         Assert.Equal(12, (await db.Products.FindAsync(product.Id))!.RestockTo);
@@ -352,9 +350,9 @@ public class ProductUseCaseTests
 
         foreach (var fields in new[]
         {
-            new ProductCreateFields("Coke", null, null, 1m, 0, 10, 9, "unit", null, true, null),
-            new ProductCreateFields("Coke", null, null, 1m, 0, -1, 0, "unit", null, true, null),
-            new ProductCreateFields("Coke", null, null, 1m, 0, 0, -1, "unit", null, true, null),
+            new ProductCreateFields("Coke", null, null, 0, 10, 9, "unit", null, true, null),
+            new ProductCreateFields("Coke", null, null, 0, -1, 0, "unit", null, true, null),
+            new ProductCreateFields("Coke", null, null, 0, 0, -1, "unit", null, true, null),
         })
         {
             var result = await create.Handle(fields, CancellationToken.None);
@@ -376,7 +374,7 @@ public class ProductUseCaseTests
 
         var result = await CreateUseCases(db).Update.Handle(
             1,
-            new ProductUpdateFields("Coke", null, null, 0m, 10, 9, "unit", null, true),
+            new ProductUpdateFields("Coke", null, null, 10, 9, "unit", null, true),
             CancellationToken.None);
 
         Assert.Equal(UpdateProductOutcome.Invalid, result.Outcome);

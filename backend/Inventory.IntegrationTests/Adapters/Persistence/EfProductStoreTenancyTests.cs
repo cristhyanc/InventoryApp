@@ -45,7 +45,7 @@ public class EfProductStoreTenancyTests : IDisposable
     }
 
     private static ProductUpdateFields UpdateFields(long? categoryId = null) =>
-        new("B-Product", "SKU-B", null, 0m, 5, 10, "unit", categoryId, true);
+        new("B-Product", "SKU-B", null, 5, 10, "unit", categoryId, true);
 
     [Fact]
     public async Task ExistsAsync_IsFalse_ForAnotherBusinesssProduct()

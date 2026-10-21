@@ -23,7 +23,9 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 import { apiErrorMessage } from '../shared/api-error-message';
 
 // No 'supplier' column since issue #787 (A1 of #786): a product carries no supplier to sort by.
-type ProductSortColumn = 'name' | 'category' | 'price' | 'stock' | 'status';
+// No `price` column since issue #792 (A2 of #786): a product carries no selling price, so there is
+// nothing to show or sort by. `stock` and `status` are unchanged.
+type ProductSortColumn = 'name' | 'category' | 'stock' | 'status';
 
 @Component({
   selector: 'app-product-list',
@@ -252,8 +254,6 @@ export class ProductListComponent implements OnInit, OnDestroy {
         return product.name;
       case 'category':
         return product.category?.name ?? null;
-      case 'price':
-        return product.unitPrice;
       case 'stock':
         return product.quantityInStock;
       case 'status':
@@ -269,7 +269,6 @@ export class ProductListComponent implements OnInit, OnDestroy {
       name: product.name,
       sku: product.sku ?? null,
       description: product.description ?? null,
-      unitPrice: product.unitPrice,
       lowStockThreshold: product.lowStockThreshold,
       restockTo: product.restockTo,
       unit: product.unit ?? null,

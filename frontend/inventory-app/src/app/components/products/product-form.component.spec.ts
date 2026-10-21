@@ -14,7 +14,6 @@ function product(overrides: Partial<Product> = {}): Product {
     name: 'E2E Chips',
     sku: 'SNK-001',
     description: 'Salted chips',
-    unitPrice: 3.5,
     averageUnitCost: 1.2,
     machinePrice: null,
     commissionValue: null,
@@ -108,14 +107,13 @@ describe('ProductFormComponent content width (issue #478)', () => {
 });
 
 describe('ProductFormComponent editing a product this business maintains itself (issue #737)', () => {
-  it('shows every field editable, including name, price and category, and carries no provider-managed note', async () => {
+  it('shows every field editable, including name and category, and carries no provider-managed note', async () => {
     const { host } = await render();
 
     const value = (name: string) => (host.querySelector(`[name="${name}"]`) as HTMLInputElement | null)?.value;
     expect(value('name')).toBe('E2E Chips');
     expect(value('sku')).toBe('SNK-001');
     expect(value('description')).toBe('Salted chips');
-    expect(value('unitPrice')).toBe('3.5');
     expect(value('lowStockThreshold')).toBe('4');
     expect(value('restockTo')).toBe('18');
     expect(value('unit')).toBe('bag');
@@ -133,12 +131,19 @@ describe('ProductFormComponent editing a product this business maintains itself 
       Array.from(host.querySelectorAll('form .field-label')).map((label) => label.textContent?.trim())
     ).not.toContain('Supplier');
 
+    // No Unit Price control either (issue #792, A2 of #786): a product carries no selling price,
+    // so the form offers no input for one and no field is labelled "Unit Price ($)". The Initial
+    // Unit Cost field on the create form is a cost and is unaffected.
+    expect(host.querySelector('[name="unitPrice"]')).toBeNull();
+    expect(
+      Array.from(host.querySelectorAll('form .field-label')).map((label) => label.textContent?.trim())
+    ).not.toContain('Unit Price ($) *');
+
     expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(false);
-    expect((host.querySelector('[name="unitPrice"]') as HTMLInputElement).readOnly).toBe(false);
     expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).disabled).toBe(false);
     expect(host.querySelector('.alert-info')).toBeNull();
 
-    expect(host.querySelectorAll('label.field, label.flex').length).toBeGreaterThanOrEqual(8);
+    expect(host.querySelectorAll('label.field, label.flex').length).toBeGreaterThanOrEqual(7);
   });
 
   it('keeps the field labels and their inputs together, so a wider card does not separate them', async () => {
@@ -177,22 +182,10 @@ describe('ProductFormComponent editing a product this business maintains itself 
     expect(component.error).toBe('Product name is required.');
   });
 
-  it('refuses to save a negative unit price', async () => {
-    const { component, update, navigate } = await render();
-
-    component.form.unitPrice = -1;
-    component.save();
-
-    expect(update).not.toHaveBeenCalled();
-    expect(navigate).not.toHaveBeenCalled();
-    expect(component.error).toBe('Unit price cannot be negative.');
-  });
-
-  it('saves the edited values, including the now-editable name, price and category, and returns to the list', async () => {
+  it('saves the edited values, including the now-editable name and category, and returns to the list', async () => {
     const { component, update, navigate } = await render();
 
     component.form.name = 'E2E Chips (renamed)';
-    component.form.unitPrice = 4.25;
     component.form.categoryId = 1;
     component.form.sku = 'SNK-002';
     component.form.lowStockThreshold = 6;
@@ -204,7 +197,6 @@ describe('ProductFormComponent editing a product this business maintains itself 
       name: 'E2E Chips (renamed)',
       sku: 'SNK-002',
       description: 'Salted chips',
-      unitPrice: 4.25,
       lowStockThreshold: 6,
       restockTo: 24,
       unit: 'bag',
@@ -239,28 +231,28 @@ describe('ProductFormComponent editing a provider-linked product (issue #737)', 
     return product({ providerManagedFields: ['name', 'categoryId'] });
   }
 
-  it('locks name and category, names Nayax, and leaves price and other local fields editable', async () => {
+  it('locks name and category, names Nayax, and leaves the other local fields editable', async () => {
     const { host } = await render({ product: providerManagedProduct() });
 
     expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(true);
     expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).disabled).toBe(true);
-    expect((host.querySelector('[name="unitPrice"]') as HTMLInputElement).readOnly).toBe(false);
-    expect((host.querySelector('[name="unitPrice"]') as HTMLInputElement).disabled).toBe(false);
+    expect((host.querySelector('[name="unit"]') as HTMLInputElement).readOnly).toBe(false);
+    expect((host.querySelector('[name="restockTo"]') as HTMLInputElement).disabled).toBe(false);
 
     expect(host.querySelector('.alert-info .alert-title')?.textContent).toContain(
       'Name and category are managed by Nayax and cannot be edited here.'
     );
   });
 
-  it('still saves the editable fields, including price, for a provider-linked product', async () => {
+  it('still saves the editable fields for a provider-linked product', async () => {
     const { component, update, navigate } = await render({ product: providerManagedProduct() });
 
-    component.form.unitPrice = 5;
+    component.form.restockTo = 30;
     component.save();
 
     expect(update).toHaveBeenCalledWith(
       7,
-      expect.objectContaining({ name: 'E2E Chips', categoryId: 2, unitPrice: 5 })
+      expect.objectContaining({ name: 'E2E Chips', categoryId: 2, restockTo: 30 })
     );
     expect(navigate).toHaveBeenCalledWith(['/products']);
   });
@@ -288,7 +280,6 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     const { component, create, navigate } = await render({ routeParams: {} });
 
     component.form.name = 'New Snack';
-    component.form.unitPrice = 2.5;
     component.form.categoryId = 2;
     component.form.quantityInStock = 10;
     component.form.initialUnitCost = 1.1;
@@ -300,7 +291,6 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
       name: 'New Snack',
       sku: null,
       description: null,
-      unitPrice: 2.5,
       lowStockThreshold: 2,
       restockTo: 8,
       unit: 'unit',

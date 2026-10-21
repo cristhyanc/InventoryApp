@@ -47,7 +47,6 @@ public class ProductJsonContractTests
         Name = "Coke",
         Sku = "SKU-1",
         Description = "A can",
-        UnitPrice = 3.50m,
         AverageUnitCost = 1.25m,
         CostingQuantity = 7,
         InventoryValue = 8.75m,
@@ -97,7 +96,6 @@ public class ProductJsonContractTests
         Name = record.Name,
         Sku = record.Sku,
         Description = record.Description,
-        UnitPrice = record.UnitPrice,
         AverageUnitCost = record.AverageUnitCost,
         CostingQuantity = record.CostingQuantity,
         InventoryValue = record.InventoryValue,
@@ -194,7 +192,6 @@ public class ProductJsonContractTests
         {
             Id = 1,
             Name = "Bare",
-            UnitPrice = 0m,
             AverageUnitCost = 0m,
             QuantityInStock = 0,
             LowStockThreshold = 0,
@@ -215,6 +212,10 @@ public class ProductJsonContractTests
         // reads `supplier` must find nothing rather than an explicit null that looks like
         // "no supplier recorded".
         Assert.DoesNotContain("supplier", response, StringComparison.OrdinalIgnoreCase);
+
+        // The selling price went the same way (issue #792): `unitPrice` is absent, not `0`. A zero
+        // would read as "this product is free" rather than "this product has no price".
+        Assert.DoesNotContain("\"unitPrice\"", response, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -228,7 +229,11 @@ public class ProductJsonContractTests
         Assert.Equal(
             new[]
             {
-                "id", "name", "sku", "description", "unitPrice", "averageUnitCost", "costingQuantity",
+                // "supplierId"/"supplier" (issue #787, A1 of #786) and "unitPrice" (issue #792, A2)
+                // are the only keys this contract has ever lost, both by approved deletion of the
+                // column behind them. "machinePrice" stays: the machine's live price is a different
+                // value, and it is what a product now sells for.
+                "id", "name", "sku", "description", "averageUnitCost", "costingQuantity",
                 "inventoryValue", "machinePrice", "commissionValue", "suggestedNetValue",
                 "suggestedPriceValue", "mdbCode", "maxStockInMachine", "machineReplenishmentNeed",
                 "onOrderQuantity", "projectedStockForReorder", "quantityInStock", "lowStockThreshold",

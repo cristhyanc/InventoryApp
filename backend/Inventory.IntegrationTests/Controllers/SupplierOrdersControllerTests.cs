@@ -166,7 +166,7 @@ public class SupplierOrdersControllerTests
                 9,
                 3,
                 new SupplierOrderProductSummaryRecord(
-                    3, "Coke", null, null, 3.50m, 1.25m, null, null, 4, 10, 20, "can", true,
+                    3, "Coke", null, null, 1.25m, null, null, 4, 10, 20, "can", true,
                     new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                     new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                     null),

@@ -563,7 +563,7 @@ public sealed class HistoricalGstClassificationApiTests
             var products = await db.Products.AsNoTracking().OrderBy(product => product.Id)
                 .Select(product =>
                     $"{product.Id}:{product.QuantityInStock}:{product.CostingQuantity}:" +
-                    $"{product.InventoryValue}:{product.AverageUnitCost}:{product.UnitPrice}")
+                    $"{product.InventoryValue}:{product.AverageUnitCost}")
                 .ToListAsync();
             var adjustments = await db.StockAdjustments.AsNoTracking().OrderBy(adjustment => adjustment.Id)
                 .Select(adjustment =>

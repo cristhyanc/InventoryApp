@@ -85,7 +85,7 @@ public class MachineUseCaseTests
         await using (var seed = TestAppDbContext.Unrestricted(options))
         {
             seed.Categories.Add(new Category { Id = 1, Name = "Drinks" });
-            seed.Products.Add(new Product { Id = 200, Name = "px", UnitPrice = 2m, CategoryId = 1 });
+            seed.Products.Add(new Product { Id = 200, Name = "px", CategoryId = 1 });
             await seed.SaveChangesAsync();
         }
 
@@ -112,7 +112,7 @@ public class MachineUseCaseTests
     {
         using var db = CreateDbContext("mach_test");
         // seed product referenced by Nayax
-        db.Products.Add(new Product { Id = 200, Name = "px", UnitPrice = 2m });
+        db.Products.Add(new Product { Id = 200, Name = "px" });
         await db.SaveChangesAsync();
 
         var nayaxMock = new Mock<INayaxLynxClient>();

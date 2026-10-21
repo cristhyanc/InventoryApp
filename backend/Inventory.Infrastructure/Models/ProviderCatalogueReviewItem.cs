@@ -58,9 +58,17 @@ public class ProviderCatalogueReviewItem : IBusinessOwned
     public string? ProviderGroupExternalId { get; set; }
 
     /// <summary>
-    /// The provider's catalogue selling price as comparable text, or <c>null</c> when it reported
-    /// none. The Nayax <c>ProductDefaultRetailPrice</c> - never the <c>ProductCostPrice</c> cost
-    /// field (AGENTS.md § Inventory and historical costing invariants).
+    /// <strong>Historical only since issue #792 (A2 of #786), and deliberately kept.</strong> It
+    /// held the provider's catalogue selling price as comparable text - the Nayax
+    /// <c>ProductDefaultRetailPrice</c>, never the <c>ProductCostPrice</c> cost field - for the
+    /// negotiation against <c>Product.UnitPrice</c>, and that product field no longer exists.
+    ///
+    /// <para>A review this release starts leaves it <c>null</c>, nothing reads it as a value to
+    /// write, and the column and the values earlier releases wrote are neither dropped nor
+    /// backfilled: they are a record of what the provider said at the moment a review was read. The
+    /// one thing that still consults it is <c>EfCatalogueReviewStore.ApplyAsync</c>, which refuses a
+    /// stored review that carries any as stale (<c>ApplyCatalogueReview.StaleSellingPriceReviewMessage</c>)
+    /// rather than applying half of a plan that was approved whole.</para>
     /// </summary>
     public string? ProviderUnitPrice { get; set; }
 

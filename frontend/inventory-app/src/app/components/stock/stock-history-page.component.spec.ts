@@ -25,7 +25,6 @@ function product(overrides: Partial<Product> = {}): Product {
     id: 1,
     name: 'Coke',
     unit: 'can',
-    unitPrice: 2.5,
     quantityInStock: 17,
     lowStockThreshold: 2,
     ...overrides

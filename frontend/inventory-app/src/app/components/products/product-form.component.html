@@ -54,11 +54,6 @@
             <span class="field-label">Active product</span>
           </label>
 
-          <label class="field">
-            <span class="field-label">Unit Price ($) *</span>
-            <input [(ngModel)]="form.unitPrice" name="unitPrice" type="number" min="0" step="0.01" />
-          </label>
-
           @if (!productId) {
             <label class="field">
               <span class="field-label">Opening Stock</span>

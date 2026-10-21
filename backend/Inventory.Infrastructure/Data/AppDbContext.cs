@@ -262,9 +262,6 @@ public class AppDbContext : DbContext
         ConfigureProviderCatalogueReview(modelBuilder);
 
         modelBuilder.Entity<Product>()
-            .Property(p => p.UnitPrice)
-            .HasColumnType("decimal(18,2)");
-        modelBuilder.Entity<Product>()
             .Property(p => p.AverageUnitCost)
             .HasColumnType("decimal(18,6)");
         modelBuilder.Entity<Product>()

@@ -47,9 +47,6 @@
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('category')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('category')">{{ sortLabel('Category', 'category') }}</button>
               </th>
-              <th scope="col" class="table-cell table-num" [attr.aria-sort]="ariaSort('price')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('price')">{{ sortLabel('Price', 'price') }}</button>
-              </th>
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('stock')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('stock')">{{ sortLabel('Stock', 'stock') }}</button>
               </th>
@@ -87,7 +84,6 @@
                     [attr.aria-label]="'Edit product ' + p.name">{{ p.name }}</a>
                 </td>
                 <td class="table-cell">{{ p.category?.name }}</td>
-                <td class="table-cell table-num">${{ p.unitPrice.toFixed(2) }}</td>
                 <td class="table-cell">
                   <span class="badge" [ngClass]="p.isActive ? (p.isReorderAlert ? 'badge-danger' : 'badge-success') : 'badge-neutral'">
                     {{ p.quantityInStock }} {{ p.unit }}

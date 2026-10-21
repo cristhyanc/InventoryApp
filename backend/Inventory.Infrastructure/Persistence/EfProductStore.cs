@@ -75,7 +75,6 @@ public sealed class EfProductStore : IProductStore
             Name = name,
             Sku = fields.Sku,
             Description = fields.Description,
-            UnitPrice = fields.UnitPrice,
             AverageUnitCost = fields.InitialUnitCost ?? 0m,
             IsActive = fields.IsActive,
             QuantityInStock = fields.QuantityInStock,
@@ -157,7 +156,6 @@ public sealed class EfProductStore : IProductStore
         product.Name = name;
         product.Sku = fields.Sku;
         product.Description = fields.Description;
-        product.UnitPrice = fields.UnitPrice;
         product.IsActive = fields.IsActive;
         product.LowStockThreshold = fields.LowStockThreshold;
         product.RestockTo = fields.RestockTo;

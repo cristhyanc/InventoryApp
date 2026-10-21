@@ -210,7 +210,6 @@ public class SupportSessionReadOnlyPersistenceTests : IDisposable
         BusinessId = businessId,
         Name = name,
         Sku = $"{name}-SKU",
-        UnitPrice = 2.50m,
         QuantityInStock = 5,
     };
 }

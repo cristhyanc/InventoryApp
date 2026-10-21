@@ -59,14 +59,14 @@ public sealed record PurchaseItemRecord(
 ///
 /// <para>The product's supplier is not among those fields since issue #787 (A1 of #786): a product
 /// carries none. The supplier of the <em>purchase</em> is unaffected and is still on
-/// <see cref="PurchaseRecord"/> itself.</para>
+/// <see cref="PurchaseRecord"/> itself. Its selling price is not among them either since issue #792
+/// (A2 of #786) - the purchase's own line unit costs and totals are untouched.</para>
 /// </summary>
 public sealed record PurchaseProductSummaryRecord(
     long Id,
     string Name,
     string? Sku,
     string? Description,
-    decimal UnitPrice,
     decimal AverageUnitCost,
     int? CostingQuantity,
     decimal? InventoryValue,

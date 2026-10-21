@@ -160,7 +160,7 @@ public class ReportingRegressionTests
     public async Task Transaction_sales_uses_filters_estimated_fees_commission_and_full_totals()
     {
         using var db = CreateDbContext();
-        db.Products.Add(new Product { Id = 1, Name = "Water", UnitPrice = 3m });
+        db.Products.Add(new Product { Id = 1, Name = "Water" });
         db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = .20m });
         db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
         {
@@ -213,7 +213,7 @@ public class ReportingRegressionTests
     public async Task Transaction_csv_export_values_match_the_api_response_for_the_same_unpaginated_filter()
     {
         using var db = CreateDbContext();
-        db.Products.Add(new Product { Id = 1, Name = "Water", UnitPrice = 3m });
+        db.Products.Add(new Product { Id = 1, Name = "Water" });
         db.NayaxProcessingFeeRates.Add(new NayaxProcessingFeeRate { EffectiveFrom = new DateTime(2025, 1, 1), FeeExGst = .20m });
         db.SiteCommissionAgreements.Add(new SiteCommissionAgreement
         {
@@ -473,7 +473,7 @@ public class ReportingRegressionTests
     public async Task Product_profitability_uses_decimal_cost_and_zero_safe_margin()
     {
         using var db = CreateDbContext();
-        db.Products.Add(new Product { Id = 1, Name = "Known", UnitPrice = 99m });
+        db.Products.Add(new Product { Id = 1, Name = "Known" });
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 1,
@@ -523,7 +523,7 @@ public class ReportingRegressionTests
     public async Task Product_profitability_never_rescues_an_unresolved_sale_by_the_name_it_reported()
     {
         using var db = CreateDbContext();
-        db.Products.Add(new Product { Id = 29, Name = "Maltese King Share 60g", UnitPrice = 4.80m });
+        db.Products.Add(new Product { Id = 29, Name = "Maltese King Share 60g" });
         db.NayaxSales.Add(new NayaxSales
         {
             TransactionID = 29,
@@ -553,7 +553,7 @@ public class ReportingRegressionTests
     public async Task Product_profitability_merges_sales_attributed_to_the_same_catalogue_product()
     {
         using var db = CreateDbContext();
-        db.Products.Add(new Product { Id = 1, Name = "Nu Pure Spring Water 600mL", UnitPrice = 3m });
+        db.Products.Add(new Product { Id = 1, Name = "Nu Pure Spring Water 600mL" });
         db.NayaxSales.AddRange(
             new NayaxSales
             {
@@ -641,7 +641,7 @@ public class ReportingRegressionTests
     public async Task Daily_report_includes_payment_split_cogs_quality_and_period_reimbursement()
     {
         using var db = CreateDbContext();
-        db.Products.Add(new Product { Id = 1, Name = "Known", UnitPrice = 99m });
+        db.Products.Add(new Product { Id = 1, Name = "Known" });
         db.NayaxSales.AddRange(
             new NayaxSales
             {
@@ -1041,7 +1041,7 @@ public class ReportingRegressionTests
     public async Task Product_profitability_csv_export_uses_the_same_authoritative_values_as_the_api_report()
     {
         using var db = CreateDbContext();
-        db.Products.Add(new Product { Id = 1, Name = "Water", UnitPrice = 3m });
+        db.Products.Add(new Product { Id = 1, Name = "Water" });
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 402, MachineID = 10, NayaxProductId = 1, ProductName = "Water", SettlementValue = 30m, CostOfGoodsSold = 10m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
             new NayaxSales { TransactionID = 403, MachineID = 10, NayaxProductId = 999, ProductName = "Unmapped Thing", SettlementValue = 5m, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) });
@@ -1297,7 +1297,7 @@ public class ReportingRegressionTests
             .Options;
         await using var db = TestAppDbContext.Unrestricted(options);
         await db.Database.EnsureCreatedAsync();
-        db.Products.Add(new Product { Id = 1, Name = "Water", UnitPrice = 3m });
+        db.Products.Add(new Product { Id = 1, Name = "Water" });
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Credit Card", SettlementValue = 10m, CostOfGoodsSold = 1m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },
             new NayaxSales { TransactionID = 2, MachineID = 10, NayaxProductId = 1, ProductName = "Water", PaymentMethod = "Prepaid Credit", SettlementValue = 20m, CostOfGoodsSold = 1m, CostingStatus = SaleCostingStatus.Costed, TransactionStatusId = NayaxTransactionStatusIds.Completed, MachineAuthorizationTime = new DateTime(2025, 8, 1) },

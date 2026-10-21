@@ -220,10 +220,11 @@ public sealed class MachineAndProductFinancialRedactionApiTests
         var product = list ? Single(json) : json;
         AssertNull(product, RestrictedProductFields);
 
-        // Unit cost, selling price and the stock figures stay visible: the recorded decision keeps
-        // them, and an Operator restocks from them.
+        // Unit cost and the stock figures stay visible: the recorded decision keeps them, and an
+        // Operator restocks from them. The catalogue selling price is not among them any more -
+        // issue #792 removed the field, so the response carries no `unitPrice` at all.
         Assert.Equal(ApiFactory.AverageUnitCost, product.GetProperty("averageUnitCost").GetDecimal());
-        Assert.Equal(ApiFactory.UnitPrice, product.GetProperty("unitPrice").GetDecimal());
+        Assert.False(product.TryGetProperty("unitPrice", out _));
         Assert.Equal(ApiFactory.CostingQuantity, product.GetProperty("costingQuantity").GetInt32());
         Assert.Equal(ApiFactory.QuantityInStock, product.GetProperty("quantityInStock").GetInt32());
     }
@@ -382,7 +383,6 @@ public sealed class MachineAndProductFinancialRedactionApiTests
 
         public const decimal InventoryValue = 777.77m;
         public const decimal AverageUnitCost = 1.23m;
-        public const decimal UnitPrice = 3.57m;
         public const decimal MachinePrice = 4.65m;
         public const int CostingQuantity = 7;
         public const int QuantityInStock = 12;
@@ -479,7 +479,6 @@ public sealed class MachineAndProductFinancialRedactionApiTests
                 // product has one in production.
                 ExternalProductId = NayaxExternalId.From(ProductId),
                 Name = "Coke",
-                UnitPrice = UnitPrice,
                 AverageUnitCost = AverageUnitCost,
                 CostingQuantity = CostingQuantity,
                 InventoryValue = InventoryValue,

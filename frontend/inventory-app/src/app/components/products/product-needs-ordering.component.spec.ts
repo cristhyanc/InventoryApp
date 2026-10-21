@@ -16,7 +16,6 @@ function product(overrides: Partial<Product> = {}): Product {
     name: 'Product',
     sku: null,
     description: null,
-    unitPrice: 2.5,
     averageUnitCost: 1,
     costingQuantity: null,
     inventoryValue: null,
@@ -214,13 +213,13 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
 
   it('sorts numeric columns numerically rather than lexicographically', async () => {
     const { fixture, host } = await render([
-      product({ id: 1, name: 'A', unitPrice: 9 }),
-      product({ id: 2, name: 'B', unitPrice: 10 }),
-      product({ id: 3, name: 'C', unitPrice: 2 })
+      product({ id: 1, name: 'A', quantityInStock: 9 }),
+      product({ id: 2, name: 'B', quantityInStock: 10 }),
+      product({ id: 3, name: 'C', quantityInStock: 2 })
     ]);
 
-    const priceHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Price')) as HTMLTableCellElement;
-    (priceHeader.querySelector('button') as HTMLButtonElement).click();
+    const stockHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Stock')) as HTMLTableCellElement;
+    (stockHeader.querySelector('button') as HTMLButtonElement).click();
     fixture.detectChanges();
 
     const rows = Array.from(host.querySelectorAll('tbody tr'));
@@ -300,16 +299,16 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
 
   it('sorts numeric columns numerically in descending order as well', async () => {
     const { fixture, host } = await render([
-      product({ id: 1, name: 'A', unitPrice: 9 }),
-      product({ id: 2, name: 'B', unitPrice: 10 }),
-      product({ id: 3, name: 'C', unitPrice: 2 })
+      product({ id: 1, name: 'A', quantityInStock: 9 }),
+      product({ id: 2, name: 'B', quantityInStock: 10 }),
+      product({ id: 3, name: 'C', quantityInStock: 2 })
     ]);
 
-    const priceHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Price')) as HTMLTableCellElement;
-    const priceButton = priceHeader.querySelector('button') as HTMLButtonElement;
-    priceButton.click();
+    const stockHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Stock')) as HTMLTableCellElement;
+    const stockButton = stockHeader.querySelector('button') as HTMLButtonElement;
+    stockButton.click();
     fixture.detectChanges();
-    priceButton.click();
+    stockButton.click();
     fixture.detectChanges();
 
     const rows = Array.from(host.querySelectorAll('tbody tr'));

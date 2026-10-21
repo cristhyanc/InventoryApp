@@ -1726,7 +1726,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 
 #527 above redacts the Dashboard summary, and #681 closed `GET /api/products/inventory-value-summary`. The machine and product endpoints were the way back to both figures: `GET /api/machines` and `GET /api/machines/{id}` carry six periods of gross revenue, the six matching direct-profit figures and `profitabilityStatus`, and `GET /api/products`, `GET /api/products/{id}`, `GET /api/products/alerts/low-stock` and `GET /api/machines/{id}/products` carry each product's `inventoryValue`, which sums to the valuation the Dashboard withholds. All of them are gated on `Inventory.Operate`, which an Operator holds — correctly, because restocking machines is exactly what they are for. Issue #698 therefore withholds the figures and keeps the endpoints.
 
-**The recorded decision (Cristhyan, 15 October 2026).** `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure. **Unit cost (`averageUnitCost`, `unitPrice`) and selling price (`machinePrice` and the slot's `suggestedNetValue`/`suggestedPriceValue`) stay visible to an Operator**, who needs them to restock and to price a slot. `costingQuantity` is a quantity, not a value, and stays too.
+**The recorded decision (Cristhyan, 15 October 2026).** `Dashboard.ViewFinancials` governs every sales, revenue, profit, margin, profitability-status, trend and inventory-value figure. **Unit cost (`averageUnitCost`) and selling price (`machinePrice` and the slot's `suggestedNetValue`/`suggestedPriceValue`) stay visible to an Operator**, who needs them to restock and to price a slot. `costingQuantity` is a quantity, not a value, and stays too. The catalogue `unitPrice` this decision also named is not a question any more: issue #792 removed the field, so the responses carry none at all (see [A product carries no selling price](#a-product-carries-no-selling-price-issue-792)).
 
 **Withheld is `null` here, not absent.** This is the deliberate difference from #527, and it is the API contract change the issue approved: `MachineResponse`'s six gross-revenue fields became nullable, and the restricted fields are serialized as explicit `null`. #527 could remove its two properties because one of them was a whole object and the other had no "withheld" meaning to confuse; here the keys are the ones every machine and product client binds to, and thirteen disappearing keys on one response would be a far larger break than a nullable figure. `null` is already how both responses say "unavailable" for profit and for an incomplete inventory valuation, which is why the frontend already renders it (issue #699, merged first). What must never happen is `0`: a withheld revenue arriving as zero is a false financial statement about the business, so the redacted projection writes every withheld figure out rather than letting a default supply one.
 
@@ -6766,17 +6766,30 @@ Reconciliation applies the same separation as bookkeeping, and adds a third cate
 
 **Export parity.** The reconciliation CSV/XLSX rows add `AdjustmentsSupported`, `AdjustmentsBasis` (the assumption above), the five status counts and `DataQualityNotes`. Each period row carries its own counts and its own notes; the `TOTAL` row carries the report's range-wide counts and notes rather than a sum of the period rows'. A clean period exports an empty `DataQualityNotes` cell and no boilerplate, and the export keeps every figure, filter and status it exported before.
 
-### Product selling price
+### A product carries no selling price (issue #792)
 
-`Product.UnitPrice` is the catalog default/list selling price, taken from the Nayax product catalog's `ProductDefaultRetailPrice` field by the catalogue review's apply, and only on an operator's explicit per-product decision (issue #57 for the field; the one-way sync was `ImportService.ImportProductsAsync`, then `Inventory.Application.Imports.ImportNayaxProductCatalog` from issue #300, until issue #739 replaced it with the review — see [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300) and [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)). It is a display/default value, not a calculation input: no reporting, profit, or costing calculation in `Inventory.Application`/`Inventory.Domain` reads it. It is distinct from:
+**`Product.UnitPrice` does not exist.** It was the catalog default/list selling price (issue #57 for the field), and issue #792 — A2 of parent #786 — deleted it: the `RemoveProductUnitPrice` migration drops `Products.UnitPrice` and the stored prices with it, under the repository owner's explicit approval of a destructive deletion on **21 October 2026**. `Down` recreates the column so the schema matches the previous release's code, and every row comes back at its `0` default; the values are not recoverable, and nothing is inferred in their place.
 
-- `Product.AverageUnitCost` and the AVCO/historical-cost ledger — purchase cost, not selling price;
-- `Product.MachinePrice` (`[NotMapped]` on the entity, and a machine-slot value on `ProductResponse`) — the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) by `ListMachineProducts`/`GetSiteProducts`;
-- the Nayax `ProductCostPrice` field on an imported sale (`NayaxSales.NayaxProductCostPrice`) — a genuine cost value used for historical COGS, never a selling price. The catalogue import previously set `UnitPrice` from this cost field by mistake; it now uses the catalog `ProductDefaultRetailPrice` instead.
+**Why it went.** It was a display/default value and never a calculation input — no reporting, profit or costing calculation in `Inventory.Application`/`Inventory.Domain` ever read it. What it did do was stand beside the machine's own live price as a second answer to "what does this sell for?", with nothing keeping the two in step: a provider import, and later an operator's keep-or-take decision, were the only things that moved it, so a catalogue that nobody reviewed went quietly stale while the machine kept charging its real price.
 
-**The JSON field this value is imported from is confirmed (issue #363).** A human confirmed from a live `GET /v1/operators/{OperatorID}/products` response that the product selling price field is `ProductDefaultRetailPrice`, matching the Nayax developer portal, which documents that field on `GET /v1/operators/{OperatorID}/products` and `GET /v1/products/{NayaxProductID}` and documents no bare `RetailPrice` field on either endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` above correctly use. The operator-catalogue DTO `Inventory.Application.Nayax.NayaxProduct.ProductDefaultRetailPrice` binds that confirmed JSON name. Products already imported with `UnitPrice` of `0` under the previous, unconfirmed `RetailPrice` mapping are not backfilled by this change; whether to backfill them is a separate decision.
+**What a product sells for, and what it costs, after the change.**
 
-The public property name `UnitPrice` is retained for API/contract compatibility. **Since issue #736 the business owns this value too** (parent #329 decision P2 and P3): `PUT /api/products/{id}` accepts it, `ProductUpdateFields` carries it, and the only bound on it is that it is not negative (`Inventory.Domain.Products.ProductCataloguePolicy`). It had to become editable, because a business with no sales provider has no import to set it. **Since issue #737 (B2) the product edit screen presents it editable for every product**, and presents the name and the category as read-only inputs only for a product carrying an external id, naming the provider in a note beside them. A local price edit of a provider-managed product is accepted rather than refused — the price is deliberately *not* one of the provider-managed fields that are locked, which are the product's name and category only (see [Manual catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)). **Nothing overwrites it from the provider without being asked.** Choosing per field whether to keep the local price or take the provider's is the catalogue review of issue #738, which also remembers the provider value a skipped price was decided about so it is not proposed again until the provider changes it (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)); issue #739 built its screen and, with it, removed the write-through import that used to overwrite the price on every run. It is never an inventory-valuation input: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42), and a `quantityInStock * unitPrice` selling-price valuation must not be introduced anywhere.
+- The **selling price** is the machine's, not the catalogue's: `Product.MachinePrice` (`[NotMapped]` on the entity, and a machine-slot value on `ProductResponse`) is the machine-specific live price, sourced from the per-machine Nayax `RetailPrice` (`NayaxMachineProduct.RetailPrice`) by `ListMachineProducts`/`GetSiteProducts`, together with the slot's `suggestedNetValue`/`suggestedPriceValue`. A recorded sale's own amount is the other authoritative statement of what was charged, and it is unchanged.
+- The **cost** is `Product.AverageUnitCost` and the AVCO/historical-cost ledger, a purchase item's `UnitCost`, a supplier-order line's agreed `UnitPrice` (a different column on a different table, untouched) and the Nayax `ProductCostPrice` on an imported sale (`NayaxSales.NayaxProductCostPrice`). None of them is a selling price and none of them changed.
+
+**The API contract (breaking, as issue #792 permits).** `ProductResponse` no longer carries `unitPrice`, and neither does the product snapshot nested in a purchase line, a supplier-order line or a machine slot — removed, never sent as `null`. `ProductCreateDto`/`ProductUpdateDto` bind none either, so a submitted `unitPrice` is simply not bound and nothing is stored for it; `initialUnitCost` on the create is a cost and is unaffected. `ProductCataloguePolicy` is down to one invariant, that a product has a name, and `ProductCataloguePolicy.NegativeUnitPriceMessage` is gone with the bound it expressed.
+
+**The UI.** The product form has no Unit Price input; All Products, Needs Ordering and the Dashboard's Reorder Alerts have no Price column or price sort; and the Stock History page's product summary is three tiles rather than four. The stock movement table's own unit-cost and cost-impact columns, the purchase and supplier-order prices and the machine pages' live prices are all untouched.
+
+**The catalogue review proposes no price** (see [Provider catalogue review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)). The Nayax `ProductDefaultRetailPrice` is not read, a review entry records no provider price, a created row is initialised without one, and a submitted selling-price decision is refused outright rather than dropped. A review **stored** before this change still carries the provider prices it meant to negotiate, so it is refused whole as stale — `ApplyCatalogueReview.StaleSellingPriceReviewMessage`, decided on the authoritative row inside the apply's own transaction and before anything is staged — and the operator starts a fresh one.
+
+**Two things are deliberately kept.** `ProviderCatalogueReviewItems.ProviderUnitPrice` and the values earlier releases wrote into it stay in the schema and are neither dropped nor backfilled: they record what the provider said at the moment a review was read, and they are what identifies a stale stored review. `NegotiableCatalogueField.UnitPrice = 1` stays declared because stored `ProviderCatalogueFieldDecisions` rows hold that number; nothing reads those rows any more, and the number must not be reused for a new field.
+
+**The Nayax contract is unchanged, and still confirmed (issue #363).** `Inventory.Application.Nayax.NayaxProduct.ProductDefaultRetailPrice` stays declared and still binds the confirmed JSON name: a human confirmed from a live `GET /v1/operators/{OperatorID}/products` response that the product selling price field is `ProductDefaultRetailPrice`, matching the Nayax developer portal, which documents that field on `GET /v1/operators/{OperatorID}/products` and `GET /v1/products/{NayaxProductID}` and documents no bare `RetailPrice` field on either endpoint; `RetailPrice` is documented only on the machine-product endpoints (`GET /v1/machines/{MachineID}/machineProducts`), which is what `NayaxMachineProduct.RetailPrice` and `Product.MachinePrice` correctly use. Nothing consumes it now — that record mirrors the provider's published contract rather than the subset the application happens to read, the same reason `CashPrice` and `CreditCardPrice` stay — and no Nayax contract was invented, altered or guessed by this change.
+
+**Release sequence.** Production applies pending migrations at startup (AGENTS.md § Database and migrations), so the API that starts after `RemoveProductUnitPrice` is applied is the one that no longer reads the column: running the *previous* release against this schema does not work, and rolling back to it is not supported. Deploy the API before the frontend, as the human-started **Deploy Production** workflow already does. A stored catalogue review that was pending across the upgrade is refused as stale on its first apply and the operator restarts it; nothing else about the upgrade is visible to an operator.
+
+**Do not reintroduce it.** No selling-price column, navigation, create/update field, response property, list column, sort or form input on a product, and no `quantityInStock * unitPrice` retail valuation anywhere: the home Dashboard's "Inventory Value" tile is a backend-authoritative cost valuation (see [Dashboard "Inventory Value" tile](#dashboard-inventory-value-tile-issue-42) below, issue #42).
 
 ### Purchase GST classification (issue #429)
 
@@ -7161,8 +7174,8 @@ and it never substitutes for a real purchase, correction or write-off.
 #### Dashboard "Inventory Value" tile (issue #42)
 
 The business-owned perpetual inventory value - the sum of every product's persisted
-`InventoryValue` (the AVCO valuation the `RebuildProductCost` use case maintains), never
-`QuantityInStock * UnitPrice` retail value and never home/storage stock quantity on its own - is
+`InventoryValue` (the AVCO valuation the `RebuildProductCost` use case maintains), never a
+quantity × retail-price value and never home/storage stock quantity on its own - is
 the figure behind the home Dashboard's "Inventory" card (see
 [Home dashboard: four headline cards](#home-dashboard-four-headline-cards-issue-460) below).
 
@@ -8996,7 +9009,7 @@ port a product's actual Purchase-item history is read through, implemented by
 (composed into the product-edit page's at-a-glance summary and "View price history" drill-down, per
 [Page composition boundary](#page-composition-boundary-issue-191)) only fetch and present this result.
 
-This comparison is historical/quoted guidance, never a substitute for AVCO, `Product.UnitPrice`, or a
+This comparison is historical/quoted guidance, never a substitute for AVCO or a
 live supplier quote: it never feeds inventory costing, and a supplier-order creation flow that shows it
 for reference must not let it silently overwrite an entered order price/cost. A Purchase with no
 supplier recorded stays visible in the comparison and history with an explicit null/"None" source
@@ -10558,8 +10571,10 @@ on `ProductsController`, and `POST api/categories`, `PUT api/categories/{id}` an
 capability the catalogue reads declare — maintaining the catalogue is the same day-to-day inventory
 work as refilling from it — so no capability is added, a read-only support session is refused them
 by the central `GET`/`HEAD` rule (issue #551), and the business is resolved from the caller's
-membership as everywhere else. `PUT api/products/{id}` now also binds `name`, `unitPrice` and
-`categoryId`, which the request body always carried and the action used to ignore.
+membership as everywhere else. `PUT api/products/{id}` now also binds `name` and
+`categoryId`, which the request body always carried and the action used to ignore. It bound
+`unitPrice` too until issue #792 removed the field (see [A product carries no selling
+price](#a-product-carries-no-selling-price-issue-792)).
 
 **Provider-managed fields.** `Inventory.Domain.Providers.ProviderManagedCatalogueFields` is the one
 statement of which fields a provider owns: a product carrying an `ExternalProductId` has its `name`
@@ -10728,7 +10743,9 @@ only be stale or wrong, and the one screen that pre-filled from it — the Needs
 **The schema.** `RemoveProductSupplier` drops the column with its foreign key and its
 `IX_Products_SupplierId` index. It is **destructive, by the repository owner's approval on
 21 October 2026**, and it is the whole of what it touches: every other product column keeps its
-value — `UnitPrice` explicitly, because removing the selling price is issue #792 — and the table
+value — the selling price `UnitPrice` explicitly, which the very next migration then removed under
+its own approval (issue #792, see [A product carries no selling
+price](#a-product-carries-no-selling-price-issue-792)) — and the table
 keeps its own key, its category foreign key, and its `Sku`, `BusinessId` and filtered
 `(BusinessId, ExternalProductId)` indexes. `Down` recreates the column, index and foreign key so the
 schema matches the previous release's code, and every row comes back `NULL`: a dropped value is not
@@ -10767,9 +10784,10 @@ The product edit page's supplier price comparison and its GST-rule note still sp
 should: both are about the purchases a product was actually bought in.
 
 **What is explicitly not in this change.** `Product.UnitPrice`, the selling-price table columns and
-catalogue price negotiation are issue #792. The purchase summaries and the other screen changes are
-issues #788–#791. No cost, average cost, inventory value, COGS, reorder figure or stored purchase
-is recalculated or backfilled.
+catalogue price negotiation were issue #792, which has since removed all three (see [A product
+carries no selling price](#a-product-carries-no-selling-price-issue-792)). The purchase summaries
+and the other screen changes are issues #788–#791. No cost, average cost, inventory value, COGS,
+reorder figure or stored purchase is recalculated or backfilled.
 
 **Release sequence, because Production migrates at startup.** `DatabaseSchemaStartup` applies pending
 migrations when the API starts (issue #201), so for a short period the deployed API is the previous
@@ -10831,7 +10849,14 @@ its product stays unlinked, and a local key that happens to equal a provider id 
 (issue #735). The only ways a link comes about are an operator naming a row and a row the review
 creates, which is what keeps a provider id from ever being inferred.
 
-**Name and category follow the provider; price is negotiated.**
+**Name and category follow the provider; nothing is negotiated any more.** Until issue #792 the
+selling price was the one field the operator decided, and that issue (A2 of #786) deleted the
+product field behind it: a review proposes no price, records none on its stored entries, writes none
+onto a created row, and refuses a submitted price decision — see [A product carries no selling
+price](#a-product-carries-no-selling-price-issue-792). What remains below describes the negotiation
+mechanism because it is still the contract the one surviving negotiable field (`UnitVolume`, which
+carries no provider value) and any future field run on.
+
 `Inventory.Domain.Providers.ProviderManagedCatalogueFields` already says which fields a provider owns
 on a row it names (issue #736), and this review is where that becomes a *transition*: linking a
 product replaces its name with the provider's and its category with the local category carrying the
@@ -10846,20 +10871,21 @@ The negotiable fields are `Inventory.Domain.Providers.NegotiableCatalogueField`,
 
 - **A value is proposed only when three things hold**: the provider has one, it differs from the local
   value, and it differs from the provider value this field was **last decided about**. The third is
-  what makes a skip stick — an operator who kept their own $3.00 over the provider's $3.50 is not
+  what makes a skip stick — an operator who kept their own value over the provider's is not
   asked again until the provider moves it somewhere new.
 - That last-decided value is the whole reason `ProviderCatalogueFieldDecisions` exists: one row per
   product and field, holding the provider value and which way it went, replaced rather than appended
   because "what did we last ask about?" has one current answer. Both answers are recorded — keeping
-  the local value is a decision about that provider value just as taking it is.
+  the local value is a decision about that provider value just as taking it is. The rows an earlier
+  release wrote about the retired selling price stay in the table and are read by nothing.
 - Values are compared as the opaque text `ProviderCatalogueFieldValue` renders, in the invariant
-  culture and with a price's trailing zeros fixed, so `3.5` and `3.50` are one answer rather than two
+  culture, so two spellings of one value are one answer rather than two
   and the operator is not asked the same question on every review.
 - A field nobody answered is left exactly as it is and proposed again next time. A **created** row has
   no local value to keep, so it takes the provider's.
 
 **The provider publishes no unit/volume label, so none is proposed.** `NegotiableCatalogueField`
-declares `UnitVolume` beside `UnitPrice`, and its provider value is always absent. The authoritative
+declares `UnitVolume` beside the retired `UnitPrice`, and its provider value is always absent. The authoritative
 Lynx contract for `GET /v1/operators/{OperatorID}/products` declares no unit or volume *label*: its
 only volume-shaped fields are `ProductVolumeTypeID`, an `int32` whose vocabulary the documentation
 does not publish, and `ProductPackageQuantity`, which is units per package. `Product.Unit` is a
@@ -10871,9 +10897,12 @@ says about it, and the API returns it as `unitVolumeNote`.
 
 **The review is persisted, and the apply is authorised by it.** `ProviderCatalogueReviews` and
 `ProviderCatalogueReviewItems` hold the provider's side exactly as it was read. The apply request
-carries item keys, one of three actions (`Defer`, `LinkExisting`, `CreateNew`) and the two field
-answers — **nothing a caller submits reaches a catalogue field**: every provider name, price and group
+carries item keys, one of three actions (`Defer`, `LinkExisting`, `CreateNew`) and the field
+answers — **nothing a caller submits reaches a catalogue field**: every provider name and group
 id comes from the stored items, and every local value from the rows read inside the transaction. A
+stored review that predates issue #792 is refused whole, before anything is staged, because its
+entries still carry provider prices and its plan can no longer be carried out in full
+(`ApplyCatalogueReview.StaleSellingPriceReviewMessage`). A
 business has at most one *pending* review, enforced by a filtered unique index over `(BusinessId)`
 where `AppliedAtUtc IS NULL`: a review is a reading of the provider's catalogue at an instant, and an
 older reading is not a second opinion, so starting one replaces the unapplied one. An applied review
@@ -10969,21 +10998,16 @@ theirs, which is exactly what the apply does with it.
   read-only here*, and linking a category states the same about its name. That is the transition
   `ProviderManagedCatalogueFields` describes, said at the moment the operator chooses it rather than
   discovered afterwards on the edit form.
-- The one negotiable field is the **price**: keep mine or take the provider's when linking, accept or
-  skip when a linked product's provider price has moved. The screen notes that either answer is
-  remembered and that leaving both unanswered asks again next review, which is
-  `CatalogueReviewPolicy.IsProposed` in the operator's words.
-- **Which price "mine" is, in that comparison** (`localPrice`). For an already-linked row it is the
-  review's own local value, because the server compared it when it read the catalogue. For a row the
-  operator is linking now the review reports **no** local value at all — `StartCatalogueReview`
-  cannot report one, since the local row is what the operator is naming on this screen — so the
-  screen shows the price of the product they named, rendered with the two decimals
-  `ProviderCatalogueFieldValue.FromPrice` writes so both sides read alike. That is the price the
-  apply itself negotiates against (`ApplyNegotiableFields` re-reads the named product's `UnitPrice`),
-  and it is the single local catalogue value this screen renders beside the provider's: showing
-  nothing there would tell an operator authorising a replacement that they have no price to lose.
-- A **unit/volume** is never offered. The provider publishes no unit or volume label, so the API
-  proposes none, and the screen renders a control for the price choice alone — issue #739's
+- **Nothing is negotiated, so the screen offers no field control at all** (issue #792, A2 of #786).
+  The price used to be the one choice — keep mine or take the provider's when linking, accept or
+  skip when a linked product's provider price had moved — and a product carries no selling price
+  any more, so the keep-or-take fieldset, the "Mine … Nayax …" comparison and the applied result's
+  accepted/skipped counts are all gone. A stale API response that still proposes a `UnitPrice`
+  choice renders nothing and sends nothing: the screen never offers a field it cannot write, and
+  the apply would refuse a price decision anyway. See [A product carries no selling
+  price](#a-product-carries-no-selling-price-issue-792).
+- A **unit/volume** is not offered either, and never was. The provider publishes no unit or volume
+  label, so the API proposes none — issue #739's
   out-of-scope note and the owner's decision of 20 October 2026 keep `Product.Unit` locally managed
   until a human decides which Lynx field, if any, means it.
 - A provider-owned change on an already-linked row is listed as **applied automatically** with the
@@ -10996,7 +11020,7 @@ theirs, which is exactly what the apply does with it.
 
 **Every entry starts on Skip**, and an entry the operator answered nothing about is sent as nothing
 at all — a half-decided review must not link the other half by omission. The screen sends decisions
-and nothing else: no provider name, price or group id travels back from the browser, and a link that
+and nothing else: no provider name or group id travels back from the browser, and a link that
 names no local row is refused locally with a message rather than sent, because the server refuses the
 whole apply over one such decision and would throw away every other answer on the screen. Both calls
 are disabled while a support session is active, for the reason every other write on this page is
@@ -11015,16 +11039,19 @@ and because what it did is still the right explanation of *why* the review exist
 - It was a one-way write-through sync of the Nayax operator catalogue into the local product and
   category tables: it created a row for every snapshot entry no local row carried the provider id of,
   and overwrote `Name`, `Description`, `UnitPrice` (from the catalogue `ProductDefaultRetailPrice`,
-  never the Nayax `ProductCostPrice` — see [Product selling price](#product-selling-price)) and
-  `CategoryId` on every row that did, plus `UpdatedAt`. Stock, costing, supplier and the operator's
-  own local fields were never written. A local product Nayax stopped returning was never removed —
-  that drift is reported by the catalogue reconciliation below.
+  never the Nayax `ProductCostPrice`) and `CategoryId` on every row that did, plus `UpdatedAt`.
+  Stock, costing, supplier and the operator's own local fields were never written. A local product
+  Nayax stopped returning was never removed — that drift is reported by the catalogue
+  reconciliation below.
 - **Two of those four fields are what the review still applies without asking** — the name and the
   category, because the provider owns them (`ProviderManagedCatalogueFields`). The price became a
-  per-product decision in issue #738, and the **description is no longer taken from the provider at
-  all**: it is not one of the fields the review negotiates or applies, so a provider description
-  change now leaves the local description alone. That is a deliberate consequence of C1/C2 rather
-  than an oversight — the review's contract names exactly the fields it writes.
+  per-product decision in issue #738 and then went altogether in issue #792, which deleted the
+  product field behind it (see [A product carries no selling
+  price](#a-product-carries-no-selling-price-issue-792)); and the **description is no longer taken
+  from the provider at all**: it is not one of the fields the review negotiates or applies, so a
+  provider description change now leaves the local description alone. That is a deliberate
+  consequence of C1/C2 rather than an oversight — the review's contract names exactly the fields it
+  writes.
 - It had no concurrency token, so two overlapping imports could both decide the same product was new
   and a local edit to a provider-linked row committed between its read and its write was simply
   overwritten. The review's apply is the opposite shape: it re-reads every row it is about to write
@@ -12158,7 +12185,8 @@ files" as the historical record of that slice, not as a test to look for today.
       `Inventory.Infrastructure.Persistence.EfNayaxProductCatalogImportStore` (API-owned until issue #309); see
       [Nayax product catalogue import](#nayax-product-catalogue-import-issue-300) for the full
       behaviour, including the preserved new/existing upsert, the untouched local stock/costing
-      state, the never-renamed existing category and the `Product.UnitPrice` retail-price semantics.
+      state, the never-renamed existing category and the retail-price semantics of the
+      then-existing `Product.UnitPrice` (removed by issue #792).
       Like child 1, this slice adds no `Inventory.Domain` code: the import persists raw remote
       catalogue facts and derives no accounting value. The Products slice ports from issue #240 were
       deliberately not reused or widened for an upsert keyed by the remote identifier, and the

@@ -63,7 +63,11 @@ export interface Product {
   name: string;
   sku?: string | null;
   description?: string | null;
-  unitPrice: number;
+  /**
+   * No `unitPrice` since issue #792 (A2 of #786): a product carries no catalogue selling price at
+   * all, and the API sends none rather than sending `0`. What a product sells for is the machine's
+   * own live price, `machinePrice` below; what it costs is `averageUnitCost`.
+   */
   averageUnitCost: number;
   costingQuantity?: number | null;
   inventoryValue?: number | null;
@@ -125,12 +129,14 @@ export interface Product {
   deletionRefusal?: string | null;
 }
 
-/** The product a client posts to `POST /api/products` (issue #737). */
+/**
+ * The product a client posts to `POST /api/products` (issue #737). It carries no `unitPrice` since
+ * issue #792 (A2 of #786): a product has no selling price. `initialUnitCost` is a cost and stays.
+ */
 export interface ProductCreateDto {
   name: string;
   sku?: string | null;
   description?: string | null;
-  unitPrice: number;
   quantityInStock: number;
   lowStockThreshold: number;
   restockTo: number;
@@ -160,7 +166,7 @@ export interface ReorderAlertListing {
 
 /**
  * The Dashboard "Inventory Value" tile's authoritative source: the business-owned perpetual
- * inventory value (cost basis), never retail UnitPrice. `totalInventoryValue` is `null` whenever
+ * inventory value (cost basis), never a retail price. `totalInventoryValue` is `null` whenever
  * `isComplete` is `false` - a product with unknown cost must never be presented as a real `$0.00`.
  */
 export interface InventoryValuationSummary {
@@ -448,11 +454,11 @@ export interface SiteProduct {
   machineMdbCodes: SiteProductMachineMdbCode[];
 }
 
+/** The product a client puts to `PUT /api/products/{id}`. No `unitPrice` since issue #792. */
 export interface ProductUpdateDto {
   name: string;
   sku?: string | null;
   description?: string | null;
-  unitPrice: number;
   lowStockThreshold: number;
   restockTo: number;
   unit?: string | null;

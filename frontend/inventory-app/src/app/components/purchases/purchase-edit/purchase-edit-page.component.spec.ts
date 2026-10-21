@@ -56,7 +56,6 @@ function product(id: number, name: string): Product {
   return {
     id,
     name,
-    unitPrice: 2,
     averageUnitCost: 1,
     machinePrice: null,
     commissionValue: null,

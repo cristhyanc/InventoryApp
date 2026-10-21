@@ -25,7 +25,6 @@ function product(overrides: Partial<Product> = {}): Product {
     name: 'Cola 375mL',
     sku: null,
     description: null,
-    unitPrice: 2.5,
     averageUnitCost: 1,
     costingQuantity: null,
     inventoryValue: null,

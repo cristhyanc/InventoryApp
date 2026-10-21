@@ -19,7 +19,9 @@ public sealed record ProductRecord
     public required string Name { get; init; }
     public string? Sku { get; init; }
     public string? Description { get; init; }
-    public required decimal UnitPrice { get; init; }
+
+    // No selling price since issue #792 (A2 of #786): a product carries none. AverageUnitCost is a
+    // cost and is unaffected.
     public required decimal AverageUnitCost { get; init; }
     public int? CostingQuantity { get; init; }
     public decimal? InventoryValue { get; init; }

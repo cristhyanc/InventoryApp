@@ -5,10 +5,11 @@ namespace Inventory.Application.Products;
 /// <summary>
 /// The product creation use case: validates the deterministic invariants, then persists.
 ///
-/// <para>Issue #736 gave it an HTTP route for the first time (<c>POST /api/products</c>) and the two
-/// catalogue invariants a manually created product needs - a name, and a selling price that is not
-/// negative (<see cref="ProductCataloguePolicy"/>). The initial-cost and restock rules, their
-/// messages and the order they are checked in are unchanged from issue #240.</para>
+/// <para>Issue #736 gave it an HTTP route for the first time (<c>POST /api/products</c>) and the
+/// catalogue invariants a manually created product needs (<see cref="ProductCataloguePolicy"/>),
+/// which since issue #792 is one: a name. The selling price it also bounded is gone with the field.
+/// The initial-cost and restock rules, their messages and the order they are checked in are
+/// unchanged from issue #240.</para>
 /// </summary>
 public sealed class CreateProduct
 {
@@ -29,7 +30,7 @@ public sealed class CreateProduct
         var restockError = ProductRestockPolicy.Validate(fields.LowStockThreshold, fields.RestockTo);
         if (restockError is not null) return CreateProductResult.Invalid(restockError);
 
-        var catalogueError = ProductCataloguePolicy.Validate(fields.Name, fields.UnitPrice);
+        var catalogueError = ProductCataloguePolicy.Validate(fields.Name);
         if (catalogueError is not null) return CreateProductResult.Invalid(catalogueError);
 
         var attempt = await _store.CreateAsync(fields, cancellationToken);
