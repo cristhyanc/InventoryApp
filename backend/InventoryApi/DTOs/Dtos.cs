@@ -21,6 +21,10 @@ namespace InventoryApi.DTOs;
 /// <para>No owning business, and no provider id: the business comes from the caller's membership
 /// (AGENTS.md § Tenant ownership and data isolation), and <c>ExternalProductId</c> is written only
 /// by a provider import or the catalogue review (issue #738).</para>
+///
+/// <para><strong>And no supplier since issue #787</strong> (A1 of #786): a product carries no
+/// supplier metadata, so <c>supplierId</c> is gone from this request. A submitted
+/// <c>supplierId</c> is simply not bound - the create succeeds and nothing is stored for it.</para>
 /// </summary>
 public record ProductCreateDto(
     string Name,
@@ -32,7 +36,6 @@ public record ProductCreateDto(
     int RestockTo,
     string? Unit,
     long? CategoryId,
-    int? SupplierId,
     bool IsActive,
     decimal? InitialUnitCost = null
 );
@@ -45,6 +48,9 @@ public record ProductCreateDto(
 /// provider names, a <em>change</em> to the name or the category is refused with <c>400</c> and a
 /// message naming that provider; sending the stored values back is not a change, and the price and
 /// every other field here stay editable for every product.</para>
+///
+/// <para><c>supplierId</c> is gone since issue #787 (A1 of #786), for the same reason it left
+/// <see cref="ProductCreateDto"/>: a product has no supplier to change.</para>
 /// </summary>
 public record ProductUpdateDto(
     string Name,
@@ -55,7 +61,6 @@ public record ProductUpdateDto(
     int RestockTo,
     string? Unit,
     long? CategoryId,
-    int? SupplierId,
     bool IsActive
 );
 

@@ -434,7 +434,7 @@ describe('PlatformDiagnosticsQueryComponent permitted surface (issue #335)', () 
     for (const table of ['Businesses', 'Categories', 'Suppliers', 'Products', 'Receipts', 'ReceiptItems', 'StockAdjustments']) {
       expect(text).toContain(table);
     }
-    expect(text).toContain('Id, BusinessId, CategoryId, SupplierId');
+    expect(text).toContain('Id, BusinessId, CategoryId');
     expect(text).toContain('Id, BusinessId, ReceiptId, ProductId');
   });
 

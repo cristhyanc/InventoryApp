@@ -8,6 +8,8 @@ import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { Product, Category, ReorderMode, Supplier } from '../../models/models';
+// `SupplierService` stays: this page's order dialog still needs the supplier list for its required
+// supplier selector (issue #787, A1 of #786). What left is the product-supplier filter and column.
 import { NayaxUnavailability, storageOnlyReorderLabel } from '../../provider/nayax-availability';
 import { ListLoadState } from '../shared/list-load-state';
 import { createFilterTrigger$ } from '../shared/filter-request-trigger';
@@ -19,7 +21,6 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 type NeedsOrderingSortColumn =
   | 'name'
   | 'category'
-  | 'supplier'
   | 'price'
   | 'stock'
   | 'machineNeed'
@@ -42,7 +43,6 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   readonly loadState = new ListLoadState();
   search = '';
   categoryId: number | '' = '';
-  supplierId: number | '' = '';
   selectedProductIds = new Set<number>();
   sortColumn: NeedsOrderingSortColumn | null = null;
   sortDirection: SortDirection = 'asc';
@@ -113,8 +113,7 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   private fetchProducts() {
     const filters = {
       search: this.search || undefined,
-      categoryId: this.categoryId === '' ? undefined : this.categoryId,
-      supplierId: this.supplierId === '' ? undefined : this.supplierId
+      categoryId: this.categoryId === '' ? undefined : this.categoryId
     };
 
     const token = this.loadState.start();
@@ -160,7 +159,7 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     this.search$.next(value);
   }
 
-  /** Triggers an immediate (non-debounced) refresh, e.g. for category/supplier changes. */
+  /** Triggers an immediate (non-debounced) refresh, e.g. for a category change. */
   applyFilters(): void {
     this.immediateFilter$.next();
   }
@@ -168,7 +167,6 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   resetFilters(): void {
     this.search = '';
     this.categoryId = '';
-    this.supplierId = '';
     this.applyFilters();
   }
 
@@ -188,8 +186,13 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
     }
 
     const selectedProducts = this.products.filter((product) => this.selectedProductIds.has(product.id));
-    const supplierIds = [...new Set(selectedProducts.map((product) => product.supplierId).filter((id): id is number => id != null))];
-    this.orderForm.supplierId = supplierIds.length === 1 ? supplierIds[0] : null;
+
+    // The order starts with no supplier chosen (issue #787, A1 of #786). It used to be inferred
+    // from the selected products' own supplier when they all agreed; a product carries none now,
+    // and guessing was never the right default anyway - the supplier being ordered from is a
+    // decision about this order. The selector stays required, so the order cannot be sent without
+    // one.
+    this.orderForm.supplierId = null;
     this.orderQuantities = Object.fromEntries(selectedProducts.map((product) => [product.id, product.needToOrder]));
     this.showOrderForm = true;
   }
@@ -308,8 +311,6 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
         return product.name;
       case 'category':
         return product.category?.name ?? null;
-      case 'supplier':
-        return product.supplier?.name ?? null;
       case 'price':
         return product.unitPrice;
       case 'stock':
@@ -342,7 +343,6 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
       restockTo: product.restockTo,
       unit: product.unit ?? null,
       categoryId: product.categoryId ?? null,
-      supplierId: product.supplierId ?? null,
       isActive: !product.isActive
     }).subscribe({
       next: () => this.applyFilters(),

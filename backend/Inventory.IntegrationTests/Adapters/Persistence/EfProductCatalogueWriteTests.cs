@@ -71,14 +71,14 @@ public class EfProductCatalogueWriteTests : IDisposable
         int quantityInStock = 0,
         long? categoryId = null,
         decimal? initialUnitCost = null) =>
-        new(name, "SKU-1", "A can", unitPrice, quantityInStock, 5, 10, "can", categoryId, null, true, initialUnitCost);
+        new(name, "SKU-1", "A can", unitPrice, quantityInStock, 5, 10, "can", categoryId, true, initialUnitCost);
 
     private static ProductUpdateFields UpdateFields(
         string name = "Coke",
         decimal unitPrice = 3.50m,
         long? categoryId = null,
         bool isActive = true) =>
-        new(name, "SKU-1", "A can", unitPrice, 5, 10, "can", categoryId, null, isActive);
+        new(name, "SKU-1", "A can", unitPrice, 5, 10, "can", categoryId, isActive);
 
     private EfProductStore StoreFor(AppDbContext db) => new(db, TestCostingUseCases.Rebuild(db));
 

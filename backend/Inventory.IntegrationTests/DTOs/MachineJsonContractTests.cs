@@ -254,8 +254,6 @@ public class MachineJsonContractTests
             UpdatedAt = new DateTime(2026, 2, 2, 9, 45, 0, DateTimeKind.Utc),
             CategoryId = 3,
             Category = new ProductCategoryRecord(3, "Drinks", "Cold"),
-            SupplierId = 4,
-            Supplier = new ProductSupplierRecord(4, "Acme", "Pat", "123", "a@b.c", "1 Road"),
             StockAdjustments =
             [
                 new ProductStockAdjustmentRecord(
@@ -361,7 +359,10 @@ public class MachineJsonContractTests
                 "suggestedPriceValue", "mdbCode", "maxStockInMachine", "machineReplenishmentNeed",
                 "onOrderQuantity", "projectedStockForReorder", "quantityInStock", "lowStockThreshold",
                 "restockTo", "needToOrder", "unit", "isActive", "lastEatBefore1", "lastEatBefore2",
-                "createdAt", "updatedAt", "categoryId", "category", "supplierId", "supplier",
+                // "supplierId"/"supplier" left this snapshot with the product's supplier column
+                // itself (issue #787, A1 of #786) - the one key the machine-slot product contract
+                // has ever lost. Every other key keeps its name, type, value and position.
+                "createdAt", "updatedAt", "categoryId", "category",
                 "stockAdjustments", "isLowStock", "isReorderAlert",
             },
             document.RootElement.EnumerateObject().Select(property => property.Name));

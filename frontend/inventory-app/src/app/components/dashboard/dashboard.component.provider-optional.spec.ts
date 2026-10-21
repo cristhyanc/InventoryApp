@@ -158,8 +158,6 @@ function product(overrides: Partial<Product> = {}): Product {
     updatedAt: '2026-01-01T00:00:00Z',
     categoryId: null,
     category: null,
-    supplierId: null,
-    supplier: { id: 1, name: 'Acme Supplies' },
     isActive: true,
     isLowStock: true,
     isReorderAlert: true,
@@ -468,6 +466,10 @@ describe('Dashboard with a usable provider is unchanged (issue #727)', () => {
     expect(headers).toContain('Machine need');
     expect(headers).toContain('Stock after machine need');
     expect(host.textContent).not.toContain('Storage stock only');
+
+    // Reorder Alerts carries no Supplier column since issue #787 (A1 of #786): a product has no
+    // supplier, so a column of em-dashes would say nothing. Every other column is unchanged.
+    expect(headers).not.toContain('Supplier');
   });
 
   it('synchronizes the latest sales once, then loads Machines and Sites', () => {

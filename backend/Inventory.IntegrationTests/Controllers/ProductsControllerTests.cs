@@ -87,7 +87,7 @@ public class ProductsControllerTests
             Assert.IsType<OkObjectResult>(result.Result).Value);
 
     private static ProductUpdateDto UpdateDto(int lowStockThreshold, int restockTo) =>
-        new("Coke", null, null, 1m, lowStockThreshold, restockTo, "unit", null, null, true);
+        new("Coke", null, null, 1m, lowStockThreshold, restockTo, "unit", null, true);
 
     [Fact]
     public async Task Update_RestockToBelowThreshold_ReturnsBadRequestWithMessage()
@@ -220,7 +220,7 @@ public class ProductsControllerTests
         });
         await db.SaveChangesAsync();
 
-        var product = SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None));
+        var product = SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None));
 
         Assert.Equal(1, product.Id);
         Assert.Equal("Coke", product.Name);
@@ -278,7 +278,7 @@ public class ProductsControllerTests
         });
         await db.SaveChangesAsync();
 
-        var product = SingleProduct(await CreateController(db).LowStock(null, null, null, CancellationToken.None));
+        var product = SingleProduct(await CreateController(db).LowStock(null, null, CancellationToken.None));
 
         Assert.Equal("Party Mix", product.Name);
         Assert.Equal(8m, product.OnOrderQuantity);
@@ -312,7 +312,7 @@ public class ProductsControllerTests
         await db.SaveChangesAsync();
 
         var result = await CreateController(db).Create(
-            new ProductCreateDto("Coke", "SKU-1", "A can", 3.50m, 0, 5, 10, "can", 3, null, true),
+            new ProductCreateDto("Coke", "SKU-1", "A can", 3.50m, 0, 5, 10, "can", 3, true),
             CancellationToken.None);
 
         var created = Assert.IsType<CreatedAtActionResult>(result.Result);
@@ -328,7 +328,7 @@ public class ProductsControllerTests
         using var db = CreateDbContext();
 
         var result = await CreateController(db).Create(
-            new ProductCreateDto("  ", null, null, 1m, 0, 5, 10, "unit", null, null, true),
+            new ProductCreateDto("  ", null, null, 1m, 0, 5, 10, "unit", null, true),
             CancellationToken.None);
 
         var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
@@ -342,7 +342,7 @@ public class ProductsControllerTests
         using var db = CreateDbContext();
 
         var result = await CreateController(db).Create(
-            new ProductCreateDto("Coke", null, null, -1m, 0, 5, 10, "unit", null, null, true),
+            new ProductCreateDto("Coke", null, null, -1m, 0, 5, 10, "unit", null, true),
             CancellationToken.None);
 
         var badRequest = Assert.IsType<BadRequestObjectResult>(result.Result);
@@ -365,7 +365,7 @@ public class ProductsControllerTests
         await db.SaveChangesAsync();
 
         var result = await CreateController(db).Update(
-            1, new ProductUpdateDto("Coke Zero", null, null, 4.25m, 5, 10, "can", 3, null, true));
+            1, new ProductUpdateDto("Coke Zero", null, null, 4.25m, 5, 10, "can", 3, true));
 
         Assert.IsType<NoContentResult>(result);
         var product = await db.Products.FindAsync(1L);
@@ -380,7 +380,7 @@ public class ProductsControllerTests
         await db.SaveChangesAsync();
 
         var result = await CreateController(db).Update(
-            1, new ProductUpdateDto(null!, null, null, 1m, 5, 10, "unit", null, null, true));
+            1, new ProductUpdateDto(null!, null, null, 1m, 5, 10, "unit", null, true));
 
         Assert.IsType<BadRequestObjectResult>(result);
         Assert.Equal("Coke", (await db.Products.FindAsync(1L))!.Name);
@@ -398,13 +398,13 @@ public class ProductsControllerTests
         db.Products.Add(new Product { Id = 1, Name = "Local", ExternalProductId = null });
         await db.SaveChangesAsync();
 
-        var local = SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None));
+        var local = SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None));
         Assert.Empty(local.ProviderManagedFields!);
 
         db.Products.Single().ExternalProductId = "100";
         await db.SaveChangesAsync();
 
-        var linked = SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None));
+        var linked = SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None));
         Assert.Equal(new[] { "name", "categoryId" }, linked.ProviderManagedFields!);
     }
 
@@ -431,7 +431,7 @@ public class ProductsControllerTests
         await db.SaveChangesAsync();
         var controller = CreateController(db);
 
-        var products = Products(await controller.GetAll(null, null, null, null, null, CancellationToken.None))
+        var products = Products(await controller.GetAll(null, null, null, null, CancellationToken.None))
             .ToDictionary(product => product.Name);
 
         Assert.True(products["Deletable"].CanDelete);
@@ -466,7 +466,7 @@ public class ProductsControllerTests
         var controller = CreateController(db);
 
         var published = SingleProduct(
-            await controller.GetAll(null, null, null, null, null, CancellationToken.None)).DeletionRefusal;
+            await controller.GetAll(null, null, null, null, CancellationToken.None)).DeletionRefusal;
         var refused = Assert.IsType<ConflictObjectResult>(await controller.Delete(1, CancellationToken.None));
 
         Assert.Equal(refused.Value, published);
@@ -489,8 +489,8 @@ public class ProductsControllerTests
         await db.SaveChangesAsync();
         var controller = CreateController(db);
 
-        var working = Products(await controller.GetAll(null, null, null, null, null, CancellationToken.None));
-        var whole = Products(await controller.GetAll(null, null, null, null, true, CancellationToken.None));
+        var working = Products(await controller.GetAll(null, null, null, null, CancellationToken.None));
+        var whole = Products(await controller.GetAll(null, null, null, true, CancellationToken.None));
 
         Assert.Equal(["Coke"], working.Select(product => product.Name));
         Assert.Equal(["Coke", "Discontinued"], whole.Select(product => product.Name).Order());
@@ -536,16 +536,16 @@ public class ProductsControllerTests
         await db.SaveChangesAsync();
         var controller = CreateController(db);
 
-        Assert.Empty(Products(await controller.GetAll(null, null, null, null, null, CancellationToken.None)));
+        Assert.Empty(Products(await controller.GetAll(null, null, null, null, CancellationToken.None)));
         var retired = SingleProduct(
-            await controller.GetAll(null, null, null, null, true, CancellationToken.None));
+            await controller.GetAll(null, null, null, true, CancellationToken.None));
         Assert.False(retired.IsActive);
 
         Assert.IsType<NoContentResult>(await controller.Update(
-            1, new ProductUpdateDto("Discontinued", null, null, 1m, 5, 10, "unit", null, null, true)));
+            1, new ProductUpdateDto("Discontinued", null, null, 1m, 5, 10, "unit", null, true)));
 
         var reactivated = SingleProduct(
-            await controller.GetAll(null, null, null, null, null, CancellationToken.None));
+            await controller.GetAll(null, null, null, null, CancellationToken.None));
         Assert.True(reactivated.IsActive);
         Assert.Equal(7, reactivated.QuantityInStock);
     }
@@ -753,7 +753,7 @@ public class ProductsControllerTests
         await db.SaveChangesAsync();
 
         var json = System.Text.Json.JsonSerializer.Serialize(
-            SingleProduct(await CreateController(db).GetAll(null, null, null, null, null, CancellationToken.None)),
+            SingleProduct(await CreateController(db).GetAll(null, null, null, null, CancellationToken.None)),
             new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
 
         Assert.DoesNotContain("gstRule", json, StringComparison.OrdinalIgnoreCase);

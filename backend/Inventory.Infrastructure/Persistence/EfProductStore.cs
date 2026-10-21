@@ -83,7 +83,6 @@ public sealed class EfProductStore : IProductStore
             RestockTo = fields.RestockTo,
             Unit = fields.Unit,
             CategoryId = fields.CategoryId,
-            SupplierId = fields.SupplierId,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
         };
@@ -164,7 +163,6 @@ public sealed class EfProductStore : IProductStore
         product.RestockTo = fields.RestockTo;
         product.Unit = fields.Unit;
         product.CategoryId = fields.CategoryId;
-        product.SupplierId = fields.SupplierId;
         product.UpdatedAt = DateTime.UtcNow;
 
         await _db.SaveChangesAsync(cancellationToken);

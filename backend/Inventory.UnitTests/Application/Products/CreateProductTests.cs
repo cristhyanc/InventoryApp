@@ -11,7 +11,7 @@ public class CreateProductTests
         decimal? initialUnitCost = null,
         string name = "Coke",
         decimal unitPrice = 1.5m) =>
-        new(name, "SKU-1", null, unitPrice, 0, lowStockThreshold, restockTo, "unit", null, null, true,
+        new(name, "SKU-1", null, unitPrice, 0, lowStockThreshold, restockTo, "unit", null, true,
             initialUnitCost);
 
     [Fact]

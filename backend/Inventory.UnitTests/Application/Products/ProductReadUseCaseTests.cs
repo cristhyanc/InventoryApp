@@ -84,7 +84,7 @@ public class ProductReadUseCaseTests
     public async Task ListProducts_PassesTheCallersFilterThroughUnchanged()
     {
         var catalog = new FakeProductCatalogStore(FakeProductCatalogStore.Product(1, "Coke"));
-        var filter = new ProductCatalogFilter("Co", 7, 9, IncludeRetired: false);
+        var filter = new ProductCatalogFilter("Co", 7, IncludeRetired: false);
 
         await UseCases(catalog).List.Handle(filter, lowStockOnly: false, CancellationToken.None);
 

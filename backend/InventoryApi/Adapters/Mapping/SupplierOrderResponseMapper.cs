@@ -94,6 +94,5 @@ public static class SupplierOrderResponseMapper
             CreatedAt = record.CreatedAt,
             UpdatedAt = record.UpdatedAt,
             CategoryId = record.CategoryId,
-            SupplierId = record.SupplierId,
         };
 }

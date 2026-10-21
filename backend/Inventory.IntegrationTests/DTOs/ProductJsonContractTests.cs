@@ -19,16 +19,23 @@ namespace InventoryApi.Tests.DTOs;
 /// here rather than in a client. The explicit key list is asserted as well, so a future change to
 /// <em>both</em> sides at once still has to be a conscious one.
 ///
-/// <para><strong>The contract has moved exactly twice, and only by appending.</strong> Issue #736,
+/// <para><strong>The contract has been appended to twice, and broken once.</strong> Issue #736,
 /// whose acceptance criteria require the catalogue response to say which fields the business's sales
 /// provider manages so the UI can lock them, added <c>providerManagedFields</c>. Issue #737, whose
 /// criterion is that Delete is offered only where the API allows it, added <c>canDelete</c> and
 /// <c>deletionRefusal</c> after it - and only on a read that resolved the question, so they are
 /// absent from the byte-for-byte comparisons below, which still run against a record that did not.
-/// Every key a client already read keeps its name, type, value and position. Nothing else may move
-/// this reference without its own issue. The nested product snapshots on a purchase, a supplier
-/// order and a machine slot carry none of the three - they are <c>null</c> there and omitted - so
-/// their own contract tests are untouched.</para>
+/// Every key a client already read keeps its name, type, value and position. The nested product
+/// snapshots on a purchase, a supplier order and a machine slot carry none of the three - they are
+/// <c>null</c> there and omitted.</para>
+///
+/// <para><strong>The one break is issue #787</strong> (A1 of #786), the destructive product-supplier
+/// deletion the owner approved on 21 October 2026: <c>supplierId</c> and <c>supplier</c> are gone
+/// from this response and from every nested product snapshot with it. They are <strong>removed, not
+/// nulled</strong>, which is the honest shape - a product has no supplier to report, so reporting
+/// one as empty would be a different statement. The purchase's and the supplier order's own
+/// <c>supplier</c> is unaffected and their contract tests still assert it. Nothing else may move
+/// this reference without its own issue.</para>
 /// </summary>
 public class ProductJsonContractTests
 {
@@ -53,8 +60,6 @@ public class ProductJsonContractTests
         UpdatedAt = new DateTime(2026, 2, 2, 9, 45, 0, DateTimeKind.Utc),
         CategoryId = 3,
         Category = new ProductCategoryRecord(3, "Drinks", "Cold"),
-        SupplierId = 4,
-        Supplier = new ProductSupplierRecord(4, "Acme", "Pat", "123", "a@b.c", "1 Road"),
         StockAdjustments =
         [
             new ProductStockAdjustmentRecord(
@@ -111,18 +116,6 @@ public class ProductJsonContractTests
                 Id = record.Category.Id,
                 Name = record.Category.Name,
                 Description = record.Category.Description,
-            },
-        SupplierId = record.SupplierId,
-        Supplier = record.Supplier is null
-            ? null
-            : new Supplier
-            {
-                Id = record.Supplier.Id,
-                Name = record.Supplier.Name,
-                ContactName = record.Supplier.ContactName,
-                Phone = record.Supplier.Phone,
-                Email = record.Supplier.Email,
-                Address = record.Supplier.Address,
             },
         StockAdjustments = record.StockAdjustments.Select(adjustment => new StockAdjustment
         {
@@ -216,8 +209,12 @@ public class ProductJsonContractTests
 
         Assert.Equal(ExpectedJson(record, "[]"), response);
         Assert.Contains("\"category\":null", response, StringComparison.Ordinal);
-        Assert.Contains("\"supplier\":null", response, StringComparison.Ordinal);
         Assert.Contains("\"stockAdjustments\":[]", response, StringComparison.Ordinal);
+
+        // The supplier keys are not null here - they are gone (issue #787). A client that still
+        // reads `supplier` must find nothing rather than an explicit null that looks like
+        // "no supplier recorded".
+        Assert.DoesNotContain("supplier", response, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -236,7 +233,7 @@ public class ProductJsonContractTests
                 "suggestedPriceValue", "mdbCode", "maxStockInMachine", "machineReplenishmentNeed",
                 "onOrderQuantity", "projectedStockForReorder", "quantityInStock", "lowStockThreshold",
                 "restockTo", "needToOrder", "unit", "isActive", "lastEatBefore1", "lastEatBefore2",
-                "createdAt", "updatedAt", "categoryId", "category", "supplierId", "supplier",
+                "createdAt", "updatedAt", "categoryId", "category",
                 "stockAdjustments", "isLowStock", "isReorderAlert",
 
                 // Issue #736's one appended key, last so every key above keeps its position. Issue
@@ -251,10 +248,6 @@ public class ProductJsonContractTests
         Assert.Equal(
             new[] { "id", "name", "description" },
             document.RootElement.GetProperty("category").EnumerateObject().Select(property => property.Name));
-
-        Assert.Equal(
-            new[] { "id", "name", "contactName", "phone", "email", "address" },
-            document.RootElement.GetProperty("supplier").EnumerateObject().Select(property => property.Name));
 
         Assert.Equal(
             new[]

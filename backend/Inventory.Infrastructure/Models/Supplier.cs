@@ -47,6 +47,7 @@ public class Supplier : IBusinessOwned
     [JsonIgnore]
     public GstClassification PackageGstDefault { get; set; } = GstRules.None;
 
-    [JsonIgnore]
-    public virtual ICollection<Product> Products { get; set; } = new List<Product>();
+    // No products collection (issue #787, A1 of #786): a supplier is named by the purchases and the
+    // supplier orders it was party to, not by a catalogue row. Those two relationships, this
+    // supplier's GST defaults and supplier CRUD are all unchanged.
 }

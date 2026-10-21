@@ -142,8 +142,12 @@ public class PublishedResponseSchemaContractTests
         Assert.Equal(BaseProductPropertyNames, product.Properties.Keys.ToArray());
         Assert.Empty(product.Required);
         Assert.Equal("Category", product.Properties["category"].Reference?.Id);
-        Assert.Equal("Supplier", product.Properties["supplier"].Reference?.Id);
         Assert.Equal("StockAdjustment", product.Properties["stockAdjustments"].Items.Reference?.Id);
+
+        // The nested product describes no supplier since issue #787 (A1 of #786). The `Supplier`
+        // component stays published and byte-identical, because the purchase and the supplier order
+        // reference it - which `Nested_supplier_component_matches_the_base_contract` above asserts.
+        Assert.DoesNotContain("supplier", product.Properties.Keys, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -201,10 +205,13 @@ public class PublishedResponseSchemaContractTests
             },
             productResponse.Required.Order(StringComparer.Ordinal).ToArray());
         Assert.Equal("CategoryResponse", productResponse.Properties["category"].Reference?.Id);
-        Assert.Equal("SupplierResponse", productResponse.Properties["supplier"].Reference?.Id);
         Assert.Equal(
             "ProductStockAdjustmentResponse",
             productResponse.Properties["stockAdjustments"].Items.Reference?.Id);
+
+        // The product no longer describes a supplier at all (issue #787); the supplier component
+        // itself is unchanged above, because the purchase and the supplier order still reference it.
+        Assert.DoesNotContain("supplier", productResponse.Properties.Keys, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -415,6 +422,13 @@ public class PublishedResponseSchemaContractTests
     /// in requiredness, <c>readOnly</c> flags and their own nested references - the difference the
     /// nested purchase/supplier-order <c>product</c> reference would otherwise have handed
     /// clients.</para>
+    ///
+    /// <para><strong>The list has lost exactly two keys, once</strong>: issue #787 (A1 of #786)
+    /// dropped the product's <c>supplierId</c>/<c>supplier</c> from the entity this component is
+    /// regenerated from, so they left the published description with the column itself. That is the
+    /// one approved breaking change here, and the purchase's and supplier order's <em>own</em>
+    /// <c>supplier</c> reference is untouched - which is what the nested-reference assertions
+    /// above still prove.</para>
     /// </summary>
     private static readonly string[] BaseProductPropertyNames =
     [
@@ -423,7 +437,7 @@ public class PublishedResponseSchemaContractTests
         "suggestedPriceValue", "mdbCode", "maxStockInMachine", "machineReplenishmentNeed",
         "onOrderQuantity", "projectedStockForReorder", "quantityInStock", "lowStockThreshold",
         "restockTo", "needToOrder", "unit", "isActive", "lastEatBefore1", "lastEatBefore2",
-        "createdAt", "updatedAt", "categoryId", "category", "supplierId", "supplier",
+        "createdAt", "updatedAt", "categoryId", "category",
         "stockAdjustments", "isLowStock", "isReorderAlert",
     ];
 

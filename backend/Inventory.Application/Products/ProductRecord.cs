@@ -5,7 +5,7 @@ namespace Inventory.Application.Products;
 
 /// <summary>
 /// One catalogue product as the Application layer sees it (issue #240): the persisted catalogue and
-/// costing fields, its category/supplier detail, its stock-adjustment history, and the two reorder
+/// costing fields, its category detail, its stock-adjustment history, and the two reorder
 /// inputs (<see cref="MachineReplenishmentNeed"/>/<see cref="OnOrderQuantity"/>) that
 /// <see cref="ListLowStockProducts"/> resolves live rather than reading from the database.
 ///
@@ -32,8 +32,6 @@ public sealed record ProductRecord
     public required DateTime UpdatedAt { get; init; }
     public long? CategoryId { get; init; }
     public ProductCategoryRecord? Category { get; init; }
-    public int? SupplierId { get; init; }
-    public ProductSupplierRecord? Supplier { get; init; }
     public IReadOnlyList<ProductStockAdjustmentRecord> StockAdjustments { get; init; } = [];
 
     /// <summary>
@@ -86,10 +84,6 @@ public sealed record ProductRecord
 
 /// <summary>The category detail carried on a product, as the Application layer sees it.</summary>
 public sealed record ProductCategoryRecord(long Id, string Name, string? Description);
-
-/// <summary>The supplier detail carried on a product, as the Application layer sees it.</summary>
-public sealed record ProductSupplierRecord(
-    int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address);
 
 /// <summary>
 /// One persisted stock movement in a product's history. <paramref name="Reason"/> and

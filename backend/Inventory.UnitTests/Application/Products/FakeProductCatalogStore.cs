@@ -54,8 +54,6 @@ public sealed class FakeProductCatalogStore : IProductCatalogStore
 
         if (filter.CategoryId.HasValue)
             products = products.Where(product => product.CategoryId == filter.CategoryId);
-        if (filter.SupplierId.HasValue)
-            products = products.Where(product => product.SupplierId == filter.SupplierId);
 
         return products;
     }

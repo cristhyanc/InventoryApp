@@ -20,6 +20,10 @@ namespace Inventory.Application.Products;
 /// calculation in <c>Inventory.Application</c>/<c>Inventory.Domain</c> reads it, and it must never be
 /// conflated with <c>AverageUnitCost</c>, a historical sale cost or a machine's live price (AGENTS.md
 /// § Inventory and historical costing invariants; docs/architecture.md § Product selling price).</para>
+///
+/// <para><strong>There is no supplier here since issue #787</strong> (A1 of #786): a product carries
+/// no supplier metadata at all, so an edit has none to change. The supplier of a purchase and of a
+/// supplier order is unaffected and is still chosen on those records.</para>
 /// </summary>
 public sealed record ProductUpdateFields(
     string? Name,
@@ -30,5 +34,4 @@ public sealed record ProductUpdateFields(
     int RestockTo,
     string? Unit,
     long? CategoryId,
-    int? SupplierId,
     bool IsActive);

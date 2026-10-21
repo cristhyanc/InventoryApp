@@ -170,8 +170,6 @@ function product(overrides: Partial<Product> = {}): Product {
     updatedAt: '2026-01-01T00:00:00Z',
     categoryId: null,
     category: null,
-    supplierId: null,
-    supplier: { id: 1, name: 'Acme Supplies' },
     isActive: true,
     isLowStock: true,
     isReorderAlert: true,

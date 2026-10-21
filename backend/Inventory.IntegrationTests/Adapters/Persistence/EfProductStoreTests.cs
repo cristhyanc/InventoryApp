@@ -39,7 +39,7 @@ public class EfProductStoreTests : IDisposable
 
     private static ProductUpdateFields UpdateFields(
         string name = "Coke", decimal unitPrice = 0m, long? categoryId = null) =>
-        new(name, "SKU-UPDATED", null, unitPrice, 5, 10, "unit", categoryId, null, true);
+        new(name, "SKU-UPDATED", null, unitPrice, 5, 10, "unit", categoryId, true);
 
     private async Task<long> SeedProductAsync()
     {

@@ -76,7 +76,6 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
         }
 
         if (filter.CategoryId.HasValue) query = query.Where(product => product.CategoryId == filter.CategoryId);
-        if (filter.SupplierId.HasValue) query = query.Where(product => product.SupplierId == filter.SupplierId);
 
         return query;
     }
@@ -84,7 +83,6 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
     private static IQueryable<Product> WithDetail(IQueryable<Product> products) =>
         products
             .Include(product => product.Category)
-            .Include(product => product.Supplier)
             .Include(product => product.StockAdjustments);
 
     private static IReadOnlyList<ProductRecord> ToRecords(IEnumerable<Product> products) =>
@@ -231,16 +229,6 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
         Category = product.Category is null
             ? null
             : new ProductCategoryRecord(product.Category.Id, product.Category.Name, product.Category.Description),
-        SupplierId = product.SupplierId,
-        Supplier = product.Supplier is null
-            ? null
-            : new ProductSupplierRecord(
-                product.Supplier.Id,
-                product.Supplier.Name,
-                product.Supplier.ContactName,
-                product.Supplier.Phone,
-                product.Supplier.Email,
-                product.Supplier.Address),
         StockAdjustments = product.StockAdjustments.Select(adjustment => new ProductStockAdjustmentRecord(
             adjustment.Id,
             adjustment.ProductId,

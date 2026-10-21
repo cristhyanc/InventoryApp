@@ -10,7 +10,7 @@ public class UpdateProductTests
         int restockTo = 10,
         string? name = "Coke",
         decimal unitPrice = 2.50m) =>
-        new(name, "SKU-1", null, unitPrice, lowStockThreshold, restockTo, "unit", null, null, true);
+        new(name, "SKU-1", null, unitPrice, lowStockThreshold, restockTo, "unit", null, true);
 
     [Fact]
     public async Task Handle_UpdatesTheProduct_WhenFieldsAreValid()
@@ -77,7 +77,7 @@ public class UpdateProductTests
 
         var result = await new UpdateProduct(store).Handle(
             1,
-            new ProductUpdateFields("Coke Zero", "SKU-1", null, 4.25m, 5, 10, "can", 9, null, true),
+            new ProductUpdateFields("Coke Zero", "SKU-1", null, 4.25m, 5, 10, "can", 9, true),
             CancellationToken.None);
 
         Assert.Equal(UpdateProductOutcome.Success, result.Outcome);

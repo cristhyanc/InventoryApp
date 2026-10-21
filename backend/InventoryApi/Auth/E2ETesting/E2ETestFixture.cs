@@ -205,11 +205,11 @@ public static class E2ETestFixture
         // Quantities, thresholds and restock targets are chosen so the reorder page has exactly
         // one alerting product on a fresh database: 2 in stock at a threshold of 10 needs
         // 30 - 2 = 28 ordered, while the other two products need nothing.
-        var reorderProduct = NewProduct(ReorderProductName, "E2E-REORDER", category, supplier,
+        var reorderProduct = NewProduct(ReorderProductName, "E2E-REORDER", category,
             new ProductStocking(QuantityInStock: 2, LowStockThreshold: 10, RestockTo: 30, UnitPrice: 3.50m, OpeningUnitCost: 1.20m));
-        var correctionProduct = NewProduct(CorrectionProductName, "E2E-CORRECTION", category, supplier,
+        var correctionProduct = NewProduct(CorrectionProductName, "E2E-CORRECTION", category,
             new ProductStocking(QuantityInStock: 20, LowStockThreshold: 5, RestockTo: 24, UnitPrice: 4.00m, OpeningUnitCost: 2.00m));
-        var purchaseProduct = NewProduct(PurchaseProductName, "E2E-PURCHASE", category, supplier,
+        var purchaseProduct = NewProduct(PurchaseProductName, "E2E-PURCHASE", category,
             new ProductStocking(QuantityInStock: 0, LowStockThreshold: 0, RestockTo: 0, UnitPrice: 2.50m, OpeningUnitCost: null));
         db.Products.AddRange(reorderProduct, correctionProduct, purchaseProduct);
         await db.SaveChangesAsync(cancellationToken);
@@ -266,7 +266,7 @@ public static class E2ETestFixture
         db.Suppliers.Add(supplier);
         await db.SaveChangesAsync(cancellationToken);
 
-        var product = NewProduct(BusinessBProductName, "E2E-OTHER", category, supplier,
+        var product = NewProduct(BusinessBProductName, "E2E-OTHER", category,
             new ProductStocking(QuantityInStock: 50, LowStockThreshold: 5, RestockTo: 60, UnitPrice: 5.00m, OpeningUnitCost: 2.50m));
         db.Products.Add(product);
         await db.SaveChangesAsync(cancellationToken);
@@ -307,7 +307,6 @@ public static class E2ETestFixture
         string name,
         string sku,
         Category category,
-        Supplier supplier,
         ProductStocking stocking) =>
         new()
         {
@@ -315,7 +314,6 @@ public static class E2ETestFixture
             Sku = sku,
             Description = "Seeded E2E product",
             Category = category,
-            Supplier = supplier,
             QuantityInStock = stocking.QuantityInStock,
             LowStockThreshold = stocking.LowStockThreshold,
             RestockTo = stocking.RestockTo,

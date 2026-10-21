@@ -126,7 +126,7 @@ public sealed class SqliteDiagnosticsQueryExecutorTests : IDisposable
     [InlineData("SELECT count(*) FROM Products")]
     [InlineData("SELECT BusinessId, count(*) FROM Categories GROUP BY BusinessId")]
     [InlineData("SELECT max(Id), min(Id), sum(Id), avg(Id), total(Id) FROM Products")]
-    [InlineData("SELECT coalesce(SupplierId, -1), ifnull(CategoryId, -1), typeof(Id) FROM Products")]
+    [InlineData("SELECT coalesce(CategoryId, -1), ifnull(CategoryId, -1), typeof(Id) FROM Products")]
     [InlineData("WITH owned AS (SELECT Id, BusinessId FROM Products) SELECT count(*) FROM owned")]
     public async Task The_permitted_aggregate_and_null_handling_functions_work(string sql)
     {

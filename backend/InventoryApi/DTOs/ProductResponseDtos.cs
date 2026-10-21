@@ -109,9 +109,10 @@ public sealed record ProductResponse
     public long? CategoryId { get; init; }
     public CategoryResponse? Category { get; init; }
 
-    public int? SupplierId { get; init; }
-    public SupplierResponse? Supplier { get; init; }
-
+    // The two keys issue #787 (A1 of #786) removed, and the only breaking change in this response:
+    // a product no longer carries `supplierId`/`supplier`, here or in the product snapshot nested in
+    // a purchase line, a supplier-order line or a machine slot. A supplier is still published on the
+    // purchase and the supplier order themselves, where one is actually recorded.
     public IReadOnlyList<ProductStockAdjustmentResponse> StockAdjustments { get; init; } = [];
 
     public bool IsLowStock => ProductReorderPolicy.IsLowStock(QuantityInStock, LowStockThreshold);

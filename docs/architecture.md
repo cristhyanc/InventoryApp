@@ -2106,13 +2106,13 @@ The page says what it is before it knows who is asking: cross-business scope, re
 Businesses(Id)
 Categories(Id, BusinessId)
 Suppliers(Id, BusinessId)
-Products(Id, BusinessId, CategoryId, SupplierId)
+Products(Id, BusinessId, CategoryId)
 Receipts(Id, BusinessId, SupplierId)
 ReceiptItems(Id, BusinessId, ReceiptId, ProductId)
 StockAdjustments(Id, BusinessId, ProductId, ReceiptItemId)
 ```
 
-Every entry is an identity or foreign-key column, which is what an orphan or cross-business ownership investigation needs and all it needs. No name, note, amount, quantity, timestamp or free-text column is on it; `Businesses` exposes only `Id`, not the trading name. `BusinessMemberships` (Entra identity data), the `Nayax*` and `Imported*` tables (raw remote payloads, and where issue #327's token configuration would land), SQLite's own schema tables and everything else are absent. **A new table, or a new column on a listed table, is denied automatically** until a separately reviewed change adds it here.
+Every entry is an identity or foreign-key column, which is what an orphan or cross-business ownership investigation needs and all it needs. No name, note, amount, quantity, timestamp or free-text column is on it; `Businesses` exposes only `Id`, not the trading name. `BusinessMemberships` (Entra identity data), the `Nayax*` and `Imported*` tables (raw remote payloads, and where issue #327's token configuration would land), SQLite's own schema tables and everything else are absent. **A new table, or a new column on a listed table, is denied automatically** until a separately reviewed change adds it here. `Products.SupplierId` was on this list until issue #787 dropped the column; the allowlist names *physical* columns, so a column that leaves the schema leaves the surface with it — narrowing needs no review, only widening does.
 
 **How the surface is enforced: inside SQLite, not by reading the SQL.** `Inventory.Infrastructure.PlatformDiagnostics.SqliteDiagnosticsQueryExecutor` opens its own connection to the same configured data source and puts four independent barriers in front of the statement:
 
@@ -8976,9 +8976,13 @@ form calculates the other from that line's purchased **unit** quantity:
 
 The Purchasing/Suppliers vertical slice derives a per-product supplier price comparison from actual,
 immutable `PurchaseItem.UnitCost` history joined to its owning Purchase's date, title/reference, and
-supplier, rather than adding a separate quoted/current-price table: `Product`'s existing primary
-`SupplierId` is a default for ordering, not the source of this comparison, and every supplier a
-product was ever actually bought from remains visible. `Inventory.Domain.Purchases.SupplierPriceComparisonPolicy`
+supplier, rather than adding a separate quoted/current-price table: every supplier a
+product was ever actually bought from remains visible. `Product` used to carry a `SupplierId` as a
+default for ordering, which was never the source of this comparison and which issue #787 removed
+(see [A product carries no supplier](#a-product-carries-no-supplier-issue-787)); the purchase history
+this comparison reads *is* now the only record of who a product is bought from, and it is the better
+one, because a product bought from whoever is cheapest this month never had one supplier to store.
+`Inventory.Domain.Purchases.SupplierPriceComparisonPolicy`
 is the one authoritative calculation: it selects the lowest and most recent recorded unit cost with
 deterministic tie-breaks (lowest-cost ties break to the earliest occurrence; latest-date ties break to
 the higher purchase item id), computes the absolute/percentage difference between them - leaving the
@@ -9095,7 +9099,11 @@ that holds the published description still. It does four narrowly scoped things:
   `#/components/schemas/Product` and `supplier` at
   `#/components/schemas/Supplier`. Because the replacement runs through the generator rather than
   rewriting a reference string, the referenced component is registered with its complete shape —
-  including its own nested `category`/`supplier`/`stockAdjustments` references — instead of dangling;
+  including its own nested `category`/`stockAdjustments` references — instead of dangling. The
+  legacy `Product` component had a nested `supplier` reference of its own until issue #787 dropped
+  the product's supplier; the purchase's and the supplier order's **own** `supplier` reference, which
+  is what this bullet is about, is unchanged (see
+  [A product carries no supplier](#a-product-carries-no-supplier-issue-787));
 - describes the stock history/adjust operations' response with the schema of the legacy
   `Inventory.Infrastructure.Models.StockAdjustment` entity (issue #305), through an operation filter rather than
   a schema-id redirect. Those two actions return the API-owned
@@ -9143,7 +9151,9 @@ generated before the DTOs replaced the entities — no substitution is applied t
 shape of the `Supplier` and `Product` components they point at, that every published property
 reference resolves, that `ProductResponse`/`SupplierResponse` are untouched by the boundary, that
 the internal DTO names and a requiredness declaration are absent, and that no Receipt-named schema
-or tag exists.
+or tag exists. The `Product` property list it compares against lost `supplierId`/`supplier` in issue
+#787, the one approved break in that component; the `Supplier` component it is compared to is
+byte-identical, because the purchase and the supplier order still reference it.
 
 | Layer | Canonical Purchase language | Left as a legacy/compatibility surface | Why |
 | --- | --- | --- | --- |
@@ -10558,8 +10568,10 @@ row with no external id has nothing managed. The product and category responses 
 `providerManagedFields`, so a client locks exactly the inputs the server refuses — the same function
 produces both, which is what stops the lock and the enforcement from drifting apart. A *change* to a
 managed field is refused with `400` and a message naming the provider; submitting the stored value is
-not a change, so a client may send the whole row back, and the price, SKU, unit, supplier, restock
-settings and active flag stay editable for every product. Nothing here clears an external id; if a
+not a change, so a client may send the whole row back, and the price, SKU, unit, restock
+settings and active flag stay editable for every product. (A supplier was in that list until issue
+#787 removed the field entirely — see
+[A product carries no supplier](#a-product-carries-no-supplier-issue-787).) Nothing here clears an external id; if a
 future provider switch (#761) does, the fields become editable again with no further change.
 
 `providerManagedFields` is the key issue #736 appended to the catalogue response (issue #737 appended
@@ -10694,6 +10706,81 @@ name, or creates one. See
 and [The catalogue review screen](#the-catalogue-review-screen-issue-739) below. Nothing else about
 this section changed: the provider still owns a linked row's name and category, the price is still
 local and still editable, and a row with no external id is still the business's own in full.
+
+### A product carries no supplier (issue #787)
+
+A product held one supplier — `Product.SupplierId`, a nullable foreign key to `Suppliers` with
+`OnDelete(SetNull)` — described as a default for ordering. **Nothing ever read it as one.** No
+reorder, pick-list, purchasing, costing or reporting decision consulted it; the supplier-order
+create has always taken its supplier from the request and validated it against the business's own
+suppliers; and the per-product
+[supplier price comparison](#supplier-product-price-history-and-comparison-issue-63) was always
+derived from the purchase history instead. Issue #787 (A1 of #786) removed the field, its stored
+values, and the whole surface built on it.
+
+**Why removal rather than reinterpretation.** A supplier is a party to a transaction, so the place
+to record one is the transaction: the purchase that was bought, and the supplier order that was
+placed. Both of those already do, and both are untouched. A product bought from whoever is cheapest
+this month has no single supplier, so a stored default on the catalogue row was a field that could
+only be stale or wrong, and the one screen that pre-filled from it — the Needs Ordering order dialog
+— was guessing at a decision about *this order*.
+
+**The schema.** `RemoveProductSupplier` drops the column with its foreign key and its
+`IX_Products_SupplierId` index. It is **destructive, by the repository owner's approval on
+21 October 2026**, and it is the whole of what it touches: every other product column keeps its
+value — `UnitPrice` explicitly, because removing the selling price is issue #792 — and the table
+keeps its own key, its category foreign key, and its `Sku`, `BusinessId` and filtered
+`(BusinessId, ExternalProductId)` indexes. `Down` recreates the column, index and foreign key so the
+schema matches the previous release's code, and every row comes back `NULL`: a dropped value is not
+recoverable and nothing is inferred in its place. `RemoveProductSupplierMigrationTests` proves both
+directions, including `PRAGMA foreign_key_check` finding nothing after the rebuild.
+
+**The code.** `Product.SupplierId`/`Product.Supplier` and `Supplier.Products` are gone with their
+`AppDbContext` relationship. `ProductRecord.SupplierId`/`Supplier` and `ProductSupplierRecord`,
+`ProductCreateFields.SupplierId`, `ProductUpdateFields.SupplierId` and
+`ProductCatalogFilter.SupplierId` are gone from `Inventory.Application`, and with them the
+`Include(product => product.Supplier)` and the supplier `Where` in `EfProductCatalogStore` and the
+two assignments in `EfProductStore`. `Products.SupplierId` left
+[the platform diagnostics allowlist](#platform-diagnostics-issue-336) with the column, because that
+allowlist names physical columns.
+
+**The API contract breaks, deliberately and once.** `ProductResponse` no longer carries
+`supplierId`/`supplier`, so neither does `GET /api/products`, `GET /api/products/{id}`, the reorder
+listing, `GET /api/machines/{id}/products`, nor the product snapshot nested in a purchase line or a
+supplier-order line (`PurchaseProductSummaryRecord`/`SupplierOrderProductSummaryRecord` lost the
+field too). The keys are **removed, not nulled**: a product has no supplier to report, and an
+explicit `null` would state "no supplier recorded", which is a different and now meaningless claim.
+`GET /api/products` and `GET /api/products/alerts/low-stock` no longer bind a `supplierId` query
+parameter, and `ProductCreateDto`/`ProductUpdateDto` no longer bind one either — a client that still
+sends it is simply not bound, so the write succeeds and stores nothing for it, rather than being
+refused. **The purchase's and the supplier order's own `supplier` is untouched** in the payload and
+in the published `Supplier` component, which is what their contract tests and
+`PublishedResponseSchemaContractTests` still assert.
+
+**The UI.** The product form has no Supplier dropdown and loads no supplier list. All Products and
+Needs Ordering lose their "All Suppliers" filter, their Supplier column and its sort; All Products
+loads no supplier list either, while **Needs Ordering still does**, because its order dialog needs
+one. The home Dashboard's Reorder Alerts table loses its Supplier column. `ProductNeedsOrderingComponent.openOrderForm`
+opens with `orderForm.supplierId` **null** instead of inferring it from the selected products, and
+the selector stays `required`, so an order still cannot be sent without a supplier a person chose.
+The product edit page's supplier price comparison and its GST-rule note still speak of suppliers, and
+should: both are about the purchases a product was actually bought in.
+
+**What is explicitly not in this change.** `Product.UnitPrice`, the selling-price table columns and
+catalogue price negotiation are issue #792. The purchase summaries and the other screen changes are
+issues #788–#791. No cost, average cost, inventory value, COGS, reorder figure or stored purchase
+is recalculated or backfilled.
+
+**Release sequence, because Production migrates at startup.** `DatabaseSchemaStartup` applies pending
+migrations when the API starts (issue #201), so for a short period the deployed API is the previous
+build running against a schema with no `Products.SupplierId`. That build's EF model still declares
+the column, so **a product read or write by the old code fails until the new build is serving**;
+purchases, supplier orders and everything else are unaffected. The deployment is therefore
+human-sequenced in the ordinary way — one **Deploy Production** run for an exact `main` commit,
+API first and then the frontend from the same commit — and the window is the API's own restart, not
+a period either build can be left in. **Rolling back to a release that reads the column is not
+supported**: `Down` restores an empty column, so the old build would read every product as having no
+supplier, and the deleted associations do not come back.
 
 ### Provider catalogue review: link-or-create and change review (issue #738)
 

@@ -98,6 +98,5 @@ public static class PurchaseResponseMapper
             CreatedAt = record.CreatedAt,
             UpdatedAt = record.UpdatedAt,
             CategoryId = record.CategoryId,
-            SupplierId = record.SupplierId,
         };
 }

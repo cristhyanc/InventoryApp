@@ -8,7 +8,7 @@ import { CategoryService } from '../../services/category.service';
 import { SupplierService } from '../../services/supplier.service';
 import { SupplierOrderService } from '../../services/supplier-order.service';
 import { ToastService } from '../../services/toast.service';
-import { Product } from '../../models/models';
+import { Product, Supplier } from '../../models/models';
 
 function product(overrides: Partial<Product> = {}): Product {
   return {
@@ -39,8 +39,6 @@ function product(overrides: Partial<Product> = {}): Product {
     updatedAt: '2026-01-01T00:00:00Z',
     categoryId: null,
     category: null,
-    supplierId: null,
-    supplier: null,
     isActive: true,
     isLowStock: true,
     isReorderAlert: false,
@@ -53,7 +51,12 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
 
   async function render(
     products: Product[],
-    options: { sessionActive?: Observable<boolean>; update?: jest.Mock; create?: jest.Mock } = {}
+    options: {
+      sessionActive?: Observable<boolean>;
+      update?: jest.Mock;
+      create?: jest.Mock;
+      suppliers?: Supplier[];
+    } = {}
   ) {
     const navigate = jest.fn();
     const update = options.update ?? jest.fn(() => of(undefined));
@@ -72,7 +75,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
           }
         },
         { provide: CategoryService, useValue: { getAll: () => of([]) } },
-        { provide: SupplierService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierService, useValue: { getAll: () => of(options.suppliers ?? []) } },
         { provide: SupplierOrderService, useValue: { create } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } }
@@ -260,25 +263,19 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['A', 'C', 'B']);
   });
 
-  it('keeps a missing supplier last in both ascending and descending order', async () => {
-    const { fixture, host } = await render([
-      product({ id: 1, name: 'A', supplier: { id: 1, name: 'Acme' } }),
-      product({ id: 2, name: 'B', supplier: null }),
-      product({ id: 3, name: 'C', supplier: { id: 2, name: 'Zenith' } })
-    ]);
+  /**
+   * The supplier controls this page used to carry (issue #787, A1 of #786): the "All Suppliers"
+   * filter and the Supplier column with its sort button. A product carries no supplier, so none of
+   * them can exist. The order dialog's own supplier selector is a different control and stays - see
+   * the supplier-order tests below.
+   */
+  it('offers no supplier filter, column or sort over the products', async () => {
+    const { host } = await render([product({ id: 1, name: 'A' })]);
 
-    const supplierHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Supplier')) as HTMLTableCellElement;
-    const supplierButton = supplierHeader.querySelector('button') as HTMLButtonElement;
-
-    supplierButton.click();
-    fixture.detectChanges();
-    let rows = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['A', 'C', 'B']);
-
-    supplierButton.click();
-    fixture.detectChanges();
-    rows = Array.from(host.querySelectorAll('tbody tr'));
-    expect(rows.map((r) => r.querySelectorAll('td')[1]?.textContent?.trim())).toEqual(['C', 'A', 'B']);
+    expect(host.textContent).not.toContain('All Suppliers');
+    expect(
+      Array.from(host.querySelectorAll('thead th')).some((th) => th.textContent?.includes('Supplier'))
+    ).toBe(false);
   });
 
   it('breaks a tie between two missing categories deterministically in descending order', async () => {
@@ -399,6 +396,35 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     expect(component.selectedProductIds.has(2)).toBe(true);
     expect(component.showOrderForm).toBe(true);
     expect(component.selectedProducts().map((p) => p.name)).toEqual(['Apple']);
+  });
+
+  /**
+   * The order dialog opens with no supplier chosen (issue #787, A1 of #786). It used to prefill the
+   * selected products' own supplier when they all agreed; a product carries none now, so the
+   * supplier being ordered from is an explicit choice. The selector stays, stays required, and is
+   * populated from the supplier list - which is why this page still loads it.
+   */
+  it('opens the order dialog with no supplier chosen and a required supplier selector', async () => {
+    const { fixture, host } = await render(
+      [product({ id: 1, name: 'Banana', needToOrder: 4 })],
+      { suppliers: [{ id: 3, name: 'Acme' }, { id: 4, name: 'Zenith' }] }
+    );
+    const component = fixture.componentInstance;
+
+    component.toggleSelection(1, true);
+    component.openOrderForm();
+    fixture.detectChanges();
+
+    expect(component.orderForm.supplierId).toBeNull();
+
+    const selector = host.querySelector('[name="orderSupplier"]') as HTMLSelectElement;
+    expect(selector).not.toBeNull();
+    expect(selector.required).toBe(true);
+    expect(Array.from(selector.options).map((option) => option.textContent?.trim())).toEqual([
+      'Select supplier',
+      'Acme',
+      'Zenith'
+    ]);
   });
 
   describe('in a support session (issue #661)', () => {

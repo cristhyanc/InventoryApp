@@ -46,13 +46,18 @@ public static class PlatformDiagnosticsDataSurface
     /// by <c>AppDbContext.OnModelCreating</c>, and <c>PurchaseItem.ReceiptId</c> /
     /// <c>StockAdjustment.ReceiptItemId</c> keep their legacy names, so the physical names below
     /// are the "Receipt" spellings rather than the CLR "Purchase" ones.
+    ///
+    /// <para><c>Products.SupplierId</c> left the surface with the column itself (issue #787, A1 of
+    /// #786). The allowlist names physical columns, so a dropped column has to leave it: the
+    /// authorizer would otherwise permit a name SQLite no longer has. Narrowing it needs no review
+    /// - only widening does.</para>
     /// </summary>
     public static IReadOnlyList<PlatformDiagnosticsTable> Tables { get; } =
     [
         new("Businesses", ["Id"]),
         new("Categories", ["Id", BusinessIdColumn]),
         new("Suppliers", ["Id", BusinessIdColumn]),
-        new("Products", ["Id", BusinessIdColumn, "CategoryId", "SupplierId"]),
+        new("Products", ["Id", BusinessIdColumn, "CategoryId"]),
         new("Receipts", ["Id", BusinessIdColumn, "SupplierId"]),
         new("ReceiptItems", ["Id", BusinessIdColumn, "ReceiptId", "ProductId"]),
         new("StockAdjustments", ["Id", BusinessIdColumn, "ProductId", "ReceiptItemId"]),

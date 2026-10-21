@@ -572,5 +572,5 @@ public sealed class EfPurchaseStore : IPurchaseStore
         product.Id, product.Name, product.Sku, product.Description, product.UnitPrice, product.AverageUnitCost,
         product.CostingQuantity, product.InventoryValue, product.QuantityInStock, product.LowStockThreshold,
         product.RestockTo, product.Unit, product.IsActive, product.CreatedAt, product.UpdatedAt,
-        product.CategoryId, product.SupplierId);
+        product.CategoryId);
 }

@@ -5,8 +5,7 @@ import { Observable, of, throwError } from 'rxjs';
 import { ProductFormComponent } from './product-form.component';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
-import { SupplierService } from '../../services/supplier.service';
-import { Category, GstClassification, Product, Supplier } from '../../models/models';
+import { Category, GstClassification, Product } from '../../models/models';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
 function product(overrides: Partial<Product> = {}): Product {
@@ -33,7 +32,6 @@ function product(overrides: Partial<Product> = {}): Product {
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     categoryId: 2,
-    supplierId: 3,
     isActive: true,
     isLowStock: false,
     isReorderAlert: false,
@@ -45,11 +43,6 @@ function product(overrides: Partial<Product> = {}): Product {
 const categories: Category[] = [
   { id: 1, name: 'Drinks' },
   { id: 2, name: 'Snacks' }
-];
-
-const suppliers: Supplier[] = [
-  { id: 3, name: 'Supplier A' },
-  { id: 4, name: 'Supplier B' }
 ];
 
 /** The routed edit page, rendered the way entering `/products/7/edit` renders it. */
@@ -80,7 +73,6 @@ async function render(
         }
       },
       { provide: CategoryService, useValue: { getAll: jest.fn(() => of(categories)) } },
-      { provide: SupplierService, useValue: { getAll: jest.fn(() => of(suppliers)) } },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       provideRouter([]),
       { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap(overrides.routeParams ?? { id: '7' }) } } }
@@ -129,7 +121,17 @@ describe('ProductFormComponent editing a product this business maintains itself 
     expect(value('unit')).toBe('bag');
     expect((host.querySelector('[name="isActive"]') as HTMLInputElement).checked).toBe(true);
     expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).value).toContain('2');
-    expect((host.querySelector('[name="supplierId"]') as HTMLSelectElement).value).toContain('3');
+
+    // No Supplier control at all (issue #787, A1 of #786): a product carries no supplier, so the
+    // form offers none and no field is labelled "Supplier". A supplier is chosen on the purchase or
+    // the supplier order instead, and nothing on this page loads the supplier list - the TestBed
+    // above provides no SupplierService, so injecting one would fail this render. The supplier
+    // price comparison and the GST-rule note still mention suppliers, because both are about the
+    // purchases a product was actually bought in, which this change leaves alone.
+    expect(host.querySelector('[name="supplierId"]')).toBeNull();
+    expect(
+      Array.from(host.querySelectorAll('form .field-label')).map((label) => label.textContent?.trim())
+    ).not.toContain('Supplier');
 
     expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(false);
     expect((host.querySelector('[name="unitPrice"]') as HTMLInputElement).readOnly).toBe(false);
@@ -142,7 +144,7 @@ describe('ProductFormComponent editing a product this business maintains itself 
   it('keeps the field labels and their inputs together, so a wider card does not separate them', async () => {
     const { host } = await render();
 
-    for (const name of ['sku', 'description', 'supplierId', 'lowStockThreshold', 'restockTo', 'unit']) {
+    for (const name of ['sku', 'description', 'categoryId', 'lowStockThreshold', 'restockTo', 'unit']) {
       const control = host.querySelector(`[name="${name}"]`);
       expect(control?.closest('label')?.querySelector('.field-label')).not.toBeNull();
     }
@@ -195,7 +197,6 @@ describe('ProductFormComponent editing a product this business maintains itself 
     component.form.sku = 'SNK-002';
     component.form.lowStockThreshold = 6;
     component.form.restockTo = 24;
-    component.form.supplierId = 4;
     component.form.isActive = false;
     component.save();
 
@@ -208,7 +209,6 @@ describe('ProductFormComponent editing a product this business maintains itself 
       restockTo: 24,
       unit: 'bag',
       categoryId: 1,
-      supplierId: 4,
       isActive: false
     });
     expect(navigate).toHaveBeenCalledWith(['/products']);
@@ -290,7 +290,6 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     component.form.name = 'New Snack';
     component.form.unitPrice = 2.5;
     component.form.categoryId = 2;
-    component.form.supplierId = 3;
     component.form.quantityInStock = 10;
     component.form.initialUnitCost = 1.1;
     component.form.lowStockThreshold = 2;
@@ -306,7 +305,6 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
       restockTo: 8,
       unit: 'unit',
       categoryId: 2,
-      supplierId: 3,
       isActive: true,
       quantityInStock: 10,
       initialUnitCost: 1.1

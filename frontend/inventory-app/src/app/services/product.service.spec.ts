@@ -43,8 +43,6 @@ function product(): Product {
     updatedAt: '2026-01-01T00:00:00Z',
     categoryId: null,
     category: null,
-    supplierId: null,
-    supplier: null,
     isActive: true,
     isLowStock: true,
     isReorderAlert: true
@@ -177,15 +175,20 @@ describe('ProductService reorder-alert listing metadata (issue #727)', () => {
     expect(listing?.machineNeedUnavailableReason).toBeNull();
   });
 
-  it('still sends the page filters it has always sent', () => {
+  /**
+   * The page filters the reorder listing still sends. `supplierId` is deliberately not one of them
+   * since issue #787 (A1 of #786): a product carries no supplier, so the endpoint accepts no such
+   * narrowing and the service must not invent the parameter.
+   */
+  it('still sends the page filters it has always sent, and no supplier narrowing', () => {
     const { service, httpMock } = createService();
 
-    service.getLowStock({ search: 'cola', categoryId: 2, supplierId: 3 }).subscribe();
+    service.getLowStock({ search: 'cola', categoryId: 2 }).subscribe();
     const request = httpMock.expectOne((candidate) => candidate.url === LOW_STOCK_URL);
 
     expect(request.request.params.get('search')).toBe('cola');
     expect(request.request.params.get('categoryId')).toBe('2');
-    expect(request.request.params.get('supplierId')).toBe('3');
+    expect(request.request.params.has('supplierId')).toBe(false);
     request.flush([]);
   });
 });

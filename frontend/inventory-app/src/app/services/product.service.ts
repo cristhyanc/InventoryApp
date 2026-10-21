@@ -19,7 +19,8 @@ import { ConfigService } from './config.service';
 export interface ProductFilters {
   search?: string;
   categoryId?: number;
-  supplierId?: number;
+  // No `supplierId` (issue #787, A1 of #786): a product has no supplier, so `GET /api/products` and
+  // the reorder-alert listing accept no such narrowing any more.
   machineId?: number;
   lowStockOnly?: boolean;
   /**
@@ -69,7 +70,6 @@ export class ProductService {
     let params = new HttpParams();
     if (filters.search) params = params.set('search', filters.search);
     if (filters.categoryId !== undefined) params = params.set('categoryId', filters.categoryId);
-    if (filters.supplierId !== undefined) params = params.set('supplierId', filters.supplierId);
     if (filters.machineId !== undefined) params = params.set('machineId', filters.machineId);
     if (filters.lowStockOnly) params = params.set('lowStockOnly', true);
     if (filters.includeRetired) params = params.set('includeRetired', true);
@@ -92,7 +92,6 @@ export class ProductService {
     let params = new HttpParams();
     if (filters.search) params = params.set('search', filters.search);
     if (filters.categoryId !== undefined) params = params.set('categoryId', filters.categoryId);
-    if (filters.supplierId !== undefined) params = params.set('supplierId', filters.supplierId);
     return this.http
       .get<Product[]>(`${this.baseUrl}/alerts/low-stock`, { params, observe: 'response' })
       .pipe(map((response) => reorderAlertListing(response)));

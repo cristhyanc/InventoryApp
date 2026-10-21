@@ -62,10 +62,10 @@ public class EfProductCatalogStoreRetirementTests : IDisposable
     private static EfProductCatalogStore StoreFor(AppDbContext db) => new(db);
 
     private static ProductCatalogFilter WorkingCatalogue(string? search = null) =>
-        new(search, null, null, IncludeRetired: false);
+        new(search, null, IncludeRetired: false);
 
     private static ProductCatalogFilter WholeCatalogue(string? search = null) =>
-        new(search, null, null, IncludeRetired: true);
+        new(search, null, IncludeRetired: true);
 
     [Fact]
     public async Task ListOrderedByNameAsync_LeavesARetiredProductOutOfTheWorkingCatalogue()

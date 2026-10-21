@@ -642,12 +642,9 @@ public class AppDbContext : DbContext
             .HasForeignKey(p => p.CategoryId)
             .OnDelete(DeleteBehavior.SetNull);
 
-        modelBuilder.Entity<Product>()
-            .HasOne(p => p.Supplier)
-            .WithMany(s => s.Products)
-            .HasForeignKey(p => p.SupplierId)
-            .OnDelete(DeleteBehavior.SetNull);
-
+        // A product has no supplier relationship (issue #787, A1 of #786). The supplier
+        // relationships that remain are the purchase's, the supplier order's and the operating
+        // expense's, below - each one a supplier the business actually transacted with.
         modelBuilder.Entity<StockAdjustment>()
             .HasOne(sa => sa.Product)
             .WithMany(p => p.StockAdjustments)

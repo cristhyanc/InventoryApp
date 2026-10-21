@@ -109,14 +109,13 @@ public class ProductsController : ControllerBase
     public async Task<ActionResult<IEnumerable<ProductResponse>>> GetAll(
         [FromQuery] string? search,
         [FromQuery] long? categoryId,
-        [FromQuery] int? supplierId,
         [FromQuery] bool? lowStockOnly,
         [FromQuery] bool? includeRetired,
         CancellationToken ct)
     {
         var visibility = await _capabilities.ForCurrentRequestAsync(ct);
         var listing = await _listProducts.Handle(
-            new ProductCatalogFilter(search, categoryId, supplierId, includeRetired == true),
+            new ProductCatalogFilter(search, categoryId, includeRetired == true),
             lowStockOnly,
             ct);
         ReorderListingMetadataHeaders.Publish(Response, listing);
@@ -189,7 +188,6 @@ public class ProductsController : ControllerBase
     public async Task<ActionResult<IEnumerable<ProductResponse>>> LowStock(
         [FromQuery] string? search,
         [FromQuery] long? categoryId,
-        [FromQuery] int? supplierId,
         CancellationToken ct)
     {
         var visibility = await _capabilities.ForCurrentRequestAsync(ct);
@@ -197,7 +195,7 @@ public class ProductsController : ControllerBase
             // A retired product never alerts: ProductReorderPolicy.IsReorderAlert requires an
             // active product, and that stays the authority. Excluding them from the read as well
             // only narrows the SQL - it cannot change which rows alert.
-            new ProductCatalogFilter(search, categoryId, supplierId, IncludeRetired: false), ct);
+            new ProductCatalogFilter(search, categoryId, IncludeRetired: false), ct);
         ReorderListingMetadataHeaders.Publish(Response, listing);
         return Ok(listing.Products
             .Select(item => ProductRecordResponseMapper.ToResponse(item, visibility))
@@ -235,7 +233,6 @@ public class ProductsController : ControllerBase
             dto.RestockTo,
             dto.Unit,
             dto.CategoryId,
-            dto.SupplierId,
             dto.IsActive);
 
         var result = await _updateProduct.Handle(id, fields, CancellationToken.None);
@@ -277,7 +274,6 @@ public class ProductsController : ControllerBase
                 dto.RestockTo,
                 dto.Unit,
                 dto.CategoryId,
-                dto.SupplierId,
                 dto.IsActive,
                 dto.InitialUnitCost),
             ct);

@@ -169,7 +169,6 @@ public class SupplierOrdersControllerTests
                     3, "Coke", null, null, 3.50m, 1.25m, null, null, 4, 10, 20, "can", true,
                     new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
                     new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-                    null,
                     null),
                 24m,
                 6m,
