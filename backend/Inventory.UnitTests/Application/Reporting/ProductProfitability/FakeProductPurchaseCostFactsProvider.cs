@@ -16,10 +16,25 @@ public sealed class FakeProductPurchaseCostFactsProvider : IProductPurchaseCostF
 
     public IReadOnlyCollection<long>? LastRequestedProductIds { get; private set; }
 
+    /// <summary>
+    /// Whether the all-products read was the one that was called (issue #788). The two reads answer
+    /// different questions - "these products' history" and "the whole business's history" - so a
+    /// test that needs to know which one a use case chose asks here rather than inferring it from
+    /// an empty id list.
+    /// </summary>
+    public bool ReadEveryProduct { get; private set; }
+
     public Task<IReadOnlyDictionary<long, IReadOnlyList<SupplierPriceHistoryEntry>>> GetForProductsAsync(
         IReadOnlyCollection<long> productIds, CancellationToken cancellationToken)
     {
         LastRequestedProductIds = productIds;
+        return Task.FromResult(_factsByProduct);
+    }
+
+    public Task<IReadOnlyDictionary<long, IReadOnlyList<SupplierPriceHistoryEntry>>> GetForAllProductsAsync(
+        CancellationToken cancellationToken)
+    {
+        ReadEveryProduct = true;
         return Task.FromResult(_factsByProduct);
     }
 

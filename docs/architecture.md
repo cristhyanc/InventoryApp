@@ -1632,6 +1632,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
 | *(no page — see below)* | `GET api/data-quality/nayax-catalog-reconciliation` | `Integration.Manage` | ✘ | ✘ | ✔ |
+| *(no page yet — the screens are issues #789–#791)* | `GET api/products/purchase-cost-summary` (issue #788) | `Dashboard.ViewFinancials` | ✘ | ✔ | ✔ |
 | Admin → Integrations → connection wizard, Test (issue #536, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/test` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Admin → Integrations → connection wizard, Save and Re-test (issue #537, added as a reviewed edit; the wizard is #538) | `POST api/settings/nayax-connection/save`, `POST api/settings/nayax-connection/retest` | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Connection banners on every page that needs Nayax (issue #539) | `GET api/settings/nayax-connection/status` (issue #537) | `Dashboard.View` | ✔ | ✔ | ✔ |
@@ -1662,6 +1663,7 @@ The other is `NayaxConnectionController` since issue #537: its test, save and re
   It is also **rate-limited per business** since issue #681: `Inventory.Application.SalesSync.NayaxSalesSyncRateLimiter` allows ten runs per business per two minutes, claimed before the first Nayax call, and a refused run answers `429` with `Retry-After` and reaches neither Nayax nor the database. One run is one Nayax request per machine plus one, and the Dashboard triggers one per load — which a browser repeats on every visit, back-navigation and refresh — so this was the most expensive call in the application and the easiest to repeat, with nothing bounding either the requests against someone else's API or the write amplification in this one. The limit is per business rather than per actor for the reason the connection test's is: what it protects is the business's own Nayax account and its own rows. The window is kept in memory, like every other limiter here (docs § SQLite operating assumptions). Because the allowance is the business's, members opening the Dashboard together share it: ten simultaneous loads all synchronize (`NayaxSalesSyncControllerTests`), and a load past that is refused. A refusal proves the business started runs inside the last two minutes, so the Dashboard loads its persisted figures and says they were refreshed in the last couple of minutes, not that synchronization failed (`isSalesSyncRecentlyRefreshed`); any other error still shows the not-synchronized warning. The `429` body names no wait and points at `Retry-After`, because the wait can be up to the whole window.
 
 - `GET api/products/inventory-value-summary` → **`Inventory.Operate` and `Dashboard.ViewFinancials`** (issue #681). It is an action on `ProductsController`, so it carries the catalogue's own capability; the second one is declared on the action. The endpoint reports the exact value of the business's inventory at cost, broken down — the figure [issue #527](#dashboard-financial-redaction-issue-527) omits from the dashboard response entirely for a role without `Dashboard.ViewFinancials`, today an Operator. On the catalogue's capability alone, that redaction was a presentation detail rather than a boundary: an Operator could read the number directly. No page calls this endpoint (`ProductService.getInventoryValuationSummary` has no caller since the dashboard stopped using it), so it was gated rather than removed — gating preserves the API contract, which AGENTS.md § Architecture rules asks for, while removing it would be a breaking change for a caller nobody has surveyed. A Manager and an Owner hold both capabilities and are unaffected; an Operator gets the ordinary bare `403`. Gating this one action left the figure reachable by summing the catalogue's own `inventoryValue`, which is what [issue #698](#machine-and-product-financial-redaction-issue-698) closed, along with the machine endpoints' revenue, profit and profitability-status figures: those endpoints stay on `Inventory.Operate` for every role, because an Operator restocks from them, and only the figures inside the response are withheld. [Issue #700](#operator-readable-financial-disclosure-issue-700) closed the last two routes to the same figure — a stock movement's `inventoryValueAfter` and the catalogue snapshot nested in a purchase or supplier-order line — and audited every other Operator-readable endpoint for one.
+- `GET api/products/purchase-cost-summary` → **`Dashboard.ViewFinancials`**, so a Manager and an Owner (issue #788, B of parent #786). It reports what every product was last bought for and what it was cheapest at, with the supplier of each — supplier purchasing facts over the whole catalogue, which is the same kind of figure `GET api/products/{id}/price-history` shows one product at a time. **It is its own controller, `ProductPurchaseCostsController`, for exactly that reason**: a controller declares one capability for every action it holds, so adding this action to `ProductsController` would either have inherited the catalogue's `Inventory.Operate` — handing those figures to every role that may operate inventory — or, declared per action, left the catalogue and this read looking alike when they are not. No page calls it yet: the screens that will are issues #789–#791 (C, D and E of #786), and the Angular client is already in place (`ProductPurchaseCostService`). It is read-only and `GET`, so a support session may call it under the central `GET`/`HEAD` rule of issue #551, which grants `Dashboard.ViewFinancials`. See [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63).
 - `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
 
 **What an Operator and a Manager lose, and when.** An Operator can no longer reach expenses, any report or export, the imports, the site commission surface, the Nayax fee rates, the catalogue reconciliation or any repair. A Manager additionally cannot reach the Nayax fee rates, the catalogue reconciliation or any repair — a Manager may read a report whose underlying fee rate only an Owner may change, which is the agreed table and not a defect. Routes, verbs, request shapes and success responses are unchanged; the only new answer is the bare `403` an under-privileged caller receives. Every member of the one live business is an `Owner`, so nothing anybody reaches changes until non-Owner roles are assigned.
@@ -7199,6 +7201,52 @@ its valuation, product count and storage units all describe one catalogue read. 
 directly; the endpoint itself is unchanged and stays available for any other caller that needs the
 valuation alone.
 
+##### One product's average cost, and whether it has been established (issue #788)
+
+The same `null InventoryValue` evidence answers a second question, about one product rather than the
+catalogue: **may this product's average unit cost be displayed at all?** `Product.AverageUnitCost` is a
+non-nullable column, so a product no cost rebuild has ever run for still carries a number in it — a
+create can seed one — and a screen that rendered that number would present an unestablished figure as
+a costed one. Before issue #788 a client had no authoritative way to tell the two apart: the only
+available signal was `inventoryValue`, which the product responses **withhold** from a caller without
+`Dashboard.ViewFinancials` (issue #698), so reading it would have reported every product's cost as
+unknown to an Operator.
+
+`InventoryValuationPolicy.DisplayUnitCost(inventoryValue, averageUnitCost)` is that answer, and it is
+deliberately the one-row form of the rule the tile above already applies rather than a new AVCO
+calculation: a `null` inventory value means no rebuild has run, so the display cost is `null`;
+otherwise it is the **persisted** `AverageUnitCost` exactly as the rebuild left it, **including a
+genuine zero**. The Dashboard's `ProductsWithUnknownCost` count is the same evidence counted, so a
+product cannot be counted as unknown there and shown a cost here.
+
+On the wire it is `ProductResponse.averageUnitCostForDisplay`, and these properties are the contract:
+
+- **Additive and non-breaking.** It is appended after issue #736's `providerManagedFields` and issue
+  #737's `canDelete`/`deletionRefusal`, so every key a client already read keeps its name, type, value
+  and position (`ProductJsonContractTests`). The legacy `averageUnitCost` and every persisted costing
+  value — `AverageUnitCost`, `CostingQuantity`, `InventoryValue` — are unchanged, and there is no
+  migration and no historical recalculation: this is a projection of what is already stored.
+- **Absent, never `0`, when the cost is unknown.** It is omitted from the JSON rather than sent as
+  `null`, so in TypeScript it is `averageUnitCostForDisplay?: number | null` and a client renders an
+  absent value as unknown (`—`). A rebuilt cost of `0` is present as `0`, which is a measured answer
+  and must render as `$0.00`.
+- **Available to exactly the roles that already read `averageUnitCost`** — every role that may
+  operate inventory. It is decided from the product record's own inventory value, not from the
+  withheld response field, which is why an Operator gets a real answer. It carries no revenue, profit,
+  margin or valuation figure, so it is outside the restricted vocabulary
+  `OperatorReadableFinancialFigureTests` guards, and it exposes **none** of the gated last/cheapest
+  supplier facts: those stay on `GET api/products/purchase-cost-summary` behind
+  `Dashboard.ViewFinancials` (see
+  [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63)).
+- **Published only by the `/api/products` reads.** It is deliberately absent from the product snapshot
+  nested in a purchase line or a supplier-order line and from a machine slot's product: those are
+  pinned contracts of their own and are not surfaces a product's cost is presented from, so they keep
+  every key they had and say nothing rather than answering a question their reader cannot act on — the
+  same treatment issues #736 and #737 gave their keys there. `PurchaseResponseJsonContractTests`,
+  `SupplierOrderJsonContractTests`, `MachineJsonContractTests` and `ProductJsonContractTests` each pin
+  the absence. An absent key on one of those payloads says nothing about the cost, exactly as an
+  absent `canDelete` is not permission.
+
 #### Home Dashboard summary API (issue #459)
 
 `GET /api/dashboard/summary` (`InventoryApi.Controllers.DashboardController`, thin: it binds no
@@ -9014,6 +9062,48 @@ live supplier quote: it never feeds inventory costing, and a supplier-order crea
 for reference must not let it silently overwrite an entered order price/cost. A Purchase with no
 supplier recorded stays visible in the comparison and history with an explicit null/"None" source
 rather than being omitted.
+
+**The same facts for the whole catalogue at once: `GET api/products/purchase-cost-summary` (issue
+#788, B of parent #786).** The product screens need every product's last and cheapest cost together,
+and one `price-history` request per product is an N+1 against the purchase history. The bulk answer is
+`Inventory.Application.Purchases.ListProductPurchaseCostSummaries`, which reads the history in one
+query through the `IProductPurchaseCostFactsProvider` port the profitability report already uses and
+then applies **this same `SupplierPriceComparisonPolicy.Evaluate`** per product. It selects nothing
+itself, which is the whole design: there is no third last/cheapest formula, and
+`ProductPurchaseCostSummaryApiTests` compares the bulk answer field by field against what
+`price-history` answers for the same product over a fixture built to make a divergence show — four
+lines for one product, two of them on the same latest date and one of them a genuine $0.
+
+Three properties of that endpoint are deliberate and tested:
+
+- **The tie-breaks are the policy's, and they are pinned rather than assumed.** The last cost is the
+  latest `PurchaseDate`, then the **higher** `PurchaseItemId`; the cheapest is the lowest `UnitCost`,
+  then the **earliest** `PurchaseDate`, then the **lower** `PurchaseItemId`. The use-case tests supply
+  equal-cost and same-date records in an order that would give a different answer if anything sorted
+  by arrival.
+- **A genuine $0 purchase line is a real recorded cost** — a free sample, a replacement delivery, a
+  promotional case — and stays one. It can be the cheapest cost paid and it can be the last cost
+  paid; it is never filtered out, and never reported as a missing figure. A `null` supplier name means
+  the purchase had no supplier recorded and is published as such, never replaced with another
+  purchase's supplier and never used as a reason to drop the line (dropping it would quietly move the
+  last cost to an older purchase).
+- **A product with no purchase history is absent, not zero.** The response is an array of
+  `{ productId, lastUnitCost, lastSupplierName, lastPurchaseDate, lowestUnitCost, lowestSupplierName,
+  lowestPurchaseDate }` holding one entry per product with at least one recorded purchase line, in
+  product id order, so it is normally shorter than the catalogue; a client matches rows up by
+  `productId` and shows "no purchases recorded" for a product it does not find. The optional repeated
+  `productIds` query value narrows the read in the query itself; with no ids the answer covers every
+  product of the business, **retired products included**, because a retired product's purchase history
+  is exactly what a tool reaching into the past needs. The whole-business read is a second method on
+  the port (`GetForAllProductsAsync`) rather than an empty id list, so "no products were asked about"
+  keeps answering nothing for the report that passes a filter. Scoping is the ordinary tenant query
+  filters on the EF adapter; nothing in the request names or carries a business.
+
+The Angular client is `ProductPurchaseCostService`
+(`frontend/inventory-app/src/app/services/product-purchase-cost.service.ts`) with its
+`ProductPurchaseCostSummary` model (`src/app/models/product-purchase-cost-summary.ts`). It fetches and
+presents; it sorts nothing, picks no cheapest and derives no saving. No screen uses it yet — the
+screens are issues #789–#791.
 
 Product Profitability's **Last Cost**/**Lowest Cost**/**Saving per unit** columns (issue #207) are the
 same purchasing insight surfaced on the report used to compare sales performance against purchasing

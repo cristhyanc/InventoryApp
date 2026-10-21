@@ -455,15 +455,22 @@ public class PublishedResponseSchemaContractTests
     /// What the API-owned <c>ProductResponse</c> publishes: the legacy component's list with
     /// <c>providerManagedFields</c> appended, which issue #736's acceptance criteria require of the
     /// catalogue response ("product and category responses say which fields are provider-managed, so
-    /// the UI can lock them"), and then <c>canDelete</c>/<c>deletionRefusal</c>, which issue #737's
-    /// criterion that Delete is offered only where the API allows it requires of the same response.
-    /// Additive and last in both cases, so no published key is renamed, reordered, retyped or
-    /// dropped - and the legacy <c>Product</c> component the pinned purchase/supplier-order schemas
-    /// reference is deliberately not given any of the three, because those nested snapshots do not
-    /// carry them at runtime either.
+    /// the UI can lock them"), then <c>canDelete</c>/<c>deletionRefusal</c>, which issue #737's
+    /// criterion that Delete is offered only where the API allows it requires of the same response,
+    /// and then <c>averageUnitCostForDisplay</c>, issue #788's authoritative statement of whether a
+    /// product's stored average cost has been established at all. Additive and last in every case,
+    /// so no published key is renamed, reordered, retyped or dropped - and the legacy <c>Product</c>
+    /// component the pinned purchase/supplier-order schemas reference is deliberately not given any
+    /// of the four, because those nested snapshots do not carry them at runtime either.
     /// </summary>
     private static readonly string[] PublishedProductResponsePropertyNames =
-        [.. BaseProductPropertyNames, "providerManagedFields", "canDelete", "deletionRefusal"];
+    [
+        .. BaseProductPropertyNames,
+        "providerManagedFields",
+        "canDelete",
+        "deletionRefusal",
+        "averageUnitCostForDisplay",
+    ];
 
     private static string Normalize(string json) =>
         JsonNode.Parse(json)!.ToJsonString(new JsonSerializerOptions { WriteIndented = true });

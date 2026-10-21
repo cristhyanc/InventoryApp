@@ -93,6 +93,14 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // this action additionally requires the financial capability and an Operator is refused.
         { "Dashboard.ViewFinancials", "GET", "/api/products/inventory-value-summary", "Manager,Owner" },
 
+        // Issue #788. The bulk last/cheapest purchase-cost summary reports what every product was
+        // bought for and from whom - supplier purchasing facts over the whole catalogue - so it sits
+        // on the financial capability rather than the catalogue's own Inventory.Operate, and an
+        // Operator is refused. It is a separate controller for exactly that reason: a controller
+        // declares one capability, and putting this action on ProductsController would either have
+        // widened who reads these figures or narrowed the catalogue for everybody.
+        { "Dashboard.ViewFinancials", "GET", "/api/products/purchase-cost-summary", "Manager,Owner" },
+
         // Issue #526: the Manager surfaces.
         { "Expenses.Manage", "GET", "/api/operating-expenses", "Manager,Owner" },
         { "Expenses.Manage", "GET", $"/api/operating-expenses/{MissingId}", "Manager,Owner" },
@@ -259,6 +267,7 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
     [InlineData("/api/suppliers", "Operator,Manager,Owner")]
     [InlineData("/api/stock-history", "Operator,Manager,Owner")]
     [InlineData("/api/business/current", "Operator,Manager,Owner")]
+    [InlineData("/api/products/purchase-cost-summary", "Manager,Owner")]
     [InlineData("/api/operating-expenses", "Manager,Owner")]
     [InlineData("/api/site-commissions/agreements", "Manager,Owner")]
     [InlineData("/api/settings/nayax-processing-fee-rates", "Owner")]

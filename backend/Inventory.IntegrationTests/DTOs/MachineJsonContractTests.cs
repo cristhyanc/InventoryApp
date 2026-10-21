@@ -223,6 +223,9 @@ public class MachineJsonContractTests
         Assert.Equal(JsonValueKind.Null, document.RootElement.GetProperty("inventoryValue").ValueKind);
         Assert.Equal(1.25m, document.RootElement.GetProperty("averageUnitCost").GetDecimal());
         Assert.False(document.RootElement.TryGetProperty("unitPrice", out _));
+        // Nor is issue #788's availability projection published on a machine slot's product: it
+        // belongs to the catalogue reads, and this payload is a pinned contract of its own.
+        Assert.False(document.RootElement.TryGetProperty("averageUnitCostForDisplay", out _));
         Assert.Equal(5m, document.RootElement.GetProperty("machinePrice").GetDecimal());
         Assert.Equal(7, document.RootElement.GetProperty("costingQuantity").GetInt32());
 

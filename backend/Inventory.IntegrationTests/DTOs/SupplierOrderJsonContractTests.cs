@@ -216,6 +216,10 @@ public class SupplierOrderJsonContractTests
         // And no selling price since issue #792 (A2 of #786) - while the line's own agreed
         // `unitPrice`, which is a different value entirely, is untouched.
         Assert.False(product.TryGetProperty("unitPrice", out _));
+        // Issue #788's availability projection is not here either: it belongs to the catalogue
+        // reads, and this snapshot is a pinned contract of its own. The stored `averageUnitCost`
+        // below is unchanged, so nothing a client already read from this payload has moved.
+        Assert.False(product.TryGetProperty("averageUnitCostForDisplay", out _));
         Assert.Equal(0.50m, line.GetProperty("unitPrice").GetDecimal());
         Assert.Equal("Coke", product.GetProperty("name").GetString());
         Assert.Equal(1.25m, product.GetProperty("averageUnitCost").GetDecimal());

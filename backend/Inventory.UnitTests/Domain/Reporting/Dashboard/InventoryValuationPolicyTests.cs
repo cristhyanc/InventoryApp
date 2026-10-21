@@ -48,4 +48,37 @@ public class InventoryValuationPolicyTests
         Assert.Equal(2, result.ProductsWithUnknownCost);
         Assert.Equal(2, result.TotalProducts);
     }
+
+    /// <summary>
+    /// One product's display cost (issue #788) is the same completeness rule the total above
+    /// applies, asked about a single row: a null <c>InventoryValue</c> is the evidence that no cost
+    /// rebuild has ever run for that product, so there is no cost to display. It is deliberately
+    /// not a second AVCO calculation - the number returned is the persisted
+    /// <c>AverageUnitCost</c>, unchanged.
+    /// </summary>
+    [Fact]
+    public void A_product_no_cost_rebuild_has_run_for_has_no_display_unit_cost() =>
+        Assert.Null(InventoryValuationPolicy.DisplayUnitCost(inventoryValue: null, averageUnitCost: 0m));
+
+    /// <summary>
+    /// The failure mode this rule exists to prevent: a product whose cost was never rebuilt can
+    /// still carry a stored <c>AverageUnitCost</c> - the column is non-nullable and a create can
+    /// seed it - and publishing that as the product's cost would present an unverified figure as a
+    /// costed one. The evidence is the inventory value, never the average cost itself.
+    /// </summary>
+    [Fact]
+    public void A_stored_average_cost_without_a_rebuild_is_still_unknown() =>
+        Assert.Null(InventoryValuationPolicy.DisplayUnitCost(inventoryValue: null, averageUnitCost: 1.25m));
+
+    /// <summary>
+    /// A genuine zero survives: a rebuild that found no cost-bearing stock values the product at
+    /// $0, which is a measured answer and must not become "unknown".
+    /// </summary>
+    [Fact]
+    public void A_rebuilt_zero_cost_is_a_known_zero_display_unit_cost() =>
+        Assert.Equal(0m, InventoryValuationPolicy.DisplayUnitCost(inventoryValue: 0m, averageUnitCost: 0m));
+
+    [Fact]
+    public void A_rebuilt_cost_is_the_persisted_average_unit_cost_unchanged() =>
+        Assert.Equal(1.25m, InventoryValuationPolicy.DisplayUnitCost(inventoryValue: 8.75m, averageUnitCost: 1.25m));
 }
