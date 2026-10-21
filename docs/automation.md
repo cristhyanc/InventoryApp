@@ -78,88 +78,137 @@ an eval case relies on: either update the affected case(s)/`policyReferences` in
 request because the guardrail is intentionally changing (and say so, per `AGENTS.md` § Tests
 required by change type), or treat the failure as a regression and fix the guardrail file instead.
 
-## Self-hosted runner placement (issue #645)
+## Runner placement (issues #645 and #807)
 
-**Every job in every repository workflow runs on the self-hosted runners labelled
-`[self-hosted, linux, x64, inventory-agent]`, with no GitHub-hosted runner and no fallback to one.**
-The owner approved moving everything, deployment included, on 19 October 2026. This replaces the
-earlier pilot (issue #635) and the opt-in `INVENTORY_AGENT_SELF_HOSTED_ALL` selector, which is
-**retired**: no workflow reads it, so the repository variable, if it is still set, has no effect and
-can be deleted by a human in Repository Settings → Secrets and variables → Actions → Variables.
+**The owner chooses where every job runs with one repository variable, `INVENTORY_AGENT_SELF_HOSTED_ALL`.**
 
-That covers all 15 files in `.github/workflows/`: implementation (`agent-implement.yml`, including the
+| Value | Every job runs on |
+| --- | --- |
+| exactly `true` | the self-hosted runners labelled `[self-hosted, linux, x64, inventory-agent]` |
+| `false`, or unset | GitHub-hosted `ubuntu-latest` |
+| anything else (`TRUE`, `yes`, ` true`, `1`, ...) | nothing useful: every job fails in its first step |
+
+Issue #645 (19 October 2026) moved every job, deployment included, to the self-hosted runners and
+retired the earlier opt-in selector. Issue #807 (owner's request, 22 October 2026) restores the switch
+and supersedes #645's no-hosted-fallback decision. The switch is an **explicit mode, never an automatic
+fallback**: when the selected runners are offline, jobs wait; nothing moves them to the other kind of
+runner. The variable is set by a human in Repository Settings → Secrets and variables → Actions →
+Variables. Agents never set, change or remove it. **An unset variable means GitHub-hosted**: to keep
+jobs on the VM, set it to `true` before a release carrying this change reaches `main`.
+
+It applies to all 15 files in `.github/workflows/`: implementation (`agent-implement.yml`, including the
 documentation-impact preflight and the architecture dispatcher), model selection
-(`agent-model-selection.yml`, a reusable workflow whose job is checked like any other), architecture
-(`agent-architecture.yml`), validation (`validate.yml`), review (`agent-review.yml`), repair
-(`agent-repair.yml`), head update (`agent-head-update.yml`), review request (`agent-review-request.yml`),
-the review transport check (`agent-review-transport-check.yml`), branch cleanup
-(`agent-branch-cleanup.yml`), Project status sync (`project-status-sync.yml`), the runner diagnostic
-(`inventory-agent-runner-diagnostic.yml`), the manual Docker validation
-(`inventoryapp-self-hosted-docker-validation.yml`), `vm-manager.yml` and **every job of Deploy
-Production** (`deploy-production.yml`). Despite its name, `vm-manager.yml` ("Build and test API") does
-not start or manage a VM: it builds and tests the backend on pushes to `develop` and `main`. It is named
-after the `vm-manager` App Service. The repository contains **no mechanism that wakes or starts the
-runner VM**; nothing in it powers a machine on.
+(`agent-model-selection.yml`, a reusable workflow in this repository that reads the same repository
+variable through `vars` itself, as it already read the isolation variable, so a caller cannot hand it a
+different mode), architecture (`agent-architecture.yml`), validation and status
+publishing (`validate.yml`), review (`agent-review.yml`), repair (`agent-repair.yml`), head update
+(`agent-head-update.yml`), review request (`agent-review-request.yml`), the review transport check
+(`agent-review-transport-check.yml`), branch cleanup (`agent-branch-cleanup.yml`), Project status sync
+(`project-status-sync.yml`), the runner diagnostic (`inventory-agent-runner-diagnostic.yml`), the manual
+Docker validation (`inventoryapp-self-hosted-docker-validation.yml`), `vm-manager.yml` and **every job of
+Deploy Production** (`deploy-production.yml`). Despite its name, `vm-manager.yml` ("Build and test API")
+does not start or manage a VM: it builds and tests the backend on pushes to `develop` and `main`. It is
+named after the `vm-manager` App Service. The repository contains **no mechanism that wakes or starts
+the runner VM**; nothing in it powers a machine on.
+
+**Mode selection is not verification.** The switch only says where jobs run. Two separate variables
+record what a human has verified about the owner's self-hosted VM, and they matter only in self-hosted
+mode: `INVENTORY_RUNNER_ISOLATION_VERIFIED` (the runners are reset or ephemeral per job; see the
+isolation gate below) and `INVENTORY_RUNNER_BASELINE_VERIFIED` (the runner diagnostic passed on every
+runner; see Host baseline). A GitHub-hosted runner is a fresh VM per job that GitHub provisions and
+discards, so neither variable describes it and neither is required in GitHub-hosted mode. Setting the
+switch never sets, changes or implies either verification variable, and nothing changes them
+automatically.
+
+**How every job selects its runner.** Each job's `runs-on` is exactly:
+
+```yaml
+runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+```
+
+and each job's first step is **Report and validate runner mode**. It logs the variable, the selected
+kind of runner, and the runner the job actually got (`$RUNNER_NAME` and `runner.environment`). It fails
+the job when the variable is anything other than exactly `true`, `false` or unset. That step is needed
+because GitHub compares expression strings without regard to case: `TRUE` or `True` matches `== 'true'`
+in `runs-on` and in every gate, so such a value selects the self-hosted runners **and** still needs
+verified isolation, but no expression can reject it outright. The step also fails a job that landed on
+a different kind of runner than the variable selects when the job starts, which happens only when the
+variable was changed after the job was queued; re-run the job.
 
 **Contract.** `scripts/validate-runner-placement.mjs` (with `.test.mjs`, run by `validate.yml`) reads
-every workflow's `jobs:` map and fails when any job: selects a GitHub-hosted label (`ubuntu-*`,
-`windows-*`, `macos-*`); computes its runner with an expression, which is how a fallback is written;
-uses a runner group or any label set other than exactly the four above; has no `runs-on`; calls a
-reusable workflow from outside this repository's `.github/workflows`; mentions the retired switch; or
-runs `node` before the pinned `actions/setup-node` step installs it. It also enforces the credential
-isolation gate below. A job counts as credentialed when it references any secret other than its own
-`GITHUB_TOKEN` in an expression (dot, bracket or whole-context form, such as `secrets.NAME`,
-`secrets['NAME']` or `toJSON(secrets)`), passes a reusable-workflow `secrets:` mapping, or holds a
-token with any `write` scope (`id-token: write` included). That covers job-level permissions,
-permissions inherited from the workflow, and the repository default when neither declares any. Such
-a job fails the contract unless its job-level `if:` has `vars.INVENTORY_RUNNER_ISOLATION_VERIFIED ==
-'true'` as one of its top-level `&&` operands, with no top-level `||`. The implementation,
-architecture, review, repair, validation, head-update, review-request, branch-cleanup and Deploy
-Production workflows must each carry the visible refusal step. The agent and deployment contracts lock
-the updated `if:` text.
+every workflow's `jobs:` map and fails when any job: has a `runs-on` other than exactly that selector
+(a fixed label of either kind, a runner group, another expression, a different fallback or a selector
+that differs from the other jobs'); has no `runs-on`; does not start with the exact runner mode step;
+calls a reusable workflow from outside this repository's `.github/workflows`; reads
+`INVENTORY_AGENT_SELF_HOSTED_ALL` anywhere except through the approved selector, gates and the step-level
+`RUNNER_MODE` variable (in any case or accessor form); refuses on the isolation variable without the
+self-hosted mode condition; or runs `node` before the pinned `actions/setup-node` step installs it. It
+also enforces the credential isolation gate below. Its tests evaluate the approved selector and gates
+over every combination of mode (`true`, `TRUE`, `True`, `false`, unset, empty, `yes`, ` true`, `1`) and
+verification value (`true`, `TRUE`, `false`, empty, unset), with a small model of GitHub's documented
+expression semantics (not GitHub's own evaluator), and run the runner mode step's script in `bash`. The
+agent and deployment contracts lock the updated `if:` text.
 
-**When every runner is offline, jobs queue.** GitHub holds a job that no matching runner picks up and
-eventually fails it (currently after 24 hours); it never reroutes the job to a GitHub-hosted runner.
-Label-, push-, comment- and pull-request-triggered runs therefore wait rather than run. To recover, a
-human starts the runner VM, then the runner service on it (`sudo ./svc.sh start` in the runner's
-installation directory, or `./run.sh` for an interactive runner), and confirms it shows **Idle** in
-Repository Settings → Actions → Runners. Queued jobs then start by themselves. A job that already
-failed after the queue limit is re-run from its run page; an implementation run whose job failed this
-way needs its readiness label removed and re-applied, as for any other failed run. Deploy Production
-is no exception: a deployment queues until a runner is online, and its environment approvals still
-apply when it starts.
+**Changing the mode.** GitHub evaluates each job's `runs-on` and `if:` when it prepares that job, before
+sending it to a runner; it does not document a run-wide snapshot of `vars`. A change therefore affects
+**newly scheduled jobs only**. A job that is already running stays where it is. A job already queued for
+the other kind of runner is **not** rescued: it keeps waiting for that runner (GitHub eventually fails a
+job no matching runner picks up, currently after 24 hours), and if it does start, the runner mode step
+fails it when the runner kind no longer matches the variable. A later job of a run that is already in
+progress may be scheduled under the new value, so one run can span both kinds of runner; every job is
+still gated by the value it was scheduled under. To move work after changing the variable, cancel the waiting run and
+re-run it (**Re-run all jobs**, or **Re-run failed jobs** after it fails). An implementation run needs
+its readiness label removed and re-applied, as for any other failed run. Deploy Production is started
+again by hand, and its environment approvals still apply.
+
+**When the self-hosted runners are offline in self-hosted mode, jobs queue.** Label-, push-, comment-
+and pull-request-triggered runs wait rather than run. To recover, a human starts the runner VM, then the
+runner service on it (`sudo ./svc.sh start` in the runner's installation directory, or `./run.sh` for an
+interactive runner), and confirms it shows **Idle** in Repository Settings → Actions → Runners. Queued
+jobs then start by themselves. A job that already failed after the queue limit is re-run from its run
+page. Alternatively the owner can switch to GitHub-hosted mode and re-run the waiting work as above.
 
 **Host baseline.** Jobs install .NET and Node.js themselves (`actions/setup-dotnet`,
-`actions/setup-node`; jobs that previously relied on the GitHub image's preinstalled Node.js now set it
-up first). Everything else must be on the runner host, installed by a human: `git`, `curl`, `jq`,
-`tar`, `gzip`, `unzip`, the GitHub CLI at `/usr/bin/gh` (the trusted helper scripts call it by absolute
-path), the Azure CLI `az` (required by `azure/login` in Deploy Production), and a Docker daemon the
-runner account can reach (required by the Docker validation and by `Azure/static-web-apps-deploy`,
-which is a container action). The manual **Inventory agent runner diagnostic** checks exactly this list
-without checking out code or using secrets, and fails when anything is missing. Because the pool has
-several runners and any of them can pick up a job, the host that will upload the frontend is not known
-when the API is deployed. A check on that host would come only after the API had changed. Deploy
-Production therefore refuses in its first job, before it validates, builds or deploys anything, unless
-the repository variable `INVENTORY_RUNNER_BASELINE_VERIFIED` is `true`. Deploy API and Deploy Frontend
-also require that variable in their job-level `if:`. A human sets the variable only after the
-diagnostic has passed on **every** runner in the pool. The per-host checks stay as a second line of
-defence: Deploy API fails before Azure login when `az`, `jq`, `curl` or `/usr/bin/gh` is missing, and
-Deploy Frontend fails before the Static Web Apps upload when `docker`, `curl`, `/usr/bin/gh` or the
-Docker daemon is unavailable. A runner added to the pool later must pass the diagnostic before it is
-registered, or the variable must be removed until it has. **The baseline is not verified until a human
-runs the diagnostic on every runner in the pool and it passes**; no agent has done so. No workflow installs packages with
-`sudo`, and none may.
+`actions/setup-node`), in either mode. On a **self-hosted** runner everything else must be on the host,
+installed by a human: `git`, `curl`, `jq`, `tar`, `gzip`, `unzip`, the GitHub CLI at `/usr/bin/gh` (the
+trusted helper scripts call it by absolute path), the Azure CLI `az` (required by `azure/login` in Deploy
+Production), and a Docker daemon the runner account can reach (required by the Docker validation and by
+`Azure/static-web-apps-deploy`, which is a container action). GitHub's `ubuntu-latest` image provides
+all of them. The manual **Inventory agent runner diagnostic** checks exactly this list without checking
+out code or using secrets, and fails when anything is missing. It runs wherever the switch sends jobs:
+in GitHub-hosted mode it names the hosted runner and warns that it did **not** verify the owner's VM,
+so a hosted diagnostic is never a basis for setting either verification variable.
+
+Because the self-hosted pool has several runners and any of them can pick up a job, the host that will
+upload the frontend is not known when the API is deployed. A check on that host would come only after
+the API had changed. In self-hosted mode Deploy Production therefore refuses in its first job, before it
+validates, builds or deploys anything, unless `INVENTORY_RUNNER_BASELINE_VERIFIED` is `true`, and
+Deploy API and Deploy Frontend require it in their job-level `if:` through
+`(vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true')`.
+A human sets the variable only after the diagnostic has passed on **every** self-hosted runner in the
+pool. A runner added to the pool later must pass the diagnostic before it is registered, or the variable
+must be removed until it has. **The baseline is not verified until a human runs the diagnostic on every
+self-hosted runner and it passes**; no agent has done so. In GitHub-hosted mode every job gets a fresh
+runner from the same published image, so the first job instead checks the deploy jobs' tools (`az`,
+`jq`, `curl`, `docker`, `/usr/bin/gh` and a reachable Docker daemon) on its own runner before anything
+changes. In both modes the per-job checks stay as a second line of defence: Deploy API fails before Azure
+login when `az`, `jq`, `curl` or `/usr/bin/gh` is missing, and Deploy Frontend fails before the Static
+Web Apps upload when `docker`, `curl`, `/usr/bin/gh` or the Docker daemon is unavailable. The exact
+approved `main` commit, the manual start, API before SPA, the migration preflight, the health check,
+the release record and every Azure, OIDC and environment restriction are the same in both modes. No
+workflow installs packages with `sudo`, and none may.
 
 **Manual Docker validation.** `.github/workflows/inventoryapp-self-hosted-docker-validation.yml` is
 dispatched by hand from `main`. It checks out reviewed `main` code with read-only contents permission
 and no persisted checkout credentials, then runs the runner-local `inventoryapp-dev:local` image with
 the runner service account's UID/GID, a writable `/tmp` HOME, `TZ=UTC`, dropped Linux capabilities and
 no new privileges; the container verifies `git ls-files` and runs `bash scripts/validate.sh`. It
-executes no pull-request head and passes no AI or deployment credential. The image must exist on the
-runner host. Never mount the Docker socket into a job, and do not treat a container as sufficient
-isolation for untrusted code.
+executes no pull-request head and passes no AI or deployment credential. The image exists only on the
+self-hosted host, so in GitHub-hosted mode the workflow fails before checkout with an error saying it
+validated nothing there. Never mount the Docker socket into a job, and do not treat a container as
+sufficient isolation for untrusted code.
 
-**Isolation on a persistent runner.** What the workflows do:
+**Isolation on a persistent self-hosted runner.** What the workflows do, in both modes:
 
 - No checkout persists its token (`persist-credentials: false` everywhere, `vm-manager.yml` included),
   and `actions/checkout` cleans the workspace before each checkout.
@@ -173,10 +222,10 @@ isolation for untrusted code.
   architecture results still travel as run-bound, digest-checked artifacts, and every eligibility,
   exact-SHA and fork guard is unchanged.
 
-**What the workflows cannot do, and is a machine-administration blocker.** The same persistent runner
-account now executes untrusted code (pull-request heads in `validate.yml`, and code the agents write),
-credentialed Claude runs, and the production deployment jobs. Code from one job can leave something
-behind for the next: files in the runner account's home directory (including Claude Code's own
+**What the workflows cannot do, and is a machine-administration blocker in self-hosted mode.** The same
+persistent runner account executes untrusted code (pull-request heads in `validate.yml`, and code the
+agents write), credentialed Claude runs, and the production deployment jobs. Code from one job can leave
+something behind for the next: files in the runner account's home directory (including Claude Code's own
 `~/.claude` state), a modified tool cache (`$RUNNER_TOOL_CACHE`, where setup actions keep .NET and
 Node.js), or a background process. Docker daemon access is effectively root on the host. No workflow
 step can fully undo that, so until a human provisions **ephemeral runners** (a fresh or reset VM per
@@ -185,9 +234,9 @@ as safe as the runner host. Running more than one runner under the same account 
 shares that home directory and tool cache between concurrent jobs. Workflow concurrency groups are
 unchanged and serialise only runs of the same workflow and pull request.
 
-**Credential isolation gate (fail closed).** Because documentation alone does not stop a job, every job
-that holds a credential is skipped until a human records that the isolation above exists. The gate
-covers two kinds of credential:
+**Credential isolation gate (fail closed in self-hosted mode).** Because documentation alone does not
+stop a job, in self-hosted mode every job that holds a credential is skipped until a human records that
+the isolation above exists. The gate covers two kinds of credential:
 
 - **Long-lived credentials.** These are the Claude jobs (`agent-model-selection.yml` select, implement,
   the architecture check and fix, review and repair), which hold `CLAUDE_CODE_OAUTH_TOKEN` and, for
@@ -200,42 +249,68 @@ covers two kinds of credential:
   repair, head-update and review-request dispatchers (`actions: write`), architecture finalization
   (labels and dispatch), review publication (`pull-requests: write`, `statuses: write`), branch cleanup
   (`contents: write`), the production release record (`deployments: write`), and the validation status
-  jobs. In `validate.yml` the context job no longer holds `statuses: write`. The pending and final
+  jobs. In `validate.yml` the context job holds no `statuses: write`. The pending and final
   `merge-validation`/`agent-validation` statuses are published by the separate `report-pending` and
   `report-status` jobs, which are gated, and the exact-SHA review dispatcher is gated too.
 
-Their job-level `if:` requires the repository variable `INVENTORY_RUNNER_ISOLATION_VERIFIED` to be
-exactly `true`. The condition sits on the job, not on a step, because GitHub hands a job its secrets
-and token when the job starts. Nothing falls back to a GitHub-hosted runner. Jobs that hold only
-read-only tokens keep running: pull-request validation itself (the context and `Backend tests and
-frontend build` jobs), the review transport check, the diagnostic, the Docker validation and the push
-build. Deploy Production refuses in its first job, so it validates, builds and deploys nothing while
-the gate is closed.
+A job counts as credentialed when it references any secret other than its own `GITHUB_TOKEN` in an
+expression (dot, bracket or whole-context form, such as `secrets.NAME`, `secrets['NAME']` or
+`toJSON(secrets)`), passes a reusable-workflow `secrets:` mapping, or holds a token with any `write`
+scope (`id-token: write` included). That covers job-level permissions, permissions inherited from the
+workflow, and the repository default when neither declares any. Such a job's job-level `if:` must have
+exactly
 
-**Effect on merging (owner's decision, 19 October 2026).** With the gate closed, no pull request receives
-the required `merge-validation` status. Every pull request therefore stays unmergeable under branch
-protection until the variable is set, or until a human uses an administrator bypass. The validation job
-still runs and shows its result, so a human can see whether the code passed before deciding.
+```text
+(vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+```
 
-The refusal is visible rather than a silent skip. These jobs each fail with an error naming the
-variable, so the run is red and no credentialed job starts: the implementation preflight, the
-architecture and review context jobs, the first job of Deploy Production, and a dedicated
-`isolation-gate` job (with no permissions) beside repair, validation status publishing, head update,
-review request and branch cleanup. An implementation run refused this way leaves the issue's readiness label in place, as for any
-failed preflight; re-apply it after the variable is set. Project status sync is skipped without a red
-run, as it already is while `PROJECT_SYNC_ENABLED` is off.
+as one of its top-level `&&` operands, with no top-level `||`; every other condition (event
+eligibility, labels, owner and association checks, exact-SHA provenance, `needs` results) stays as it
+was. The gate compares the switch exactly as `runs-on` does, so no value can put a credentialed job on a
+self-hosted runner without verified isolation. In GitHub-hosted mode the gate is open whatever the
+isolation variable says. The condition sits on the job, not on a step, because GitHub hands a job its
+secrets and token when the job starts. Jobs that hold only read-only tokens keep running in either
+mode: pull-request validation itself (the context and `Backend tests and frontend build` jobs), the
+review transport check, the diagnostic, the Docker validation and the push build. In self-hosted mode
+with the gate closed, Deploy Production refuses in its first job, so it validates, builds and deploys
+nothing.
 
-**To lift the gate**, a human first provisions reset or ephemeral runners for the `inventory-agent`
-labels (or another isolation boundary they have reviewed), runs the diagnostic on them, and only then
-sets `INVENTORY_RUNNER_ISOLATION_VERIFIED=true` in Repository Settings → Secrets and variables → Actions
-→ Variables. Deployment additionally needs `INVENTORY_RUNNER_BASELINE_VERIFIED=true` (see Host
-baseline). Removing a variable, or setting any other value, closes its gate again. Agents never set,
-change or remove either variable. Workflows that
-run from the default branch (`issues`, `issue_comment`, `pull_request_target` and `workflow_dispatch`
-triggers) enforce the gate once this reaches `main`.
+One residual case is accepted: with an invalid value that GitHub does not read as `true` (such as
+`yes`), a credentialed job starts on a fresh GitHub-hosted runner, receives its secrets, and fails in
+its first step before any other step runs. A value GitHub reads as `true` (such as `TRUE`) is gated
+like `true`.
 
-**Cost boundaries.** Moving jobs to self-hosted runners removes GitHub-hosted runner minutes for
-repository-owned jobs only. GitHub still coordinates every run; artifact and cache storage is still
+**Effect on merging (owner's decision, 19 October 2026).** In self-hosted mode with the gate closed, no
+pull request receives the required `merge-validation` status. Every pull request therefore stays
+unmergeable under branch protection until the variable is set, or until a human uses an administrator
+bypass. The validation job still runs and shows its result, so a human can see whether the code passed
+before deciding. In GitHub-hosted mode the status jobs run and publish as normal.
+
+The refusal is visible rather than a silent skip. In self-hosted mode with the gate closed, these jobs
+each fail with an error naming the variable, so the run is red and no credentialed job starts: the
+implementation preflight, the architecture and review context jobs, the first job of Deploy Production,
+and a dedicated `isolation-gate` job (with no permissions, conditioned on
+`vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED != 'true'`)
+beside repair, validation status publishing, head update, review request and branch cleanup. An
+implementation run refused this way leaves the issue's readiness label in place, as for any failed
+preflight; re-apply it after the variable is set. Project status sync is skipped without a red run, as
+it already is while `PROJECT_SYNC_ENABLED` is off.
+
+**To lift the gate in self-hosted mode**, a human first provisions reset or ephemeral runners for the
+`inventory-agent` labels (or another isolation boundary they have reviewed), runs the diagnostic on them
+in self-hosted mode, and only then sets `INVENTORY_RUNNER_ISOLATION_VERIFIED=true` in Repository Settings
+→ Secrets and variables → Actions → Variables. Deployment additionally needs
+`INVENTORY_RUNNER_BASELINE_VERIFIED=true` (see Host baseline). Removing a verification variable, or
+setting any other value, closes its gate again. Agents never set, change or remove any of the three
+variables. Workflows that run from the default branch (`issues`, `issue_comment`,
+`pull_request_target` and `workflow_dispatch` triggers) use the switch and these gates only once this
+reaches `main`; until then they keep #645's all-self-hosted behaviour.
+
+**Cost boundaries.** In self-hosted mode repository-owned jobs use no GitHub-hosted runner minutes. In
+GitHub-hosted mode every repository job uses GitHub-hosted Linux minutes, billed under the account's
+existing GitHub Actions plan, included minutes and spending limit; this change does not alter billing,
+budgets or spending limits, and a run stops being covered when the account's limit is reached exactly
+as before. In both modes GitHub still coordinates every run, and artifact and cache storage is still
 billed by GitHub; the runner VM, its power and network, Azure, Anthropic and SonarCloud are separate
 costs. Checks that external services or GitHub Apps run on their own infrastructure (SonarCloud, for
 example) are not repository jobs and are outside `runs-on` control.
@@ -736,7 +811,7 @@ Its result is advisory. A human still reviews and decides whether to merge.
 
 Invocations of the same model **may share that model's billing credential**: every Claude invocation uses `CLAUDE_CODE_OAUTH_TOKEN`. Independence is provided by separation of invocation, context, and authority, not by separate accounts:
 
-- **Separate invocations:** implementation, architecture and review are separate workflows with separate runs, working trees, prompts, and tokens. The architecture pass no longer shares the implementation runner: it is dispatched from trusted `main`, checks out the exact implementation PR SHA in its own job and a freshly cleaned workspace (on the persistent self-hosted runner that is a separate job, not a separate machine; see § Self-hosted runner placement), and only a deterministic post-agent step may publish a structural commit back to that same feature branch. All three editing invocations (implementation, architecture and repair) may remove tracked files in project directories with `git rm -- <path>` when in scope; they cannot remove `.github/` files through that permission. The implementation and architecture agents may also recover from an accidentally staged project file with the narrowly scoped `git restore --staged -- <project-path>` permission; broad restore/reset and `.github/` cleanup remain forbidden. Both may create directories with `mkdir -p` only under `backend/`, `frontend/`, `docs/` and `scripts/`. The implementation, architecture and repair Claude steps each set `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` to 30 minutes so the bare, allowlisted `bash scripts/validate.sh` can finish in the foreground; with the short default timeout an agent backgrounded or redirected validation, the literal-command allowlist refused it, and the run ended with uncommitted work (implementation run 36774979794, issue #240; repair run 37202054752 on PR #376, issue #361). The same three steps set `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` to `1` and add `Monitor` to `--disallowedTools`, so no command can be left running in the background. A headless run ends when the agent's turn ends, and an agent that started validation in the background with the Monitor tool ended its turn waiting for it, leaving uncommitted work (implementation run 38104920781, issue #498). The agent workflow contract tests reject broader deletion, staging-cleanup and directory-creation patterns and require both timeouts, the disabled background tasks and the refused `Monitor` tool. A human starts Claude implementation with `agent-ready-claude`; the initial review is requested automatically, by `agent-implement.yml`'s dispatcher applying `agent-review` and successful validation dispatching the review. After a human starts a repair, successful exact-SHA validation may dispatch another independent review under that existing label.
+- **Separate invocations:** implementation, architecture and review are separate workflows with separate runs, working trees, prompts, and tokens. The architecture pass no longer shares the implementation runner: it is dispatched from trusted `main`, checks out the exact implementation PR SHA in its own job and a freshly cleaned workspace (on a persistent self-hosted runner that is a separate job, not a separate machine; see § Runner placement), and only a deterministic post-agent step may publish a structural commit back to that same feature branch. All three editing invocations (implementation, architecture and repair) may remove tracked files in project directories with `git rm -- <path>` when in scope; they cannot remove `.github/` files through that permission. The implementation and architecture agents may also recover from an accidentally staged project file with the narrowly scoped `git restore --staged -- <project-path>` permission; broad restore/reset and `.github/` cleanup remain forbidden. Both may create directories with `mkdir -p` only under `backend/`, `frontend/`, `docs/` and `scripts/`. The implementation, architecture and repair Claude steps each set `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` to 30 minutes so the bare, allowlisted `bash scripts/validate.sh` can finish in the foreground; with the short default timeout an agent backgrounded or redirected validation, the literal-command allowlist refused it, and the run ended with uncommitted work (implementation run 36774979794, issue #240; repair run 37202054752 on PR #376, issue #361). The same three steps set `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` to `1` and add `Monitor` to `--disallowedTools`, so no command can be left running in the background. A headless run ends when the agent's turn ends, and an agent that started validation in the background with the Monitor tool ended its turn waiting for it, leaving uncommitted work (implementation run 38104920781, issue #498). The agent workflow contract tests reject broader deletion, staging-cleanup and directory-creation patterns and require both timeouts, the disabled background tasks and the refused `Monitor` tool. A human starts Claude implementation with `agent-ready-claude`; the initial review is requested automatically, by `agent-implement.yml`'s dispatcher applying `agent-review` and successful validation dispatching the review. After a human starts a repair, successful exact-SHA validation may dispatch another independent review under that existing label.
 - **Separate contexts:** each run has its own checkout, prompt, conversation, and tool configuration. The reviewer receives the head SHA, the pull request, and the issue, not the implementation agent's transcript or reasoning.
 - **Separate, job-scoped GitHub permissions:** the implementation and repair jobs use repository-scoped GitHub App installation tokens only for branch/PR mutations and agent GitHub calls; deterministic bookkeeping/dispatch continues to use each job's `GITHUB_TOKEN`. The review job has read-only access to code and the pull request and cannot publish; only the separate deterministic publish job may post a comment-only review and a commit status, with its own `GITHUB_TOKEN`. The App private key is never exposed to the review or validation jobs.
 
@@ -868,7 +943,7 @@ A change whose chain is broken (for example a PR without an issue, or a validati
 | Setting | Recommendation |
 | --- | --- |
 | Pull requests required | Require a pull request before merging into `develop` and `main`. |
-| Required status check | Two stable statuses exist: `merge-validation`, published by normal same-repository `pull_request` validation of every PR (only while the runner isolation gate is open; see § Self-hosted runner placement), and `agent-validation`, published only by trusted exact-SHA dispatch for agent PRs. Keep `merge-validation` required for branch protection. Agent-created/updated PRs use the dedicated GitHub App token, so their normal `pull_request` runs start automatically rather than waiting for manual workflow approval. |
+| Required status check | Two stable statuses exist: `merge-validation`, published by normal same-repository `pull_request` validation of every PR (in self-hosted mode only while the runner isolation gate is open; see § Runner placement), and `agent-validation`, published only by trusted exact-SHA dispatch for agent PRs. Keep `merge-validation` required for branch protection. Agent-created/updated PRs use the dedicated GitHub App token, so their normal `pull_request` runs start automatically rather than waiting for manual workflow approval. |
 | Force pushes | Block force pushes to `develop` and `main`. |
 | Branch deletion | Block deletion of `develop` and `main`. |
 | Conversation resolution | Require all review conversations to be resolved before merging, where available. |

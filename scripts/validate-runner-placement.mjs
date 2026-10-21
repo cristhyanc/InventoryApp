@@ -1,5 +1,7 @@
-// Runner placement contract (issue #645): every repository-owned GitHub Actions job runs on the
-// self-hosted inventory-agent runners, with no GitHub-hosted runner and no fallback to one.
+// Runner placement contract (issues #645 and #807): every repository-owned GitHub Actions job selects
+// its runner with the one approved expression over the owner's INVENTORY_AGENT_SELF_HOSTED_ALL switch.
+// Exactly 'true' selects the self-hosted inventory-agent runners; false or unset selects ubuntu-latest.
+// The switch is an explicit mode, never an automatic fallback when the self-hosted runners are offline.
 // Run with: node scripts/validate-runner-placement.mjs
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -7,22 +9,60 @@ import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-export const SELF_HOSTED_RUNS_ON = '[self-hosted, linux, x64, inventory-agent]';
-// The retired opt-in selector: while it existed, leaving it unset fell back to ubuntu-latest.
-export const RETIRED_RUNNER_SWITCH = 'INVENTORY_AGENT_SELF_HOSTED_ALL';
-const HOSTED_LABEL = /\b(?:ubuntu|windows|macos)-(?:latest|\d[\w.-]*)\b/;
+export const RUNNER_MODE_VARIABLE = 'INVENTORY_AGENT_SELF_HOSTED_ALL';
+export const SELF_HOSTED_LABELS = ['self-hosted', 'linux', 'x64', 'inventory-agent'];
+export const GITHUB_HOSTED_LABEL = 'ubuntu-latest';
+// The only runs-on value a job may use. GitHub compares strings without regard to case, so a value
+// such as 'TRUE' also selects the self-hosted runners; the isolation gate below uses the same
+// comparison, so such a value still needs verified isolation, and the runner mode step then fails it.
+export const RUNS_ON_SELECTOR =
+  "${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"inventory-agent\"]') || 'ubuntu-latest' }}";
+// Every job's first step: it logs the selected mode and the runner, and fails when the variable is
+// anything other than exactly true, false or unset (expressions cannot compare case-sensitively), or
+// when the job landed on a different kind of runner than the variable now selects.
+export const RUNNER_MODE_STEP = `      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: \${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: \${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=\${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+`;
+// The step-level reading of the switch, used by the runner mode step and the visible refusal steps.
+export const RUNNER_MODE_ENV = '          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}\n';
 const LOCAL_REUSABLE_WORKFLOW = /^\.\/\.github\/workflows\/[\w.-]+\.ya?ml$/;
-// A self-hosted runner has no GitHub-hosted image tools, so a job that runs `node` installs it
-// with the pinned actions/setup-node step before its first use instead of assuming one on PATH.
+// A self-hosted runner has no GitHub-hosted image tools, so a job that runs `node` installs it with the
+// pinned actions/setup-node step before its first use instead of assuming one on PATH, in either mode.
 export const SETUP_NODE_STEP = 'uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0';
-// Jobs that receive a credential run only once a human confirms the persistent runners are reset or
-// ephemeral per job (issue #645 review). A credential is any secret other than the job's own token,
-// a reusable-workflow secret mapping, Azure OIDC, or a GITHUB_TOKEN with any write scope, declared
-// on the job or inherited from the workflow: an earlier job's leftover process could use a write
-// token to forge statuses or reviews, dispatch workflows or delete branches while the job runs.
-// The condition must be on the job itself: credentials reach the runner when the job starts, so a
-// step that fails afterwards would already be too late.
-export const ISOLATION_CONDITION = "vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'";
+// In self-hosted mode, jobs that receive a credential run only once a human confirms the persistent
+// runners are reset or ephemeral per job (issue #645 review). A GitHub-hosted runner is a fresh VM
+// per job, so in GitHub-hosted mode that verification of the owner's VM is not required (issue #807).
+// A credential is any secret other than the job's own token, a reusable-workflow secret mapping,
+// Azure OIDC, or a GITHUB_TOKEN with any write scope, declared on the job or inherited from the
+// workflow: an earlier job's leftover process could use a write token to forge statuses or reviews,
+// dispatch workflows or delete branches while the job runs. The condition must be on the job
+// itself: credentials reach the runner when the job starts, so a step that fails afterwards would
+// already be too late. It compares the switch exactly as RUNS_ON_SELECTOR does, so no value can
+// select the self-hosted runners without also requiring verified isolation.
+export const ISOLATION_CONDITION =
+  "(vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')";
+// The job-level condition of a visible refusal job, the exact complement of ISOLATION_CONDITION.
+export const ISOLATION_REFUSAL_CONDITION =
+  "vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && vars.INVENTORY_RUNNER_ISOLATION_VERIFIED != 'true'";
+// The same refusal inside a step of a job that holds no credential.
+export const ISOLATION_REFUSAL_STEP_TEST = 'if [ "$RUNNER_MODE" = "true" ] && [ "$RUNNER_ISOLATION_VERIFIED" != "true" ]; then';
+// Deploy API and Deploy Frontend: a verified host baseline is required only of the self-hosted runners.
+export const BASELINE_CONDITION =
+  "(vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true')";
 export const ISOLATION_GATE_STEP = 'Require verified runner isolation for credentialed jobs';
 // The workflows whose credentialed jobs a person starts, so a refusal must fail visibly, not skip.
 export const VISIBLE_ISOLATION_GATE_WORKFLOWS = [
@@ -85,10 +125,13 @@ function reusableWorkflowViolations(where, uses, runsOn) {
 }
 
 function runsOnViolation(where, value) {
-  if (HOSTED_LABEL.test(value)) return `${where}: selects a GitHub-hosted runner (${value}).`;
-  if (value.includes('${{')) return `${where}: selects its runner with an expression (${value}); a computed runner can fall back to a GitHub-hosted one.`;
-  if (value !== SELF_HOSTED_RUNS_ON) return `${where}: runs-on must be exactly ${SELF_HOSTED_RUNS_ON} (found ${value || 'a multi-line value'}).`;
-  return undefined;
+  if (value === RUNS_ON_SELECTOR) return undefined;
+  return `${where}: runs-on must be exactly the approved runner mode selector ${RUNS_ON_SELECTOR} (found ${value || 'a multi-line value'}); a fixed runner, another expression or a fallback would ignore or bypass the ${RUNNER_MODE_VARIABLE} mode.`;
+}
+
+function modeStepViolation(where, job) {
+  if (job.includes(`\n    steps:\n${RUNNER_MODE_STEP}`)) return undefined;
+  return `${where}: its first step must be exactly the approved 'Report and validate runner mode' step, which logs the selected mode and runner and rejects any value other than true, false or unset.`;
 }
 
 function nodeSetupViolation(where, job) {
@@ -174,16 +217,45 @@ function jobViolations(where, job, workflowPermissions) {
   const uses = jobValues(job, 'uses');
   const isolation = isolationViolation(where, job, workflowPermissions);
   if (uses.length > 0) return [...reusableWorkflowViolations(where, uses, runsOn), isolation].filter(Boolean);
-  if (runsOn.length !== 1) return [`${where}: must declare exactly one runs-on: ${SELF_HOSTED_RUNS_ON} (found ${runsOn.length}).`];
-  return [runsOnViolation(where, runsOn[0]), nodeSetupViolation(where, job), isolation].filter(Boolean);
+  if (runsOn.length !== 1) return [`${where}: must declare exactly one runs-on: ${RUNS_ON_SELECTOR} (found ${runsOn.length}).`];
+  return [runsOnViolation(where, runsOn[0]), modeStepViolation(where, `\n${job}`), nodeSetupViolation(where, job), isolation].filter(Boolean);
+}
+
+// Any reading of the switch in an expression, whatever its case or accessor form.
+const MODE_READ = new RegExp(String.raw`\bvars\s*(?:\.\s*|\[\s*['"])${RUNNER_MODE_VARIABLE}\b`, 'i');
+const APPROVED_MODE_READS = [RUNS_ON_SELECTOR, ISOLATION_CONDITION, ISOLATION_REFUSAL_CONDITION, RUNNER_MODE_ENV];
+
+/**
+ * The switch may be read only through the approved texts: the selector, the isolation gate and its
+ * refusal, the deployment baseline gate and the step-level RUNNER_MODE variable. Any other reading
+ * could choose a runner, or relax a gate, differently from the selector.
+ */
+function modeReadViolations(text, source) {
+  let remaining = text;
+  for (const approved of [...APPROVED_MODE_READS, BASELINE_CONDITION]) remaining = remaining.replaceAll(approved, '');
+  return remaining
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line) && MODE_READ.test(line))
+    .map((line) => `${source}: reads ${RUNNER_MODE_VARIABLE} outside the approved selector, gates and RUNNER_MODE step variable (${line.trim()}).`);
+}
+
+/** A refusal that ignores the mode would block GitHub-hosted runs that need no VM isolation. */
+function refusalViolations(text, source) {
+  const unconditional = text.replaceAll(ISOLATION_REFUSAL_CONDITION, '').replaceAll(ISOLATION_REFUSAL_STEP_TEST, '');
+  const violations = [];
+  if (/vars\.INVENTORY_RUNNER_ISOLATION_VERIFIED\s*!=/.test(unconditional) || unconditional.includes('if [ "$RUNNER_ISOLATION_VERIFIED"')) {
+    violations.push(`${source}: refuses on INVENTORY_RUNNER_ISOLATION_VERIFIED without the self-hosted mode condition; use ${ISOLATION_REFUSAL_CONDITION} or ${ISOLATION_REFUSAL_STEP_TEST}.`);
+  }
+  if (text.includes(ISOLATION_REFUSAL_STEP_TEST) && !text.includes(RUNNER_MODE_ENV)) {
+    violations.push(`${source}: its isolation refusal step reads $RUNNER_MODE but no step sets it from the switch.`);
+  }
+  return violations;
 }
 
 /** Returns a list of violations for one workflow; an empty list means it satisfies the contract. */
 export function runnerPlacementViolations(workflowText, source) {
   const text = workflowText.replaceAll('\r\n', '\n');
-  const violations = text.includes(RETIRED_RUNNER_SWITCH)
-    ? [`${source}: still reads the retired ${RETIRED_RUNNER_SWITCH} runner switch, which allowed a GitHub-hosted fallback.`]
-    : [];
+  const violations = [...modeReadViolations(text, source), ...refusalViolations(text, source)];
   const workflowPermissions = blockValue(text.slice(0, text.search(/^jobs:/m)), 'permissions', 0);
   for (const [id, job] of Object.entries(workflowJobs(text, source))) {
     violations.push(...jobViolations(`${source} job '${id}'`, job, workflowPermissions));
@@ -206,5 +278,5 @@ const invokedDirectly =
 if (invokedDirectly) {
   const paths = listWorkflowFiles();
   verifyRunnerPlacement({ read: (path) => readFileSync(resolve(repositoryRoot, path), 'utf8'), paths });
-  console.log(`Runner placement contract passed: ${paths.length} workflows, every job on ${SELF_HOSTED_RUNS_ON}.`);
+  console.log(`Runner placement contract passed: ${paths.length} workflows, every job selects its runner with the ${RUNNER_MODE_VARIABLE} mode.`);
 }

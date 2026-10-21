@@ -12,15 +12,18 @@ import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readRepositoryFile, repositoryRoot } from './validate-agent-workflows.mjs';
+import { BASELINE_CONDITION, ISOLATION_CONDITION } from './validate-runner-placement.mjs';
 
 export const deployProductionPath = '.github/workflows/deploy-production.yml';
 export const PRODUCTION_ENVIRONMENT = 'VmInventoryApi_Env';
 export const RELEASE_SHA = '${{ needs.resolve.outputs.sha }}';
-// Issue #645 review: credentialed jobs wait for a human to verify runner isolation, and the deploy
-// jobs also wait for a human to verify the tool baseline on every runner, because the host that
-// uploads the frontend is not known when the API is deployed.
-export const RUNNER_ISOLATION_CONDITION = "vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true'";
-export const RUNNER_BASELINE_CONDITION = "vars.INVENTORY_RUNNER_BASELINE_VERIFIED == 'true'";
+// Issues #645 and #807: in self-hosted mode credentialed jobs wait for a human to verify runner
+// isolation, and the deploy jobs also wait for a human to verify the tool baseline on every runner,
+// because the host that uploads the frontend is not known when the API is deployed. In GitHub-hosted
+// mode neither variable describes the runner, so neither is required; each deploy job still checks
+// its own tools before it uses a credential.
+export const RUNNER_ISOLATION_CONDITION = ISOLATION_CONDITION;
+export const RUNNER_BASELINE_CONDITION = BASELINE_CONDITION;
 export const DEPLOY_JOB_CONDITION = `if: github.ref == 'refs/heads/main' && ${RUNNER_ISOLATION_CONDITION} && ${RUNNER_BASELINE_CONDITION}`;
 const RUNNER_BASELINE_STEP = '- name: Require a verified tool baseline on every runner';
 
@@ -252,7 +255,12 @@ export function verifyDeployProductionWorkflow(text, source = deployProductionPa
   requireOrder(resolveJob, "if: github.ref != 'refs/heads/main'", 'uses: actions/checkout', `${source} job 'resolve'`);
   requireText(resolveJob, 'exit 1', `${source} job 'resolve'`);
   requireOrder(resolveJob, RUNNER_BASELINE_STEP, 'uses: actions/checkout', `${source} job 'resolve'`);
-  requireText(resolveJob, 'if [ "$RUNNER_BASELINE_VERIFIED" != "true" ]; then', `${source} job 'resolve'`);
+  requireText(resolveJob, 'if [ "$RUNNER_MODE" = "true" ] && [ "$RUNNER_BASELINE_VERIFIED" != "true" ]; then', `${source} job 'resolve'`);
+  // GitHub-hosted mode (issue #807): no VM baseline applies, so the first job checks the deploy
+  // jobs' tools on its own fresh runner before the API is validated, built or deployed.
+  requireText(resolveJob, 'if [ "$RUNNER_MODE" != "true" ]; then', `${source} job 'resolve'`);
+  requireText(resolveJob, 'for tool in az jq curl docker; do', `${source} job 'resolve'`);
+  requireText(resolveJob, 'docker info >/dev/null 2>&1 ||', `${source} job 'resolve'`);
   requireText(resolveJob, 'merge-base --is-ancestor "$sha" refs/remotes/origin/main', `${source} job 'resolve'`);
   requireText(resolveJob, '^[0-9a-f]{40}$', `${source} job 'resolve'`);
   requirePermissions(jobs, 'resolve', { contents: 'read', deployments: 'read' }, source);

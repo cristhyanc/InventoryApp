@@ -1,9 +1,11 @@
 name: Inventory agent runner diagnostic
 
 # Manually dispatched only. Runs no repository or pull request code and uses no secrets.
-# Every repository job runs on this runner pool (issue #645); this checks that a runner is online
-# and has the host tools those jobs need. It does not make a persistent runner a sandbox: see
-# docs/automation.md § Self-hosted runner placement.
+# It runs where INVENTORY_AGENT_SELF_HOSTED_ALL sends every repository job (issue #807): with true it
+# checks that a self-hosted inventory-agent runner is online and has the host tools those jobs need;
+# with false or unset it runs on a GitHub-hosted runner and says plainly that it verified nothing
+# about the owner's VM. It does not make a persistent runner a sandbox: see docs/automation.md
+# § Runner placement.
 on:
   workflow_dispatch:
 
@@ -15,23 +17,45 @@ concurrency:
 
 jobs:
   diagnostic:
-    name: Check isolated Ubuntu runner
-    runs-on: [self-hosted, linux, x64, inventory-agent]
+    name: Check the selected runner's host tools
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
       - name: Check runner and available tools (no checkout or secrets)
         shell: bash
+        env:
+          RUNNER_KIND: ${{ runner.environment }}
         run: |
           set -euo pipefail
-          echo "Runner: $RUNNER_NAME"
+          echo "Runner: $RUNNER_NAME ($RUNNER_KIND)"
+          if [ "$RUNNER_KIND" != "self-hosted" ]; then
+            echo "::warning::This diagnostic ran on a GitHub-hosted runner because INVENTORY_AGENT_SELF_HOSTED_ALL is false or unset. It describes that hosted runner only: it does not verify the owner's self-hosted VM and is no basis for setting INVENTORY_RUNNER_BASELINE_VERIFIED or INVENTORY_RUNNER_ISOLATION_VERIFIED."
+          fi
           echo "Operating system: $(uname -s)"
           echo "Architecture: $(uname -m)"
           echo "Memory:"
           free -h
           echo "Available disk space:"
           df -h .
-          # Every repository job runs on this runner (issue #645). Jobs install .NET and Node.js
-          # themselves with setup actions; these host tools must be provisioned by a human.
+          # Jobs install .NET and Node.js themselves with setup actions; on a self-hosted runner these
+          # host tools must be provisioned by a human.
           echo "Required host tools:"
           missing=0
           for tool in git curl jq tar gzip unzip az docker; do
@@ -50,7 +74,11 @@ jobs:
             if command -v "$tool" >/dev/null 2>&1; then echo "$tool: on PATH"; else echo "$tool: not on PATH"; fi
           done
           if [ "$missing" -ne 0 ]; then
-            echo "::error::The runner is missing required host tools; see docs/automation.md § Self-hosted runner placement."
+            echo "::error::The runner is missing required host tools; see docs/automation.md § Runner placement."
             exit 1
           fi
-          echo "Diagnostic completed. No repository code or secrets were used."
+          if [ "$RUNNER_KIND" = "self-hosted" ]; then
+            echo "Diagnostic completed on self-hosted runner $RUNNER_NAME. No repository code or secrets were used."
+          else
+            echo "Diagnostic completed on GitHub-hosted runner $RUNNER_NAME; the owner's self-hosted VM was not checked. No repository code or secrets were used."
+          fi
