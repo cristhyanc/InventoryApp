@@ -5962,8 +5962,8 @@ the page reports on.
   drops the Nayax sentence from its subtitle. An expense already recorded under that category
   **keeps** it - in the table, in the Category filter and on the edit form, which offers the category
   whenever the expense being edited carries it - because a recorded expense is a fact about the past
-  and this page must never quietly reclassify one. Its machine field is the business's own machines
-  (issue #746).
+  and this page must never quietly reclassify one. Its machine field and its list's machine filter are
+  the business's own machines (issue #746).
 
 **What is deliberately not here.** The home Dashboard and Needs Ordering keep issue #727's own
 answer, derived from the summary and the reorder listing they already fetch: those responses are
@@ -10195,7 +10195,9 @@ the one that was asked about.
 **The expense form reads the machine records themselves since issue #746** (see [Machine fields from
 the business's own machines](#machine-fields-from-the-businesss-own-machines-issue-746)), rather than
 the fleet list this section describes. What it submits is unchanged: the same local machine id, under
-the same server-side check.
+the same server-side check. The same issue gave the expense **list** the Machine filter that this
+section's `machineId` list parameter was waiting for; the parameter, its `AND` and its refusal of a
+machine the business does not have are the ones described above, unchanged.
 
 **One lookup, gated on the provider.** `Inventory.Application.Nayax.INayaxMachineLinkStore` is the
 machine half of [`INayaxProductLinkStore`](#resolving-a-nayax-product-id-to-a-local-product-issue-733),
@@ -10319,15 +10321,26 @@ number (it publishes `isProviderNamed`, the fact), so there is none to show and 
 | Expense being edited | the active machines **plus the machine that expense already names**, deactivated or not |
 | Stock History machine filter | **every** recorded machine, deactivated included |
 | Stock History machine column | named from that same list, deactivated included |
+| Expense list machine filter | **every** recorded machine, deactivated included |
 
 A retired machine is not somewhere stock is being put or a cost is being incurred now, so it is not
-offered for a new record. It is still part of what happened, so it stays in the filter and in the
+offered for a new record. It is still part of what happened, so it stays in both filters and in the
 column - and it stays as the selected value of an expense being edited, which is why
 `machineOptions` reads the machine from the **stored expense** rather than from the form: choosing
 "None" and changing one's mind must not make the machine unreachable, and saving the form again must
 not silently detach the cost from the machine that incurred it. The server already accepts a
 deactivated machine for exactly that reason ([#780](#expense-machine-references-issue-780)), and
 still refuses one that is not this business's.
+
+**The expense list's filter rides a parameter that already exists.** `GET /api/operating-expenses`
+has accepted an optional local `machineId` since [#780](#expense-machine-references-issue-780) -
+`OperatingExpenseFilter.MachineId`, applied by `EfOperatingExpenseStore` as one more `AND` beside the
+date, category, supplier and site filters - so `OperatingExpenseComponent`'s Machine filter is the
+frontend finally using it, and no endpoint, DTO or query was added or changed for it. It is the same
+id the field submits, so the filter and the field cannot disagree about which machine a row is, and
+the server still answers nothing for a machine the business does not have. The totals row sums the
+rows the server returned, which is what makes a machine-narrowed list state that machine's cost
+rather than the whole business's.
 
 **The field is offered once there is an active machine, and the three other states stay distinct.**
 A read still outstanding says it is loading, a read that **failed** renders an explicit error in
@@ -10352,7 +10365,10 @@ support-session guard changed. Every role that can reach these screens already h
 `operating-expense.component.local-machines.spec.ts` each cover the four cases the issue names -
 without a provider, with one, with a deactivated machine, and with a failed read - plus the
 outstanding read and the id that is actually submitted; the Stock History spec also asserts the
-adjustment field through its page, which is where the form's list comes from.
+adjustment field through its page, which is where the form's list comes from. The expense spec covers
+the list's Machine filter over the same four cases, including the deactivated machine it lists and the
+local id it narrows by, and `operating-expense.service.spec.ts` pins the request itself: the chosen id
+is sent as `machineId`, and no machine parameter is sent while none is chosen.
 `stock-adjustment-form.component.spec.ts` covers the active-only offer, the error and loading states,
 and the staged machine dropped when the list stops offering it.
 

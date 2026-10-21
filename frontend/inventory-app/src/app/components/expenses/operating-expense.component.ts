@@ -25,6 +25,11 @@ import { SupportSessionService } from '../../support-session/support-session.ser
  *   while that machine was in service and retiring it must not silently detach the expense - see
  *   `machineOptions`. A read that **failed** reports itself where the field was and one still
  *   outstanding says it is loading; neither is ever presented as "no machines".
+ * - The list's **machine filter** narrows the expenses to one of those machines through the
+ *   `machineId` parameter `GET /api/operating-expenses` has accepted since issue #780 - the same
+ *   local id, so no contract changes. Unlike the field it lists the **deactivated** machines too,
+ *   because an expense incurred on a machine that has since been retired has to stay findable; see
+ *   `machineFilterShown`.
  * - The **"Nayax monthly fee"** category and the Nayax wording in the page subtitle need only Nayax
  *   to be part of this business. Without it the category is not offered for a **new** expense and
  *   the subtitle drops the Nayax sentence - but an expense already recorded under it keeps it, in
@@ -81,6 +86,28 @@ import { SupportSessionService } from '../../support-session/support-session.ser
                 }
               </select>
             </label>
+            @if (machinesError) {
+              <div class="field">
+                <span class="field-label">Machine</span>
+                <p data-testid="machine-filter-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
+              </div>
+            } @else if (machinesLoading) {
+              <div class="field">
+                <span class="field-label">Machine</span>
+                <output data-testid="machine-filter-loading" class="field-hint">Loading machines…</output>
+              </div>
+            } @else if (machineFilterShown) {
+              <label class="field">
+                <span class="field-label">Machine</span>
+                <select id="expense-machine-filter" [(ngModel)]="filters.machineId">
+                  <option [ngValue]="undefined">All machines</option>
+                  <!-- Every recorded machine, deactivated ones included, so a retired machine's expenses stay findable. -->
+                  @for (machine of machines; track machine.id) {
+                    <option [ngValue]="machine.id">{{ machine.name }}</option>
+                  }
+                </select>
+              </label>
+            }
           </div>
           <button type="button" class="btn btn-secondary btn-sm mt-3" (click)="load()">Apply filters</button>
         </div>
@@ -247,7 +274,7 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
   machines: LocalMachine[] = [];
   editing: OperatingExpense | null = null;
   selectedAttachment: File | null = null;
-  filters: { from?: string; to?: string; category?: OperatingExpenseCategory; supplierId?: number } = {};
+  filters: { from?: string; to?: string; category?: OperatingExpenseCategory; supplierId?: number; machineId?: number } = {};
   form: OperatingExpensePayload = this.emptyForm();
   /**
    * Whether a support session is active (issue #659, extending #554): Add/Edit/Delete hide and
@@ -338,6 +365,18 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
    */
   get machineFieldShown(): boolean {
     return this.machinesError === '' && !this.machinesLoading && this.machineOptions.length > 0;
+  }
+
+  /**
+   * Whether the list's machine filter is offered at all: only once the business has an **active**
+   * machine to filter by (issue #746), the same rule the Stock History filter uses. A failed read is
+   * reported in its place ({@link machinesError}) and an outstanding one says it is loading, so an
+   * empty filter is never a statement about a business whose machines nobody read. The filter itself
+   * lists every recorded machine, deactivated ones included: an expense attributed to a machine that
+   * has since been retired is still a cost that was incurred, and it has to stay findable.
+   */
+  get machineFilterShown(): boolean {
+    return this.machinesError === '' && !this.machinesLoading && this.machines.some(machine => machine.isActive);
   }
   ngOnDestroy(): void { this.objectUrls.releaseAll(); this.sessionActiveSubscription.unsubscribe(); }
   viewAttachment(expense: OperatingExpense): void {

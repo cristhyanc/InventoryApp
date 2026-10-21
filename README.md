@@ -1477,9 +1477,9 @@ the filters and fields below.
   (see [Recording a pick without a provider](#recording-a-pick-without-a-provider) below): instead of
   disappearing, it opens straight into its manual entry screen and says why the calculated matrix is
   unavailable, because a business can still record what it took out of storage with no provider at
-  all. Stock History, the stock adjustment form and the Expenses form are no longer on this list at
-  all: since issue #746 their machine field and filter are the business's **own** machine records and
-  need no provider (see [Choosing a machine on the stock and expense
+  all. Stock History, the stock adjustment form and the Expenses screen are no longer on this list at
+  all: since issue #746 their machine fields and filters are the business's **own** machine records
+  and need no provider (see [Choosing a machine on the stock and expense
   screens](#choosing-a-machine-on-the-stock-and-expense-screens) below).
 - **A request that *failed* says so where its filter was.** "The machine list could not be loaded, so
   this report cannot be narrowed to one machine", for example. It is never shown as "All machines"
@@ -1487,8 +1487,8 @@ the filters and fields below.
 - **Expenses stops mentioning Nayax it does not have.** Without a connection, "Nayax monthly fee" is
   not offered for a **new** expense and the page subtitle drops its Nayax sentence. An expense already
   recorded under that category keeps it — in the table, in the Category filter and on its own edit
-  form — because a recorded expense is a fact about the past. Its machine field is not affected: that
-  is the business's own machines.
+  form — because a recorded expense is a fact about the past. Its machine field and its Machine filter
+  are not affected: those are the business's own machines.
 - **Stock History keeps the two questions apart.** The "Nayax Sync Restock" source filter is about
   movements that are already recorded locally, so it is offered whenever Nayax is part of the business
   at all — including while a stored connection needs attention — and the table keeps labelling such a
@@ -1526,12 +1526,16 @@ machine list there was came from the fleet read.
 - **A new record offers the machines that are in service.** A stock adjustment and a **new** expense
   offer only **active** machines, because a retired machine is not somewhere stock is being put or a
   cost is being incurred now.
-- **History stays readable, deactivated machines included.** The Stock History filter lists the
-  deactivated machines too, and its Machine column names them, so a movement recorded against a
-  machine you have since retired is still findable and still reads as that machine rather than as a
-  number. An **expense being edited** keeps its own machine as the selected value even once that
-  machine has been deactivated, so saving the form again cannot quietly detach the cost from the
-  machine that incurred it.
+- **History stays readable, deactivated machines included.** The Stock History filter and the
+  Expenses list's own Machine filter list the deactivated machines too, and Stock History's Machine
+  column names them, so a movement or a cost recorded against a machine you have since retired is
+  still findable and still reads as that machine rather than as a number. An **expense being edited**
+  keeps its own machine as the selected value even once that machine has been deactivated, so saving
+  the form again cannot quietly detach the cost from the machine that incurred it.
+- **The Expenses list narrows to one machine.** Its Machine filter sits beside the date, Category and
+  Supplier filters and applies with the same **Apply filters** button, so the table and its totals
+  show what one machine cost you. "All machines" asks for no machine at all, which is what you see
+  until you choose one.
 - **No machines yet is not a machine list that failed.** While the machine read is outstanding the
   field or filter says it is loading; a read that **failed** says so in its place ("The machine list
   could not be loaded…"), and it is never shown as "All machines" narrowing nothing or as a business
