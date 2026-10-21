@@ -4,26 +4,32 @@ import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
 import { OperatingExpense, OperatingExpenseCategory, OperatingExpensePayload, OperatingExpenseService } from '../../services/operating-expense.service';
 import { SupplierService } from '../../services/supplier.service';
-import { MachineService } from '../../services/machine.service';
-import { Supplier, Machine } from '../../models/models';
+import { LocalMachineService } from '../../services/local-machine.service';
+import { Supplier, LocalMachine } from '../../models/models';
 import { ObjectUrlCache } from '../shared/object-url-cache';
 import { IconComponent } from '../shared/icon.component';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
-import { loadProviderList } from '../../provider/provider-list-load';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
 /**
  * Operating Expenses: the manual expenses a business records itself.
  *
  * **Nothing on this page needs Nayax to work, and without Nayax it stops mentioning it** (issue
- * #728, decision P9 of issue #329). Two things depend on the provider, for two different reasons:
+ * #728, decision P9 of issue #329).
  *
- * - The **machine** field attributes an expense to one machine, so it needs a machine list. It is
- *   loaded through `loadProviderList`, which keeps "the provider cannot list machines", "the
- *   machine read failed" and "this business has no machines" apart; the field is hidden for the
- *   first and the third, and the second reports itself where the field was. What it submits is the
- *   machine's **local** id (`localMachineId`, issue #780) and not the provider's number, so a
- *   listed machine this business has recorded none of is not offered - see `machineOptions`.
+ * - The **machine** field attributes an expense to one of the business's **own** machine records,
+ *   read from `/api/local-machines` (issue #746, G2b of #329). It needs no provider: the id it
+ *   submits is `LocalMachine.id`, which is exactly what `OperatingExpense.MachineId` holds (issue
+ *   #780). A **new** expense is offered only the **active** machines; an expense being edited keeps
+ *   its own machine on the list even once it has been deactivated, because the cost was incurred
+ *   while that machine was in service and retiring it must not silently detach the expense - see
+ *   `machineOptions`. A read that **failed** reports itself where the field was and one still
+ *   outstanding says it is loading; neither is ever presented as "no machines".
+ * - The list's **machine filter** narrows the expenses to one of those machines through the
+ *   `machineId` parameter `GET /api/operating-expenses` has accepted since issue #780 - the same
+ *   local id, so no contract changes. Unlike the field it lists the **deactivated** machines too,
+ *   because an expense incurred on a machine that has since been retired has to stay findable; see
+ *   `machineFilterShown`.
  * - The **"Nayax monthly fee"** category and the Nayax wording in the page subtitle need only Nayax
  *   to be part of this business. Without it the category is not offered for a **new** expense and
  *   the subtitle drops the Nayax sentence - but an expense already recorded under it keeps it, in
@@ -80,6 +86,28 @@ import { SupportSessionService } from '../../support-session/support-session.ser
                 }
               </select>
             </label>
+            @if (machinesError) {
+              <div class="field">
+                <span class="field-label">Machine</span>
+                <p data-testid="machine-filter-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
+              </div>
+            } @else if (machinesLoading) {
+              <div class="field">
+                <span class="field-label">Machine</span>
+                <output data-testid="machine-filter-loading" class="field-hint">Loading machines…</output>
+              </div>
+            } @else if (machineFilterShown) {
+              <label class="field">
+                <span class="field-label">Machine</span>
+                <select id="expense-machine-filter" [(ngModel)]="filters.machineId">
+                  <option [ngValue]="undefined">All machines</option>
+                  <!-- Every recorded machine, deactivated ones included, so a retired machine's expenses stay findable. -->
+                  @for (machine of machines; track machine.id) {
+                    <option [ngValue]="machine.id">{{ machine.name }}</option>
+                  }
+                </select>
+              </label>
+            }
           </div>
           <button type="button" class="btn btn-secondary btn-sm mt-3" (click)="load()">Apply filters</button>
         </div>
@@ -134,13 +162,18 @@ import { SupportSessionService } from '../../support-session/support-session.ser
                   <span class="field-label">Machine (optional)</span>
                   <p data-testid="machine-field-error" class="text-md-body text-md-danger-text">{{ machinesError }}</p>
                 </div>
+              } @else if (machinesLoading) {
+                <div class="field">
+                  <span class="field-label">Machine (optional)</span>
+                  <output data-testid="machine-field-loading" class="field-hint">Loading machines…</output>
+                </div>
               } @else if (machineFieldShown) {
                 <label class="field">
                   <span class="field-label">Machine (optional)</span>
-                  <select [(ngModel)]="form.machineId">
+                  <select id="expense-machine" [(ngModel)]="form.machineId">
                     <option [ngValue]="null">None</option>
-                    @for (machine of machineOptions; track machine.machineID) {
-                      <option [ngValue]="machine.localMachineId">{{ machine.machineName || machine.machineNumber || machine.machineID }}</option>
+                    @for (machine of machineOptions; track machine.id) {
+                      <option [ngValue]="machine.id">{{ machine.name }}</option>
                     }
                   </select>
                 </label>
@@ -236,10 +269,12 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 export class OperatingExpenseComponent implements OnInit, OnDestroy {
   readonly categories = Object.values(OperatingExpenseCategory).filter(x => typeof x === 'number') as OperatingExpenseCategory[];
   readonly categoryNames = ['NayaxMonthlyFee', 'Insurance', 'RepairsAndMaintenance', 'Software', 'Accounting', 'PhoneInternet', 'VehicleTravel', 'BankFees', 'Other'];
-  expenses: OperatingExpense[] = []; suppliers: Supplier[] = []; machines: Machine[] = [];
+  expenses: OperatingExpense[] = []; suppliers: Supplier[] = [];
+  /** Every machine this business has recorded, active and inactive alike (issue #746). */
+  machines: LocalMachine[] = [];
   editing: OperatingExpense | null = null;
   selectedAttachment: File | null = null;
-  filters: { from?: string; to?: string; category?: OperatingExpenseCategory; supplierId?: number } = {};
+  filters: { from?: string; to?: string; category?: OperatingExpenseCategory; supplierId?: number; machineId?: number } = {};
   form: OperatingExpensePayload = this.emptyForm();
   /**
    * Whether a support session is active (issue #659, extending #554): Add/Edit/Delete hide and
@@ -249,8 +284,10 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
    * `SupportSessionService.active$`.
    */
   sessionActive = false;
-  /** Set when the machine list could not be read for a reason that is not an availability answer. */
+  /** Set when the machine list could not be read at all; never shown as "no machines". */
   machinesError = '';
+  /** Whether that read is still outstanding, which is not the same as there being no machines. */
+  machinesLoading = false;
   /** Whether Nayax is part of this business at all; the Nayax fee category and subtitle need it. */
   providerRecordsAvailable = true;
   // Supporting documents are protected by the API, so they are fetched through HttpClient
@@ -260,7 +297,7 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
   constructor(
     public service: OperatingExpenseService,
     private supplierService: SupplierService,
-    private machineService: MachineService,
+    private localMachineService: LocalMachineService,
     private provider: ProviderAvailabilityService,
     supportSession: SupportSessionService
   ) {
@@ -269,13 +306,24 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.load();
     this.supplierService.getAll().subscribe(x => this.suppliers = x);
-    loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe(outcome => {
-      this.machines = outcome.kind === 'listed' ? outcome.items : [];
-      this.machinesError = outcome.kind === 'failed'
-        ? 'The machine list could not be loaded, so an expense cannot be attributed to a machine.'
-        : '';
-    });
+    this.loadMachines();
     this.provider.featureOffered('providerRecords').subscribe(available => (this.providerRecordsAvailable = available));
+  }
+
+  private loadMachines(): void {
+    this.machinesLoading = true;
+    this.machinesError = '';
+    this.localMachineService.getAll().subscribe({
+      next: machines => {
+        this.machines = machines ?? [];
+        this.machinesLoading = false;
+      },
+      error: () => {
+        this.machines = [];
+        this.machinesError = 'The machine list could not be loaded, so an expense cannot be attributed to a machine.';
+        this.machinesLoading = false;
+      }
+    });
   }
 
   /** The page's own wording: without Nayax it describes only what this business does record. */
@@ -299,21 +347,36 @@ export class OperatingExpenseComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * The machines an expense may be attributed to: the listed ones this business has its own record
-   * of (issue #780). An expense stores the **local** machine id, so a machine the provider reports
-   * that nothing here has recorded yet cannot be chosen - there is no id to store. The option's
-   * label is unchanged.
+   * The machines an expense may be attributed to (issue #746): the business's **active** machines,
+   * plus the machine the expense **being edited** already names, even once that machine has been
+   * deactivated. Keeping it is what stops a retired machine's historical expense from losing its
+   * attribution the next time somebody saves the form; the backend accepts a deactivated machine
+   * for exactly that reason (issue #780). It is taken from the stored expense rather than from the
+   * form, so choosing "None" and changing one's mind still offers it.
    */
-  get machineOptions(): Machine[] {
-    return this.machines.filter(machine => machine.localMachineId != null);
+  get machineOptions(): LocalMachine[] {
+    const recorded = this.editing?.machineId ?? null;
+    return this.machines.filter(machine => machine.isActive || machine.id === recorded);
   }
 
   /**
-   * Whether an expense may be attributed to a machine at all: only when a listed machine has a
-   * local record to attribute it to.
+   * Whether an expense may be attributed to a machine at all: only when there is a machine to
+   * attribute it to. A failed or outstanding read is reported in the field's place instead.
    */
   get machineFieldShown(): boolean {
-    return this.machineOptions.length > 0;
+    return this.machinesError === '' && !this.machinesLoading && this.machineOptions.length > 0;
+  }
+
+  /**
+   * Whether the list's machine filter is offered at all: only once the business has an **active**
+   * machine to filter by (issue #746), the same rule the Stock History filter uses. A failed read is
+   * reported in its place ({@link machinesError}) and an outstanding one says it is loading, so an
+   * empty filter is never a statement about a business whose machines nobody read. The filter itself
+   * lists every recorded machine, deactivated ones included: an expense attributed to a machine that
+   * has since been retired is still a cost that was incurred, and it has to stay findable.
+   */
+  get machineFilterShown(): boolean {
+    return this.machinesError === '' && !this.machinesLoading && this.machines.some(machine => machine.isActive);
   }
   ngOnDestroy(): void { this.objectUrls.releaseAll(); this.sessionActiveSubscription.unsubscribe(); }
   viewAttachment(expense: OperatingExpense): void {

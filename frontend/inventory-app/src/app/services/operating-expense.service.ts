@@ -61,12 +61,14 @@ export interface OperatingExpensePayload {
 export class OperatingExpenseService {
   private get baseUrl(): string { return `${this.config.apiBaseUrl.replace(/\/$/, '')}/operating-expenses`; }
   constructor(private http: HttpClient, private config: ConfigService) {}
-  getAll(filters: { from?: string; to?: string; category?: OperatingExpenseCategory; supplierId?: number }): Observable<OperatingExpense[]> {
+  /** `machineId` is a local machine id, as above; the endpoint has accepted it since issue #780. */
+  getAll(filters: { from?: string; to?: string; category?: OperatingExpenseCategory; supplierId?: number; machineId?: number }): Observable<OperatingExpense[]> {
     let params = new HttpParams();
     if (filters.from) params = params.set('from', filters.from);
     if (filters.to) params = params.set('to', filters.to);
     if (filters.category !== undefined) params = params.set('category', filters.category);
     if (filters.supplierId !== undefined) params = params.set('supplierId', filters.supplierId);
+    if (filters.machineId !== undefined) params = params.set('machineId', filters.machineId);
     return this.http.get<OperatingExpense[]>(this.baseUrl, { params });
   }
   create(payload: OperatingExpensePayload, attachment?: File | null): Observable<OperatingExpense> {

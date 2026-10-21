@@ -3,7 +3,7 @@ import { Observable, of } from 'rxjs';
 import { OperatingExpenseComponent } from './operating-expense.component';
 import { OperatingExpense, OperatingExpenseCategory, OperatingExpenseService } from '../../services/operating-expense.service';
 import { SupplierService } from '../../services/supplier.service';
-import { MachineService } from '../../services/machine.service';
+import { LocalMachineService } from '../../services/local-machine.service';
 import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
@@ -44,7 +44,7 @@ async function render(overrides: {
         }
       },
       { provide: SupplierService, useValue: { getAll: jest.fn(() => of([])) } },
-      { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
+      { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       provideNayaxConnectionStatus()
     ]

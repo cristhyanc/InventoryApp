@@ -1490,25 +1490,28 @@ Owner saves or re-tests the connection, and used by the "Nayax isn't fully conne
 the filters and fields below.
 
 - **A filter over a list that cannot exist is not shown.** Without a usable connection, the machine
-  filter disappears from Stock History and the report pages, the Site filter disappears from Site
-  Commissions, and the optional machine field disappears from the stock adjustment form and the
-  Expenses form. No request is sent that could only be refused. The Pick List is the one exception
+  filter disappears from the report pages and the Site filter disappears from Site Commissions. No
+  request is sent that could only be refused. The Pick List is the one exception
   (see [Recording a pick without a provider](#recording-a-pick-without-a-provider) below): instead of
   disappearing, it opens straight into its manual entry screen and says why the calculated matrix is
   unavailable, because a business can still record what it took out of storage with no provider at
-  all.
+  all. Stock History, the stock adjustment form and the Expenses screen are no longer on this list at
+  all: since issue #746 their machine fields and filters are the business's **own** machine records
+  and need no provider (see [Choosing a machine on the stock and expense
+  screens](#choosing-a-machine-on-the-stock-and-expense-screens) below).
 - **A request that *failed* says so where its filter was.** "The machine list could not be loaded, so
   this report cannot be narrowed to one machine", for example. It is never shown as "All machines"
   narrowing nothing, and a business that genuinely has no machines is never reported as an error.
 - **Expenses stops mentioning Nayax it does not have.** Without a connection, "Nayax monthly fee" is
   not offered for a **new** expense and the page subtitle drops its Nayax sentence. An expense already
   recorded under that category keeps it — in the table, in the Category filter and on its own edit
-  form — because a recorded expense is a fact about the past.
+  form — because a recorded expense is a fact about the past. Its machine field and its Machine filter
+  are not affected: those are the business's own machines.
 - **Stock History keeps the two questions apart.** The "Nayax Sync Restock" source filter is about
   movements that are already recorded locally, so it is offered whenever Nayax is part of the business
   at all — including while a stored connection needs attention — and the table keeps labelling such a
-  movement either way. The machine filter needs a machine list, so it stays hidden until there are
-  machines to filter by.
+  movement either way. Its machine filter is about the business's own machines and does not depend on
+  the connection at all.
 - **A connection that needs attention is still a connection.** A business whose stored token stopped
   working keeps its Nayax expense category and its Nayax source filter; what it loses is the live
   fleet reads, with the banner asking an Owner to reconnect.
@@ -1521,6 +1524,43 @@ the filters and fields below.
 
 **A connected business sees no change here either.** Every filter, field and category is exactly as
 before.
+
+#### Choosing a machine on the stock and expense screens
+
+Issue #746 takes the three screens that attribute the business's **own** records to a machine — the
+stock adjustment form, Stock History and Operating Expenses — off the live Nayax fleet and onto the
+machines the business keeps itself (see [Machines](#machines) below). They worked only with a
+connected provider before, even for a business that had recorded its machines, because the only
+machine list there was came from the fleet read.
+
+- **The machine field and the machine filter are your own machines, with or without a provider.**
+  They list the machines from Machines → *Your machines*, by the name you gave each one, and a
+  business with no provider at all gets exactly the same field and filter as one with a usable
+  connection. No Nayax request is made for them. What is stored is unchanged — these screens already
+  recorded your own machine, not the provider's number — so no movement, expense, report or export
+  changes meaning.
+- **No provider name or number is shown.** A machine's name is yours and is the only label; the
+  machine records publish no provider identifier at all (see [Machines](#machines)).
+- **A new record offers the machines that are in service.** A stock adjustment and a **new** expense
+  offer only **active** machines, because a retired machine is not somewhere stock is being put or a
+  cost is being incurred now.
+- **History stays readable, deactivated machines included.** The Stock History filter and the
+  Expenses list's own Machine filter list the deactivated machines too, and Stock History's Machine
+  column names them, so a movement or a cost recorded against a machine you have since retired is
+  still findable and still reads as that machine rather than as a number. An **expense being edited**
+  keeps its own machine as the selected value even once that machine has been deactivated, so saving
+  the form again cannot quietly detach the cost from the machine that incurred it.
+- **The Expenses list narrows to one machine.** Its Machine filter sits beside the date, Category and
+  Supplier filters and applies with the same **Apply filters** button, so the table and its totals
+  show what one machine cost you. "All machines" asks for no machine at all, which is what you see
+  until you choose one.
+- **No machines yet is not a machine list that failed.** While the machine read is outstanding the
+  field or filter says it is loading; a read that **failed** says so in its place ("The machine list
+  could not be loaded…"), and it is never shown as "All machines" narrowing nothing or as a business
+  with no machines. A business that has recorded no active machine simply has no machine field, with
+  no error.
+- **Read-only support sessions are unchanged.** Every write control on these screens is still hidden
+  or disabled in a support session, exactly as before.
 
 #### Recording a pick without a provider
 
@@ -1567,9 +1607,10 @@ that cannot be used.
   and "No active products match your filters." appears only after a successful read. If refreshing
   storage quantities after a save fails, the screen keeps the last list, says the quantities may be
   out of date and offers **Refresh**.
-- **No machine selector yet.** Issue #746 is what lets an operator attribute a manual pick to one of
+- **No machine selector yet.** Issue #794 is what lets an operator attribute a manual pick to one of
   the business's own machines; until it ships, every manual save omits a machine and is recorded as a
-  whole-business pick, exactly as the batch refill endpoint already allows.
+  whole-business pick, exactly as the batch refill endpoint already allows. (Issue #746 brought those
+  machines to the stock and expense screens, above, and deliberately left the pick list alone.)
 
 #### The menu without a usable provider
 

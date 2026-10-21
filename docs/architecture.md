@@ -5951,26 +5951,27 @@ the page reports on.
   no machines to filter by and show `machinesError` in its place when the read failed. Apply keeps its
   right alignment either way. **Site Commissions** does the same for its Site select over
   `SiteService.getAll()`, which is a live fleet read too.
-- **Stock History** (`StockHistoryPageComponent`) keeps its two provider-dependent filters apart: the
-  **machine** filter needs a machine list (`machineFleet`) and stays hidden until machines exist - which
-  is what issue #746 (G2b) will change by listing locally recorded machines - while the **"Nayax Sync
-  Restock" source** option needs only `providerRecords`, because the movements it selects are already
-  recorded locally. The table keeps labelling a Nayax-sourced movement whatever the filter offers.
-- **The stock adjustment form** (`StockAdjustmentFormComponent`) takes the page's machine list as an
-  input and reads an **empty** list as "no machine list is available": the field is hidden rather than
-  offering "— None —" alone, and a machine staged before the list went away is dropped rather than
-  submitted against a list the page can no longer show.
-- **Expenses** (`OperatingExpenseComponent`) hides its machine field the same way, and without
-  `providerRecords` it stops offering "Nayax monthly fee" for a **new** expense and drops the Nayax
-  sentence from its subtitle. An expense already recorded under that category **keeps** it - in the
-  table, in the Category filter and on the edit form, which offers the category whenever the expense
-  being edited carries it - because a recorded expense is a fact about the past and this page must
-  never quietly reclassify one.
+- **Stock History** (`StockHistoryPageComponent`) keeps only the **"Nayax Sync Restock" source**
+  option on this signal, through `providerRecords`, because the movements it selects are already
+  recorded locally; the table keeps labelling a Nayax-sourced movement whatever the filter offers. Its
+  **machine** filter left this signal in issue #746 - it is the business's own machine records now
+  (see [Machine fields from the business's own machines](#machine-fields-from-the-businesss-own-machines-issue-746)).
+- **The stock adjustment form** (`StockAdjustmentFormComponent`) takes its machine list from the page
+  as an input and is no longer on this signal either (issue #746). It keeps the rule the signal
+  taught: a failed read is an error in place of the field, never an empty one.
+- **Expenses** (`OperatingExpenseComponent`) is on this signal for its categories and its wording
+  only: without `providerRecords` it stops offering "Nayax monthly fee" for a **new** expense and
+  drops the Nayax sentence from its subtitle. An expense already recorded under that category
+  **keeps** it - in the table, in the Category filter and on the edit form, which offers the category
+  whenever the expense being edited carries it - because a recorded expense is a fact about the past
+  and this page must never quietly reclassify one. Its machine field and its list's machine filter are
+  the business's own machines (issue #746).
 
 **What is deliberately not here.** The home Dashboard and Needs Ordering keep issue #727's own
 answer, derived from the summary and the reorder listing they already fetch: those responses are
 authoritative about the cards beside them, and a second probe would be a second answer that could
-disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b). The menu was
+disagree with them. Local machines are issues #740 (G1), #741 (G2) and #746 (G2b), the last of which
+took three of the screens below off this signal. The menu was
 issue #729 (E2), and it reads this signal through
 [Provider-locked navigation](#provider-locked-navigation-issue-729).
 
@@ -5987,11 +5988,11 @@ check no feature claims all leaving a feature `unknown`.
 per-feature difference between `machineFleet` and `providerRecords`, the second request a retained
 permission refusal prevents while an unrelated feature stays loadable, and the failures that stay
 errors.
-`pick-list.component.provider-optional.spec.ts`,
-`stock-history-page.component.provider-optional.spec.ts`,
-`operating-expense.component.provider-optional.spec.ts` and `reports/report-provider-optional.spec.ts`
+`pick-list.component.provider-optional.spec.ts` and `reports/report-provider-optional.spec.ts`
 cover each screen's hidden control, its error state, and the empty list neither may be confused with;
-`stock-adjustment-form.component.spec.ts` covers the machine field and the dropped staged machine;
+`stock-history-page.component.provider-optional.spec.ts` and
+`operating-expense.component.provider-optional.spec.ts` cover what is left of this signal on those
+two screens after issue #746 - the source option, the Nayax fee category and the subtitle;
 `nayax-connection-wizard.component.spec.ts` covers the signal being refreshed by a save and a
 re-test, including the per-feature permissions a re-test found, granted and refused alike;
 `nayax-status-banner.component.spec.ts` covers three banners costing one read; and
@@ -8838,15 +8839,18 @@ rather than one filter. **A connected business with every permission granted see
 `mode` defaults to `'calculated'`, the toggle is offered, and every existing calculated-mode test
 (`pick-list.component.spec.ts`, `pick-list.component.provider-optional.spec.ts`) passes unmodified.
 
-**No machine selector, and no local id substituted for a provider one (issue #746 not yet merged).**
+**No machine selector, and no local id substituted for a provider one (deferred to issue #794).**
 Every manual save omits `machineId` entirely; the batch refill contract already treats an absent
 machine as a valid whole-business pick (`PickListRefillPolicy.ValidateAgainstState` only checks a
 machine when one is named). The calculated view's own machine selection is untouched by this issue:
 it keeps selecting and querying by the raw provider machine id (`Machine.machineID`) it always has,
-and manual entry never reads or writes that selection. A local machine selector for manual entry, and
-the machine-page consolidation the 18 October 2026 owner decision describes (replacing the
-machine-detail page's per-product quantity inputs with a link into this screen), are both explicitly
-deferred to #746 and are not part of this slice.
+and manual entry never reads or writes that selection. A local machine selector for manual entry is
+issue #794 - the second half of G2b, which issue #746 split off when it took the stock and expense
+screens onto the local machines (see [Machine fields from the business's own
+machines](#machine-fields-from-the-businesss-own-machines-issue-746)) - and the machine-page
+consolidation the 18 October 2026 owner decision describes (replacing the machine-detail page's
+per-product quantity inputs with a link into this screen) is tracked separately under #744. Neither
+is part of this slice.
 
 **Entry, validation and the save contract.** Manual entry lists every product in `products` (already
 active-only, since `ProductService.getAll()` with no filters answers the working catalogue), with a
@@ -10326,6 +10330,13 @@ business has recorded no machine for contributes **no** expenses and narrows the
 to none — never silently to the whole business's, which would report another machine's costs against
 the one that was asked about.
 
+**The expense form reads the machine records themselves since issue #746** (see [Machine fields from
+the business's own machines](#machine-fields-from-the-businesss-own-machines-issue-746)), rather than
+the fleet list this section describes. What it submits is unchanged: the same local machine id, under
+the same server-side check. The same issue gave the expense **list** the Machine filter that this
+section's `machineId` list parameter was waiting for; the parameter, its `AND` and its refusal of a
+machine the business does not have are the ones described above, unchanged.
+
 **One lookup, gated on the provider.** `Inventory.Application.Nayax.INayaxMachineLinkStore` is the
 machine half of [`INayaxProductLinkStore`](#resolving-a-nayax-product-id-to-a-local-product-issue-733),
 with the same rules and for the same reason: `ExternalMachineId` holds whatever provider the business
@@ -10414,8 +10425,90 @@ combined shape and so has the same `Down` ordering; that is not changed here.
 
 **The frontend.** The machine list and the dashboard link to `/machines/{localMachineId}` and link
 nothing for a listed machine with no local record; the machine page passes the route id to its tabs;
-the restock, the stock adjustment form and the stock history filter submit and match `localMachineId`
-and offer only machines that have one.
+the restock, the stock adjustment form and the stock history filter submit and match the local
+machine id. The restock still takes it from the fleet row it is already showing and so offers only
+machines that have one; the stock adjustment form and the stock history filter stopped reading the
+fleet at all in issue #746 (next section) and read the machine records themselves.
+
+### Machine fields from the business's own machines (issue #746)
+
+Child G2b of issue #329, and frontend only: no endpoint, contract, stored value or migration is
+involved. [#780](#expense-machine-references-issue-780) and [#741](#stock-machine-references-issue-741)
+had already moved what these screens *store* onto the business's own machine row, but each still
+**discovered** its machines by reading the live Nayax fleet (`MachineService.getAll()` through
+[`loadProviderList`](#shared-provider-availability-and-error-versus-empty-states-issue-728)) and
+keeping the rows that carried a `localMachineId`. A business with no provider therefore had no
+machine list, and so no machine field at all, even with machines of its own recorded - the one thing
+the G group exists to fix.
+
+**Three screens, one source.** `StockAdjustmentFormComponent` (fed by its page),
+`StockHistoryPageComponent` and `OperatingExpenseComponent` read `LocalMachineService.getAll()`
+(`GET /api/local-machines`, issue #740) and key every option by `LocalMachine.id`. That is the same
+id they submitted before, so nothing about a stored movement or expense changes; what changed is that
+the id now comes from the resource that owns it instead of from a provider read that could not be
+made. The fleet read is **not** made by these screens at all - not as a fallback, and not for a
+label. The label is `LocalMachine.name` and nothing else: that resource publishes no provider name or
+number (it publishes `isProviderNamed`, the fact), so there is none to show and none is invented.
+
+**Active for a new record, every machine for history.**
+
+| Surface | What it lists |
+| --- | --- |
+| Stock adjustment form (a new movement) | the **active** machines |
+| New expense | the **active** machines |
+| Expense being edited | the active machines **plus the machine that expense already names**, deactivated or not |
+| Stock History machine filter | **every** recorded machine, deactivated included |
+| Stock History machine column | named from that same list, deactivated included |
+| Expense list machine filter | **every** recorded machine, deactivated included |
+
+A retired machine is not somewhere stock is being put or a cost is being incurred now, so it is not
+offered for a new record. It is still part of what happened, so it stays in both filters and in the
+column - and it stays as the selected value of an expense being edited, which is why
+`machineOptions` reads the machine from the **stored expense** rather than from the form: choosing
+"None" and changing one's mind must not make the machine unreachable, and saving the form again must
+not silently detach the cost from the machine that incurred it. The server already accepts a
+deactivated machine for exactly that reason ([#780](#expense-machine-references-issue-780)), and
+still refuses one that is not this business's.
+
+**The expense list's filter rides a parameter that already exists.** `GET /api/operating-expenses`
+has accepted an optional local `machineId` since [#780](#expense-machine-references-issue-780) -
+`OperatingExpenseFilter.MachineId`, applied by `EfOperatingExpenseStore` as one more `AND` beside the
+date, category, supplier and site filters - so `OperatingExpenseComponent`'s Machine filter is the
+frontend finally using it, and no endpoint, DTO or query was added or changed for it. It is the same
+id the field submits, so the filter and the field cannot disagree about which machine a row is, and
+the server still answers nothing for a machine the business does not have. The totals row sums the
+rows the server returned, which is what makes a machine-narrowed list state that machine's cost
+rather than the whole business's.
+
+**The field is offered once there is an active machine, and the three other states stay distinct.**
+A read still outstanding says it is loading, a read that **failed** renders an explicit error in
+place of the field or filter, and a business with no active machine simply has no field - with no
+error, because that is a true statement about the business. This is issue #728's error-versus-empty
+rule kept on a read that is no longer the provider's: `loadProviderList`'s `unavailable` outcome has
+no counterpart here, because `/api/local-machines` has no availability answer to give. The page owns
+the read and the adjustment form takes `machines`, `machinesFailed` and `machinesLoading` as inputs,
+so the two agree about which of those states they are in; a machine staged on the form that the list
+stops offering - the list went away, or that machine was deactivated - is dropped rather than
+submitted.
+
+**What stayed where it was.** `MachineService` and the provider fleet screens are untouched; the pick
+list's manual entry is issue #794; the report machine filters stay on the provider's machine number
+by the G2 decision ([#780](#expense-machine-references-issue-780)); and the Nayax source filter, the
+"Nayax monthly fee" category and the Expenses subtitle stay on the shared provider signal, because
+they are about whether Nayax is part of this business rather than about a machine list. No
+support-session guard changed. Every role that can reach these screens already holds
+`Inventory.Operate`, which is what `/api/local-machines` requires, so no role loses a field it had.
+
+**What proves it.** `stock-history-page.component.local-machines.spec.ts` and
+`operating-expense.component.local-machines.spec.ts` each cover the four cases the issue names -
+without a provider, with one, with a deactivated machine, and with a failed read - plus the
+outstanding read and the id that is actually submitted; the Stock History spec also asserts the
+adjustment field through its page, which is where the form's list comes from. The expense spec covers
+the list's Machine filter over the same four cases, including the deactivated machine it lists and the
+local id it narrows by, and `operating-expense.service.spec.ts` pins the request itself: the chosen id
+is sent as `machineId`, and no machine parameter is sent while none is chosen.
+`stock-adjustment-form.component.spec.ts` covers the active-only offer, the error and loading states,
+and the staged machine dropped when the list stops offering it.
 
 ### Resolving a Nayax product id to a local product (issue #733)
 

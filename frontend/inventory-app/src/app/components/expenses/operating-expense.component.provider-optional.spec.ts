@@ -1,12 +1,11 @@
-import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
-import { Observable, of, throwError } from 'rxjs';
-import { Machine } from '../../models/models';
+import { of } from 'rxjs';
+import { LocalMachine } from '../../models/models';
 import {
   SpecConnectionStatus,
   provideNayaxConnectionStatus
 } from '../../provider/provider-availability.spec-helpers';
-import { MachineService } from '../../services/machine.service';
+import { LocalMachineService } from '../../services/local-machine.service';
 import {
   OperatingExpense,
   OperatingExpenseCategory,
@@ -29,16 +28,8 @@ function expense(overrides: Partial<OperatingExpense> = {}): OperatingExpense {
   };
 }
 
-function notConnected(): HttpErrorResponse {
-  return new HttpErrorResponse({
-    status: 409,
-    error: { code: 'nayax_not_connected', nayaxConnectionStatus: 'NotConfigured' }
-  });
-}
-
 async function render(options: {
   status?: SpecConnectionStatus;
-  machines?: Observable<Machine[]>;
   expenses?: OperatingExpense[];
 } = {}) {
   await TestBed.configureTestingModule({
@@ -55,11 +46,9 @@ async function render(options: {
       },
       { provide: SupplierService, useValue: { getAll: jest.fn(() => of([])) } },
       {
-        provide: MachineService,
+        provide: LocalMachineService,
         useValue: {
-          getAll: jest.fn(
-            () => options.machines ?? of([{ machineID: 9, localMachineId: 41, machineName: 'Lobby' } as Machine])
-          )
+          getAll: jest.fn(() => of([{ id: 41, name: 'Lobby', isActive: true, isProviderNamed: false } as LocalMachine]))
         }
       },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
@@ -73,8 +62,7 @@ async function render(options: {
   return {
     fixture,
     component: fixture.componentInstance,
-    host: fixture.nativeElement as HTMLElement,
-    machineService: TestBed.inject(MachineService) as unknown as { getAll: jest.Mock }
+    host: fixture.nativeElement as HTMLElement
   };
 }
 
@@ -89,16 +77,19 @@ const subtitle = (host: HTMLElement) =>
 afterEach(() => TestBed.resetTestingModule());
 
 /**
- * Operating Expenses without a usable provider (issue #728). The machine field follows the machine
- * list; the Nayax monthly fee and the subtitle follow whether Nayax is part of this business at
- * all; and an already-recorded Nayax fee is never taken away from the expense that carries it.
+ * Operating Expenses without a usable provider (issue #728). The Nayax monthly fee and the subtitle
+ * follow whether Nayax is part of this business at all, and an already-recorded Nayax fee is never
+ * taken away from the expense that carries it.
+ *
+ * The **machine** field no longer follows the provider at all: since issue #746 it lists the
+ * business's own machine records, and `operating-expense.component.local-machines.spec.ts` covers
+ * it.
  */
 describe('OperatingExpenseComponent provider-optional form (issue #728)', () => {
-  it('offers the machine field, the Nayax fee category and the Nayax subtitle when connected', async () => {
+  it('offers the Nayax fee category and the Nayax subtitle when connected', async () => {
     const { component, host } = await render();
     component.startCreate();
 
-    expect(component.machineFieldShown).toBe(true);
     expect(formCategoryLabels(component)).toContain('Nayax Monthly Fee');
     expect(subtitle(host)).toBe(
       'Manual expenses only. Nayax processing, commissions, delivery and packaging remain separately sourced.'
@@ -138,62 +129,11 @@ describe('OperatingExpenseComponent provider-optional form (issue #728)', () => 
     expect(component.categories.map((category) => component.categoryLabel(category))).toContain('Nayax Monthly Fee');
   });
 
-  it('hides the machine field without a provider, and asks for no machines', async () => {
-    const { component, host, machineService } = await render({ status: 'NotConfigured' });
+  it("keeps the machine field whatever the connection says: the machines are this business's own", async () => {
+    const { component } = await render({ status: 'NotConfigured' });
     component.startCreate();
 
-    expect(machineService.getAll).not.toHaveBeenCalled();
-    expect(component.machineFieldShown).toBe(false);
+    expect(component.machineFieldShown).toBe(true);
     expect(component.machinesError).toBe('');
-    expect(host.querySelector('[data-testid="machine-field-error"]')).toBeNull();
-  });
-
-  it('hides the machine field when the machine read itself is refused', async () => {
-    const { component } = await render({ status: 'unreadable', machines: throwError(() => notConnected()) });
-
-    expect(component.machineFieldShown).toBe(false);
-    expect(component.machinesError).toBe('');
-  });
-
-  /**
-   * Issue #780: an expense stores the business's own machine record, so the option's value is the
-   * machine's `localMachineId` and not the provider's `machineID`, and a listed machine with no
-   * local record is not offered at all - there is nothing to store for it.
-   */
-  it('offers the local machine id as the machine option value', async () => {
-    const { component, fixture, host } = await render();
-    component.startCreate();
-    fixture.detectChanges();
-
-    // The machine is offered, under its own name, and what it carries is the local id.
-    expect(Array.from(host.querySelectorAll('option')).map((option) => option.textContent?.trim())).toContain('Lobby');
-    expect(component.machineOptions.map((machine) => machine.machineID)).toEqual([9]);
-    expect(component.machineOptions.map((machine) => machine.localMachineId)).toEqual([41]);
-
-    // Selecting it puts the local id - not the provider's number 9 - on the submitted form.
-    component.form.machineId = component.machineOptions[0].localMachineId ?? null;
-    expect(component.form.machineId).toBe(41);
-  });
-
-  it('hides the machine field when no listed machine has a local record', async () => {
-    const { component } = await render({ machines: of([{ machineID: 9, machineName: 'Lobby' } as Machine]) });
-
-    expect(component.machines).toHaveLength(1);
-    expect(component.machineOptions).toEqual([]);
-    expect(component.machineFieldShown).toBe(false);
-    expect(component.machinesError).toBe('');
-  });
-
-  it('reports an error in place of the machine field when the machine read failed', async () => {
-    const { component, fixture, host } = await render({
-      machines: throwError(() => new HttpErrorResponse({ status: 500 }))
-    });
-    component.startCreate();
-    fixture.detectChanges();
-
-    expect(component.machinesError).toContain('The machine list could not be loaded');
-    expect(host.querySelector('[data-testid="machine-field-error"]')?.textContent).toContain(
-      'The machine list could not be loaded'
-    );
   });
 });

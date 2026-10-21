@@ -1,23 +1,20 @@
-import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
-import { Observable, of, throwError } from 'rxjs';
+import { of } from 'rxjs';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
-import { Machine, StockAdjustmentReason, StockAdjustmentSource, StockHistoryPage } from '../../models/models';
+import { LocalMachine, StockAdjustmentReason, StockAdjustmentSource, StockHistoryPage } from '../../models/models';
 import {
   SpecConnectionStatus,
   provideNayaxConnectionStatus
 } from '../../provider/provider-availability.spec-helpers';
-import { MachineService } from '../../services/machine.service';
+import { LocalMachineService } from '../../services/local-machine.service';
 import { ProductService } from '../../services/product.service';
 import { StockService } from '../../services/stock.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { StockHistoryPageComponent } from './stock-history-page.component';
 
-function machine(machineID: number, machineName: string): Machine {
-  // The local machine (issue #741) is what a movement records and the filter sends; it is
-  // deliberately a different number from the provider's.
-  return { machineID, localMachineId: machineID + 100, machineName } as Machine;
+function localMachine(id: number, name: string): LocalMachine {
+  return { id, name, isActive: true, isProviderNamed: false };
 }
 
 function page(): StockHistoryPage {
@@ -32,7 +29,7 @@ function page(): StockHistoryPage {
         unitCost: null,
         reason: StockAdjustmentReason.Restock,
         source: StockAdjustmentSource.Nayax,
-        machineId: 9,
+        machineId: 41,
         notes: '',
         eatBefore: null,
         createdAt: '2026-01-15T22:30:00Z'
@@ -45,18 +42,7 @@ function page(): StockHistoryPage {
   };
 }
 
-/** A `409` exactly as `NayaxConnectionExceptionHandler` writes one for a business with no Nayax. */
-function notConnected(): HttpErrorResponse {
-  return new HttpErrorResponse({
-    status: 409,
-    error: { code: 'nayax_not_connected', nayaxConnectionStatus: 'NotConfigured' }
-  });
-}
-
-async function render(options: {
-  status?: SpecConnectionStatus;
-  machines?: Observable<Machine[]>;
-} = {}) {
+async function render(options: { status?: SpecConnectionStatus } = {}) {
   await TestBed.configureTestingModule({
     imports: [StockHistoryPageComponent],
     providers: [
@@ -67,10 +53,7 @@ async function render(options: {
       },
       { provide: StockService, useValue: { historyPage: jest.fn(() => of(page())) } },
       { provide: ProductService, useValue: { getAll: jest.fn(() => of([])) } },
-      {
-        provide: MachineService,
-        useValue: { getAll: jest.fn(() => options.machines ?? of([machine(9, 'Lobby')])) }
-      },
+      { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of([localMachine(41, 'Lobby')])) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       provideNayaxConnectionStatus(options.status ?? 'Ready')
     ]
@@ -82,71 +65,42 @@ async function render(options: {
   fixture.detectChanges();
   return {
     component: fixture.componentInstance,
-    host: fixture.nativeElement as HTMLElement,
-    machineService: TestBed.inject(MachineService) as unknown as { getAll: jest.Mock }
+    host: fixture.nativeElement as HTMLElement
   };
 }
 
 const machineFilter = (host: HTMLElement) => host.querySelector('#filter-machine');
-const machineFilterError = (host: HTMLElement) => host.querySelector('[data-testid="machine-filter-error"]');
 const sourceOptions = (host: HTMLElement) =>
   Array.from(host.querySelectorAll('#filter-source option')).map((option) => option.textContent?.trim());
 
 afterEach(() => TestBed.resetTestingModule());
 
 /**
- * Stock History without a usable provider (issue #728): the machine filter and the Nayax source
- * option answer two different questions, and a failed machine read is never one of the answers.
+ * Stock History without a usable provider (issue #728): the Nayax source option is about movements
+ * that are already recorded locally, so it follows `providerRecords` and nothing else.
+ *
+ * The **machine** filter no longer follows the provider at all: since issue #746 it lists the
+ * business's own machine records, and `stock-history-page.component.local-machines.spec.ts` covers
+ * it.
  */
 describe('StockHistoryPageComponent provider-optional filters (issue #728)', () => {
-  it('offers the machine filter and the Nayax source for a connected business', async () => {
+  it('offers the Nayax source for a connected business', async () => {
     const { host } = await render();
 
-    expect(machineFilter(host)).not.toBeNull();
-    expect(machineFilterError(host)).toBeNull();
     expect(sourceOptions(host)).toEqual(['All sources', 'Manual', 'Nayax Sync Restock']);
   });
 
-  it('hides the machine filter and the Nayax source without a provider, and asks for no machines', async () => {
-    const { host, machineService } = await render({ status: 'NotConfigured' });
+  it('drops the Nayax source without a provider, and keeps the machine filter', async () => {
+    const { host } = await render({ status: 'NotConfigured' });
 
-    expect(machineService.getAll).not.toHaveBeenCalled();
-    expect(machineFilter(host)).toBeNull();
-    expect(machineFilterError(host)).toBeNull();
     expect(sourceOptions(host)).toEqual(['All sources', 'Manual']);
+    expect(machineFilter(host)).not.toBeNull();
   });
 
   it('keeps the Nayax source for a connection that needs attention: those movements are recorded', async () => {
     const { host } = await render({ status: 'NeedsAttention' });
 
-    expect(machineFilter(host)).toBeNull();
     expect(sourceOptions(host)).toEqual(['All sources', 'Manual', 'Nayax Sync Restock']);
-  });
-
-  it('hides the machine filter when the refusal comes back from the machine read itself', async () => {
-    const { host, component, machineService } = await render({
-      status: 'unreadable',
-      machines: throwError(() => notConnected())
-    });
-
-    expect(machineService.getAll).toHaveBeenCalledTimes(1);
-    expect(machineFilter(host)).toBeNull();
-    expect(machineFilterError(host)).toBeNull();
-    expect(component.machines).toEqual([]);
-  });
-
-  it('shows an error in place of the machine filter when the machine read failed', async () => {
-    const { host } = await render({ machines: throwError(() => new HttpErrorResponse({ status: 500 })) });
-
-    expect(machineFilter(host)).toBeNull();
-    expect(machineFilterError(host)?.textContent).toContain('The machine list could not be loaded');
-  });
-
-  it('hides the machine filter when the provider lists no machines, with no error', async () => {
-    const { host } = await render({ machines: of([]) });
-
-    expect(machineFilter(host)).toBeNull();
-    expect(machineFilterError(host)).toBeNull();
   });
 
   it('still labels a Nayax-sourced movement in the table when the filter does not offer it', async () => {
