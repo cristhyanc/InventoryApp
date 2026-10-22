@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { PickListComponent } from './pick-list.component';
@@ -173,7 +173,8 @@ function createHarness(
     productService,
     pickListService,
     toast as unknown as ToastService,
-    providerAvailabilityDouble()
+    providerAvailabilityDouble(),
+    { snapshot: { queryParamMap: convertToParamMap({}) } } as unknown as ActivatedRoute
   );
   component.ngOnInit();
 

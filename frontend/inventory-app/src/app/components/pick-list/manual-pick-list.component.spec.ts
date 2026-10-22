@@ -7,6 +7,7 @@ import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import {
   INVALID_TAKEN_QUANTITY_MESSAGE,
+  MACHINE_ATTRIBUTION_FAILED_MESSAGE,
   MACHINES_LOAD_FAILED_MESSAGE,
   REFILL_CONFLICT_MESSAGE,
   REFILL_FORBIDDEN_MESSAGE,
@@ -79,7 +80,8 @@ function createHarness(
   products: Product[] = [product({ id: 1, name: 'Coke', quantityInStock: 20 }), product({ id: 2, name: 'Chips', quantityInStock: 5 })],
   recordRefill: jest.Mock = jest.fn((request: PickListRefillRequest) => of(recordedResponse(request))),
   sessionActive: Observable<boolean> = of(false),
-  getAllMachines: jest.Mock = jest.fn(() => of([]))
+  getAllMachines: jest.Mock = jest.fn(() => of([])),
+  preselectedMachineId: number | null = null
 ): Harness {
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
   const pickListService = { recordRefill } as unknown as PickListService;
@@ -92,6 +94,7 @@ function createHarness(
     localMachineService
   );
   component.products = products;
+  component.preselectedMachineId = preselectedMachineId;
   component.ngOnInit();
 
   return { component, recordRefill, toast, getAllMachines };
@@ -210,6 +213,64 @@ describe('ManualPickListComponent machine selector (issue #794)', () => {
     const thirdRequest: PickListRefillRequest = recordRefill.mock.calls[2][0];
     expect(thirdRequest.idempotencyKey).not.toBe(firstRequest.idempotencyKey);
     expect(thirdRequest.machineId).toBe(6);
+  });
+});
+
+describe('ManualPickListComponent machine preselection from a link (issue #744 machine-page consolidation)', () => {
+  it('selects the local machine the link named, once it is confirmed active', () => {
+    const getAllMachines = jest.fn(() => of([localMachine({ id: 5, name: 'Front Lobby' })]));
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
+
+    expect(component.selectedMachineId).toBe(5);
+    expect(component.machineAttributionFailed).toBe(false);
+
+    component.onTakenChange(1, '3');
+    component.save();
+
+    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(request.machineId).toBe(5);
+  });
+
+  it('reports attribution as failed, and leaves the selection at "No machine", when the linked machine is not an active local machine', () => {
+    const getAllMachines = jest.fn(() => of([localMachine({ id: 6, name: 'Back Room' })]));
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
+
+    expect(component.selectedMachineId).toBeNull();
+    expect(component.machineAttributionFailed).toBe(true);
+    expect(component.machineAttributionFailedMessage).toBe(MACHINE_ATTRIBUTION_FAILED_MESSAGE);
+
+    // Not silent: the dropdown still reflects the true, unattributed selection and a save against
+    // it is an explicit "No machine" choice, not one disguised as the linked machine.
+    component.onTakenChange(1, '3');
+    component.save();
+    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(request.machineId).toBeUndefined();
+  });
+
+  it('reports attribution as failed when the local machine list itself could not be read', () => {
+    const getAllMachines = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })));
+    const { component } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
+
+    expect(component.machineAttributionFailed).toBe(true);
+    expect(component.selectedMachineId).toBeNull();
+  });
+
+  it('does not report a failure when no machine was linked at all', () => {
+    const getAllMachines = jest.fn(() => of([localMachine({ id: 5, name: 'Front Lobby' })]));
+    const { component } = createHarness(undefined, undefined, undefined, getAllMachines, null);
+
+    expect(component.machineAttributionFailed).toBe(false);
+    expect(component.selectedMachineId).toBeNull();
+  });
+
+  it('treats a deactivated machine named by the link the same as one that no longer exists', () => {
+    const getAllMachines = jest.fn(() =>
+      of([localMachine({ id: 5, name: 'Front Lobby', isActive: false })])
+    );
+    const { component } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
+
+    expect(component.selectedMachineId).toBeNull();
+    expect(component.machineAttributionFailed).toBe(true);
   });
 });
 

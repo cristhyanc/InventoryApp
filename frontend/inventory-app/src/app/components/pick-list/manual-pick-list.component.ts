@@ -34,6 +34,9 @@ export const CATALOGUE_REFRESH_FAILED_MESSAGE =
 export const MACHINES_LOAD_FAILED_MESSAGE =
   'The machine list could not be loaded, so this refill cannot be attributed to a machine.';
 
+export const MACHINE_ATTRIBUTION_FAILED_MESSAGE =
+  'The machine this entry was opened for could not be selected automatically - it may have been deactivated or removed. Choose it below if it is still listed, or save without a machine.';
+
 /**
  * Where the page's read of the active catalogue stands. Only `'loaded'` means {@link
  * ManualPickListComponent.products} is a real answer, so only then may an empty list be described
@@ -77,6 +80,18 @@ function parseTakenQuantity(raw: string): number | null {
  * {@link lastSubmission} compares for idempotency, so changing it - like changing a row - mints a
  * new key; see `save`. It is never sent to `PickListService.get`, the calculated list's own machine
  * read, which keeps using provider machine ids untouched by this selector.
+ *
+ * **A machine can also arrive preselected, from the machine-details page's "Record refill" link**
+ * (issue #744's machine-page consolidation). `PickListComponent` reads the link's `machineId` query
+ * parameter - already the local machine id `MachineDetailComponent` resolved for that page, never
+ * the raw Nayax number - and hands it in as {@link preselectedMachineId}. Once the machine read
+ * settles, it is accepted only if it names one of this business's own **active** machines; if it
+ * does, {@link selectedMachineId} is set to it exactly as if the operator had chosen it from the
+ * dropdown. If it does not - the machine was deactivated or removed after the link was opened, or
+ * the machine read itself failed - {@link machineAttributionFailed} is set instead of silently
+ * leaving the selection at "No machine": the link promised this refill would be attributed to that
+ * machine, so failing to do so has to be visible rather than indistinguishable from an operator who
+ * deliberately chose "No machine".
  *
  * **Idempotency.** Each save keeps the rows the operator currently has typed into an exact submitted
  * row set - the products with a positive "Taken" value, in catalogue order - and compares it, together
@@ -125,6 +140,13 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   /** Set when the catalogue refresh after a recorded refill failed, so the storage quantities shown may be stale. */
   @Input() catalogueRefreshFailed = false;
 
+  /**
+   * The local machine id a "Record refill" link named, or `null` for ordinary pick-list entry
+   * (issue #744's machine-page consolidation). Resolved once, against the machine read this
+   * component already makes; see {@link machineAttributionFailed} and the class doc.
+   */
+  @Input() preselectedMachineId: number | null = null;
+
   /** Emitted when the operator asks to read the catalogue again after a failed load or refresh. */
   @Output() readonly retryCatalogue = new EventEmitter<void>();
 
@@ -169,6 +191,16 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   /** The chosen machine's id, or `null` for the default "No machine" choice. */
   selectedMachineId: number | null = null;
 
+  /**
+   * Set when {@link preselectedMachineId} named a machine that, once the machine read settled, was
+   * not one of this business's own active machines - deactivated, removed, or the read itself
+   * failed. Reported on screen rather than left to a silent "No machine" default, because the link
+   * that opened this entry promised attribution the save would otherwise quietly not deliver.
+   */
+  machineAttributionFailed = false;
+
+  readonly machineAttributionFailedMessage = MACHINE_ATTRIBUTION_FAILED_MESSAGE;
+
   /** The raw text typed into each product's "Taken" box, keyed by product id. */
   private readonly takenById = new Map<number, string>();
 
@@ -196,10 +228,12 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
       next: (machines) => {
         this.machines = machines;
         this.machinesLoadFailed = false;
+        this.resolvePreselectedMachine();
       },
       error: () => {
         this.machines = [];
         this.machinesLoadFailed = true;
+        this.resolvePreselectedMachine();
       }
     });
   }
@@ -308,6 +342,24 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
         this.handleSaveError(error, submittedRows);
       }
     });
+  }
+
+  /**
+   * Accepts {@link preselectedMachineId} as the real selection only if it names one of the machines
+   * the read just answered with and that machine is active; otherwise raises
+   * {@link machineAttributionFailed} instead of leaving the failure unreported. Does nothing when no
+   * machine was linked at all.
+   */
+  private resolvePreselectedMachine(): void {
+    if (this.preselectedMachineId === null) {
+      return;
+    }
+    const match = this.activeMachines.find((machine) => machine.id === this.preselectedMachineId);
+    if (match) {
+      this.selectedMachineId = match.id;
+    } else {
+      this.machineAttributionFailed = true;
+    }
   }
 
   /** Every row with a positive, well-formed quantity, in catalogue order; `null` while any typed entry is malformed. */

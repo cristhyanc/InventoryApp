@@ -92,12 +92,29 @@
         data-testid="machine-panel-products"
         class="mt-4 card"
         [hidden]="activeTab !== 'products'">
-      <div class="card-header">
-        <h2 class="card-title">Products for this machine</h2>
-        <!-- A count only once the rows behind it have actually been read: before that there is no
-             number to report, and `0` would read as "this machine has no products". -->
-        @if (productsState === 'loaded') {
-          <span class="text-md-body value-muted" data-testid="machine-products-count">{{ products.length }} products found</span>
+      <div class="card-header flex items-center justify-between gap-4">
+        <div class="flex items-center gap-4">
+          <h2 class="card-title">Products for this machine</h2>
+          <!-- A count only once the rows behind it have actually been read: before that there is no
+               number to report, and `0` would read as "this machine has no products". -->
+          @if (productsState === 'loaded') {
+            <span class="text-md-body value-muted" data-testid="machine-products-count">{{ products.length }} products found</span>
+          }
+        </div>
+        <!-- Hidden rather than disabled while a support session is active (issue #658), the same
+             treatment the per-product Restock control it replaced had (issue #744's machine-page
+             consolidation): the write it leads to - ManualPickListComponent.save - refuses on its own
+             too, so there is nothing a disabled link would be protecting that the destination does not
+             already refuse itself. machine.localMachineId is always set here: GetById resolves it onto
+             every response from the route's own local id (issue #741). -->
+        @if (!sessionActive) {
+          <a
+            data-testid="machine-record-refill-link"
+            class="btn btn-secondary"
+            routerLink="/pick-list"
+            [queryParams]="{ mode: 'manual', machineId: machine?.localMachineId }">
+            Record refill
+          </a>
         }
       </div>
       <div class="card-body p-0">
@@ -135,7 +152,6 @@
                       <th scope="col" class="table-cell">50% Card Margin Price</th>
                     }
                     <th scope="col" class="table-cell">Stock</th>
-                    <th scope="col" class="table-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -153,18 +169,6 @@
                       <span class="badge" [ngClass]="stockClass(product)">
                         {{ product.quantityInStock }} / {{ product.maxStockInMachine }}
                       </span>
-                    </td>
-                    <td class="table-cell">
-                      <!-- Hidden rather than disabled while a support session is active (issue #658): a
-                           session grants InventoryOperate, so this write would otherwise still render. -->
-                      @if (!sessionActive) {
-                        <div class="flex items-center gap-2">
-                          <input #qtyInput type="number" min="1" [value]="product.maxStockInMachine - product.quantityInStock" class="w-20 px-2 py-1 text-sm" />
-                          <button (click)="restockProduct(product, machine, qtyInput.value, qtyInput)" [disabled]="product.quantityInStock >= product.maxStockInMachine" class="btn btn-sm btn-secondary">
-                            Restock
-                          </button>
-                        </div>
-                      }
                     </td>
                   </tr>
                 </tbody>

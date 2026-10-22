@@ -31,6 +31,12 @@
         </select>
       </label>
     }
+
+    @if (machineAttributionFailed) {
+      <p data-testid="manual-pick-list-machine-attribution-failed" role="alert" class="text-md-body text-md-danger-text self-center">
+        {{ machineAttributionFailedMessage }}
+      </p>
+    }
   </div>
 </section>
 

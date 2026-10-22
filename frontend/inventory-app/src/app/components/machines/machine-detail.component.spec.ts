@@ -7,8 +7,6 @@ import { MachineDetailComponent } from './machine-detail.component';
 import { Machine, MachineLatestSales, Product } from '../../models/models';
 import { ConfigService } from '../../services/config.service';
 import { MachineService } from '../../services/machine.service';
-import { StockService } from '../../services/stock.service';
-import { ToastService } from '../../services/toast.service';
 import { BreadcrumbService } from '../../layout/breadcrumbs/breadcrumb.service';
 import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService } from '../../services/nayax-connection.service';
@@ -50,8 +48,6 @@ describe('MachineDetailComponent product refresh', () => {
     const component = new MachineDetailComponent(
       route,
       machineService,
-      {} as StockService,
-      {} as ToastService,
       breadcrumbServiceStub(),
       supportSessionStub(),
       accessServiceStub()
@@ -86,8 +82,6 @@ describe('MachineDetailComponent Sales and Products tabs (issue #768)', () => {
     const instance = new MachineDetailComponent(
       route,
       machineService,
-      {} as StockService,
-      {} as ToastService,
       breadcrumbServiceStub(),
       supportSessionStub(),
       accessServiceStub()
@@ -207,8 +201,6 @@ describe('MachineDetailComponent Products panel read (issue #768)', () => {
         provideHttpClientTesting(),
         { provide: ConfigService, useValue: { apiBaseUrl: '/api' } },
         { provide: ActivatedRoute, useValue: { paramMap: paramMap$ } },
-        { provide: StockService, useValue: {} },
-        { provide: ToastService, useValue: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } },
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
@@ -364,7 +356,7 @@ describe('MachineDetailComponent breadcrumb label', () => {
     const route = { paramMap: of(convertToParamMap({ id })) } as unknown as ActivatedRoute;
     const breadcrumbService = breadcrumbServiceStub();
     const component = new MachineDetailComponent(
-      route, machineService, {} as StockService, {} as ToastService, breadcrumbService, supportSessionStub(), accessServiceStub()
+      route, machineService, breadcrumbService, supportSessionStub(), accessServiceStub()
     );
 
     component.ngOnInit();
@@ -411,8 +403,6 @@ describe('MachineDetailComponent Nayax status banner (issue #539)', () => {
             getLatestSales: () => of(emptyLatestSales())
           }
         },
-        { provide: StockService, useValue: {} },
-        { provide: ToastService, useValue: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } },
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status, machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
@@ -443,12 +433,12 @@ describe('MachineDetailComponent Nayax status banner (issue #539)', () => {
 });
 
 /**
- * Restock while a support session is active (issue #658). A session grants `InventoryOperate`, so
- * this write would otherwise still render.
+ * The "Record refill" link that replaced the per-product Restock control (issue #744's
+ * machine-page consolidation). It is hidden during a support session on the same reasoning Restock
+ * was, and the removed control's quantity input and button are gone from the page entirely.
  */
-describe('MachineDetailComponent write control during a support session (issue #658)', () => {
-  async function render(sessionActive: Observable<boolean>) {
-    const stockAdjust = jest.fn(() => of({}));
+describe('MachineDetailComponent Record refill link (issue #744 machine-page consolidation)', () => {
+  async function render(sessionActive: Observable<boolean> = of(false)) {
     await TestBed.configureTestingModule({
       imports: [MachineDetailComponent],
       providers: [
@@ -457,13 +447,13 @@ describe('MachineDetailComponent write control during a support session (issue #
         {
           provide: MachineService,
           useValue: {
-            get: () => of({ machineID: 7 } as Machine),
+            // The provider's own number (900) is never what the link must carry - only the local
+            // id (7), which GetById already resolves onto every response (issue #741).
+            get: () => of({ machineID: 900, localMachineId: 7 } as Machine),
             getProducts: () => of([product(8)]),
             getLatestSales: () => of(emptyLatestSales())
           }
         },
-        { provide: StockService, useValue: { adjust: stockAdjust } },
-        { provide: ToastService, useValue: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } },
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
@@ -474,40 +464,46 @@ describe('MachineDetailComponent write control during a support session (issue #
     const fixture = TestBed.createComponent(MachineDetailComponent);
     fixture.detectChanges(false);
     // The product table lives in the Products tab, which is not the tab a machine opens on since
-    // issue #768, and its rows are only read once it is opened.
+    // issue #768.
     fixture.componentInstance.openTab('products');
     fixture.detectChanges(false);
-    return { fixture, host: fixture.nativeElement as HTMLElement, stockAdjust };
+    return { fixture, host: fixture.nativeElement as HTMLElement };
   }
 
   afterEach(() => TestBed.resetTestingModule());
 
-  it('hides the Restock control while a session is active', async () => {
-    const { host } = await render(of(true));
-
-    expect(Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Restock')).toBeUndefined();
-  });
-
-  it('shows the Restock control while no session is active', async () => {
+  it('links Record refill to manual pick-list entry with the local machine id, never the provider number', async () => {
     const { host } = await render(of(false));
 
-    expect(Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Restock')).toBeDefined();
+    const link = host.querySelector<HTMLAnchorElement>('[data-testid="machine-record-refill-link"]');
+    expect(link).not.toBeNull();
+    expect(link!.textContent?.trim()).toBe('Record refill');
+    expect(link!.getAttribute('href')).toBe('/pick-list?mode=manual&machineId=7');
   });
 
-  it('does not write the restock while a session is active, even if restockProduct() is invoked directly', async () => {
-    const { fixture, stockAdjust } = await render(of(true));
+  it('hides the Record refill link while a support session is active', async () => {
+    const { host } = await render(of(true));
 
-    fixture.componentInstance.restockProduct(product(8), { machineID: 7 } as Machine, 5);
-
-    expect(stockAdjust).not.toHaveBeenCalled();
+    expect(host.querySelector('[data-testid="machine-record-refill-link"]')).toBeNull();
   });
 
-  it('records the restock against the local machine, not the provider machine number (issue #741)', async () => {
-    const { fixture, stockAdjust } = await render(of(false));
+  it('shows the Record refill link while no session is active', async () => {
+    const { host } = await render(of(false));
 
-    fixture.componentInstance.restockProduct(product(8), { machineID: 900, localMachineId: 7 } as Machine, 5);
+    expect(host.querySelector('[data-testid="machine-record-refill-link"]')).not.toBeNull();
+  });
 
-    expect(stockAdjust).toHaveBeenCalledWith(55, expect.objectContaining({ machineId: 7, quantityChange: -5 }));
+  it('renders no Restock button or "Taken"/quantity input at all: the control was removed, not hidden', async () => {
+    const { host } = await render(of(false));
+
+    expect(Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Restock')).toBeUndefined();
+    expect(host.querySelector('input[type="number"]')).toBeNull();
+  });
+
+  it('no longer exposes restockProduct()', async () => {
+    const { fixture } = await render(of(false));
+
+    expect((fixture.componentInstance as unknown as { restockProduct?: unknown }).restockProduct).toBeUndefined();
   });
 });
 
@@ -553,8 +549,6 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
             getLatestSales: () => of(emptyLatestSales())
           }
         },
-        { provide: StockService, useValue: {} },
-        { provide: ToastService, useValue: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } },
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(canViewFinancials) } },
@@ -618,8 +612,6 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
             getLatestSales: () => of(emptyLatestSales())
           }
         },
-        { provide: StockService, useValue: {} },
-        { provide: ToastService, useValue: { success: jest.fn(), warning: jest.fn(), error: jest.fn() } },
         { provide: BreadcrumbService, useValue: breadcrumbServiceStub() },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
