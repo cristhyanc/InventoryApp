@@ -9,6 +9,7 @@ import {
   SpecConnectionStatus,
   provideNayaxConnectionStatus
 } from '../../provider/provider-availability.spec-helpers';
+import { LocalMachineService } from '../../services/local-machine.service';
 import { MachineService } from '../../services/machine.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ProductService } from '../../services/product.service';
@@ -46,6 +47,7 @@ async function render(options: { status?: SpecConnectionStatus; machines?: Obser
       },
       { provide: ProductService, useValue: { getAll: jest.fn(() => of([product()])) } },
       { provide: PickListService, useValue: { get: jest.fn(() => of(pickListResult())) } },
+      { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
       { provide: AccessService, useValue: { allows: () => of(true) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },

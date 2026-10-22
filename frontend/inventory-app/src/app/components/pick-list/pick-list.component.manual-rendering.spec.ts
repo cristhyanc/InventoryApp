@@ -5,6 +5,7 @@ import { BehaviorSubject, Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService } from '../../access/access.service';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { PickListRefillRequest, PickListRefillResponse, Product } from '../../models/models';
+import { LocalMachineService } from '../../services/local-machine.service';
 import { MachineService } from '../../services/machine.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ProductService } from '../../services/product.service';
@@ -54,6 +55,7 @@ async function render(
       { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: ProductService, useValue: { getAll: getAllProducts } },
       { provide: PickListService, useValue: { get: jest.fn(() => of({ products: [] })), recordRefill } },
+      { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: ToastService, useValue: toast },
       { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
       { provide: AccessService, useValue: { allows: () => of(true) } },

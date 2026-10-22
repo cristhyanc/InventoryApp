@@ -3,15 +3,20 @@ import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { PickListComponent } from './pick-list.component';
+import { LocalMachineService } from '../../services/local-machine.service';
 import { MachineService } from '../../services/machine.service';
 import { ProductService } from '../../services/product.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
-import { Machine, PickListProduct, PickListResult, Product } from '../../models/models';
+import { LocalMachine, Machine, PickListProduct, PickListRefillRequest, PickListResult, Product } from '../../models/models';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
 import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
 import { providerAvailabilityDouble } from '../../provider/provider-availability.spec-helpers';
+
+function localMachine(overrides: Partial<LocalMachine>): LocalMachine {
+  return { id: 1, name: 'Machine', isActive: true, isProviderNamed: false, ...overrides };
+}
 
 function machine(overrides: Partial<Machine>): Machine {
   return {
@@ -633,7 +638,8 @@ describe('PickListComponent rendered structure', () => {
     machines: Machine[] = [machine({ machineID: 10, machineName: 'Machine A' }), machine({ machineID: 20, machineName: 'Machine B' })],
     products: Product[] = [product({ id: 1, name: 'Coke' }), product({ id: 2, name: 'Chips' })],
     pickList: jest.Mock = jest.fn(() => of(pickListResult())),
-    nayaxStatus: NayaxConnectionStatusName = 'Ready'
+    nayaxStatus: NayaxConnectionStatusName = 'Ready',
+    options: { localMachines?: LocalMachine[]; recordRefill?: jest.Mock } = {}
   ) {
     await TestBed.configureTestingModule({
       imports: [PickListComponent],
@@ -641,7 +647,8 @@ describe('PickListComponent rendered structure', () => {
         provideRouter([]),
         { provide: MachineService, useValue: { getAll: jest.fn(() => of(machines)) } },
         { provide: ProductService, useValue: { getAll: jest.fn(() => of(products)) } },
-        { provide: PickListService, useValue: { get: pickList } },
+        { provide: PickListService, useValue: { get: pickList, recordRefill: options.recordRefill ?? jest.fn() } },
+        { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of(options.localMachines ?? [])) } },
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() } },
         { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
         { provide: AccessService, useValue: { allows: () => of(true) } },
@@ -1062,5 +1069,48 @@ describe('PickListComponent rendered structure', () => {
     const rows = Array.from(host.querySelectorAll('tbody tr'));
     expect(rows[0].textContent).toContain('Coke');
     expect(rows[1].textContent).toContain('Chips');
+  });
+
+  it('keeps a manual refill\'s local machine selection out of the calculated list\'s provider machine ids, with a provider in place (issue #794)', async () => {
+    const recordRefill: jest.Mock = jest.fn((request: PickListRefillRequest) =>
+      of({
+        idempotencyKey: request.idempotencyKey,
+        replayed: false,
+        machineId: request.machineId ?? null,
+        notes: null,
+        recordedAtUtc: '2026-01-01T00:00:00Z',
+        rows: request.rows.map((row) => ({ ...row, stockAdjustmentId: row.productId * 100 }))
+      })
+    );
+    const pickList = jest.fn(() => of(pickListResult()));
+    const { fixture, requireElement, requireButton, click, openDropdown, checkOption, applyFilters } = await render(
+      undefined,
+      undefined,
+      pickList,
+      undefined,
+      { localMachines: [localMachine({ id: 5, name: 'Front Lobby' })], recordRefill }
+    );
+
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+    expect(pickList).toHaveBeenCalledWith([10]);
+
+    click(requireButton('Enter quantities taken'));
+    const machineSelect = requireElement<HTMLSelectElement>('select#manual-pick-list-machine');
+    machineSelect.value = machineSelect.options[1].value;
+    machineSelect.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+    const takenInput = requireElement<HTMLInputElement>('input[aria-label="Taken: Coke"]');
+    takenInput.value = '2';
+    takenInput.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    click(requireButton('Save'));
+
+    expect(recordRefill).toHaveBeenCalledTimes(1);
+    const submitted: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(submitted.machineId).toBe(5);
+    expect(pickList).toHaveBeenCalledTimes(1);
+    expect(pickList).toHaveBeenCalledWith([10]);
   });
 });
