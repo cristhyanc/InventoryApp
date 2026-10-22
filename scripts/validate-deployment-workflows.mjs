@@ -240,7 +240,7 @@ export function verifyNoOtherWorkflowDeploys(workflows) {
 // Returns the text of the top-level `on:` block.
 function extractOnBlock(text) {
   const lines = text.split('\n');
-  const start = lines.findIndex((line) => /^on:/.test(line));
+  const start = lines.findIndex((line) => line.startsWith('on:'));
   if (start < 0) {
     return '';
   }
