@@ -228,6 +228,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateLocalMachine>();
         services.AddScoped<RenameLocalMachine>();
         services.AddScoped<SetLocalMachineActivation>();
+        // Provider machine linking (issue #742): the one place a provider machine becomes - or waits
+        // to become - one of those records. It reads the live fleet, so unlike the five above it
+        // needs a working provider connection.
+        services.AddScoped<ReviewProviderMachines>();
+        services.AddScoped<ApplyProviderMachineLinks>();
         // The route id of every api/machines/{id} endpoint is a local machine (issue #741); this is
         // the one place it becomes the pair of ids the features behind those routes need.
         services.AddScoped<ResolveMachineIdentity>();

@@ -1703,9 +1703,14 @@ of the live Nayax fleet — so a business with no provider had no machines.
   referred to — through a sale, a refill, a machine count, an expense, a stock event, a sale
   timestamp repair or an inventory-cost transition — was given a local record when this change was
   released, carrying the provider's own machine id and the most recent name that had been stored for
-  it (or "Machine" and the number, where nothing had named it). That provider id is **not editable**
-  through the API and is never published: the machine list says only *whether* the provider names a
-  machine. Attaching one deliberately is the provider machine review (issue #742).
+  it (or "Machine" and the number, where nothing had named it). That provider id is never something a
+  request chooses and is never published: the machine list says only *whether* the provider names a
+  machine. Attaching one afterwards is the provider machine review below (issue #742), and nothing
+  else in the application does it.
+- **Your machines and the Nayax ones are one list.** A Nayax machine that has been linked *is* one of
+  your machines, so it is in *Your machines* beside the ones you added, marked "From Nayax". The
+  *Live from Nayax* section below is the provider's own view of the fleet — revenue, profit and the
+  stock workflows — and shows every Nayax machine whether it is linked or not.
 - **Nothing else moved onto these records yet.** Sales, refills, counts and reports still refer to a
   machine by the provider's own number, so no figure, report or export changes in this step; issue
   #741 is where those references are repointed at the local machine.
@@ -1714,6 +1719,40 @@ of the live Nayax fleet — so a business with no provider had no machines.
   change.
 - **In a read-only support view** the machine list is readable and every one of its write controls is
   hidden, like every other write surface in that view.
+
+### Connecting Nayax when you already have machines (issue #742)
+
+A Nayax machine becomes one of your machines through the **Machines from Nayax** panel on the Machines
+page, which reads the Nayax fleet as soon as the page can serve that read. What it does next depends
+on one thing only: whether you have a machine of your own that Nayax does not already name.
+
+- **If you have none, the new Nayax machines are simply added**, each as a new machine carrying the
+  name Nayax calls it and that machine's Nayax id. The panel lists what it added. This is the ordinary
+  case for a business that connected Nayax first: there is no machine of yours any of them could
+  already be, so there is nothing to ask.
+- **If you have any, nothing is linked and the panel asks you about each one.** For every Nayax
+  machine that no machine of yours carries the id of, you choose: *Skip for now*, *It is one of my
+  machines* (and pick it, which records the Nayax id on that machine), or *Add it as a new machine*.
+  Every row starts on Skip, so a half-answered panel links only what you answered.
+- **Nothing is matched by name, ever.** A machine of yours called exactly what Nayax calls one of its
+  machines is a different machine until you say otherwise, and a machine whose own id happens to equal
+  a Nayax machine number is a coincidence. This is the whole reason the panel asks: name matching is
+  how a fleet quietly ends up attached to the wrong machines.
+- **Linking records the Nayax id and changes nothing else.** The machine keeps *your* name for it —
+  nothing synchronises a machine name — along with all of its history, stock, counts and costs. Only
+  machines Nayax does not already name are offered, because a machine cannot be linked to two Nayax
+  machines; a deactivated machine *is* offered and marked, since linking a retired machine beats
+  duplicating it.
+- **One Nayax machine, one of your machines.** Linking two of your machines to the same Nayax machine
+  is refused, and so is linking a Nayax machine that one of your machines already carries. One refused
+  answer refuses the whole panel: nothing is linked and nothing is added, because a half-applied
+  result is the one you cannot reason about afterwards.
+- **Until a machine is linked, nothing changes for it.** Its Nayax sales, stock events and reports
+  stay under its Nayax machine number exactly as before, and it keeps appearing in *Live from Nayax*
+  and the other Nayax pages. Linking is about which machine of yours that number means from now on.
+- **With no usable Nayax connection the panel is not shown at all**, and if the fleet read fails it
+  says so and claims nothing about your machines. **In a read-only support view it is hidden
+  entirely**, like every other write surface there.
 
 ## Machine details: Sales and Products
 
