@@ -43,14 +43,13 @@ public class EfDashboardReportFactsProviderTests
         db.NayaxSales.AddRange(
             new NayaxSales { TransactionID = 1, MachineID = 10, ProductId = 1, NayaxProductId = 1, SettlementValue = 10m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
             new NayaxSales { TransactionID = 2, MachineID = 10, ProductId = 2, NayaxProductId = 2, SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed },
-            // Unresolved: counted as a transaction and a machine, and as no product at all.
+            // Unresolved: counted as a machine, and as no product at all.
             new NayaxSales { TransactionID = 3, MachineID = 20, ProductId = null, NayaxProductId = null, SettlementValue = 7m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed });
         await db.SaveChangesAsync();
         var provider = new EfDashboardReportFactsProvider(db, EmptyCommissions());
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
-        Assert.Equal(3, facts.TransactionCount);
         Assert.Equal(2, facts.MachineCount);
         Assert.Equal(2, facts.ProductCount);
     }
@@ -68,7 +67,6 @@ public class EfDashboardReportFactsProviderTests
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
-        Assert.Equal(1, facts.TransactionCount);
         Assert.Equal(1, facts.MachineCount);
     }
 
@@ -85,7 +83,6 @@ public class EfDashboardReportFactsProviderTests
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
 
-        Assert.Equal(1, facts.TransactionCount);
         Assert.Equal(1, facts.MachineCount);
     }
 
@@ -98,7 +95,6 @@ public class EfDashboardReportFactsProviderTests
 
         var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
 
-        Assert.Equal(0, facts.TransactionCount);
         Assert.Equal(0, facts.MachineCount);
         Assert.Equal(0, facts.ProductCount);
         Assert.False(facts.ImportedContainsRows);

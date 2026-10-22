@@ -13,7 +13,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Historical weighted-average inventory costing and persisted COGS provenance.
 - Effective-dated Nayax processing fees and site commission agreements.
 - Operating expenses, reimbursement imports, and settlement reconciliation.
-- Dashboard, bookkeeping, daily-sales, transaction, GST, commission, machine, and product reports.
+- Dashboard, bookkeeping, daily-sales, transaction, GST, commission, machine, and product reports. Monthly Bookkeeping reports its own sales volume too — the number of completed transactions in the selected dates and machine scope, and the average sale over them — so that reading does not need the Reporting Dashboard; both figures follow the same date and machine filters as the rest of the report, appear in its CSV/XLSX export, and show their availability state rather than a zero when provider data does not cover the period.
 - CSV/XLSX exports that use the same backend calculations as the UI.
 - Microsoft Entra sign-in and delegated-scope API authorization (see [Authentication configuration](#authentication-configuration)).
 - Owner-only business settings — name, contact email, ABN, GST registration and time zone, with a confirmation before a time zone change (see [Business settings (Admin page)](#business-settings-admin-page)).
@@ -1611,10 +1611,18 @@ that cannot be used.
   and "No active products match your filters." appears only after a successful read. If refreshing
   storage quantities after a save fails, the screen keeps the last list, says the quantities may be
   out of date and offers **Refresh**.
-- **No machine selector yet.** Issue #794 is what lets an operator attribute a manual pick to one of
-  the business's own machines; until it ships, every manual save omits a machine and is recorded as a
-  whole-business pick, exactly as the batch refill endpoint already allows. (Issue #746 brought those
-  machines to the stock and expense screens, above, and deliberately left the pick list alone.)
+- **An optional machine selector** (issue #794) lets an operator attribute a manual pick to one of
+  the business's own machines, the same local records the stock and expense screens use (see
+  [Choosing a machine on the stock and expense screens](#choosing-a-machine-on-the-stock-and-expense-screens)
+  above) — with or without a provider. It offers only **active** machines, by the name you gave each
+  one, with "No machine" as the default choice, and is shown at all only once the business has at
+  least one active machine; a business with none sees exactly what it always has, with no selector
+  and no machine recorded. The machine you choose is part of the exact request a save sends and of
+  what a retry compares: changing it, like changing a quantity, sends a new idempotency key, while
+  resending unchanged reuses the same key and the same machine. It is sent only on the refill you
+  save — never to the calculated matrix's own machine selection, which keeps using Nayax's fleet
+  untouched by this selector. A machine list that **failed** to load says so in the selector's place
+  and still lets you save without a machine, exactly as a business with none recorded would.
 
 #### The menu without a usable provider
 

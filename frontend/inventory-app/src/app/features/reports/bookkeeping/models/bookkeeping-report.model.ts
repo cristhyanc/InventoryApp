@@ -10,6 +10,13 @@ export interface BookkeepingReport {
   nayaxFeesExGst?: number; nayaxFeesIncludingGst?: number;
   deliveryCosts?: number; packageCosts?: number; otherOperatingExpenses?: number;
   cardSales?: number; cashSales?: number; cardTransactionCount?: number; cashTransactionCount?: number;
+  /**
+   * Completed (status 12) sales in the requested period and machine scope, and the average sale
+   * over them (issue #804). Both are provider-sourced and governed by `providerAvailability.sales`,
+   * so a period nothing covered shows that state instead of their zero. Optional because an older
+   * API response does not carry them.
+   */
+  transactionCount?: number; averageSale?: number;
   // Transaction-status counts for the requested period/machine, scoped by the API before the
   // completed-sale filter excluded them (issue #476). Pending, refunded and cancelled/declined rows
   // are normal Nayax outcomes; only an unrecognised or absent status ID is a data-quality problem,
