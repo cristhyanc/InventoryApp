@@ -415,7 +415,9 @@ test('an invalid or unreadable release record stops the run before anything is d
     for (const entry of ['normal', 'recovery']) {
       const run = runStep(baselineScript, { entry, recorded, baseline: entry === 'recovery' ? fixture.baseline : '' });
       assert.equal(run.status, 1, run.log);
-      assert.match(run.log, /mark that deployment record inactive/);
+      assert.match(run.log, /delete that deployment record/);
+      assert.match(run.log, /an inactive record is still listed and would be selected again/);
+      assert.match(run.log, /only when no record is left/);
       assert.deepEqual(run.outputs, {});
     }
   }
@@ -423,4 +425,19 @@ test('an invalid or unreadable release record stops the run before anything is d
   assert.equal(unreadable.status, 1);
   assert.match(unreadable.log, /Could not read the recorded production releases.*Re-run/);
   assert.deepEqual(unreadable.outputs, {});
+});
+
+test('an inactive invalid record is still selected, and an older record wins over an operator baseline', () => {
+  // The lookup lists deployments by environment and task, not by status: whatever the API returns
+  // first is the baseline, so marking a bad record inactive does not reach the bootstrap branch.
+  assert.match(baselineScript, /deployments\?environment=\$PRODUCTION_ENVIRONMENT&task=\$RELEASE_RECORD_TASK&per_page=1/);
+  assert.doesNotMatch(baselineScript, /statuses/);
+  const stillInvalid = runStep(baselineScript, { entry: 'recovery', recorded: fixture.outside, baseline: fixture.baseline });
+  assert.equal(stillInvalid.status, 1, stillInvalid.log);
+  assert.deepEqual(stillInvalid.outputs, {});
+  // After the bad record is deleted, the next newest record is used and a different operator
+  // baseline is still refused.
+  const olderRecord = runStep(baselineScript, { entry: 'recovery', recorded: fixture.baseline, baseline: fixture.release });
+  assert.equal(olderRecord.status, 1, olderRecord.log);
+  assert.match(olderRecord.log, /differs from the last recorded production release/);
 });

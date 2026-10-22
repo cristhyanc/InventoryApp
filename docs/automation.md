@@ -556,7 +556,7 @@ Start **Deploy Production (advanced recovery)** with `sha` set to the full `main
 
 #### Invalid release record
 
-If the newest record is not a full SHA of a commit in `main` (for example after history on `main` was rewritten), both entry points stop before deploying, and recovery cannot override it, because an operator baseline is accepted only when no release is recorded. A human confirms which commit production actually runs, marks that deployment record inactive, or deletes it, through GitHub's deployments REST API (a deployment must be set inactive before it can be deleted), and then bootstraps the baseline as above. No workflow changes a release record other than by adding a new one after a healthy deployment.
+If the newest record is not a full SHA of a commit in `main` (for example after history on `main` was rewritten), both entry points stop before deploying, and recovery cannot override it, because an operator baseline is accepted only when no release is recorded. A human confirms which commit production actually runs and **deletes** that deployment record through GitHub's deployments REST API: first create an `inactive` status for it (a deployment must be inactive before it can be deleted), then delete it. Marking it inactive alone is not enough, because the lookup lists deployments by environment and task, not by status, so an inactive record is still selected. Once it is deleted, the next newest record becomes the baseline, and a `baseline_sha` that differs from it is still refused. Bootstrapping as above applies only when no `deploy:production-backend` record on `VmInventoryApi_Env` is left. No workflow changes a release record other than by adding a new one after a healthy deployment.
 
 #### Re-running a run
 

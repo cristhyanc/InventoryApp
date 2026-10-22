@@ -185,7 +185,7 @@ jobs:
             if ! [[ "$recorded" =~ ^[0-9a-f]{40}$ ]] \
               || ! git cat-file -e "${recorded}^{commit}" 2>/dev/null \
               || ! git merge-base --is-ancestor "$recorded" refs/remotes/origin/main; then
-              fail "The newest recorded production release '$recorded' is not a main commit, so it cannot be the baseline. Nothing was deployed. A human must confirm which commit production runs, mark that deployment record inactive (or delete it) in GitHub, and then bootstrap the baseline with Deploy Production (advanced recovery). See docs/automation.md § Deploy Production."
+              fail "The newest recorded production release '$recorded' is not a main commit, so it cannot be the baseline. Nothing was deployed. A human must confirm which commit production runs and delete that deployment record with GitHub's deployments API (set its status to inactive first, then delete it; an inactive record is still listed and would be selected again). The next newest record then becomes the baseline; only when no record is left can Deploy Production (advanced recovery) bootstrap one with baseline_sha. See docs/automation.md § Deploy Production."
             fi
             if [ -n "$INPUT_BASELINE" ] && [ "$INPUT_BASELINE" != "$recorded" ]; then
               fail "baseline_sha $INPUT_BASELINE differs from the last recorded production release $recorded. A supplied baseline is accepted only when no release is recorded. Leave baseline_sha empty, or resolve the difference before deploying."
