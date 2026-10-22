@@ -27,7 +27,9 @@ public class ReportsControllerDashboardTests
     [Fact]
     public async Task Dashboard_action_routes_through_the_application_use_case()
     {
-        var bookkeepingFacts = FakeBookkeepingReportFactsProvider.Complete(sales: 300m, cost: 100m);
+        // The completed-transaction count reaches the dashboard through the bookkeeping report it
+        // composes (issue #804); the machine and product counts stay the dashboard facts port's.
+        var bookkeepingFacts = FakeBookkeepingReportFactsProvider.Complete(sales: 300m, cost: 100m, transactionCount: 12);
         var bookkeepingUseCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(bookkeepingFacts));
         var productFacts = FakeProductProfitabilityReportFactsProvider.SingleMappedProduct(productId: 7, productName: "Soda", sales: 60m, cost: 20m);
         var productProfitabilityUseCase = new GetProductProfitabilityReport(
@@ -38,7 +40,7 @@ public class ReportsControllerDashboardTests
         var machineProfitabilityUseCase = new GetMachineProfitabilityReport(new FakeMachineProfitabilityReportFactsProvider(FakeMachineProfitabilityReportFactsProvider.Empty()));
         var gstUseCase = new GetGstAccountingAid(bookkeepingUseCase, new FakeGstReportFactsProvider(FakeGstReportFactsProvider.Complete()));
         var dashboardUseCase = new GetDashboardReport(bookkeepingUseCase, productProfitabilityUseCase,
-            new FakeDashboardReportFactsProvider(FakeDashboardReportFactsProvider.Complete(transactionCount: 12, machineCount: 3, productCount: 4)));
+            new FakeDashboardReportFactsProvider(FakeDashboardReportFactsProvider.Complete(machineCount: 3, productCount: 4)));
         var getTransactionSalesReport = new GetTransactionSalesReport(
             new FakeTransactionSalesReportFactsProvider(FakeTransactionSalesReportFactsProvider.Empty()));
         var getReportExportRows = new GetReportExportRows(bookkeepingUseCase, dailyUseCase, reconciliationUseCase,

@@ -15,6 +15,10 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 /// migrated report facts providers through <see cref="EfReportingSharedQueries"/> rather than
 /// duplicated a further time; only the distinct machine/product counts unique to the dashboard
 /// summary are computed locally, since no already-migrated adapter needs that projection.
+///
+/// <para>It counted the period's completed transactions too until issue #804, which moved that
+/// count onto <see cref="EfBookkeepingReportFactsProvider"/>'s own completed-sale read - the same
+/// rows, already in memory there - so one definition feeds both reports.</para>
 /// </summary>
 public sealed class EfDashboardReportFactsProvider : IDashboardReportFactsProvider
 {
@@ -35,7 +39,6 @@ public sealed class EfDashboardReportFactsProvider : IDashboardReportFactsProvid
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Transactions = g.Count(),
                 Machines = g.Select(x => x.MachineID).Distinct().Count(),
                 // Distinct *local* products the period's sales are attributed to (issue #758).
                 // A sale with no association counts toward no product, as an unmatched one already
@@ -49,7 +52,6 @@ public sealed class EfDashboardReportFactsProvider : IDashboardReportFactsProvid
             _db, _siteCommissions, from, to, endExclusive, machineId, cancellationToken);
 
         return new DashboardReportFacts(
-            TransactionCount: summary?.Transactions ?? 0,
             MachineCount: summary?.Machines ?? 0,
             ProductCount: summary?.Products ?? 0,
             ImportedContainsRows: imported.ContainsRows,

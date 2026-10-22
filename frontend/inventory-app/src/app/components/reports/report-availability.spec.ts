@@ -151,6 +151,9 @@ describe('BookkeepingReportComponent provider availability (issue #730)', () => 
   const everyProviderFigure = [
     'gross-sales', 'gross-profit', 'net-profit', 'net-margin', 'nayax-fees', 'site-commission',
     'settlement-card-sales', 'settlement-fees', 'net-reimbursement', 'reconciliation-cash-sales',
+    // Issue #804: the completed-transaction count and the average sale over it are provider
+    // figures too, so an uncovered period must not show either as a measured zero.
+    'transactions', 'average-sale',
   ];
 
   it('shows no $0.00 for any provider figure anywhere in the report when both families are missing', async () => {
