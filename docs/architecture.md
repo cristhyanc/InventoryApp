@@ -6074,14 +6074,17 @@ reaches the "access not allowed" page, not an invitation to connect a provider t
 use.
 
 **Historical reports are never locked** (decision P5). Bookkeeping, Daily, Transactions,
-Reconciliation, machine profitability, product profitability, GST and the reporting dashboard read
-**stored** data, so they stay in the `Reports` group, carry no provider guard on their routes at all,
-and report their own availability states instead (issues #730 and #731). Previously imported sales
-stay readable after a disconnect. The site commission report is the one report in the provider
-section, and it is not an exception: a site is known only from the live fleet read's `CustomerID`, so
-with no usable provider it has no sites to report on and the API itself answers `isAvailable: false`
-(see [Site commissions](#site-commissions) in AGENTS.md and issue #731). Its breadcrumb still names
-`Reports` as its parent page, because `/reports` is still the page that owns that route.
+Reconciliation, machine profitability, product profitability and GST read **stored** data, so they
+stay in the `Reports` group, carry no provider guard on their routes at all, and report their own
+availability states instead (issues #730 and #731). Previously imported sales stay readable after a
+disconnect. The site commission report is the one report in the provider section, and it is not an
+exception: a site is known only from the live fleet read's `CustomerID`, so with no usable provider it
+has no sites to report on and the API itself answers `isAvailable: false` (see
+[Site commissions](#site-commissions) in AGENTS.md and issue #731). Its breadcrumb still names
+`Reports` as its parent page, with `/reports` as that parent's path - issue #806 retired the page that
+used to serve `/reports` and made it a compatibility redirect to `/reports/bookkeeping` instead (see
+[Retired Reporting Dashboard redirect](#retired-reporting-dashboard-redirect-issue-806)), but left the
+breadcrumb pointed at the same address rather than rewriting every nested report's parent link.
 
 **`requireProvider(feature)` is the URL half of a locked entry** (`provider/provider-lock.guard.ts`),
 and it is presentation exactly as `requireCapability` is: every endpoint behind these pages resolves
@@ -6559,7 +6562,9 @@ carrying extra empty space.
   `.stat-card-head .stat-card-label`/`.stat-card-head .stat-card-value` override flips only the
   icon-tile stat-card pattern to left-aligned text.
 - **Every consumer of the pattern moved together**: `dashboard.component.html`,
-  `bookkeeping-report.component.ts`, `dashboard-report.component.ts`, and the
+  `bookkeeping-report.component.ts`, `dashboard-report.component.ts` (deleted by issue #806 when the
+  Reporting Dashboard page it belonged to was retired; see
+  [Retired Reporting Dashboard redirect](#retired-reporting-dashboard-redirect-issue-806)), and the
   `design-system-showcase.component.html` fixture that renders one card per icon-tile colour
   variant. Icon glyphs, semantic colours, label text, numeric values and formatting, loading
   states, and existing footer content are unchanged; no comparison percentage or footer metric was
@@ -6568,9 +6573,10 @@ carrying extra empty space.
 - **Regression coverage** (`stat-card-icon-position.spec.ts`) loads the real compiled
   `styles.css` into jsdom and asserts the resolved computed style — DOM order, `margin`,
   `align-items`, `text-align`, `min-width`/`flex-shrink`/`overflow-wrap` — rather than only
-  checking which class names a template carries; `dashboard.component.spec.ts`,
-  `dashboard-report.component.spec.ts` and `bookkeeping-report.component.spec.ts` each separately
-  confirm their own production template renders the content wrapper before the icon tile. jsdom
+  checking which class names a template carries; `dashboard.component.spec.ts` and
+  `bookkeeping-report.component.spec.ts` each separately confirm their own production template
+  renders the content wrapper before the icon tile (`dashboard-report.component.spec.ts` did too,
+  until issue #806 deleted it with the page it covered). jsdom
   does not compute real flex geometry or take screenshots; this sandboxed run could not reach a
   browser or install one (no outbound network), so the 1440px/390px visual evidence and the final
   on-screen check against the reference are deferred to Cristhyan's recorded visual check before
@@ -6782,6 +6788,51 @@ Bookkeeping compares the reimbursement its own card sales and Nayax fees say to 
 **Availability governs it the same way as everything else** (issue #730's model, unchanged). The imported actual reimbursement is settlement-sourced and carries `ProviderAvailability.Fees`; the calculated expectation and the difference depend on both families and carry `Combined`, decided once on the server by `LeastComplete`. `GetBookkeepingReport.FeeFigures` names the actual reimbursement and the reconciliation so the availability note is accurate, the Angular report renders the amounts through `moneyOrState`, and the export writes them through `AvailabilityExportCells.Amount`. **A valid imported zero stays distinguishable from an absent import in all three surfaces**: a `Complete` period whose settlement really paid nothing shows `$0.00` with a compared status, a period with no imported row at all shows `Pending` (the one case where the UI shows a word instead of an amount, and the difference shows `—`), and a period nothing accounted for shows its state instead of the zero.
 
 **API and export contract (additive).** `GET api/reports/bookkeeping` gains `expectedReimbursement`, `actualReimbursement`, `reimbursementDifference`, `isReconciled`, `reconciliationStatus` and `reconciliationTolerance`; every existing property keeps its name, type and meaning. The bookkeeping CSV/XLSX row gains `ExpectedReimbursement`, `ActualReimbursement`, `ReimbursementDifference`, `ReconciliationStatus`, `IsReconciled` and `ReconciliationTolerance` immediately after `NetSettlement`, from the same `BookkeepingReportDto` the API returns; the status column is what tells a reader of a downloaded file that a zero actual was a period with no import rather than a settlement that paid nothing. The dashboard report, its export and the settlement matching rules are unchanged in output, and no schema, migration or stored data changed.
+
+### Retired Reporting Dashboard redirect (issue #806)
+
+With issues #804 and #805 merged, Bookkeeping carries every figure the separate Reporting Dashboard
+page showed - transaction count, average sale and the expected-versus-actual reimbursement
+comparison, each with CSV/XLSX export parity (see the two sections immediately above) - so the
+business has one financial summary report instead of two. Issue #806 (parent #803) removes the
+now-redundant frontend page and repoints navigation at Bookkeeping, while leaving the backend
+`GET api/reports/dashboard` endpoint, `DashboardReportDto` and its export untouched: other consumers
+and the existing compatibility tests still need it, and retiring that contract is separate follow-up
+work, not this issue's.
+
+**The page, its route component and its tests are gone.** `DashboardReportComponent` and
+`dashboard-report.component.spec.ts` are deleted; `app.routes.ts`'s `reports` entry no longer carries
+a `loadComponent` or a guard of its own. `layout/navigation.ts` drops the "Dashboard" entry from the
+Reports group (`BookkeepingReportComponent` is now that group's first entry), and the Home Dashboard's
+"Sales this week" card (see [Home dashboard: four headline cards](#home-dashboard-four-headline-cards-issue-460))
+links to `/reports/bookkeeping` instead, with its `aria-label` updated to match. `ReportingService.dashboard()`
+and the `DashboardReport` frontend model are unchanged and still call the retained backend endpoint;
+nothing in the frontend calls them any more, but removing a still-live, still-compatible client method
+is not this issue's job either.
+
+**The old address becomes a compatibility redirect, not a second page.** `reports` keeps `pathMatch: 'full'`
+and redirects to `/reports/bookkeeping`, so `/reports/bookkeeping`'s own `[MsalGuard, accountStateGuard,
+requireCapability('Reports.View')]` guards decide access exactly as `/reports`'s own copy of the same
+three guards once did - the redirect itself declares none. The `redirectTo` is a function
+(`RedirectFunction`), not a plain string: Angular's string form only forwards a query parameter the
+string names itself with its `:name` placeholder convention, so a bare `redirectTo: '/reports/bookkeeping'`
+silently dropped every filter - confirmed by writing the query-preservation test first and watching it
+fail against that implementation before this one. The function instead builds a `UrlTree` from the
+incoming request's own `queryParams` (`inject(Router).createUrlTree(['/reports/bookkeeping'], { queryParams })`),
+which carries whatever an old bookmark held - date, period, machine - forward untouched, whatever keys
+it has or lacks. `reporting-dashboard-redirect.spec.ts` drives the production route table end to end
+(guards doubled, as `invite-address-bar.guard.spec.ts` already does) to assert the redirect target, the
+query-string preservation and the `Reports.View` refusal; `app.routes.spec.ts` asserts the route's own
+static shape. No report page reads a query parameter into its filter state today (`ReportPageBase`
+never touches `ActivatedRoute`'s query params, on this page or any other), so preserving the string is
+forward compatibility for a bookmarked or shared link, not a behaviour change to what Bookkeeping
+renders.
+
+**Nothing backend-facing changed.** The `GET api/reports/dashboard` endpoint, `GetDashboardReport`,
+`DashboardReportDto` and the dashboard row of the export endpoint are untouched, because #805's dashboard
+adapter changes already left them composing bookkeeping's own figures (see the two sections above) and
+because decommissioning them is explicitly out of this issue's scope. Existing backend compatibility
+tests over that endpoint stay green with no change.
 
 ### Reconciliation diagnostics, exclusions and the adjustments assumption (issue #477)
 
@@ -7728,9 +7779,14 @@ shared `money`).
    when `changePercent` is not `null`, and `comparisonNote` verbatim - never a frontend-computed
    percentage - when `isComparisonAvailable` is `false` or the prior period's revenue was zero, so a
    missing-data or zero-baseline period is never misread as a collapse or a 100% rise. Links to
-   `/reports` (`DashboardReportComponent`, the "Dashboard" entry under the Reports navigation group),
-   the general sales report; no query parameter is added because that report has no week-to-date
-   filter to target, and inventing one would duplicate a filter the page does not have.
+   `/reports/bookkeeping` (`BookkeepingReportComponent`), the financial summary report - issue #806
+   retired the separate Reporting Dashboard page (`DashboardReportComponent`, the former "Dashboard"
+   entry under the Reports navigation group) once Bookkeeping covered its distinct figures (issues
+   #804 and #805), and repointed this card and the old `/reports` address, now a compatibility
+   redirect to `/reports/bookkeeping` with its query string intact (see
+   [Retired Reporting Dashboard redirect](#retired-reporting-dashboard-redirect-issue-806) below), at
+   it instead; no query parameter is added because that report has no week-to-date filter to target,
+   and inventing one would duplicate a filter the page does not have.
 2. **Needs refill** (`summary.needsRefill`) shows the distinct machine count
    (`machinesNeedingRefill`) as the primary value, with the low/empty selection counts and
    `machinesEvaluated` as supporting footer detail - distinguishing "no machines to evaluate yet"
@@ -7751,7 +7807,7 @@ shared `money`).
 
 Every card is a single `<a class="stat-card">` using the existing #453 icon-top-right stat-card
 layout and an explicit `aria-label` naming the card and its destination (e.g. "Sales this week. View
-the Reporting Dashboard."), so its accessible name stays stable and descriptive regardless of the
+Bookkeeping."), so its accessible name stays stable and descriptive regardless of the
 currently displayed figures; the icon inside is decorative (`app-icon` without a `label`, so it
 renders `aria-hidden`) because the label text already carries the meaning. The cards lay out
 `sm:grid-cols-2 lg:grid-cols-4` - four columns where width permits, stacking without horizontal

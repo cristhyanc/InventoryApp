@@ -541,7 +541,7 @@ describe('DashboardComponent template rendering', () => {
     const hrefs = cards.map((a) => a.getAttribute('href'));
 
     expect(cards).toHaveLength(4);
-    expect(hrefs[0]).toContain('/reports');
+    expect(hrefs[0]).toContain('/reports/bookkeeping');
     expect(hrefs[1]).toContain('/pick-list');
     expect(hrefs[2]).toContain('needs-ordering');
     expect(hrefs[3]).toContain('/products');

@@ -13,9 +13,9 @@ import { DesignSystemShowcaseComponent } from './design-system-showcase.componen
  * `-mt-8` overlap, flips `.stat-card-head` back to centered/reversed, or drops the left-alignment
  * override is caught by the actual resolved computed style, the same cascade a browser applies.
  * `DesignSystemShowcaseComponent` renders one stat card per icon-tile colour variant, so this
- * exercises every shared variant in one pass; `dashboard.component.spec.ts`,
- * `dashboard-report.component.spec.ts` and `bookkeeping-report.component.spec.ts` separately
- * confirm each real production template was updated to the same arrangement.
+ * exercises every shared variant in one pass; `dashboard.component.spec.ts` and
+ * `bookkeeping-report.component.spec.ts` separately confirm each real production template was
+ * updated to the same arrangement.
  */
 describe('Stat-card icon tile position (issue #453)', () => {
   let styleElement: HTMLStyleElement;

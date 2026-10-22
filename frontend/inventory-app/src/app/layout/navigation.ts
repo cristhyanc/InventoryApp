@@ -204,7 +204,6 @@ export const primaryNavigation: readonly NavItem[] = [
     label: 'Reports',
     icon: 'bar_chart',
     children: [
-      link('Dashboard', '/reports', 'Reports.View'),
       link('Bookkeeping', '/reports/bookkeeping', 'Reports.View'),
       link('Daily', '/reports/daily', 'Reports.View'),
       link('Transactions', '/reports/transactions', 'Reports.View'),
