@@ -23,13 +23,16 @@ public sealed class FakeBookkeepingReportFactsProvider : IBookkeepingReportFacts
     }
 
     public static BookkeepingReportFacts Complete(decimal sales = 100m, decimal cost = 40m, decimal cardSales = 80m,
-        int cardTransactions = 8, decimal cashSales = 20m, int cashTransactions = 2) => new(
+        int cardTransactions = 8, decimal cashSales = 20m, int cashTransactions = 2,
+        int? transactionCount = null) => new(
         GrossSales: sales,
         CardSales: cardSales,
         CardTransactions: cardTransactions,
         CashSales: cashSales,
         CashTransactions: cashTransactions,
         UnknownTransactions: 0,
+        // The completed sales these card and cash rows are, unless a test states another volume.
+        TransactionCount: transactionCount ?? cardTransactions + cashTransactions,
         PartialCostOfGoods: cost,
         IsCogsComplete: true,
         UncostedTransactionCount: 0,

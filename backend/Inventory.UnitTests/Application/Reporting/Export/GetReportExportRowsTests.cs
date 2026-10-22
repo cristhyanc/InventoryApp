@@ -329,7 +329,10 @@ public class GetReportExportRowsTests
         foreach (var column in new[]
         {
             "GrossSales", "CardSales", "CashSales", "CardTransactions", "CashTransactions", "COGS",
-            "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "SiteCommission"
+            "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "SiteCommission",
+            // Issue #804: the completed-transaction count and the average sale are provider-sourced
+            // too, so an uncovered period must not export either of them as a measured zero.
+            "Transactions", "AverageSale"
         })
         {
             Assert.Equal("Missing", Column(column));
@@ -370,6 +373,46 @@ public class GetReportExportRowsTests
         Assert.Equal("Complete", Column("SalesDataAvailability"));
         Assert.Equal("Complete", Column("FeeDataAvailability"));
         Assert.Equal("Complete", Column("CombinedDataAvailability"));
+    }
+
+    /// <summary>
+    /// Issue #804: the downloaded bookkeeping row carries the same completed-transaction count and
+    /// average sale the API returned, so a file read away from the application cannot disagree with
+    /// the page it came from.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_carries_the_same_transaction_count_and_average_sale_as_the_api_report()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete(sales: 250m, transactionCount: 10)));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+        var apiResult = await bookkeeping.Handle(filter, CancellationToken.None);
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal(10, apiResult.TransactionCount);
+        Assert.Equal(25m, apiResult.AverageSale);
+        Assert.Equal(Invariant(apiResult.TransactionCount), Cell(table, "Transactions"));
+        Assert.Equal(Invariant(apiResult.AverageSale), Cell(table, "AverageSale"));
+    }
+
+    /// <summary>
+    /// A covered period that genuinely sold nothing exports a real zero for both, because only a
+    /// <c>Complete</c> state may print a zero as a zero.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_of_a_covered_period_with_no_sales_exports_a_real_zero_transaction_count_and_average()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete(
+                sales: 0m, cost: 0m, cardSales: 0m, cardTransactions: 0, cashSales: 0m, cashTransactions: 0)));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal("Complete", Cell(table, "SalesDataAvailability"));
+        Assert.Equal("0", Cell(table, "Transactions"));
+        Assert.Equal("0", Cell(table, "AverageSale"));
     }
 
     [Fact]

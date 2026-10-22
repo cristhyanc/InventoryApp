@@ -30,6 +30,7 @@ public class BookkeepingReportAvailabilityTests
         CashSales = 0m,
         CardTransactions = 0,
         CashTransactions = 0,
+        TransactionCount = 0,
         PartialCostOfGoods = 0m,
         ImportedHasNetSettlement = false,
         ImportedNetSettlement = 0m,
@@ -137,6 +138,42 @@ public class BookkeepingReportAvailabilityTests
 
         Assert.Equal(nameof(ReportAvailabilityState.Complete), report.ProviderAvailability.Sales.State);
         Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Fees.State);
+    }
+
+    /// <summary>
+    /// Issue #804: the transaction count and the average sale are provider-sourced, so the sales
+    /// family's note has to name them. A period nothing covered reports both as zero in the
+    /// contract, and that zero is exactly the one the state exists to stop a reader believing.
+    /// </summary>
+    [Fact]
+    public async Task The_sales_note_names_the_transaction_count_and_average_sale_when_nothing_covered_the_period()
+    {
+        var report = await Report(NoProviderData(FakeBookkeepingReportFactsProvider.Complete()));
+
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Sales.State);
+        Assert.Equal(0, report.TransactionCount);
+        Assert.Equal(0m, report.AverageSale);
+        Assert.Contains("transaction count", Notes(report), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("average sale", Notes(report), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Partially covered sales are real partial data: the count and the average stay exactly as
+    /// counted, beside the stale state that says they may not be all of the period's.
+    /// </summary>
+    [Fact]
+    public async Task Partially_covered_sales_keep_the_counted_transaction_count_and_average_sale()
+    {
+        var facts = FakeBookkeepingReportFactsProvider.Complete(sales: 100m, transactionCount: 10) with
+        {
+            SalesCoverage = [new ReportCoverageRange(From.AddDays(-30), new DateTime(2026, 7, 18, 6, 0, 0, DateTimeKind.Utc))],
+        };
+
+        var report = await Report(facts);
+
+        Assert.Equal(nameof(ReportAvailabilityState.Stale), report.ProviderAvailability.Sales.State);
+        Assert.Equal(10, report.TransactionCount);
+        Assert.Equal(10m, report.AverageSale);
     }
 
     [Fact]

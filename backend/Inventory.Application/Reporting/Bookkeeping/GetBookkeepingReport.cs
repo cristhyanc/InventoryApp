@@ -103,6 +103,12 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             facts.DeclinedOrCancelledTransactionCount, facts.UnknownStatusTransactionCount,
             facts.MissingStatusTransactionCount)
         {
+            // Sales volume and the average sale over it (issue #804), from the same completed sales
+            // every amount above is derived from, through the shared average formula the reporting
+            // dashboard already used - which answers 0 for a period with no completed transaction
+            // rather than dividing by zero. Both are provider-sourced and carry the sales state.
+            TransactionCount = facts.TransactionCount,
+            AverageSale = ReportingCalculations.Average(facts.GrossSales, facts.TransactionCount),
             PartialCostOfGoods = facts.PartialCostOfGoods,
             IsCogsComplete = facts.IsCogsComplete,
             UncostedTransactionCount = facts.UncostedTransactionCount,
@@ -122,7 +128,8 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
     /// them. Public because the dashboard report republishes this report's decided states beside the
     /// same figures and must name them the same way rather than inventing a second wording.
     /// </summary>
-    public const string SalesFigures = "Sales, the card/cash split, cost of goods and profit";
+    public const string SalesFigures =
+        "Sales, the card/cash split, the transaction count and average sale, cost of goods and profit";
 
     /// <summary>The settlement-sourced figures it shows, for the same reason.</summary>
     public const string FeeFigures = "Nayax processing fees and the GST on them";

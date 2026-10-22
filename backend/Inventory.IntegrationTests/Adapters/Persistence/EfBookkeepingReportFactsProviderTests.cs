@@ -200,6 +200,73 @@ public class EfBookkeepingReportFactsProviderTests
         Assert.True(facts.IsCogsComplete);
     }
 
+    /// <summary>
+    /// Issue #804: the completed-transaction count this report now publishes is the count of the
+    /// very rows its own totals are summed from - approved status 12 only, with every other
+    /// outcome excluded exactly as it is from gross sales. A completed sale whose payment method
+    /// classifies as neither card nor cash is still one of them, so the count is not the card and
+    /// cash counts added together.
+    /// </summary>
+    [Fact]
+    public async Task Transaction_count_counts_completed_sales_only_including_an_unknown_payment_method()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m },
+            new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 2m },
+            new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 6m, PaymentMethod = "Mystery Tender", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 3m },
+            Sale(4, NayaxTransactionStatusIds.PendingSettlementNotFinal, 99m),
+            Sale(5, NayaxTransactionStatusIds.Refunded, 99m),
+            Sale(6, NayaxTransactionStatusIds.CancelledOrDeclined26, 99m),
+            Sale(7, 9999, 99m),
+            Sale(8, null, 99m));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
+
+        Assert.Equal(3, facts.TransactionCount);
+        Assert.Equal(1, facts.CardTransactions);
+        Assert.Equal(1, facts.CashTransactions);
+        Assert.Equal(1, facts.UnknownTransactions);
+        Assert.Equal(21m, facts.GrossSales);
+    }
+
+    [Fact]
+    public async Task Transaction_count_is_scoped_to_the_selected_machine_and_date_range()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.NayaxSales.AddRange(
+            Sale(1, NayaxTransactionStatusIds.Completed, 10m, machineId: 10),
+            Sale(2, NayaxTransactionStatusIds.Completed, 10m, machineId: 10),
+            Sale(3, NayaxTransactionStatusIds.Completed, 10m, machineId: 20),
+            Sale(4, NayaxTransactionStatusIds.Completed, 10m, machineId: 10, authorizationTime: new DateTime(2025, 8, 2)));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
+
+        Assert.Equal(2, facts.TransactionCount);
+        Assert.Equal(20m, facts.GrossSales);
+    }
+
+    [Fact]
+    public async Task A_period_with_no_completed_sale_reports_a_zero_transaction_count()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.NayaxSales.Add(Sale(1, NayaxTransactionStatusIds.PendingSettlementNotFinal, 99m));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
+
+        Assert.Equal(0, facts.TransactionCount);
+        Assert.Equal(0m, facts.GrossSales);
+    }
+
     private static NayaxSales Sale(
         long transactionId, int? transactionStatusId, decimal settlementValue,
         long machineId = 10, DateTime? authorizationTime = null, decimal? costOfGoodsSold = null) =>

@@ -16,7 +16,8 @@ public class GetDashboardReportTests
         int cardTransactionCount = 8, int cashTransactionCount = 2, decimal nayaxFeesIncludingGst = 4.4m,
         decimal nayaxFeesExGst = 4m, decimal siteCommission = 3m, decimal? netProfit = 40m,
         decimal? netMarginPercent = 36.36m, decimal? directProfit = null, decimal? directMarginPercent = null,
-        bool isCogsComplete = true, decimal partialCostOfGoods = 50m, bool hasMissingFeeRates = false) => new(
+        bool isCogsComplete = true, decimal partialCostOfGoods = 50m, bool hasMissingFeeRates = false,
+        int transactionCount = 10) => new(
         From: new DateTime(2025, 8, 1), To: new DateTime(2025, 8, 31), FinancialYear: "FY2025-26",
         Sales: sales, CostOfGoods: isCogsComplete ? partialCostOfGoods : null, GrossProfit: grossProfit,
         Fees: nayaxFeesExGst, NetSettlement: cardSales - nayaxFeesIncludingGst, GstOnSales: 10m, GstOnFees: 0.4m,
@@ -27,6 +28,10 @@ public class GetDashboardReportTests
         {
             PartialCostOfGoods = partialCostOfGoods,
             IsCogsComplete = isCogsComplete,
+            // The completed-transaction count and the average sale over it are the bookkeeping
+            // report's own figures since issue #804; this summary republishes them.
+            TransactionCount = transactionCount,
+            AverageSale = transactionCount == 0 ? 0m : sales / transactionCount,
             DirectProfit = directProfit,
             DirectMarginPercent = directMarginPercent,
             NayaxProcessingFees = hasMissingFeeRates
@@ -102,11 +107,16 @@ public class GetDashboardReportTests
         Assert.False(report.DataQuality.GstClassificationMissing);
     }
 
+    /// <summary>
+    /// Issue #804 relocated the completed-transaction count into the bookkeeping report this
+    /// summary already composes, so the two pages read one definition. The machine and product
+    /// counts remain the dashboard facts port's own, because no other report needs that projection.
+    /// </summary>
     [Fact]
-    public async Task Transaction_machine_and_product_counts_come_from_the_dashboard_facts_port()
+    public async Task Transaction_count_and_average_sale_come_from_the_composed_bookkeeping_report()
     {
-        var facts = FakeDashboardReportFactsProvider.Complete(transactionCount: 25, machineCount: 4, productCount: 6);
-        var useCase = UseCase(CompleteBookkeeping(sales: 250m), EmptyProductReport(), facts);
+        var facts = FakeDashboardReportFactsProvider.Complete(machineCount: 4, productCount: 6);
+        var useCase = UseCase(CompleteBookkeeping(sales: 250m, transactionCount: 25), EmptyProductReport(), facts);
 
         var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
 
@@ -115,6 +125,18 @@ public class GetDashboardReportTests
         Assert.Equal(4, report.MachineCount);
         Assert.Equal(6, report.ProductCount);
         Assert.Equal(10m, report.AverageSale);
+    }
+
+    [Fact]
+    public async Task A_period_with_no_completed_transaction_reports_a_zero_average_sale()
+    {
+        var useCase = UseCase(CompleteBookkeeping(sales: 0m, transactionCount: 0), EmptyProductReport(),
+            FakeDashboardReportFactsProvider.Complete());
+
+        var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
+
+        Assert.Equal(0, report.Transactions);
+        Assert.Equal(0m, report.AverageSale);
     }
 
     [Fact]
@@ -206,7 +228,7 @@ public class GetDashboardReportTests
     [Fact]
     public async Task Incomplete_commission_configuration_adds_a_note_and_its_warnings()
     {
-        var facts = new DashboardReportFacts(10, 2, 3, true, 74m, CommissionIsComplete: false,
+        var facts = new DashboardReportFacts(2, 3, true, 74m, CommissionIsComplete: false,
             CommissionWarnings: ["Overlapping commission agreements cover one or more sales for the selected machine."]);
         var useCase = UseCase(CompleteBookkeeping(), EmptyProductReport(), facts);
 

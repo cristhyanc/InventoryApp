@@ -174,6 +174,44 @@ describe('BookkeepingReportComponent conditional data quality and calculation he
 });
 
 /**
+ * Issue #804: Bookkeeping shows the sales volume behind its own total and the average sale over
+ * it, so an operator no longer has to open the Reporting Dashboard for them.
+ */
+describe('BookkeepingReportComponent transaction count and average sale (issue #804)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('shows the completed transaction count and the average sale the API reported', async () => {
+    const host = await render({ sales: 1000, transactionCount: 40, averageSale: 25 });
+
+    expect(host.querySelector('[data-testid="transactions"]')!.textContent).toContain('40');
+    expect(host.querySelector('[data-testid="average-sale"]')!.textContent).toContain('$25.00');
+    expect(host.textContent).toContain('average sale');
+  });
+
+  it('shows a measured zero for a covered period that genuinely sold nothing', async () => {
+    const host = await render({
+      sales: 0, transactionCount: 0, averageSale: 0,
+      providerAvailability: {
+        sales: { state: 'Complete', asOfUtc: null, isComplete: true },
+        fees: { state: 'Complete', asOfUtc: null, isComplete: true },
+        combined: { state: 'Complete', asOfUtc: null, isComplete: true }
+      }
+    });
+
+    expect(host.querySelector('[data-testid="transactions"]')!.textContent).toContain('0');
+    expect(host.querySelector('[data-testid="average-sale"]')!.textContent).toContain('$0.00');
+  });
+
+  it('explains both figures in the calculation help rather than leaving them undefined', async () => {
+    const host = await render();
+
+    const help = host.querySelector('[data-testid="calculation-help"]')!.textContent ?? '';
+    expect(help).toContain('transaction count');
+    expect(help).toContain('average sale');
+  });
+});
+
+/**
  * Regression coverage for issue #453: this component shares the `.stat-card-head`/`.icon-tile`
  * arrangement validated structurally by `stat-card-icon-position.spec.ts`, so it only needs to
  * confirm this specific production template was updated to the same order.
@@ -199,7 +237,8 @@ describe('BookkeepingReportComponent stat-card icon tile position (issue #453)',
     const host = fixture.nativeElement as HTMLElement;
 
     const heads = Array.from(host.querySelectorAll('.stat-card-head'));
-    expect(heads).toHaveLength(4);
+    // Five since issue #804 added the Transactions card.
+    expect(heads).toHaveLength(5);
     for (const head of heads) {
       const children = Array.from(head.children);
       expect(children[0].classList.contains('stat-card-content')).toBe(true);
