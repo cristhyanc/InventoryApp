@@ -11,9 +11,10 @@ using Xunit;
 namespace InventoryApi.Tests.Adapters.Persistence;
 
 /// <summary>
-/// Relational SQLite tests: the completed-sale grouping and imported-reimbursement summary this
-/// provider reuses depend on SQL translation and FK-backed navigation collections, not just
-/// in-memory LINQ semantics.
+/// Relational SQLite tests: the completed-sale grouping this provider reuses depends on SQL
+/// translation, not just in-memory LINQ semantics. The imported-reimbursement summary it also read
+/// until issue #805 is now covered where the one adapter that reads it lives, in
+/// <see cref="EfBookkeepingReportFactsProviderTests"/>.
 /// </summary>
 public class EfDashboardReportFactsProviderTests
 {
@@ -97,30 +98,6 @@ public class EfDashboardReportFactsProviderTests
 
         Assert.Equal(0, facts.MachineCount);
         Assert.Equal(0, facts.ProductCount);
-        Assert.False(facts.ImportedContainsRows);
-        Assert.Equal(0m, facts.ImportedNetSettlement);
         Assert.True(facts.CommissionIsComplete);
-    }
-
-    [Fact]
-    public async Task Imported_reimbursement_in_range_reports_net_settlement_and_contains_rows()
-    {
-        await using var connection = await CreateSqliteAsync();
-        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
-        var file = new ImportedFile { FileName = "aug.xml", FileHash = "aug", ImportedAt = DateTime.UtcNow };
-        file.Reimbursements.Add(new ImportedReimbursement
-        {
-            ReimbursementStartDate = new DateTime(2025, 8, 1),
-            ReimbursementEndDate = new DateTime(2025, 8, 31),
-            Total = 94m
-        });
-        db.ImportedFiles.Add(file);
-        await db.SaveChangesAsync();
-        var provider = new EfDashboardReportFactsProvider(db, EmptyCommissions());
-
-        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
-
-        Assert.True(facts.ImportedContainsRows);
-        Assert.Equal(94m, facts.ImportedNetSettlement);
     }
 }
