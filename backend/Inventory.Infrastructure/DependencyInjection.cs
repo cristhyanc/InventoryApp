@@ -209,6 +209,11 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
         services.AddScoped<ICategoryStore, EfCategoryStore>();
         services.AddScoped<ILocalMachineStore, EfLocalMachineStore>();
+        // Provider machine linking (issue #742): the one adapter that writes
+        // LocalMachine.ExternalMachineId, and the only reason the port above never does. Scoped like
+        // every other adapter here: its authoritative read and its write are one transaction on the
+        // request's own AppDbContext.
+        services.AddScoped<IProviderMachineLinkStore, EfProviderMachineLinkStore>();
         services.AddScoped<ISupplierStore, EfSupplierStore>();
         services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
         services.AddScoped<IProductStore, EfProductStore>();

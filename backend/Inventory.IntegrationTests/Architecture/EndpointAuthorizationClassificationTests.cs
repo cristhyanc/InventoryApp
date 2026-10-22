@@ -348,6 +348,14 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/local-machines/{id:long}", "PUT", Capability.InventoryOperate)]
     [InlineData("api/local-machines/{id:long}/deactivate", "POST", Capability.InventoryOperate)]
     [InlineData("api/local-machines/{id:long}/reactivate", "POST", Capability.InventoryOperate)]
+
+    // Provider machine linking (issue #742): the join between the two machine resources above. It
+    // declares the same capability both of them do - deciding which machine a provider number means
+    // is the same day-to-day inventory work as recording the machine or refilling it - so no role
+    // gains or loses a surface, and the read-only support session is refused both writes by the
+    // central GET/HEAD rule rather than by a check of its own.
+    [InlineData("api/machine-link-review", "POST", Capability.InventoryOperate)]
+    [InlineData("api/machine-link-review/apply", "POST", Capability.InventoryOperate)]
     [InlineData("api/Sites", "GET", Capability.InventoryOperate)]
     [InlineData("api/purchases", "POST", Capability.PurchasingOperate)]
     [InlineData("api/purchases/{id:int}/file", "GET", Capability.PurchasingOperate)]
