@@ -16,8 +16,10 @@ namespace InventoryApi.Controllers;
 /// is therefore a different resource from <c>/api/machines</c>, which is the live Nayax fleet with
 /// this business's sales and costs resolved onto it and needs working credentials for every one of
 /// its reads. Since issue #741 (G2) the stored stock and count machine references point at these
-/// rows too, and <c>/api/machines/{id}</c> takes their ids; #742 (G3) is the provider machine
-/// review, which is not in this surface.</para>
+/// rows too, and <c>/api/machines/{id}</c> takes their ids. The provider machine review of issue
+/// #742 (G3) is deliberately <em>not</em> in this surface: it is
+/// <c>/api/machine-link-review</c>, because it reads the live fleet and this resource reads no
+/// provider at all.</para>
 ///
 /// <para>Every action requires <c>Inventory.Operate</c> (issue #525), the same capability the fleet
 /// controller and the rest of day-to-day stock keeping declare: recording the machines you refill is

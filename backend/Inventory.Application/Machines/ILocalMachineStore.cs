@@ -5,9 +5,9 @@ namespace Inventory.Application.Machines;
 /// Application layer.
 ///
 /// <para>Nothing here reads or writes a provider's machine id: it is set by the <c>AddMachines</c>
-/// backfill and, later, by provider synchronization and the provider machine review (issue #742).
-/// This port reports only <em>whether</em> a machine has one, because that is what a caller needs in
-/// order to say so.</para>
+/// backfill and, since issue #742, by the provider machine review through its own port,
+/// <see cref="IProviderMachineLinkStore"/>. This port reports only <em>whether</em> a machine has
+/// one, because that is what a caller needs in order to say so.</para>
 /// </summary>
 public interface ILocalMachineStore
 {

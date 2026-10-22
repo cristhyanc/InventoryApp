@@ -6769,6 +6769,20 @@ Bookkeeping reports the sales volume behind its own total and the average sale o
 
 **API and export contract (additive).** `GET api/reports/bookkeeping` gains `transactionCount` and `averageSale`; every existing property keeps its name, type and meaning. The bookkeeping CSV/XLSX row gains `Transactions` and `AverageSale`, beside `CardTransactions`/`CashTransactions`, from the same `BookkeepingReportDto` the API returns. No schema, migration or stored data changed, and the dashboard report and its export are unchanged in output.
 
+### Bookkeeping expected-versus-actual reimbursement (issue #805)
+
+Bookkeeping compares the reimbursement its own card sales and Nayax fees say to expect against the reimbursement an imported Nayax settlement actually recorded, so an operator reconciling a month no longer has to open the Reporting Dashboard for that comparison. As with issue #804, the comparison is not new and is not duplicated: it **moved** into the report that already reads both sides of it.
+
+**One policy, reused rather than restated.** `Inventory.Domain.Reporting.Dashboard.DashboardReimbursementPolicy` is unchanged and is still the only place this comparison is decided: expected reimbursement is card sales less Nayax fees including GST, the difference is actual less expected (signed), the tolerance is `$0.01`, and the status vocabulary stays `Pending`/`Reconciled`/`Needs Review` — `Pending` exactly when no imported reimbursement row covers the period, and a `Pending` period is never reconciled. `GetBookkeepingReport` calls that policy with the facts it already has (`CardSales`, `ProcessingFees.TotalFeeIncGst`, `ImportedNetSettlement`, `ImportedContainsRows`), so no second tolerance, rounding, sign or status rule exists anywhere. The policy keeps its name, which names the feature that introduced it, not the only report allowed to use it.
+
+**No new port, and one fewer duplicate read.** `BookkeepingReportFacts` already carried the period's imported-settlement summary for its fees and net settlement, read through `EfReportingSharedQueries.ImportedSummaryAsync` for the requested business, date range and machine scope — the identical call `EfDashboardReportFactsProvider` was making for the same period. `DashboardReportFacts.ImportedContainsRows`/`ImportedNetSettlement` and that call are therefore **gone**; the dashboard adapter still computes the distinct machine and product counts and the commission completeness no other report needs. `GetDashboardReport` republishes `bookkeeping.ExpectedReimbursement`/`ActualReimbursement`/`ReimbursementDifference`/`IsReconciled`/`ReconciliationStatus`/`ReconciliationTolerance` (and `NetReimbursement` from the same actual), exactly as it already republishes the transaction count — so the two pages cannot report different figures or a different status for one period, and the dependency direction is unchanged: the dashboard composes bookkeeping, and bookkeeping does not know the dashboard exists.
+
+**`netSettlement` is untouched and still means what it meant.** It prefers the period's imported net settlement and falls back to card sales less fees, which is a different question from "what did we expect, and what arrived": a period whose import disagrees reports `netSettlement` as the imported amount *and* `expectedReimbursement` as the calculated one. The report shows them in two separate cards — "Nayax Card Settlement" and "Nayax Reimbursement Reconciliation" — and the export keeps `NetSettlement` as its own column beside the new ones.
+
+**Availability governs it the same way as everything else** (issue #730's model, unchanged). The imported actual reimbursement is settlement-sourced and carries `ProviderAvailability.Fees`; the calculated expectation and the difference depend on both families and carry `Combined`, decided once on the server by `LeastComplete`. `GetBookkeepingReport.FeeFigures` names the actual reimbursement and the reconciliation so the availability note is accurate, the Angular report renders the amounts through `moneyOrState`, and the export writes them through `AvailabilityExportCells.Amount`. **A valid imported zero stays distinguishable from an absent import in all three surfaces**: a `Complete` period whose settlement really paid nothing shows `$0.00` with a compared status, a period with no imported row at all shows `Pending` (the one case where the UI shows a word instead of an amount, and the difference shows `—`), and a period nothing accounted for shows its state instead of the zero.
+
+**API and export contract (additive).** `GET api/reports/bookkeeping` gains `expectedReimbursement`, `actualReimbursement`, `reimbursementDifference`, `isReconciled`, `reconciliationStatus` and `reconciliationTolerance`; every existing property keeps its name, type and meaning. The bookkeeping CSV/XLSX row gains `ExpectedReimbursement`, `ActualReimbursement`, `ReimbursementDifference`, `ReconciliationStatus`, `IsReconciled` and `ReconciliationTolerance` immediately after `NetSettlement`, from the same `BookkeepingReportDto` the API returns; the status column is what tells a reader of a downloaded file that a zero actual was a period with no import rather than a settlement that paid nothing. The dashboard report, its export and the settlement matching rules are unchanged in output, and no schema, migration or stored data changed.
+
 ### Reconciliation diagnostics, exclusions and the adjustments assumption (issue #477)
 
 Reconciliation applies the same separation as bookkeeping, and adds a third category. This report compares completed card sales with an imported Nayax reimbursement; it calculates no COGS, no commission and no GST on sales, so it must never claim any of them is missing. Three different things are now presented three different ways, and no report family other than reconciliation changed.
@@ -9958,7 +9972,8 @@ is made once, on the server, by the Domain `LeastComplete` rule — no presentat
 states itself. The state travels as the enum's **name**, so a renumbered enum cannot silently change
 what a stored response meant. Which figures each state governs is written out on the two DTOs; the
 short version is that every provider-sourced figure carries one, a figure depending on both families
-(net and direct profit and their margins, the net card settlement, total operating costs, net GST)
+(net and direct profit and their margins, the net card settlement, total operating costs, net GST,
+and since issue #805 bookkeeping's expected reimbursement and its difference from the actual)
 carries the combined one, and every figure the business records itself — delivery and package costs,
 operating expenses and their GST, purchase input GST — carries none and stays visible and exact.
 
@@ -10330,8 +10345,9 @@ working credentials for every one of its reads; nothing on this one touches the 
 identically for a business that has never connected one.
 
 Three things it deliberately does not do. It **never writes `ExternalMachineId`**: no request field
-corresponds to it, a created machine has none, a rename leaves it alone, and only provider
-synchronization and the provider machine review (issue #742) may attach one. It **publishes no
+corresponds to it, a created machine has none, a rename leaves it alone, and the [provider machine
+review](#provider-machine-linking-automatic-or-reviewed-issue-742) (issue #742) is the one thing that
+attaches one. It **publishes no
 provider identifier** either — the response carries `isProviderNamed`, the fact and not the id. And
 it offers **no delete**: stored sales, refills, counts and expenses refer to a machine, so a machine
 that stops trading is deactivated and stays listed. Because the capability is `Inventory.Operate`,
@@ -10357,8 +10373,9 @@ rendering a screen of refusals, while an outage is reported as an error **in pla
 presenting a `502` as "this business has no machines" is a claim nobody made. The machine **details**
 page is still a live provider destination and keeps its guard — every panel on it is a Nayax read —
 so a direct request for `/machines/{id}` with no provider reaches the "needs a provider" page with
-its generic explanation rather than one naming a read the navigation no longer claims; giving that
-page a local half belongs to issue #742.
+its generic explanation rather than one naming a read the navigation no longer claims. Giving that
+page a local half is still outstanding: issue #742 linked provider machines to local ones and left
+the details page exactly as it is.
 
 Write controls are hidden while a support session is active, on the established rule of issues #554
 and #658: the session grants `Inventory.Operate`, which is what the page would otherwise gate them
@@ -10366,7 +10383,8 @@ on, and the backend refuses the write by its read-only method rule rather than b
 capability.
 
 **What was deliberately out of scope of #740**: repointing the stored machine references (#780 did
-the expenses, #741 does the stock half), the provider machine review (#742), provider switching
+the expenses, #741 does the stock half), the provider machine review ([#742 does
+it](#provider-machine-linking-automatic-or-reviewed-issue-742)), provider switching
 (#761), slots, planograms, par levels, and manual sites — a site is known only from the live fleet
 read's `CustomerID`, so the Sites destination stays in the provider section with nothing local to
 fall back on.
@@ -10594,6 +10612,151 @@ local id it narrows by, and `operating-expense.service.spec.ts` pins the request
 is sent as `machineId`, and no machine parameter is sent while none is chosen.
 `stock-adjustment-form.component.spec.ts` covers the active-only offer, the error and loading states,
 and the staged machine dropped when the list stops offering it.
+
+### Provider machine linking: automatic or reviewed (issue #742)
+
+Child G3 of issue #329, after [local machines](#local-machines-and-external-machine-ids-issue-740)
+created the rows and [#780](#expense-machine-references-issue-780)/[#741](#stock-machine-references-issue-741)
+pointed the stored references at them. Until it, `LocalMachine.ExternalMachineId` had exactly one
+writer, the `AddMachines` backfill, so **a Nayax machine that appeared after that migration had no
+local machine at all** — and neither did any machine of a business that connected Nayax later. This
+is what records one, and the whole of the behaviour is about not recording the *wrong* one.
+
+**One endpoint reads the fleet, one applies decisions, and both are `POST`.**
+`InventoryApi.Controllers.MachineLinkReviewController`:
+
+| Endpoint | Capability | What it does |
+| --- | --- | --- |
+| `POST api/machine-link-review` | `Inventory.Operate` | Reads the provider fleet and reports it against this business's machines. Links the new ones itself **only** when nothing of the business's own is unlinked. |
+| `POST api/machine-link-review/apply` | `Inventory.Operate` | Records the submitted link-or-create decisions, as one transaction. |
+
+It is a **third** machine resource on purpose. `/api/local-machines` (#740) is the machines an
+operator maintains by hand and touches no provider; `/api/machines` is the live fleet with this
+business's sales and costs resolved onto it. This one is the join, and it is the only surface in the
+application that writes `ExternalMachineId` at all. The capability is the one both of those already
+declare — deciding which machine a provider number means is the same day-to-day inventory work as
+recording the machine or refilling it — so no role gains or loses a surface. The review is a `POST`
+even though an operator reads it: it may link machines by itself, and a cached `GET` would hand back
+a fleet nobody read.
+
+**The rule that decides whether a link is automatic.**
+`Inventory.Domain.Machines.ProviderMachineLinkPolicy.MayLinkAutomatically` is the whole of it: a
+provider machine no local machine carries the id of is created as a new local machine, with the
+provider's name and that `ExternalMachineId`, **only while the business has no machine of its own
+without a provider id**. The failure it exists to prevent is the duplicate fleet: a business that
+recorded its machines by hand before connecting Nayax has exactly the machines Nayax is about to
+describe, and creating a second row for each of them is the one outcome that cannot be undone by
+renaming anything. With nothing unlinked there is no local machine a new provider machine could
+already be, so creating one invents nothing and asks nobody a question with a single possible answer.
+A **deactivated** machine without a provider id counts as unlinked: a retired machine is still a
+machine of this business that the provider's may be, and linking a retired row beats duplicating it.
+The rule is read about *this* business only, inside the same transaction as the write it permits, so
+a machine somebody recorded while the fleet was being read stops the auto-link rather than being
+duplicated by it.
+
+**Nothing is matched by name**, exactly as in the [catalogue
+review](#provider-catalogue-review-link-or-create-and-change-review-issue-738). A local machine
+called precisely what the provider calls its machine stays unlinked and is reported for review, and a
+local key that happens to equal a provider machine number is a coincidence (issue #735). The only
+ways a link comes about are the operator naming one of their machines and a machine this feature
+creates — which is why the automatic case only ever *creates*.
+
+**What the review reports.** `Inventory.Application.Machines.ReviewProviderMachines` reads the fleet
+through the existing `INayaxLynxClient` port and resolves each machine through `ExternalMachineId`
+alone: `autoLinked` is what this read linked by itself, `awaitingReview` is what it deliberately did
+not, and `linked` is every provider machine that resolves to a local machine afterwards. A fleet
+entry with **no identifier** is not a machine and is left out: the authoritative Lynx contract for
+`GET /v1/machines` declares `MachineID` as `integer<int64> | null` (Nayax developer portal, Get All
+Machine Basic Info), so `0` is the absent value this application's non-nullable field records — the
+same exclusion `AddMachines` makes. `MachineName` is `string | null` there too, so a machine the
+provider names nothing takes `MachineCataloguePolicy.DefaultName` ("Machine 7"), the shape the
+backfill already wrote for a machine nothing had named.
+
+**The apply writes the operator's decisions and nothing else.** The request carries one of three
+actions per provider machine (`Defer`, `LinkExisting` with a machine of theirs, `CreateNew`) and
+**no provider value at all**: the provider's name for a created machine comes from the fleet read
+`ApplyProviderMachineLinks` makes itself, and a decision naming a provider machine that fleet does
+not contain is refused. A machine nobody decided about is deferred, which is the honest default — a
+half-decided review must not link the other half by omission.
+
+**The authoritative read, the comparison and the write are one operation**, and for the same reason
+the catalogue apply's are: two of the refusals are statements about *stored* rows.
+`Inventory.Infrastructure.Persistence.EfProviderMachineLinkStore.LinkAsync` re-reads the business's
+machines inside the caller's transaction and applies
+`ProviderMachineLinkPolicy.LinkRefusal` to each link there —
+
+- the chosen machine already carries a **different** provider id, or
+- **another** machine of this business already carries this one.
+
+The second is the acceptance criterion "one business cannot link two machines to the same provider
+machine id", stated as a sentence an operator can act on; the filtered unique index on
+`(BusinessId, ExternalMachineId)` refuses it as well, and two decisions in one apply cannot both
+claim one id because the staged list grows with the rows the apply creates. Recording the id a
+machine already carries is deliberately **not** a refusal: it is the state the apply was asked to
+reach, which is what makes applying the same decision twice a no-op. One refused decision refuses the
+whole apply — nothing linked, nothing created — because the links a half-applied review did write are
+the ones the next review treats as settled.
+
+**Linking is the only thing that happens.** No sale, stock movement, machine count, expense, cost or
+report is read or written, and a linked machine keeps **its own name**: nothing synchronises a
+machine's name (#740), so unlike a linked product or category there is no second name to defend.
+Until a provider machine is linked, its provider data stays under its raw provider number exactly as
+before — `NayaxSales.MachineID`, the stock events, the timestamp repairs and the report machine
+filters are unchanged — and it keeps appearing on every provider-only page, because those pages are
+the fleet read itself. `INayaxMachineLinkStore` resolves it to nothing until the link exists, which is
+the same answer it gave before.
+
+**Tenancy is the central one.** No `BusinessId` predicate is written anywhere in the adapter: another
+business's machine is invisible to the read and so unreachable to the write, a created machine is
+stamped by `BusinessOwnershipEnforcer`, and two businesses may link the same provider machine id
+without either seeing the other's. Every method refuses outright unless `Business.SalesProvider` is
+Nayax, for the reason the catalogue review's do (issue #759): the column holds *that* provider's ids
+and nothing in it says who issued them.
+
+**No migration, and no new table.** The review is derived from the fleet read and the machines each
+time, so there is no pending-review storage to add: a provider machine is "awaiting review" exactly
+while no machine carries its id, which is a fact about the rows rather than a draft. That is also
+what makes the change releasable on its own — a business that never opens Machines with a working
+provider sees no change at all, and nothing about the schema moved.
+
+**The page.** `ProviderMachineReviewComponent`
+(`frontend/inventory-app/src/app/components/machines/provider-machines/`) is the dedicated feature
+component the [page composition boundary](#page-composition-boundary-issue-191) requires, composed by
+`MachineListComponent` between the business's own machine list and the live fleet. The page renders it
+**only once the shared availability signal (issue #728) says the fleet read can be served**, because
+the panel reads that fleet the moment it appears: that is what makes the automatic half automatic — an
+operator who connects Nayax and opens Machines finds the new machines already recorded — and it is
+also what leaves a business with no usable provider, or one whose fleet read failed, alone instead of
+showing it a refusal. The panel states what was linked automatically, offers Skip / "It is one of my
+machines" / "Add it as a new machine" per waiting machine with every row starting on **Skip**, offers
+only machines the provider does not already name (a machine that carries an id would be refused by the
+server's own rule, and a retired one is offered and marked), refuses a link that names no machine
+locally rather than sending it, and asks the page to reload the machine list afterwards — the list is
+what the server stored. It is withheld entirely while a support session is active (issues #554, #658,
+#661): both of its calls are writes the read-only rule refuses, and the Nayax credentials they need
+are refused in that state anyway (issue #551).
+
+**The machine list shows both kinds together**, and always did: a linked provider machine *is* a local
+machine, so it appears in `LocalMachineListComponent` beside the ones the operator created, marked
+"From Nayax" from the `isProviderNamed` fact the response already carried (#740). No provider
+identifier is published there, and none is accepted.
+
+**What proves it.** `ProviderMachineLinkTests`
+(`backend/Inventory.IntegrationTests/Application/Machines/`) is relational over two businesses and
+covers each case the issue names: the automatic link with nothing unlinked (and beside machines
+already linked), the review when something is unlinked (including a deactivated machine), the link,
+the create, no name matching (and no key matching), the two second-link refusals, the atomic refusal,
+a decision about a machine outside the fleet, the repeat apply that changes nothing, the provider
+machine that resolves to no local machine until it is linked, and the two-business cases — another
+business's machine unreachable, the same provider id linked by both, and one business's unlinked
+machines not making the other's review wait. Two of them are specifically about the gap the
+transaction exists to close, and change the stored machines **between** the review's read and the
+apply's write, through a second database scope: another machine takes provider machine 7 after the
+review reported it as waiting, so the stale decision linking 7 to a different machine is refused and
+the acceptable decision in the same batch is not kept either; and the machine the operator chose
+takes a *different* provider id after the review, so its own identity is not overwritten.
+`ProviderMachineLinkPolicyTests` covers the rules themselves, and `provider-machine-review.component.spec.ts` and
+`provider-machine-review.service.spec.ts` cover the panel and the two routes it calls.
 
 ### Resolving a Nayax product id to a local product (issue #733)
 

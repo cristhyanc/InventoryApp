@@ -4,6 +4,10 @@ import { of, throwError } from 'rxjs';
 import { MachineListComponent } from './machine-list.component';
 import { MachineService } from '../../services/machine.service';
 import { LocalMachineService } from '../../services/local-machine.service';
+import {
+  ProviderMachineReview,
+  ProviderMachineReviewService
+} from '../../services/provider-machine-review.service';
 import { Machine } from '../../models/models';
 import { AccessService } from '../../access/access.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -14,16 +18,30 @@ import {
 
 /**
  * The providers this page's children need: the status banner (issue #539) and the shared
- * availability signal the live fleet section reads (issue #728), plus the business's own machine
- * list composed into the page since issue #740.
+ * availability signal the live fleet section reads (issue #728), the business's own machine list
+ * composed into the page since issue #740, and the provider machine review composed beside it since
+ * issue #742 - which reports an empty fleet reading here, so these tests stay about the page.
  */
 function machinePageProviders(status: 'Ready' | 'NotConfigured' = 'Ready', canViewFinancials = true) {
   return [
     provideNayaxConnectionStatus(status),
     { provide: AccessService, useValue: { allows: () => of(canViewFinancials) } },
     { provide: LocalMachineService, useValue: { getAll: () => of([]) } },
+    { provide: ProviderMachineReviewService, useValue: { review: () => of(emptyReview()), apply: () => of({}) } },
     { provide: SupportSessionService, useValue: { active$: of(false) } }
   ];
+}
+
+/** A reading of a fleet with nothing in it: nothing linked, nothing waiting. */
+function emptyReview(): ProviderMachineReview {
+  return {
+    reviewedAtUtc: '2026-10-21T02:00:00Z',
+    autoLinked: [],
+    awaitingReview: [],
+    linked: [],
+    awaitingReviewCount: 0,
+    linkedCount: 0
+  };
 }
 
 /** A stub `AccessService` for the direct-construction tests below, granted by default. */

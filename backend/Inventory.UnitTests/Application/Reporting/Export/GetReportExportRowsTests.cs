@@ -415,6 +415,82 @@ public class GetReportExportRowsTests
         Assert.Equal("0", Cell(table, "AverageSale"));
     }
 
+    /// <summary>
+    /// Issue #805: the downloaded bookkeeping row carries the same expected-versus-actual
+    /// reimbursement comparison the API report returned, so a file read away from the application
+    /// cannot disagree with the page it came from - and the calculated expectation stays a separate
+    /// column from the imported actual and from <c>NetSettlement</c>.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_carries_the_same_reimbursement_comparison_as_the_api_report()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete()));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+        var apiResult = await bookkeeping.Handle(filter, CancellationToken.None);
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal(Invariant(apiResult.ExpectedReimbursement), Cell(table, "ExpectedReimbursement"));
+        Assert.Equal(Invariant(apiResult.ActualReimbursement), Cell(table, "ActualReimbursement"));
+        Assert.Equal(Invariant(apiResult.ReimbursementDifference), Cell(table, "ReimbursementDifference"));
+        Assert.Equal(apiResult.ReconciliationStatus, Cell(table, "ReconciliationStatus"));
+        Assert.Equal(apiResult.IsReconciled.ToString(), Cell(table, "IsReconciled"));
+        Assert.Equal(Invariant(apiResult.ReconciliationTolerance), Cell(table, "ReconciliationTolerance"));
+        Assert.Equal(Invariant(apiResult.NetSettlement), Cell(table, "NetSettlement"));
+        Assert.NotEqual(Cell(table, "ExpectedReimbursement"), Cell(table, "ActualReimbursement"));
+    }
+
+    /// <summary>
+    /// The same rule as every other provider figure in this file: an actual reimbursement nothing
+    /// accounted for is exported as its state, never as a measured zero, while the status column
+    /// still says the import is <c>Pending</c>.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_reports_an_unavailable_reimbursement_comparison_as_its_state_not_a_zero()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(NoProviderData()));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        foreach (var column in new[] { "ExpectedReimbursement", "ActualReimbursement", "ReimbursementDifference" })
+        {
+            Assert.Equal("Missing", Cell(table, column));
+            Assert.NotEqual("0", Cell(table, column));
+        }
+
+        Assert.Equal("Pending", Cell(table, "ReconciliationStatus"));
+        Assert.Equal("False", Cell(table, "IsReconciled"));
+        Assert.Equal("0.01", Cell(table, "ReconciliationTolerance"));
+    }
+
+    /// <summary>
+    /// A covered period whose settlement import really did settle nothing exports a real zero, and
+    /// its status says the two sides were compared - the distinction a reader cannot otherwise make
+    /// from a file.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_of_a_covered_period_exports_an_imported_zero_as_a_real_zero()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete(
+                sales: 0m, cost: 0m, cardSales: 0m, cardTransactions: 0, cashSales: 0m, cashTransactions: 0) with
+            {
+                ProcessingFees = new NayaxProcessingFeeResult(0m, 0m, 0m, 0m, 0m, 0m, 0, DateTime.UtcNow, null),
+                ImportedNetSettlement = 0m,
+            }));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal("Complete", Cell(table, "FeeDataAvailability"));
+        Assert.Equal("0", Cell(table, "ActualReimbursement"));
+        Assert.Equal("0", Cell(table, "ReimbursementDifference"));
+        Assert.Equal("Reconciled", Cell(table, "ReconciliationStatus"));
+        Assert.Equal("True", Cell(table, "IsReconciled"));
+    }
+
     [Fact]
     public async Task Unsupported_transaction_report_name_throws()
     {

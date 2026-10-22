@@ -22,8 +22,10 @@ namespace Inventory.Infrastructure.Persistence;
 ///
 /// <para><strong>Nothing here reads or writes <see cref="LocalMachine.ExternalMachineId"/>.</strong>
 /// A created machine has none, a rename leaves it alone, and the records this adapter returns carry
-/// only whether one is present. The column is written by the <c>AddMachines</c> backfill and, later,
-/// by provider synchronization and the provider machine review (issue #742).</para>
+/// only whether one is present. The column is written by the <c>AddMachines</c> backfill and, since
+/// issue #742, by <see cref="EfProviderMachineLinkStore"/> - the provider machine review's own
+/// adapter, which is where a link is decided against the stored rows inside its own
+/// transaction.</para>
 /// </summary>
 public sealed class EfLocalMachineStore : ILocalMachineStore
 {

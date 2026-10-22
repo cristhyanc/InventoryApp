@@ -176,6 +176,56 @@ public class BookkeepingReportAvailabilityTests
         Assert.Equal(10m, report.AverageSale);
     }
 
+    /// <summary>
+    /// Issue #805: the imported actual reimbursement is settlement-sourced and the comparison built
+    /// on it depends on both families, so the fee note has to name them and the combined state has
+    /// to govern the difference. A period with no settlement import reports an actual of zero in the
+    /// contract, and that zero is exactly the one the state exists to stop a reader believing.
+    /// </summary>
+    [Fact]
+    public async Task The_fee_note_names_the_actual_reimbursement_and_the_reconciliation_when_no_settlement_covered_the_period()
+    {
+        var facts = FakeBookkeepingReportFactsProvider.Complete() with
+        {
+            SettlementCoverage = [],
+            ImportedContainsRows = false,
+            ImportedHasNetSettlement = false,
+            ImportedNetSettlement = 0m,
+        };
+
+        var report = await Report(facts);
+
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Fees.State);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Combined.State);
+        Assert.Equal(0m, report.ActualReimbursement);
+        Assert.Equal("Pending", report.ReconciliationStatus);
+        Assert.Contains("actual reimbursement", Notes(report), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("reconciliation", Notes(report), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Incomplete provider data never makes the comparison itself disappear: the amounts stay as
+    /// calculated beside the state that says they may not be all of the period's, which is what the
+    /// presentations substitute for a zero. Stale settlement coverage is still settlement coverage.
+    /// </summary>
+    [Fact]
+    public async Task Partially_covered_settlement_keeps_the_imported_actual_reimbursement_it_read()
+    {
+        var lastCovered = new DateTime(2026, 7, 18, 6, 0, 0, DateTimeKind.Utc);
+        var facts = FakeBookkeepingReportFactsProvider.Complete() with
+        {
+            SettlementCoverage = [new ReportCoverageRange(From.AddDays(-30), lastCovered)],
+        };
+
+        var report = await Report(facts);
+
+        Assert.Equal(nameof(ReportAvailabilityState.Stale), report.ProviderAvailability.Fees.State);
+        Assert.Equal(lastCovered, report.ProviderAvailability.Fees.AsOfUtc);
+        Assert.Equal(74m, report.ActualReimbursement);
+        Assert.Equal(75.6m, report.ExpectedReimbursement);
+        Assert.Equal("Needs Review", report.ReconciliationStatus);
+    }
+
     [Fact]
     public async Task Local_delivery_package_and_operating_expense_figures_stay_visible_with_no_provider_data()
     {

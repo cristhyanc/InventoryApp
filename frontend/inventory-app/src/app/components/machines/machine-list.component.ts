@@ -1,4 +1,4 @@
-import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Component, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
@@ -11,6 +11,7 @@ import { AccessService } from '../../access/access.service';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
 import { loadProviderList } from '../../provider/provider-list-load';
 import { LocalMachineListComponent } from './local-machines/local-machine-list.component';
+import { ProviderMachineReviewComponent } from './provider-machines/provider-machine-review.component';
 
 /**
  * The Machines page.
@@ -28,14 +29,33 @@ import { LocalMachineListComponent } from './local-machines/local-machine-list.c
  * error <em>in place of</em> the fleet, through the one shared path
  * ({@link loadProviderList}), because presenting it as "this business has no machines" is a claim
  * nobody made.</p>
+ *
+ * <p><strong>Between the two sits the provider machine review</strong>
+ * ({@link ProviderMachineReviewComponent}, issue #742), shown on the same condition as the fleet
+ * because it reads that fleet: it is what turns a Nayax machine into one of the machines in the
+ * list above, automatically where that is unambiguous and on the operator's decision where it is
+ * not. A link changes what the list above says, so the review asks this page to reload it.</p>
  */
 @Component({
   selector: 'app-machine-list',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, NayaxStatusBannerComponent, LocalMachineListComponent],
+  imports: [
+    CommonModule,
+    FormsModule,
+    RouterLink,
+    NayaxStatusBannerComponent,
+    LocalMachineListComponent,
+    ProviderMachineReviewComponent
+  ],
   templateUrl: './machine-list.component.html'
 })
 export class MachineListComponent implements OnInit, OnDestroy {
+  /**
+   * The business's own machine list, so a provider machine link can refresh it (issue #742). The
+   * list is what the server stored, so it is reloaded rather than patched from the link result.
+   */
+  @ViewChild(LocalMachineListComponent) localMachineList?: LocalMachineListComponent;
+
   machines: Machine[] = [];
   filteredMachines: Machine[] = [];
   search = '';
@@ -94,6 +114,11 @@ export class MachineListComponent implements OnInit, OnDestroy {
       }
       this.loadState.succeed(token);
     });
+  }
+
+  /** Reloads the business's own machine list after a provider machine was linked to it. */
+  reloadLocalMachines(): void {
+    this.localMachineList?.load();
   }
 
   onSearchChange(value: string): void {
