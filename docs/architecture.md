@@ -10734,8 +10734,13 @@ the create, no name matching (and no key matching), the two second-link refusals
 a decision about a machine outside the fleet, the repeat apply that changes nothing, the provider
 machine that resolves to no local machine until it is linked, and the two-business cases — another
 business's machine unreachable, the same provider id linked by both, and one business's unlinked
-machines not making the other's review wait. `ProviderMachineLinkPolicyTests` covers the rules
-themselves, and `provider-machine-review.component.spec.ts` and
+machines not making the other's review wait. Two of them are specifically about the gap the
+transaction exists to close, and change the stored machines **between** the review's read and the
+apply's write, through a second database scope: another machine takes provider machine 7 after the
+review reported it as waiting, so the stale decision linking 7 to a different machine is refused and
+the acceptable decision in the same batch is not kept either; and the machine the operator chose
+takes a *different* provider id after the review, so its own identity is not overwritten.
+`ProviderMachineLinkPolicyTests` covers the rules themselves, and `provider-machine-review.component.spec.ts` and
 `provider-machine-review.service.spec.ts` cover the panel and the two routes it calls.
 
 ### Resolving a Nayax product id to a local product (issue #733)

@@ -372,6 +372,91 @@ public class ProviderMachineLinkTests : IDisposable
     }
 
     // ---------------------------------------------------------------------------------------------
+    // A review the stored machines moved on from. The apply is decided on the rows as they are now,
+    // which is the whole reason the authoritative read lives inside the write's own transaction, so
+    // the state has to change between the review's read and the apply's mutation for these to mean
+    // anything (AGENTS.md § Automated task contract, on stale-state guarantees).
+    // ---------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_provider_machine_another_machine_took_since_the_review_refuses_the_stale_apply()
+    {
+        var corridor = await SeedMachine(BusinessA, "Corridor");
+        var stairwell = await SeedMachine(BusinessA, "Stairwell");
+        var fleet = Fleet(Machine(7, "Lobby level 1"), Machine(8, "Gym"));
+
+        await using var db = Scoped(BusinessA);
+        var review = await Review(db, fleet).Handle();
+
+        // The review the operator decides from: both provider machines are waiting, neither linked.
+        Assert.Equal(
+            [7L, 8L], review.AwaitingReview.Select(entry => entry.ProviderMachineId).ToList());
+
+        // Between the review and the apply, provider machine 7 is linked to Corridor by somebody
+        // else - another operator's apply, or an auto-link - through a second database scope.
+        await using (var meanwhile = Scoped(BusinessA))
+        {
+            var claimed = await meanwhile.Machines.SingleAsync(machine => machine.Id == corridor);
+            claimed.ExternalMachineId = "7";
+            await meanwhile.SaveChangesAsync();
+        }
+
+        var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            Apply(db, fleet).Handle(Decisions(LinkTo(7, stairwell), CreateFor(8))));
+
+        Assert.Contains(
+            ProviderMachineLinkPolicy.LinkRefusal(
+                "7", chosenMachineProviderId: null, anotherMachineCarriesIt: true)!,
+            refusal.Message,
+            StringComparison.Ordinal);
+
+        // Current data decided it, not the stale review: Corridor keeps the link it gained, Stairwell
+        // carries nothing, and the one decision in the batch that was acceptable - the machine for
+        // provider machine 8 - is not kept either, because a refused apply commits nothing.
+        var stored = await StoredMachines();
+        Assert.Equal(2, stored.Count);
+        Assert.Equal("7", stored.Single(machine => machine.Id == corridor).ExternalMachineId);
+        Assert.Null(stored.Single(machine => machine.Id == stairwell).ExternalMachineId);
+    }
+
+    [Fact]
+    public async Task A_machine_that_took_a_different_provider_id_since_the_review_is_not_overwritten()
+    {
+        var corridor = await SeedMachine(BusinessA, "Corridor");
+        await SeedMachine(BusinessA, "Stairwell");
+        var fleet = Fleet(Machine(7, "Lobby level 1"), Machine(9, "Foyer"));
+
+        await using var db = Scoped(BusinessA);
+        var review = await Review(db, fleet).Handle();
+
+        Assert.Equal(
+            [7L, 9L], review.AwaitingReview.Select(entry => entry.ProviderMachineId).ToList());
+
+        // This time the machine the operator chose is the one that moved: Corridor became provider
+        // machine 9 while the review sat on their screen.
+        await using (var meanwhile = Scoped(BusinessA))
+        {
+            var claimed = await meanwhile.Machines.SingleAsync(machine => machine.Id == corridor);
+            claimed.ExternalMachineId = "9";
+            await meanwhile.SaveChangesAsync();
+        }
+
+        var refusal = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            Apply(db, fleet).Handle(Decisions(LinkTo(7, corridor))));
+
+        Assert.Contains(
+            ProviderMachineLinkPolicy.LinkRefusal(
+                "7", chosenMachineProviderId: "9", anotherMachineCarriesIt: false)!,
+            refusal.Message,
+            StringComparison.Ordinal);
+
+        // A machine's provider identity is the one it has, never the one a stale plan assumed it had.
+        var stored = await StoredMachines();
+        Assert.Equal("9", stored.Single(machine => machine.Id == corridor).ExternalMachineId);
+        Assert.All(stored, machine => Assert.NotEqual("7", machine.ExternalMachineId));
+    }
+
+    // ---------------------------------------------------------------------------------------------
     // What the rest of the application sees.
     // ---------------------------------------------------------------------------------------------
 
