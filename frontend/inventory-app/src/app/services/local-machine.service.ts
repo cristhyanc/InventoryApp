@@ -13,8 +13,9 @@ import { ConfigService } from './config.service';
  * resource exactly as one with a provider does.
  *
  * The provider's own machine id is on neither side of this contract. It is written by the
- * `AddMachines` backfill and, later, by provider synchronization and the provider machine review
- * (issue #742); what a client is told is only whether the provider names the machine.
+ * `AddMachines` backfill and, since issue #742, by the provider machine review
+ * ({@link ProviderMachineReviewService}); what a client is told here is only whether the provider
+ * names the machine.
  */
 @Injectable({ providedIn: 'root' })
 export class LocalMachineService {
