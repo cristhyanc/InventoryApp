@@ -37,6 +37,9 @@ export const MACHINES_LOAD_FAILED_MESSAGE =
 export const MACHINE_ATTRIBUTION_FAILED_MESSAGE =
   'The machine this entry was opened for could not be selected automatically - it may have been deactivated or removed. Choose it below if it is still listed, or save without a machine.';
 
+export const MACHINE_RESOLUTION_PENDING_MESSAGE =
+  'Confirming the machine this entry was opened for. Quantities can be typed now and saved once it is confirmed.';
+
 /**
  * Where the page's read of the active catalogue stands. Only `'loaded'` means {@link
  * ManualPickListComponent.products} is a real answer, so only then may an empty list be described
@@ -91,7 +94,12 @@ function parseTakenQuantity(raw: string): number | null {
  * the machine read itself failed - {@link machineAttributionFailed} is set instead of silently
  * leaving the selection at "No machine": the link promised this refill would be attributed to that
  * machine, so failing to do so has to be visible rather than indistinguishable from an operator who
- * deliberately chose "No machine".
+ * deliberately chose "No machine". **Until that read settles, Save is refused** ({@link
+ * machineResolutionPending}): the catalogue can answer first, so an operator could otherwise type
+ * quantities and submit an unattributed refill while the link's own machine was still being
+ * confirmed - and a late answer arriving afterwards would change the kept submission's machine, so
+ * retrying an uncertain attempt would mint a new key and could deduct storage a second time. An
+ * entry with no linked machine at all never waits.
  *
  * **Idempotency.** Each save keeps the rows the operator currently has typed into an exact submitted
  * row set - the products with a positive "Taken" value, in catalogue order - and compares it, together
@@ -201,6 +209,11 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
 
   readonly machineAttributionFailedMessage = MACHINE_ATTRIBUTION_FAILED_MESSAGE;
 
+  readonly machineResolutionPendingMessage = MACHINE_RESOLUTION_PENDING_MESSAGE;
+
+  /** Whether the local machine read has answered, either way; see {@link machineResolutionPending}. */
+  private machineReadSettled = false;
+
   /** The raw text typed into each product's "Taken" box, keyed by product id. */
   private readonly takenById = new Map<number, string>();
 
@@ -228,11 +241,13 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
       next: (machines) => {
         this.machines = machines;
         this.machinesLoadFailed = false;
+        this.machineReadSettled = true;
         this.resolvePreselectedMachine();
       },
       error: () => {
         this.machines = [];
         this.machinesLoadFailed = true;
+        this.machineReadSettled = true;
         this.resolvePreselectedMachine();
       }
     });
@@ -250,6 +265,17 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   /** Whether the machine selector is offered at all; see the class doc. */
   get machineSelectorShown(): boolean {
     return !this.machinesLoadFailed && this.activeMachines.length > 0;
+  }
+
+  /**
+   * Whether a linked machine's resolution is still outstanding, which only happens while a
+   * "Record refill" link named one and the machine read has not answered yet. Save is refused
+   * while it is, so a refill is never submitted with an attribution that is neither the linked
+   * machine nor a deliberate "No machine", and a kept submission's machine can never change
+   * underneath an unresolved retry; see the class doc.
+   */
+  get machineResolutionPending(): boolean {
+    return this.preselectedMachineId !== null && !this.machineReadSettled;
   }
 
   categories(): Category[] {
@@ -291,7 +317,7 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   }
 
   get canSave(): boolean {
-    if (this.saving || this.sessionActive) {
+    if (this.saving || this.sessionActive || this.machineResolutionPending) {
       return false;
     }
     const rows = this.buildRows();
@@ -301,8 +327,10 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   save(): void {
     const rows = this.buildRows();
     // Checked here as well as hidden in the template, so the write is actually unavailable during a
-    // support session rather than merely invisible - the endpoint refuses it either way.
-    if (this.saving || this.sessionActive || rows === null || rows.length === 0) {
+    // support session rather than merely invisible - the endpoint refuses it either way. The
+    // pending-resolution check is here for the same reason, and because the machine the link named
+    // must not be able to arrive after this request was built: see machineResolutionPending.
+    if (this.saving || this.sessionActive || this.machineResolutionPending || rows === null || rows.length === 0) {
       return;
     }
 

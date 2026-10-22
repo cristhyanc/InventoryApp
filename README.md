@@ -1785,7 +1785,10 @@ machine selector both exist.
   time the pick list opens — deactivated, for instance, in the moment between opening the two pages —
   the pick list says so plainly next to its machine selector rather than quietly recording the refill
   against no machine at all; you can still choose a machine yourself from the list, or save without
-  one.
+  one. While the pick list is still confirming which machine the link named, it says so and Save
+  waits — you can type your quantities straight away, and saving becomes available the moment the
+  machine is settled, so a refill opened from a machine's page is never recorded against no machine
+  by accident. Entering a pick from the menu, with no machine linked, never waits for this.
 - **Sync Restock is unaffected.** It still imports Nayax's own stock-adjustment alerts and still
   recognises a refill you recorded manually — through this link or otherwise — as already accounted
   for, so applying the matching Nayax event afterward still cannot deduct the same storage twice.

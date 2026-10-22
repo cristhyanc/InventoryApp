@@ -9127,6 +9127,22 @@ state - a resolved preselection is a real, changeable selection, and a failed on
 selection exactly where it already honestly was, so the operator can still pick a machine from the
 list (if one is shown) or save explicitly against "No machine".
 
+**Until that resolution settles, Save is refused.** `machineResolutionPending` is `true` exactly
+while a link named a machine and the machine read has not answered either way, and both `canSave`
+and `save()` refuse while it is. The two reads are independent: `products` is the page's own
+already-fetched catalogue, so it is routinely ready first, and without this rule an operator could
+type quantities and submit a refill in that window with **no** `machineId` at all - neither the
+machine the link promised nor a deliberate "No machine" - and with no attribution warning, because
+`machineAttributionFailed` is only decided once the read settles. It also closes the retry
+consequence that follows from it: a submission kept for an unchanged retry carries its machine, so a
+machine arriving *after* an uncertain first attempt would change what the next Save compares against,
+mint a new idempotency key, and let a first request that did commit deduct storage a second time.
+Refusing the save until the attribution is known means no request can leave while it is unresolved,
+so there is no kept submission for a late answer to change underneath. The wait is announced in the
+selector's place (`data-testid="manual-pick-list-machine-resolution-pending"`, `role="status"`) and
+the "Taken" boxes stay open, so the operator can keep typing; **ordinary entry never waits**, because
+`preselectedMachineId` is `null` and the pending state is never raised at all.
+
 **Sync Restock's fallback wording now points at the pick list.** `MachineRestockSyncComponent`'s
 description previously said "Manual restocking above remains available as a fallback"; "above" named
 a control that no longer exists, so it now says the pick list's manual entry is the fallback instead.
@@ -9155,7 +9171,12 @@ malformed `machineId` preselecting nothing, and ordinary navigation with no quer
 unaffected. `manual-pick-list.component.spec.ts`'s "machine preselection from a link" describe block
 covers a resolved preselection, a deactivated/removed/unreadable-list failure each raising
 `machineAttributionFailed` without changing the submitted `machineId`, and no failure being raised
-when no machine was linked at all.
+when no machine was linked at all. Three of its tests hold the machine read open on a `Subject` to
+cover the window above: Save refused and no request sent while a linked machine is unresolved and
+then submitted with its `machineId` once the read answers; ordinary no-machine entry saving
+immediately with the read still outstanding; and an uncertain attempt made after the machine resolved
+being retried with the identical key, machine and rows, so a late answer can never become a second
+deduction.
 
 #### Supplier Orders frontend page (issue #387)
 
@@ -12079,10 +12100,10 @@ regression tests count the requests that actually leave the rendered page, throu
 double.
 
 **Sync Restock stays a section of its own, outside both panels**: it is a write workflow
-rather than one of the page's two views of this machine, and [issue
-#744](#nayax-machine-stock-event-import-and-sync-restock-reconciliation-issue-183) owns the future
-consolidation of the per-product manual Restock controls, which this change leaves exactly where
-they are.
+rather than one of the page's two views of this machine. The per-product manual Restock controls,
+which this change left exactly where they were, were since removed by issue #744 - see
+[Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744) -
+and Sync Restock itself stayed exactly as described here.
 
 **What this read does not promise.** The documented endpoint is "the most recent sales transactions
 for a specific machine" with no date range, no row count and no paging, so neither the API response
