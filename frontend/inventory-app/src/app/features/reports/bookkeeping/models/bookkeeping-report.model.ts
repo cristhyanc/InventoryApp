@@ -17,6 +17,18 @@ export interface BookkeepingReport {
    * API response does not carry them.
    */
   transactionCount?: number; averageSale?: number;
+  /**
+   * The expected-versus-actual Nayax reimbursement comparison (issue #805).
+   * `expectedReimbursement` is calculated from this period's card sales less the Nayax fees
+   * including GST; `actualReimbursement` is what the settlement import recorded for the period, and
+   * it is a measured zero only while `providerAvailability.fees` is `Complete` and
+   * `reconciliationStatus` is not `Pending` - `Pending` means no imported row covers the period at
+   * all. `reimbursementDifference` is actual less expected, signed. None of them is `netSettlement`,
+   * which keeps its own established meaning. Optional because an older API response does not carry
+   * them.
+   */
+  expectedReimbursement?: number; actualReimbursement?: number; reimbursementDifference?: number;
+  isReconciled?: boolean; reconciliationStatus?: string; reconciliationTolerance?: number;
   // Transaction-status counts for the requested period/machine, scoped by the API before the
   // completed-sale filter excluded them (issue #476). Pending, refunded and cancelled/declined rows
   // are normal Nayax outcomes; only an unrecognised or absent status ID is a data-quality problem,
@@ -30,8 +42,9 @@ export interface BookkeepingReport {
   /**
    * How well recorded provider coverage accounts for this period (issue #730). `sales` governs
    * sales, the card/cash split, COGS, gross profit and site commission; `fees` governs the Nayax
-   * processing fees and their GST; `combined` governs the figures that depend on both - net and
-   * direct profit and their margins, the net card settlement and the total of operating costs.
+   * processing fees, their GST and the imported actual reimbursement; `combined` governs the figures
+   * that depend on both - net and direct profit and their margins, the net card settlement, the
+   * total of operating costs, and the expected reimbursement and its difference from the actual.
    * Delivery, packaging and operating expenses are this business's own records and carry no state.
    * Optional because an older API response does not carry it.
    */

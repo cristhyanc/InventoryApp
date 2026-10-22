@@ -21,11 +21,9 @@ public sealed class FakeDashboardReportFactsProvider : IDashboardReportFactsProv
     }
 
     public static DashboardReportFacts Complete(int machineCount = 2, int productCount = 3,
-        bool importedContainsRows = true, decimal importedNetSettlement = 74m, bool commissionIsComplete = true) => new(
+        bool commissionIsComplete = true) => new(
         MachineCount: machineCount,
         ProductCount: productCount,
-        ImportedContainsRows: importedContainsRows,
-        ImportedNetSettlement: importedNetSettlement,
         CommissionIsComplete: commissionIsComplete,
         CommissionWarnings: Array.Empty<string>());
 }
