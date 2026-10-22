@@ -163,6 +163,23 @@ describe('Admin costing and maintenance routes (issue #390)', () => {
   });
 
   /**
+   * The retired Reporting Dashboard page (issue #806, parent #803): its distinct capabilities now
+   * live on Bookkeeping, so its old address redirects there instead of serving its own page. See
+   * `reporting-dashboard-redirect.spec.ts` for the query-preservation and access-control behaviour
+   * this wiring produces once the router runs it.
+   */
+  it('redirects the old /reports address to /reports/bookkeeping, with no guard of its own', () => {
+    const redirect = route('reports');
+
+    // A redirect function, not a plain string, so the original query string survives - see the
+    // comment beside it in `app.routes.ts` and `reporting-dashboard-redirect.spec.ts`.
+    expect(typeof redirect.redirectTo).toBe('function');
+    expect(redirect.pathMatch).toBe('full');
+    expect(redirect.canActivate).toBeUndefined();
+    expect(redirect.loadComponent).toBeUndefined();
+  });
+
+  /**
    * `/admin` keeps its own address rather than redirecting: the Dashboard and each dedicated
    * page's "Back to Admin" link still point at it, alongside the sidebar's Admin group (#391).
    */
@@ -345,9 +362,11 @@ describe('provider-locked routes (issue #729)', () => {
    * provider guard at all and open normally with no provider, reporting their own availability
    * states instead (issues #730 and #731). The site commission report is deliberately not here: a
    * site is known only from the live fleet read, so it has nothing stored to report on.
+   *
+   * `reports` itself is absent since issue #806: it no longer serves a page of its own, so it
+   * carries no guard at all - see the "retired Reporting Dashboard redirect" tests below.
    */
   const storedDataReportPaths = [
-    'reports',
     'reports/bookkeeping',
     'reports/daily',
     'reports/transactions',

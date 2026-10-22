@@ -217,7 +217,6 @@ describe('primary navigation (issue #391)', () => {
    */
   it('groups every report over stored data, and locks none of them', () => {
     expect(childRoutes('Reports')).toEqual([
-      { label: 'Dashboard', route: '/reports' },
       { label: 'Bookkeeping', route: '/reports/bookkeeping' },
       { label: 'Daily', route: '/reports/daily' },
       { label: 'Transactions', route: '/reports/transactions' },
@@ -555,7 +554,7 @@ describe('activeNavRoute', () => {
   it('prefers the most specific matching link so a parent page does not steal its own child', () => {
     expect(activeNavRoute(primaryNavigation, '/purchases')).toBe('/purchases');
     expect(activeNavRoute(primaryNavigation, '/purchases/orders')).toBe('/purchases/orders');
-    expect(activeNavRoute(primaryNavigation, '/reports')).toBe('/reports');
+    expect(activeNavRoute(primaryNavigation, '/reports/bookkeeping')).toBe('/reports/bookkeeping');
     expect(activeNavRoute(primaryNavigation, '/reports/site-commissions')).toBe('/reports/site-commissions');
   });
 
@@ -696,7 +695,6 @@ describe('navigationFor with the provider answer (issue #729)', () => {
     const noProvider = navigationFor(OWNER, false, 'offered', availability('NotConfigured'));
 
     expect(childRoutes('Reports', noProvider).map((child) => child.route)).toEqual([
-      '/reports',
       '/reports/bookkeeping',
       '/reports/daily',
       '/reports/transactions',

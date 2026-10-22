@@ -237,7 +237,7 @@ describe('SidebarNavComponent active route (issue #391)', () => {
 
     expect(link(host, '/reports/gst')?.getAttribute('aria-current')).toBe('page');
     expect(groupToggle(host, 'Reports').getAttribute('aria-expanded')).toBe('true');
-    expect(link(host, '/reports')?.getAttribute('aria-current')).toBeNull();
+    expect(link(host, '/reports/bookkeeping')?.getAttribute('aria-current')).toBeNull();
   });
 
   it('keeps the parent group heading active while one of its pages is open', async () => {

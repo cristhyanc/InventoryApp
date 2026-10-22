@@ -1,4 +1,5 @@
-import { Routes } from '@angular/router';
+import { inject } from '@angular/core';
+import { Router, Routes } from '@angular/router';
 import { MsalGuard } from '@azure/msal-angular';
 import { ACCESS_NOT_ALLOWED_PATH, requireCapability } from './access/capability.guard';
 import { BUSINESS_APPLICATION_ROUTE, accountStateGuard } from './access/account-state.guard';
@@ -252,9 +253,18 @@ export const routes: Routes = [
       import('./components/purchases/purchase-edit/purchase-edit-page.component').then((m) => m.PurchaseEditPageComponent)
   },
   {
+    // The retired Reporting Dashboard page (issue #806, parent #803): its distinct capabilities -
+    // transaction count, average sale and the expected-versus-actual reimbursement comparison, with
+    // exports - now live on Bookkeeping, so the old address redirects there instead of serving its
+    // own page. A string `redirectTo` only copies a query parameter it names itself (Angular's
+    // `:name` placeholder convention), so a plain string here would silently drop every filter -
+    // this returns a `UrlTree` built from the original request's own `queryParams` instead, which
+    // carries whatever the old bookmark held (date, period, machine) forward untouched.
+    // `/reports/bookkeeping`'s own guards below decide access, exactly as `/reports`'s guards once
+    // did.
     path: 'reports',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
-    loadComponent: () => import('./components/reports/dashboard-report.component').then((m) => m.DashboardReportComponent)
+    pathMatch: 'full',
+    redirectTo: ({ queryParams }) => inject(Router).createUrlTree(['/reports/bookkeeping'], { queryParams })
   },
   {
     path: 'reports/bookkeeping',
