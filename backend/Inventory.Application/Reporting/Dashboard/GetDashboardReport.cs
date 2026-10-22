@@ -76,8 +76,11 @@ public sealed class GetDashboardReport
             ? ReportingCalculations.MarginPercent(bookkeeping.Sales, bookkeeping.PartialCostOfGoods)
             : (decimal?)null;
 
+        // The completed-transaction count is the bookkeeping report's own since issue #804, which
+        // relocated it there rather than letting two reports count the same rows separately. This
+        // summary reports it, and the average sale over it, exactly as that report decided them.
         return new DashboardReportDto(bookkeeping.From, bookkeeping.To, bookkeeping.Sales, bookkeeping.GrossProfit,
-            facts.TransactionCount, facts.TransactionCount, facts.MachineCount, facts.ProductCount,
+            bookkeeping.TransactionCount, bookkeeping.TransactionCount, facts.MachineCount, facts.ProductCount,
             productReport.Rows.Count(x => x.IsUnmapped), quality, bookkeeping.NayaxFeesIncludingGst,
             reimbursement.ActualReimbursement, bookkeeping.SiteCommission, bookkeeping.NetProfit, bookkeeping.NetMarginPercent,
             bookkeeping.NayaxFeesExGst, bookkeeping.DeliveryCosts, bookkeeping.PackageCosts, bookkeeping.OtherOperatingExpenses,
@@ -89,7 +92,7 @@ public sealed class GetDashboardReport
             IsCogsComplete = bookkeeping.IsCogsComplete,
             UncostedTransactionCount = bookkeeping.UncostedTransactionCount,
             UncostedSalesAmount = bookkeeping.UncostedSalesAmount,
-            AverageSale = ReportingCalculations.Average(bookkeeping.Sales, facts.TransactionCount),
+            AverageSale = bookkeeping.AverageSale,
             GrossMarginPercent = grossMarginPercent,
             NayaxFeesIncludingGst = bookkeeping.NayaxFeesIncludingGst,
             OtherOperatingExpenses = bookkeeping.OtherOperatingExpenses,

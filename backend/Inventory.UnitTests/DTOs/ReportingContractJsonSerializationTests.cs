@@ -51,6 +51,9 @@ public class ReportingContractJsonSerializationTests
                 "cardSales", "cashSales", "cardTransactionCount", "cashTransactionCount", "nayaxProcessingRate",
                 "pendingTransactionCount", "refundedTransactionCount", "declinedOrCancelledTransactionCount",
                 "unknownStatusTransactionCount", "missingStatusTransactionCount",
+                // Added by issue #804, additively: the completed-transaction count behind the
+                // sales total and the average sale over it.
+                "transactionCount", "averageSale",
                 "partialCostOfGoods", "isCogsComplete", "uncostedTransactionCount",
                 "uncostedSalesAmount", "structuredOperatingExpenses", "operatingExpenseGst",
                 "operatingExpensesByCategory", "directProfit", "directMarginPercent", "nayaxProcessingFees",

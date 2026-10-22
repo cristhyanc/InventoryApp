@@ -13,7 +13,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Historical weighted-average inventory costing and persisted COGS provenance.
 - Effective-dated Nayax processing fees and site commission agreements.
 - Operating expenses, reimbursement imports, and settlement reconciliation.
-- Dashboard, bookkeeping, daily-sales, transaction, GST, commission, machine, and product reports.
+- Dashboard, bookkeeping, daily-sales, transaction, GST, commission, machine, and product reports. Monthly Bookkeeping reports its own sales volume too — the number of completed transactions in the selected dates and machine scope, and the average sale over them — so that reading does not need the Reporting Dashboard; both figures follow the same date and machine filters as the rest of the report, appear in its CSV/XLSX export, and show their availability state rather than a zero when provider data does not cover the period.
 - CSV/XLSX exports that use the same backend calculations as the UI.
 - Microsoft Entra sign-in and delegated-scope API authorization (see [Authentication configuration](#authentication-configuration)).
 - Owner-only business settings — name, contact email, ABN, GST registration and time zone, with a confirmation before a time zone change (see [Business settings (Admin page)](#business-settings-admin-page)).

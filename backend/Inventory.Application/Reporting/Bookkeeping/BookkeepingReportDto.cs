@@ -33,6 +33,23 @@ public record BookkeepingReportDto(
     int UnknownStatusTransactionCount = 0,
     int MissingStatusTransactionCount = 0)
 {
+    /// <summary>
+    /// Completed (status 12) sales in this period and machine scope - the volume behind
+    /// <see cref="Sales"/>, and the denominator of <see cref="AverageSale"/> (issue #804). It is a
+    /// provider-sourced figure and is governed by <see cref="ProviderAvailability"/>'s sales state,
+    /// exactly as the card/cash transaction counts beside it are.
+    /// </summary>
+    public int TransactionCount { get; init; }
+
+    /// <summary>
+    /// <see cref="Sales"/> over <see cref="TransactionCount"/>, through the shared
+    /// <c>ReportingCalculations.Average</c> - the one average-sale formula, which answers <c>0</c>
+    /// for a period with no completed transaction rather than dividing by zero. A period whose
+    /// sales state is not <c>Complete</c> shows that state instead of this zero, because nothing
+    /// measured it.
+    /// </summary>
+    public decimal AverageSale { get; init; }
+
     public decimal PartialCostOfGoods { get; init; }
     public bool IsCogsComplete { get; init; } = true;
     public int UncostedTransactionCount { get; init; }

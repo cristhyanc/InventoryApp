@@ -33,7 +33,7 @@ import { IconComponent } from '../shared/icon.component';
           <p>{{ notice.detail }}</p>
         </div>
       }
-      <section class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <section class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <article class="stat-card">
           <div class="stat-card-head"><div class="stat-card-content"><p class="stat-card-label">Gross Sales</p><p class="stat-card-value" data-testid="gross-sales">{{ moneyOrState(report.sales, salesAvailability(report)) }}</p></div><span class="icon-tile icon-tile-dark"><app-icon name="attach_money" /></span></div>
           <p class="stat-card-footer"><span class="value-muted">Card {{ moneyOrState(report.cardSales, salesAvailability(report)) }} · Cash {{ moneyOrState(report.cashSales, salesAvailability(report)) }}</span></p>
@@ -49,6 +49,10 @@ import { IconComponent } from '../shared/icon.component';
         </article>
         <article class="stat-card">
           <div class="stat-card-head"><div class="stat-card-content"><p class="stat-card-label">{{ machineId ? 'Direct Margin' : 'Net Margin' }}</p><p class="stat-card-value" data-testid="net-margin">{{ percentOrState(machineId ? report.directMarginPercent : report.netMarginPercent, combinedAvailability(report)) }}</p></div><span class="icon-tile icon-tile-dark"><app-icon name="trending_up" /></span></div>
+        </article>
+        <article class="stat-card">
+          <div class="stat-card-head"><div class="stat-card-content"><p class="stat-card-label">Transactions</p><p class="stat-card-value" data-testid="transactions">{{ countOrState(report.transactionCount, salesAvailability(report)) }}</p></div><span class="icon-tile icon-tile-dark"><app-icon name="assignment" /></span></div>
+          <p class="stat-card-footer"><span class="value-muted"><span data-testid="average-sale">{{ moneyOrState(report.averageSale, salesAvailability(report)) }}</span> average sale</span></p>
         </article>
       </section>
       @if (machineId) { <p class="value-muted">Net profit is unavailable because shared business overhead is not allocated to individual machines.</p> }
@@ -73,7 +77,7 @@ import { IconComponent } from '../shared/icon.component';
       <details class="card card-body" data-testid="calculation-help">
         <summary class="card-title cursor-pointer">How this report is calculated</summary>
         <div class="space-y-3 pt-3">
-          <p>Sales count only approved, completed Nayax transactions. Pending, refunded, cancelled and declined transactions are ordinary payment outcomes and are left out of every figure here.</p>
+          <p>Sales count only approved, completed Nayax transactions. Pending, refunded, cancelled and declined transactions are ordinary payment outcomes and are left out of every figure here. The transaction count is how many of those completed transactions this period and machine scope holds, and the average sale is gross sales divided by it.</p>
           <p>Cost of goods and profit use the cost recorded on each sale when that sale was costed, so an earlier period keeps the cost history it was built from. A completed sale with no recorded cost stays uncosted: cost of goods is shown as partial and profit is left unavailable rather than estimated from today's product cost.</p>
           <p>Site commission comes from the effective-dated site commission agreement that covered each sale's date, so a rate that changed part-way through the period applies from the date it took effect.</p>
           <p>Nayax processing fees use the imported fee amounts for the dates those cover, and the configured rate for the remaining dates; any estimated part is shown beside the fee total.</p>
@@ -154,7 +158,8 @@ export class BookkeepingReportComponent extends ReportPageBase<BookkeepingReport
     if (!incomplete.length) return null;
     return {
       title: 'Incomplete: provider data does not cover this whole period.',
-      detail: 'Sales, the card/cash split, cost of goods, site commission, the Nayax fees, the net card settlement '
+      detail: 'Sales, the card/cash split, the transaction count and average sale, cost of goods, site commission, '
+        + 'the Nayax fees, the net card settlement '
         + 'and every profit and margin built on them are shown with their state instead of a figure wherever '
         + 'nothing was recorded - they are not a measured zero. Delivery, packaging and operating expenses come '
         + 'from your own records and are unaffected.'

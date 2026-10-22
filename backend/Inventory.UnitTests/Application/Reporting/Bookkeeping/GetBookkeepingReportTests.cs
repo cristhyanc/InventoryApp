@@ -272,4 +272,59 @@ public class GetBookkeepingReportTests
         Assert.Equal(8, report.CardTransactionCount);
         Assert.Equal(2, report.CashTransactionCount);
     }
+
+    /// <summary>
+    /// Issue #804: bookkeeping reports the volume behind its own sales total and the average sale
+    /// over it, from the completed-transaction count the facts port already scopes to the requested
+    /// period and machine - the same count the reporting dashboard reports, not a second one.
+    /// </summary>
+    [Fact]
+    public async Task Reports_the_completed_transaction_count_and_the_average_sale_over_it()
+    {
+        var facts = FakeBookkeepingReportFactsProvider.Complete(sales: 250m, transactionCount: 10);
+        var useCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(facts));
+
+        var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31)), CancellationToken.None);
+
+        Assert.Equal(10, report.TransactionCount);
+        Assert.Equal(25m, report.AverageSale);
+    }
+
+    /// <summary>
+    /// The shared <c>ReportingCalculations.Average</c> answers zero for a period with no completed
+    /// transaction, exactly as the reporting dashboard's average sale already does. A covered period
+    /// that genuinely sold nothing is a real zero; an uncovered one is reported as its state by the
+    /// presentation and the export, never as this number.
+    /// </summary>
+    [Fact]
+    public async Task Zero_completed_transactions_report_a_zero_average_sale_rather_than_dividing_by_zero()
+    {
+        var facts = FakeBookkeepingReportFactsProvider.Complete(sales: 0m, cardSales: 0m, cardTransactions: 0,
+            cashSales: 0m, cashTransactions: 0);
+        var useCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(facts));
+
+        var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31)), CancellationToken.None);
+
+        Assert.Equal(0, report.TransactionCount);
+        Assert.Equal(0m, report.AverageSale);
+    }
+
+    /// <summary>
+    /// The count is the facts port's completed-sale count, not the sum of the card and cash counts:
+    /// a completed sale whose payment method is unknown is still a sale this report included in its
+    /// total, so leaving it out of the denominator would overstate the average.
+    /// </summary>
+    [Fact]
+    public async Task The_transaction_count_includes_a_completed_sale_with_an_unknown_payment_method()
+    {
+        var facts = FakeBookkeepingReportFactsProvider.Complete(sales: 120m, cardTransactions: 8, cashTransactions: 2,
+            transactionCount: 12) with
+        { UnknownTransactions = 2 };
+        var useCase = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(facts));
+
+        var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31)), CancellationToken.None);
+
+        Assert.Equal(12, report.TransactionCount);
+        Assert.Equal(10m, report.AverageSale);
+    }
 }
