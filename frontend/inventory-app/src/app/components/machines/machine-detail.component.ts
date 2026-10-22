@@ -3,20 +3,13 @@ import { CommonModule } from '@angular/common';
 import { RouterLink, ActivatedRoute } from '@angular/router';
 import { BehaviorSubject, catchError, map, Observable, of, Subscription, switchMap, tap } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
-import { StockService } from '../../services/stock.service';
-import { ToastService } from '../../services/toast.service';
 import { BreadcrumbService } from '../../layout/breadcrumbs/breadcrumb.service';
 import { MachineRestockSyncComponent } from './machine-restock-sync/machine-restock-sync.component';
 import { MachineLatestSalesComponent } from './machine-latest-sales/machine-latest-sales.component';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { AccessService } from '../../access/access.service';
-import {
-  Machine,
-  Product,
-  StockAdjustmentReason,
-  StockAdjustmentDto
-} from '../../models/models';
+import { Machine, Product } from '../../models/models';
 
 /**
  * The two content tabs of the machine-details page (issue #768), in the order the owner asked for
@@ -70,10 +63,11 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
   activeTab: MachineDetailTab = 'sales';
 
   /**
-   * Whether a support session is active (issue #658): Restock is hidden while it is, because a
-   * session grants `InventoryOperate` - the capability this write would otherwise be gated on -
-   * and the backend refuses the write itself only by its read-only method rule, never by
-   * withholding the capability. See `SupportSessionService.active$`.
+   * Whether a support session is active (issue #658): the Record refill link (formerly the
+   * per-product Restock control, removed by issue #744's machine-page consolidation) is hidden
+   * while it is, because a session grants `InventoryOperate` - the capability this write would
+   * otherwise be gated on - and the backend refuses the write itself only by its read-only method
+   * rule, never by withholding the capability. See `SupportSessionService.active$`.
    */
   sessionActive = false;
 
@@ -101,8 +95,6 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
   constructor(
     private readonly route: ActivatedRoute,
     private readonly machineService: MachineService,
-    private readonly stockService: StockService,
-    private readonly toastService: ToastService,
     private readonly breadcrumbService: BreadcrumbService,
     supportSession: SupportSessionService,
     access: AccessService
@@ -240,43 +232,6 @@ export class MachineDetailComponent implements OnInit, OnDestroy {
     if (stockPercentage < 30) return 'badge-danger';
     if (stockPercentage < 80) return 'badge-warning';
     return 'badge-success';
-  }
-
-  restockProduct(product: Product, machine: Machine | null, qty?: string | number, qtyInput?: HTMLInputElement): void {
-    // Checked here as well as hidden in the template, so the write is actually unavailable rather
-    // than merely invisible - the endpoint refuses it either way.
-    if (this.sessionActive) {
-      return;
-    }
-    const defaultQty = (product.maxStockInMachine ?? 0) - (product.quantityInStock ?? 0);
-    const qtyNum = Math.trunc(Number(qty ?? defaultQty));
-    if (!product || qtyNum <= 0) {
-      this.toastService.warning('Quantity must be greater than 0');
-      return;
-    }
-
-    const payload: StockAdjustmentDto = {
-      quantityChange: qtyNum*-1,
-      reason: StockAdjustmentReason.MachineRefill,
-      // The local machine (issue #741): what a stock movement records since then.
-      machineId: machine?.localMachineId ?? null,
-      notes: `${machine?.machineName ?? ''} - ${machine?.machineID ?? ''} - Machine restock`
-    };
-
-    this.stockService.adjust(product.id, payload).subscribe({
-      next: () => {
-        this.toastService.success(`${product.name} restocked by ${qtyNum}`);
-        if (qtyInput) {
-          qtyInput.value = '0';
-        }
-      },
-      error: (x) => {
-        const message = typeof x.error === 'string'
-          ? x.error
-          : x.error?.message ?? x.error?.title;
-        this.toastService.error(message ?? 'Failed to restock product');
-      }
-    });
   }
 
   /**

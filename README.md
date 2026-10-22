@@ -1582,12 +1582,13 @@ that cannot be used.
 - **Manual entry needs no machine, no fleet read and no product read.** It lists the business's
   active products with a search box, a category filter and a "Taken" quantity box per row, from the
   same catalogue the calculated view's Products filter already reads. Saving sends every entered
-  quantity as one request to the same batch refill endpoint the calculated view's future machine-aware
-  entry will use (`POST /api/pick-list/refills`), recording one `MachineRefill` stock movement per
-  product in a single all-or-nothing operation — the same guarantee the per-product Restock action
-  never had. A malformed "Taken" entry (anything that is not a whole number greater than zero) is
-  reported on its own row before anything is sent, and any refusal the server returns is put back on
-  the row it was about.
+  quantity as one request to the batch refill endpoint (`POST /api/pick-list/refills`), recording one
+  `MachineRefill` stock movement per product in a single all-or-nothing operation — a guarantee the
+  machine-detail page's old per-product Restock action, since removed in favour of this screen (see
+  [Record refill from a machine's page](#record-refill-from-a-machines-page) below), never had. A
+  malformed "Taken" entry (anything that is not a whole number greater than zero) is reported on its
+  own row before anything is sent, and any refusal the server returns is put back on the row it was
+  about.
 - **The page says which of the two it is.** The line under the title describes the view you are
   actually in: the calculated matrix is planning only and saves nothing, while manual entry says that
   nothing is saved until you click Save and that Save then records one machine refill per quantity
@@ -1792,16 +1793,46 @@ machine's product table in a second tab (issue #768).
   its currency, as `null` and never `0`, so this is not a client-side hide; Products stays fully
   usable. A platform administrator in a [support session](#super-admin-support-sessions) sees no
   Nayax data at all here, because a session resolves no Nayax credentials.
-- **Products is the same product table as before**, with the same fields, the same financial
-  redaction and the same per-product Restock control. It is read the first time you open that tab for
-  a machine — once, not once per thing on screen that reads it — so opening a machine does not fetch
-  it and switching back to Products does not fetch it again, and **Sync Restock stays its own section
-  above the tabs**. While that read is outstanding the tab says it is loading, and a read that
-  **failed** says so and offers a page reload: only a tab that has actually been answered reports a
-  product count or tells you the machine has no products.
+- **Products is the same product table as before**, with the same fields and the same financial
+  redaction; its per-product Restock inputs are gone — see [Record refill from a machine's
+  page](#record-refill-from-a-machines-page) below for what replaced them. The table itself is still
+  read the first time you open that tab for a machine — once, not once per thing on screen that reads
+  it — so opening a machine does not fetch it and switching back to Products does not fetch it again,
+  and **Sync Restock stays its own section above the tabs**. While that read is outstanding the tab
+  says it is loading, and a read that **failed** says so and offers a page reload: only a tab that has
+  actually been answered reports a product count or tells you the machine has no products.
 
 See [docs/architecture.md § Machine latest sales](docs/architecture.md#machine-latest-sales-issue-768)
 for the read boundary, the verified Nayax contract and the authorization rule.
+
+#### Record refill from a machine's page
+
+Issue #744's final phase replaces the Products tab's per-product quantity inputs and Restock buttons
+with one **Record refill** link, now that the pick list's manual entry (above) and its optional
+machine selector both exist.
+
+- **One link, not a control per product.** The link sits beside the product count in the Products
+  tab and opens `/pick-list` in manual entry — [Recording a pick without a
+  provider](#recording-a-pick-without-a-provider) above — with this machine already chosen in its
+  machine selector, so you can search for whatever you took and save every quantity in the one
+  atomic, idempotent request that screen already makes. It is never shown while a [support
+  session](#super-admin-support-sessions) is active, exactly as the Restock inputs it replaced never
+  were, because the pick list itself refuses to save during one too.
+- **The machine chosen is always this business's own machine record**, never the sales provider's
+  own machine number — the same local record the Machines page, Sync Restock and the machine's stock
+  and expense figures already use. If that machine is no longer one of your active machines by the
+  time the pick list opens — deactivated, for instance, in the moment between opening the two pages —
+  the pick list says so plainly next to its machine selector rather than quietly recording the refill
+  against no machine at all; you can still choose a machine yourself from the list, or save without
+  one. While the pick list is still confirming which machine the link named, it says so and Save
+  waits — you can type your quantities straight away, and saving becomes available the moment the
+  machine is settled, so a refill opened from a machine's page is never recorded against no machine
+  by accident. Entering a pick from the menu, with no machine linked, never waits for this.
+- **Sync Restock is unaffected.** It still imports Nayax's own stock-adjustment alerts and still
+  recognises a refill you recorded manually — through this link or otherwise — as already accounted
+  for, so applying the matching Nayax event afterward still cannot deduct the same storage twice.
+- **Stock display is unaffected.** The Stock column, its badge and every other figure on the Products
+  tab are exactly as they were; only the write control changed.
 
 ## Business settings (Admin page)
 

@@ -4230,11 +4230,17 @@ manual stock-adjustment form shared by the Stock History page and the preserved
 `/products/:id/stock` entry point. Sites, site products and the Sites list carry no write control
 at all - every call those pages make is a `GET` - so nothing in that family needed a guard.
 
-**`MachineDetailComponent`'s Restock control (quantity input and button) is hidden per row**, the
+**`MachineDetailComponent`'s Restock control (quantity input and button) was hidden per row**, the
 same `ProductListComponent.confirmDelete`/Delete-button shape issue #554 used: there is no
 read-only value left in a quantity input nobody may submit, so hiding it rather than disabling it
-is the right call, the same way Delete was hidden rather than disabled. `restockProduct()` also
-returns before calling `StockService.adjust` while a session is active.
+was the right call, the same way Delete was hidden rather than disabled, and `restockProduct()` also
+returned before calling `StockService.adjust` while a session is active. **Issue #744's machine-page
+consolidation removed that control and `restockProduct()` entirely**, replacing it with the
+**Record refill** link described in [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744);
+that link is hidden during a support session on the same reasoning, and the write it leads to is
+`ManualPickListComponent.save`'s own existing support-session refusal (see [Manual pick-list entry
+and mode selection](#manual-pick-list-entry-and-mode-selection-issue-744)), not a second guard
+invented here.
 
 **`MachineRestockSyncComponent`'s Sync Restock trigger is disabled, not hidden**, because unlike
 Restock's bare input it is a single well-known action on an otherwise-informative panel - the same
@@ -4253,10 +4259,11 @@ is refused. `adjust()` returns before calling `StockService.adjust` while a sess
 the component is composed into both `StockHistoryPageComponent` and the machine-detail/stock pages
 behind it, this one guard covers every place a manual adjustment can be submitted from.
 
-**What proves it.** `machine-detail.component.spec.ts` covers Restock being hidden while a session
-is active and rendered normally while none is, and `restockProduct()` refusing to call the API
-directly. `machine-restock-sync.component.spec.ts` covers Sync Restock being disabled in both
-states and every one of the four write-shaped methods refusing to call `MachineService` directly
+**What proves it.** The machine-detail page's own per-product Restock action was removed by issue
+#744's machine-page consolidation (see [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744));
+`machine-detail.component.spec.ts` now covers its replacement, the **Record refill** link, being
+hidden the same way while a session is active. `machine-restock-sync.component.spec.ts` covers Sync
+Restock being disabled in both states and every one of the four write-shaped methods refusing to call `MachineService` directly
 while a session is active, including the preview fetch. `stock-adjustment-form.component.spec.ts`
 covers Apply Adjustment being disabled in both states and `adjust()` refusing to call
 `StockService.adjust` directly while a session is active. `stock-history-page.component.spec.ts`
@@ -8935,18 +8942,37 @@ rather than one filter. **A connected business with every permission granted see
 `mode` defaults to `'calculated'`, the toggle is offered, and every existing calculated-mode test
 (`pick-list.component.spec.ts`, `pick-list.component.provider-optional.spec.ts`) passes unmodified.
 
-**No machine selector, and no local id substituted for a provider one (deferred to issue #794).**
-Every manual save omits `machineId` entirely; the batch refill contract already treats an absent
-machine as a valid whole-business pick (`PickListRefillPolicy.ValidateAgainstState` only checks a
-machine when one is named). The calculated view's own machine selection is untouched by this issue:
-it keeps selecting and querying by the raw provider machine id (`Machine.machineID`) it always has,
-and manual entry never reads or writes that selection. A local machine selector for manual entry is
-issue #794 - the second half of G2b, which issue #746 split off when it took the stock and expense
-screens onto the local machines (see [Machine fields from the business's own
-machines](#machine-fields-from-the-businesss-own-machines-issue-746)) - and the machine-page
-consolidation the 18 October 2026 owner decision describes (replacing the machine-detail page's
-per-product quantity inputs with a link into this screen) is tracked separately under #744. Neither
-is part of this slice.
+**No local id is ever substituted for a provider one.** The calculated view's own machine selection
+is untouched by this issue: it keeps selecting and querying by the raw provider machine id
+(`Machine.machineID`) it always has, and manual entry never reads or writes that selection. The batch
+refill contract already treats an absent machine as a valid whole-business pick
+(`PickListRefillPolicy.ValidateAgainstState` only checks a machine when one is named), which is what
+made the machine-free slice this section otherwise describes releasable before any local-machine
+selection existed for manual entry at all.
+
+**An optional local machine selector (issue #794 - the second half of G2b, which issue #746 split off
+when it took the stock and expense screens onto the local machines; see [Machine fields from the
+business's own machines](#machine-fields-from-the-businesss-own-machines-issue-746)) lets manual
+entry attribute a pick to one of the business's own machines, with or without a provider.**
+`ManualPickListComponent` reads `LocalMachineService.getAll()` (`/api/local-machines`, the same local
+records issue #740/#741 gave the stock and expense screens, never a provider id) and offers the
+result as `selectedMachineId` - a plain `<select>` of **active** local machines by
+`LocalMachine.name`, plus a "No machine" default - shown at all only once that read succeeds with at
+least one active machine (`machineSelectorShown`); a business with none, or whose read is still
+outstanding, behaves exactly as the machine-free slice above describes. A failed read
+(`machinesLoadFailed`) is reported in the selector's place rather than hidden silently, but a save
+without a machine still works, exactly as a business with none recorded would. The chosen machine is
+sent as the manual save's optional local `machineId` and is part of what `lastSubmission` compares
+for idempotency (see **Idempotency** below): changing it, like changing a row, mints a new key, while
+an unchanged resubmission reuses the key and the machine together. It is never sent to
+`PickListService.get`, the calculated view's own machine read, which keeps using provider machine ids
+untouched by this selector.
+
+**The machine-page consolidation the 18 October 2026 owner decision describes - replacing the
+machine-detail page's per-product quantity inputs with a link into this screen, with that machine
+preselected through this same selector's `selectedMachineId` - is issue #744's own later phase**; see
+[Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
+below.
 
 **Entry, validation and the save contract.** Manual entry lists every product in `products` (already
 active-only, since `ProductService.getAll()` with no filters answers the working catalogue), with a
@@ -9042,6 +9068,129 @@ that manual mode cannot be left while a save is in flight) and
 real template, including the provider-unavailable case hiding the Calculated option entirely, both
 mode-specific inventory-impact wordings, an uncertain save retried with the identical key and body
 after switching to calculated and back, and the toggle refusing to move while a save is in flight).
+Not listed above because it predates this section: `manual-pick-list.component.spec.ts`'s "machine
+selector" describe block (issue #794) already covers `machineSelectorShown`, `activeMachines`
+excluding inactive machines, the failed-read fallback, and the selector's own idempotency rules; see
+[Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
+immediately below for what issue #744's own later phase added on top of it.
+
+#### Machine-page consolidation: the "Record refill" link (issue #744)
+
+The owner's 18 October 2026 decision, finished once issues #743, #744's machine-free manual mode,
+#794's machine selector and #746's local machines had all shipped: the machine-detail page's
+per-product Restock inputs are **removed**, not merely hidden, and replaced with one **Record
+refill** link into the manual pick list this document already describes above, now opened with this
+machine preselected. The decision deliberately kept the old inputs in place until every one of those
+dependencies existed - a replacement that cannot yet attribute a refill to the right machine is worse
+than the thing it would replace - which is why this phase, rather than the machine-free phase above,
+is the one that removes them.
+
+**`MachineDetailComponent.restockProduct` and its per-row quantity input/button are gone.** The
+Products tab's Actions column is gone with them; `StockService`, `StockAdjustmentReason` and
+`StockAdjustmentDto` are no longer imported by this component at all. The column's other two
+read-only pieces - the stock badge (`stockClass`, `{{ quantityInStock }} / {{ maxStockInMachine }}`)
+and `MachineRestockSyncComponent`'s own Sync Restock section above the tabs - are both untouched;
+this phase removes a **write** control, never the stock display.
+
+**The replacement is one link, not a per-row control**, in the Products panel's card header beside
+the product count: `routerLink="/pick-list" [queryParams]="{ mode: 'manual', machineId:
+machine?.localMachineId }"`. It is rendered only once `machine?.localMachineId` is known (the
+`@if (machine$ | async as machine)` block this link already sits inside), and it is **hidden**, not
+disabled, while a support session is active - `*ngIf="!sessionActive"` on the link itself, the same
+treatment Restock had and `MachineRestockSyncComponent`'s own session guard already gives Sync
+Restock - because the write it leads to is refused by `ManualPickListComponent.save`'s own existing
+support-session rule (see above), and there is no partial, read-only version of "open the pick list"
+to leave reachable.
+
+**`machineId` is always the local machine id, never the raw Nayax number, and that is true by
+construction, not by a frontend check.** `machine.localMachineId` on this page is not merely usually
+present: `GET api/machines/{id}` (`MachinesController.GetById`) takes the **local** id as its route
+parameter and sets `MachineSummary.LocalMachineId` to exactly that id on every response (see the
+controller's own `// Every {id} below is a local machine, Machines.Id` comment, issue #741) - the
+page's own `machine$` can therefore never carry a `machineID` provider number where a local id is
+needed, which is the invariant the issue's "never treat the provider id as a local id" instruction
+is about. The link reuses that same already-loaded value; it introduces no new identity resolution.
+
+**`PickListComponent` reads the link's query parameters once, synchronously, in `ngOnInit`** - from
+`ActivatedRoute.snapshot.queryParamMap`, a one-shot deep link read rather than a value this page
+tracks across its own later navigation. `mode=manual` only chooses the page's **starting** view by
+calling the same `setMode('manual')` the manual-mode toggle already calls; it does not force manual
+mode the way `calculatedUnavailableReason` does, so a connected business still sees the Calculated
+toggle offered and can switch to it, and `calculatedUnavailableReason` and every other calculated-view
+rule above are completely unaffected. `machineId` is parsed only as "is this a positive integer" -
+this page performs no identity lookup of its own - and becomes `PickListComponent.
+preselectedMachineId`, passed into `ManualPickListComponent`'s `@Input` of the same name. Ordinary
+navigation to `/pick-list` (the nav menu entry, a bookmark) carries neither query parameter, so
+`mode` stays its existing default (`'calculated'`) and `preselectedMachineId` stays `null` - this
+phase changes nothing about that path.
+
+**`ManualPickListComponent` is the only place that resolves `preselectedMachineId` against the
+business's actual machines**, once its own `LocalMachineService.getAll()` read (issue #794, above)
+settles - success or failure alike. A link's machine id is accepted as the real selection, exactly as
+if the operator had chosen it from the dropdown, only when it names one of `activeMachines`; this is
+also what the issue's "resolve to the current business's local machine" requirement reduces to, since
+the id arriving here was already a local id by construction (previous bullet) and the only remaining
+question is whether it is still one of *this* business's *active* machines by the time the pick list
+loads. When it is not - deactivated or removed between opening the machine page and clicking the
+link, or the machine read itself failed - `machineAttributionFailed` is raised instead of silently
+leaving `selectedMachineId` at its default `null`: the link promised this refill would be attributed
+to that machine, so a save that quietly went through as "No machine" would misrepresent what
+happened. The message (`data-testid="manual-pick-list-machine-attribution-failed"`) is shown beside
+the selector rather than blocking the screen, and the dropdown itself is never forced into a false
+state - a resolved preselection is a real, changeable selection, and a failed one leaves the
+selection exactly where it already honestly was, so the operator can still pick a machine from the
+list (if one is shown) or save explicitly against "No machine".
+
+**Until that resolution settles, Save is refused.** `machineResolutionPending` is `true` exactly
+while a link named a machine and the machine read has not answered either way, and both `canSave`
+and `save()` refuse while it is. The two reads are independent: `products` is the page's own
+already-fetched catalogue, so it is routinely ready first, and without this rule an operator could
+type quantities and submit a refill in that window with **no** `machineId` at all - neither the
+machine the link promised nor a deliberate "No machine" - and with no attribution warning, because
+`machineAttributionFailed` is only decided once the read settles. It also closes the retry
+consequence that follows from it: a submission kept for an unchanged retry carries its machine, so a
+machine arriving *after* an uncertain first attempt would change what the next Save compares against,
+mint a new idempotency key, and let a first request that did commit deduct storage a second time.
+Refusing the save until the attribution is known means no request can leave while it is unresolved,
+so there is no kept submission for a late answer to change underneath. The wait is announced in the
+selector's place (`data-testid="manual-pick-list-machine-resolution-pending"`, `role="status"`) and
+the "Taken" boxes stay open, so the operator can keep typing; **ordinary entry never waits**, because
+`preselectedMachineId` is `null` and the pending state is never raised at all.
+
+**Sync Restock's fallback wording now points at the pick list.** `MachineRestockSyncComponent`'s
+description previously said "Manual restocking above remains available as a fallback"; "above" named
+a control that no longer exists, so it now says the pick list's manual entry is the fallback instead.
+No behaviour changed here - Sync Restock's own reconciliation workflow, duplicate detection and
+already-recorded handling (described above in this document) are untouched by this phase.
+
+**Reconciliation already treated a pick-list refill exactly like the removed Restock action, so
+nothing had to change for it to keep working.** `RecordPickListRefill`'s own store
+(`EfPickListRefillStore.ApplyAsync`) records each row through the same `IRecordInventoryMovement`
+movement logic as the removed action did, as `StockAdjustmentReason.MachineRefill` with
+`StockAdjustmentSource.Manual` - identical facts, not merely an equivalent effect. Sync Restock's
+possible-duplicate detector (`NayaxMachineStockSyncPoliciesTests`,
+`MachineStockSyncTests`) matches an unprocessed Nayax stock-adjustment event against existing
+`StockAdjustment` rows by machine, product and timing, with no awareness of which UI entry point
+created a given `Manual` row; a refill recorded through the Record refill link is therefore already
+exactly as eligible for "Already recorded manually" as one recorded through the action it replaced,
+and importing the matching Nayax event afterward still cannot deduct the same storage a second time.
+This is a regression guarantee this phase verifies, not a new rule it adds.
+
+**What proves it.** `machine-detail.component.spec.ts` covers the Record refill link carrying
+`machine.localMachineId` (never `machineID`) as its `machineId` query parameter, the link being
+hidden during a support session, and that the removed Restock button and quantity input no longer
+render at all. `pick-list.component.mode.spec.ts` covers `mode=manual` opening straight into manual
+mode while still offering the Calculated toggle, `machineId` arriving as `preselectedMachineId`, a
+malformed `machineId` preselecting nothing, and ordinary navigation with no query parameters being
+unaffected. `manual-pick-list.component.spec.ts`'s "machine preselection from a link" describe block
+covers a resolved preselection, a deactivated/removed/unreadable-list failure each raising
+`machineAttributionFailed` without changing the submitted `machineId`, and no failure being raised
+when no machine was linked at all. Three of its tests hold the machine read open on a `Subject` to
+cover the window above: Save refused and no request sent while a linked machine is unresolved and
+then submitted with its `machineId` once the read answers; ordinary no-machine entry saving
+immediately with the read still outstanding; and an uncertain attempt made after the machine resolved
+being retried with the identical key, machine and rows, so a late answer can never become a second
+deduction.
 
 #### Supplier Orders frontend page (issue #387)
 
@@ -9444,12 +9593,17 @@ change needing its own issue, ideally combined with the rest of the Purchasing a
    remains the supported fallback for when Nayax is unavailable or a machine/MDB is not yet mapped;
    Sync Restock is the preferred path when a Nayax stock-adjustment alert already reports the
    physical event.
-4a. The manual source has **two entry points and one movement**: the long-standing per-product
-   Restock action on the machine-detail page (`POST api/products/{id}/stock`), and since issue #743
-   the pick list's batch refill (`POST api/pick-list/refills`), which records a whole pick in one
-   transaction under an idempotency key. They produce the same row - same reason, same `Manual`
-   source - so everything downstream reads one kind of fact; see [Batch refill from the pick
-   list](#batch-refill-from-the-pick-list-issue-743).
+4a. The manual source has **two entry points and one movement**: the per-product manual adjustment
+   form shared by the Stock History page and the `/products/:id/stock` entry point
+   (`POST api/products/{id}/stock`), and since issue #743 the pick list's batch refill
+   (`POST api/pick-list/refills`), which records a whole pick in one transaction under an
+   idempotency key. They produce the same row - same reason, same `Manual` source - so everything
+   downstream reads one kind of fact; see [Batch refill from the pick
+   list](#batch-refill-from-the-pick-list-issue-743). The machine-detail page's own former
+   per-product Restock action was one more caller of the first entry point; issue #744's
+   machine-page consolidation replaced it with a **Record refill** link into the second instead (see
+   [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)),
+   so the machine-detail page itself now calls only the batch endpoint, never the per-product one.
 5. The reverse transfer - units taken back **out of** a machine and returned to storage - is the
    same `MachineRefill` movement with a **positive** quantity change and the machine recorded on it.
    `StockAdjustment.QuantityChange` is signed from storage's point of view throughout the
@@ -11831,12 +11985,19 @@ that meaning.
    quality failure) rolls back that event's own transaction only, so it is never left marked
    processed without its inventory movement, and it does not stop the other selected events in the
    batch from applying.
-8. **Manual restocking is the preserved fallback.** The existing per-product Restock action on the
-   machine-detail page (`MachineDetailComponent.restockProduct`) is unchanged and remains available
-   for a Nayax outage or a machine/MDB Sync Restock cannot yet resolve. `StockAdjustment.Source`
-   (`Manual` by default, `Nayax` only when set by the sync-apply path) is what keeps a manual and a
-   Nayax-sourced refill distinguishable in the stock history/audit trail, even though both share
-   `StockAdjustmentReason.MachineRefill`.
+8. **Manual restocking is the preserved fallback, now through the pick list.** The machine-detail
+   page's own per-product Restock inputs are gone (issue #744's machine-page consolidation, see
+   [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
+   below); its **Record refill** link opens `ManualPickListComponent` with this machine preselected,
+   which calls the same batch `RecordPickListRefill` use case every manual pick-list save already
+   used (issue #743) and so is available for exactly the same Nayax outage or unresolved machine/MDB
+   case the old action was. `StockAdjustment.Source` (`Manual` by default, `Nayax` only when set by
+   the sync-apply path) is unchanged and is still what keeps a manual and a Nayax-sourced refill
+   distinguishable in the stock history/audit trail - `RecordPickListRefill`'s own movements are
+   `Manual` exactly like the removed action's were - even though both share
+   `StockAdjustmentReason.MachineRefill`, so this reconciliation step still cannot mistake one for
+   the other and applying a Nayax stock-adjustment event the operator already recorded this way still
+   cannot deduct storage a second time.
 9. **Filter and bulk-select the working list as history grows (issue #206).** As imported Event 501
    history accumulates, `MachineRestockSyncComponent` sends a **From date** and a **Show
    reconciled** filter with every `POST /api/machines/{id}/sync-restock` call
@@ -12102,10 +12263,10 @@ regression tests count the requests that actually leave the rendered page, throu
 double.
 
 **Sync Restock stays a section of its own, outside both panels**: it is a write workflow
-rather than one of the page's two views of this machine, and [issue
-#744](#nayax-machine-stock-event-import-and-sync-restock-reconciliation-issue-183) owns the future
-consolidation of the per-product manual Restock controls, which this change leaves exactly where
-they are.
+rather than one of the page's two views of this machine. The per-product manual Restock controls,
+which this change left exactly where they were, were since removed by issue #744 - see
+[Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744) -
+and Sync Restock itself stayed exactly as described here.
 
 **What this read does not promise.** The documented endpoint is "the most recent sales transactions
 for a specific machine" with no date range, no row count and no paging, so neither the API response

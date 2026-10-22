@@ -1,5 +1,6 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { ActivatedRoute } from '@angular/router';
 import { EMPTY, catchError, tap } from 'rxjs';
 import { MachineService } from '../../services/machine.service';
 import { ProductService } from '../../services/product.service';
@@ -65,6 +66,19 @@ export type PickListMode = 'calculated' | 'manual';
  * known yet" or "could not be read", never "this business has no products", and a failed refresh
  * after a recorded refill is reported rather than leaving stale storage quantities unlabelled. Both
  * failures are retried through {@link loadProducts}.
+ *
+ * **A machine-details page can open straight into a preselected manual entry** (issue #744's
+ * machine-page consolidation, the owner's 18 October 2026 decision): its "Record refill" link is
+ * this same route with `?mode=manual&machineId=<local id>`, read once, synchronously, from
+ * `ActivatedRoute.snapshot.queryParamMap` in `ngOnInit` - a one-shot deep link, not a value this page
+ * tracks across later navigation within itself. `mode=manual` only chooses the **starting** view: it
+ * calls {@link setMode}('manual') exactly as `switchMode('manual')` would, so the toggle stays
+ * offered and a connected business can still switch to the calculated matrix. `machineId` is carried
+ * as {@link preselectedMachineId} into `ManualPickListComponent`'s own `@Input` of the same name,
+ * which is the only place that resolves it against the business's actual machines (see its class
+ * doc); this page parses nothing from it beyond "is it a number" so a malformed value preselects no
+ * machine rather than a wrong one. Ordinary navigation to `/pick-list` carries neither query
+ * parameter and this page behaves exactly as it did before this consolidation.
  */
 @Component({
   selector: 'app-pick-list',
@@ -125,15 +139,28 @@ export class PickListComponent implements OnInit {
   /** Set when the machine list could not be read for a reason that is not an availability answer. */
   machinesError = '';
 
+  /** The "Record refill" link's `machineId` query parameter, or `null` for ordinary pick-list entry. */
+  preselectedMachineId: number | null = null;
+
   constructor(
     private machineService: MachineService,
     private productService: ProductService,
     private pickListService: PickListService,
     private toastService: ToastService,
-    private provider: ProviderAvailabilityService
+    private provider: ProviderAvailabilityService,
+    private route: ActivatedRoute
   ) {}
 
   ngOnInit(): void {
+    const queryParams = this.route.snapshot.queryParamMap;
+    if (queryParams.get('mode') === 'manual') {
+      this.setMode('manual');
+    }
+    const linkedMachineId = Number(queryParams.get('machineId'));
+    this.preselectedMachineId = queryParams.get('machineId') !== null && Number.isInteger(linkedMachineId) && linkedMachineId > 0
+      ? linkedMachineId
+      : null;
+
     loadProviderList(this.provider, 'machineFleet', () => this.machineService.getAll()).subscribe((outcome) => {
       this.allMachines = outcome.kind === 'listed' ? outcome.items : [];
       this.machinesUnavailable =

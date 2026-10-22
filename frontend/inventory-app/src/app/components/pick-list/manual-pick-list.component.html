@@ -31,6 +31,18 @@
         </select>
       </label>
     }
+
+    @if (machineResolutionPending) {
+      <p data-testid="manual-pick-list-machine-resolution-pending" role="status" class="text-md-body value-muted self-center">
+        {{ machineResolutionPendingMessage }}
+      </p>
+    }
+
+    @if (machineAttributionFailed) {
+      <p data-testid="manual-pick-list-machine-attribution-failed" role="alert" class="text-md-body text-md-danger-text self-center">
+        {{ machineAttributionFailedMessage }}
+      </p>
+    }
   </div>
 </section>
 
