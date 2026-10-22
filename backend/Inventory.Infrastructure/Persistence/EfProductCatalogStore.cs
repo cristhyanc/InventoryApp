@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using System.Text;
 
 using Inventory.Application.Products;
 using Inventory.Domain.Products;
@@ -57,6 +58,13 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
         return records[0];
     }
 
+    /// <summary>
+    /// The character <see cref="LikePattern"/> writes before a <c>%</c>, <c>_</c> or itself, so a
+    /// character <c>LIKE</c> treats specially (issue #827) is matched literally when a person types
+    /// it into a search rather than acting as a wildcard.
+    /// </summary>
+    private const char SearchEscapeCharacter = '\\';
+
     private static IQueryable<Product> Filtered(IQueryable<Product> products, ProductCatalogFilter filter)
     {
         var query = WithDetail(products);
@@ -70,14 +78,40 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
 
         if (!string.IsNullOrWhiteSpace(filter.Search))
         {
-            var search = filter.Search;
-            query = query.Where(product => product.Name.Contains(search)
-                || (product.Sku != null && product.Sku.Contains(search)));
+            // LIKE rather than Contains (issue #827): EF Core's SQLite provider translates Contains
+            // to instr(...), which SQLite compares byte-for-byte, so a search typed in a different
+            // case than the stored name or SKU found nothing. SQLite's LIKE, unlike instr, folds
+            // ASCII letter case by default - the only case-insensitivity SQLite offers without the
+            // collation change this issue excludes - though it still leaves non-ASCII letters
+            // unfolded. The escape character keeps a literal '%' or '_' a person types from acting
+            // as a wildcard.
+            var pattern = $"%{LikePattern(filter.Search)}%";
+            var escapeCharacter = SearchEscapeCharacter.ToString();
+            query = query.Where(product => EF.Functions.Like(product.Name, pattern, escapeCharacter)
+                || (product.Sku != null && EF.Functions.Like(product.Sku, pattern, escapeCharacter)));
         }
 
         if (filter.CategoryId.HasValue) query = query.Where(product => product.CategoryId == filter.CategoryId);
 
         return query;
+    }
+
+    /// <summary>
+    /// <paramref name="value"/> with every character <c>LIKE</c> treats specially - <c>%</c>,
+    /// <c>_</c> and <see cref="SearchEscapeCharacter"/> itself - preceded by the escape character, so
+    /// each is matched literally once the result is wrapped in the leading and trailing <c>%</c> that
+    /// make the search a substring match.
+    /// </summary>
+    private static string LikePattern(string value)
+    {
+        var pattern = new StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            if (character is '%' or '_' or SearchEscapeCharacter) pattern.Append(SearchEscapeCharacter);
+            pattern.Append(character);
+        }
+
+        return pattern.ToString();
     }
 
     private static IQueryable<Product> WithDetail(IQueryable<Product> products) =>
