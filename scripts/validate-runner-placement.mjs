@@ -71,6 +71,8 @@ export const VISIBLE_ISOLATION_GATE_WORKFLOWS = [
   '.github/workflows/agent-review.yml',
   '.github/workflows/agent-repair.yml',
   '.github/workflows/deploy-production.yml',
+  '.github/workflows/deploy-production-recovery.yml',
+  '.github/workflows/deploy-production-release.yml',
   '.github/workflows/validate.yml',
   '.github/workflows/agent-head-update.yml',
   '.github/workflows/agent-review-request.yml',

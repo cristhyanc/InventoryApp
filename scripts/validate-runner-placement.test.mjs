@@ -140,6 +140,8 @@ describe('runner placement contract', () => {
   it('accepts the repository workflows, including deployment and reusable workflows', () => {
     const paths = listWorkflowFiles();
     assert.ok(paths.includes('.github/workflows/deploy-production.yml'));
+    assert.ok(paths.includes('.github/workflows/deploy-production-recovery.yml'));
+    assert.ok(paths.includes('.github/workflows/deploy-production-release.yml'));
     assert.ok(paths.includes('.github/workflows/agent-model-selection.yml'));
     assert.ok(paths.includes('.github/workflows/vm-manager.yml'));
     verifyRunnerPlacement({ read: (path) => readFileSync(resolve(path), 'utf8'), paths });
@@ -371,6 +373,8 @@ describe('runner placement contract', () => {
       ['.github/workflows/validate.yml', `publish_status == 'true' && ${ISOLATION_CONDITION}\n    needs:\n`, "publish_status == 'true'\n    needs:\n"],
       ['.github/workflows/validate.yml', `needs.report-status.result == 'success' && ${ISOLATION_CONDITION}\n`, "needs.report-status.result == 'success'\n"],
       ['.github/workflows/deploy-production.yml', `    if: ${ISOLATION_CONDITION}\n`, ''],
+      ['.github/workflows/deploy-production-recovery.yml', `    if: ${ISOLATION_CONDITION}\n`, ''],
+      ['.github/workflows/deploy-production-release.yml', `    if: ${ISOLATION_CONDITION}\n`, ''],
     ];
     for (const [path, gated, ungated, expected = /write-capable GITHUB_TOKEN/] of writers) {
       const text = readFileSync(resolve(path), 'utf8');
@@ -382,7 +386,7 @@ describe('runner placement contract', () => {
   });
 
   it('rejects each deploy job once its self-hosted isolation or baseline condition is bypassed', () => {
-    const path = '.github/workflows/deploy-production.yml';
+    const path = '.github/workflows/deploy-production-release.yml';
     const text = readFileSync(resolve(path), 'utf8');
     const deployCondition = `    if: github.ref == 'refs/heads/main' && ${ISOLATION_CONDITION} && ${BASELINE_CONDITION}\n`;
     assert.equal(text.split(deployCondition).length, 3, 'Deploy API and Deploy Frontend carry the deploy condition');

@@ -1,10 +1,13 @@
-// Production deployment workflow contract (issue #343).
+// Production deployment workflow contract (issues #343 and #491).
 //
-// Proves from the workflow text that production changes only through the manually started
-// Deploy Production workflow: no push- or pull-request-triggered workflow can reach Azure,
-// Deploy Production runs only from main, every job is bound to the one resolved release SHA,
-// validation, the migration preflight and the API health check gate what follows them, and each
-// job keeps its expected environment and permission boundary.
+// Proves from the workflow text that production changes only through the two manually started
+// entry points, Deploy Production (no inputs) and Deploy Production (advanced recovery), and that
+// both run the one shared release workflow: no push- or pull-request-triggered workflow can reach
+// Azure, both entry points run only from main and share one non-cancelling concurrency group, the
+// normal release deploys the dispatch commit and reads its baseline from the release records, every
+// job is bound to the one resolved release SHA, validation, the migration preflight and the API
+// health check gate what follows them, and each job keeps its expected environment and permission
+// boundary.
 //
 // Usage: node scripts/validate-deployment-workflows.mjs
 
@@ -15,6 +18,11 @@ import { readRepositoryFile, repositoryRoot } from './validate-agent-workflows.m
 import { BASELINE_CONDITION, ISOLATION_CONDITION } from './validate-runner-placement.mjs';
 
 export const deployProductionPath = '.github/workflows/deploy-production.yml';
+export const deployProductionRecoveryPath = '.github/workflows/deploy-production-recovery.yml';
+export const deployProductionReleasePath = '.github/workflows/deploy-production-release.yml';
+export const RELEASE_WORKFLOW_CALL = 'uses: ./.github/workflows/deploy-production-release.yml';
+// Both entry points declare exactly this block, so they share one queue and never cancel a deployment.
+export const SHARED_CONCURRENCY = 'concurrency:\n  group: deploy-production\n  cancel-in-progress: false\n';
 export const PRODUCTION_ENVIRONMENT = 'VmInventoryApi_Env';
 export const RELEASE_SHA = '${{ needs.resolve.outputs.sha }}';
 // Issues #645 and #807: in self-hosted mode credentialed jobs wait for a human to verify runner
@@ -52,6 +60,7 @@ const FORBIDDEN_IN_DEPLOY = Object.freeze([
   'pull-requests: write',
   'issues: write',
   'actions: write',
+  'cancel-in-progress: true',
 ]);
 
 const compareStrings = (left, right) => {
@@ -211,22 +220,53 @@ function forbidEnvironment(jobs, jobId, source) {
   forbidText(jobs[jobId], 'secrets.', `${source} job '${jobId}'`);
 }
 
-// Every workflow other than Deploy Production must be free of deployment markers, so no push,
-// pull request, schedule or agent event can reach Azure.
+// Every workflow other than the shared release workflow must be free of deployment markers, so no
+// push, pull request, schedule or agent event can reach Azure, and only the two entry points may
+// call the release workflow.
 export function verifyNoOtherWorkflowDeploys(workflows) {
   for (const [path, text] of Object.entries(workflows)) {
-    if (path === deployProductionPath) {
+    if (path === deployProductionReleasePath) {
       continue;
     }
     for (const marker of DEPLOYMENT_MARKERS) {
       forbidText(text, marker, path);
     }
+    if (path !== deployProductionPath && path !== deployProductionRecoveryPath) {
+      forbidText(text, 'deploy-production-release.yml', path);
+    }
   }
 }
 
-export function verifyDeployProductionWorkflow(text, source = deployProductionPath) {
-  requireText(text, 'name: Deploy Production\n', source);
+// Returns the text of the top-level `on:` block.
+function extractOnBlock(text) {
+  const lines = text.split('\n');
+  const start = lines.findIndex((line) => /^on:/.test(line));
+  if (start < 0) {
+    return '';
+  }
+  const block = [lines[start]];
+  for (const line of lines.slice(start + 1)) {
+    if (/^\S/.test(line)) {
+      break;
+    }
+    block.push(line);
+  }
+  return `${block.join('\n')}\n`;
+}
 
+const NORMAL_ENTRY = Object.freeze({
+  name: 'Deploy Production',
+  entryPoint: 'normal',
+});
+const RECOVERY_ENTRY = Object.freeze({
+  name: 'Deploy Production (advanced recovery)',
+  entryPoint: 'recovery',
+});
+
+// An entry point is a human-started dispatch from main with one gate job and one job that calls
+// the shared release workflow; it holds no deployment step of its own.
+function verifyEntryPointWorkflow(text, source, entry) {
+  requireText(text, `name: ${entry.name}\n`, source);
   const triggers = extractTriggers(text);
   if (triggers.length !== 1 || triggers[0] !== 'workflow_dispatch') {
     fail(source, `must be triggered only by workflow_dispatch, found: ${triggers.join(', ') || 'none'}`);
@@ -234,10 +274,75 @@ export function verifyDeployProductionWorkflow(text, source = deployProductionPa
   if (!/^permissions: \{\}$/m.test(text)) {
     fail(source, 'top-level permissions must be {}');
   }
-  requireText(text, 'cancel-in-progress: false', source);
+  if (!text.includes(`\n${SHARED_CONCURRENCY}`)) {
+    fail(source, `must share the production concurrency group exactly: ${SHARED_CONCURRENCY.replaceAll('\n', ' ')}`);
+  }
   for (const forbidden of FORBIDDEN_IN_DEPLOY) {
     forbidText(text, forbidden, source);
   }
+
+  const jobs = extractJobs(text, source);
+  const jobIds = Object.keys(jobs).sort(compareStrings);
+  if (jobIds.join(',') !== 'gate,release') {
+    fail(source, `must have exactly the jobs 'gate' and 'release', found: ${jobIds.join(', ')}`);
+  }
+  requireOrder(jobs.gate, "if: github.ref != 'refs/heads/main'", 'must be started from main; this run was started from $RUN_REF."\n          exit 1', `${source} job 'gate'`);
+  requirePermissions(jobs, 'gate', {}, source);
+  forbidEnvironment(jobs, 'gate', source);
+
+  const release = jobs.release;
+  requireText(release, `    ${RELEASE_WORKFLOW_CALL}\n`, `${source} job 'release'`);
+  requireNeeds(jobs, 'release', ['gate'], source);
+  requirePermissions(jobs, 'release', { contents: 'read', deployments: 'write', 'id-token': 'write' }, source);
+  requireText(release, `      entry_point: ${entry.entryPoint}\n`, `${source} job 'release'`);
+  requireText(release, '    secrets: inherit\n', `${source} job 'release'`);
+  for (const forbidden of ['environment:', 'steps:', 'runs-on:']) {
+    forbidText(release, forbidden, `${source} job 'release'`);
+  }
+  return { jobs, on: extractOnBlock(text) };
+}
+
+// Deploy Production, the normal release: no inputs at all, so the operator cannot type a commit or
+// a baseline; the release workflow deploys the dispatch commit and reads the recorded baseline.
+export function verifyDeployProductionWorkflow(text, source = deployProductionPath) {
+  const { jobs, on } = verifyEntryPointWorkflow(text, source, NORMAL_ENTRY);
+  if (on.includes('inputs:')) {
+    fail(source, 'the normal Deploy Production release must expose no inputs (no sha or baseline_sha)');
+  }
+  for (const forbidden of ['inputs.', 'sha:', 'baseline_sha']) {
+    forbidText(jobs.release, forbidden, `${source} job 'release'`);
+  }
+}
+
+// Deploy Production (advanced recovery): an exact, required full SHA and an optional baseline that
+// the release workflow accepts only when no release is recorded.
+export function verifyDeployProductionRecoveryWorkflow(text, source = deployProductionRecoveryPath) {
+  const { jobs, on } = verifyEntryPointWorkflow(text, source, RECOVERY_ENTRY);
+  requireText(on, '      sha:\n        description: Full 40-character main commit SHA to deploy.\n        required: true\n        type: string\n', `${source} inputs`);
+  requireText(on, '      baseline_sha:\n', `${source} inputs`);
+  requireText(jobs.release, '      sha: ${{ inputs.sha }}\n', `${source} job 'release'`);
+  requireText(jobs.release, '      baseline_sha: ${{ inputs.baseline_sha }}\n', `${source} job 'release'`);
+}
+
+// The release workflow both entry points call. It holds every deployment step.
+export function verifyDeployProductionReleaseWorkflow(text, source = deployProductionReleasePath) {
+  requireText(text, 'name: Deploy Production release\n', source);
+
+  const triggers = extractTriggers(text);
+  if (triggers.length !== 1 || triggers[0] !== 'workflow_call') {
+    fail(source, `must be triggered only by workflow_call from the two entry points, found: ${triggers.join(', ') || 'none'}`);
+  }
+  if (!/^permissions: \{\}$/m.test(text)) {
+    fail(source, 'top-level permissions must be {}');
+  }
+  // The concurrency group belongs to the callers, which share it; a second group here could not
+  // protect the other entry point and could cancel its caller.
+  forbidText(text, 'concurrency:', source);
+  for (const forbidden of FORBIDDEN_IN_DEPLOY) {
+    forbidText(text, forbidden, source);
+  }
+  const on = extractOnBlock(text);
+  requireText(on, '      entry_point:\n', `${source} inputs`);
 
   const jobs = extractJobs(text, source);
   for (const jobId of ['resolve', 'validate', 'preflight', 'build', 'deploy-api', 'record-release', 'verify-api', 'deploy-frontend', 'summary']) {
@@ -263,6 +368,23 @@ export function verifyDeployProductionWorkflow(text, source = deployProductionPa
   requireText(resolveJob, 'docker info >/dev/null 2>&1 ||', `${source} job 'resolve'`);
   requireText(resolveJob, 'merge-base --is-ancestor "$sha" refs/remotes/origin/main', `${source} job 'resolve'`);
   requireText(resolveJob, '^[0-9a-f]{40}$', `${source} job 'resolve'`);
+  // The normal release deploys the commit captured at dispatch and refuses any supplied commit or
+  // baseline; recovery requires its exact SHA; any other caller is refused.
+  requireOrder(resolveJob, '            normal)\n', 'sha="$GITHUB_SHA"', `${source} job 'resolve'`);
+  requireText(resolveJob, '[ -z "$INPUT_SHA" ] && [ -z "$INPUT_BASELINE" ]', `${source} job 'resolve'`);
+  requireOrder(resolveJob, '            recovery)\n', '[ -n "$INPUT_SHA" ] || fail', `${source} job 'resolve'`);
+  requireText(resolveJob, '*) fail "Unknown entry point', `${source} job 'resolve'`);
+  // The baseline comes from the release records. A record that is not a main commit stops the run,
+  // a supplied baseline that differs from a record is refused, an operator baseline is accepted
+  // only by recovery when no record exists, and the release SHA is never used as the baseline.
+  requireText(resolveJob, `task=$RELEASE_RECORD_TASK`, `${source} job 'resolve'`);
+  requireText(resolveJob, '! git merge-base --is-ancestor "$recorded" refs/remotes/origin/main', `${source} job 'resolve'`);
+  requireText(resolveJob, 'if [ -n "$INPUT_BASELINE" ] && [ "$INPUT_BASELINE" != "$recorded" ]; then', `${source} job 'resolve'`);
+  requireText(resolveJob, 'elif [ "$ENTRY_POINT" = "recovery" ] && [ -n "$INPUT_BASELINE" ]; then', `${source} job 'resolve'`);
+  requireText(resolveJob, 'merge-base --is-ancestor "$baseline" refs/remotes/origin/main', `${source} job 'resolve'`);
+  for (const guessed of ['baseline="$sha"', 'baseline="$GITHUB_SHA"', 'baseline="${GITHUB_SHA}"', 'baseline_sha=$sha']) {
+    forbidText(resolveJob, guessed, `${source} job 'resolve'`);
+  }
   requirePermissions(jobs, 'resolve', { contents: 'read', deployments: 'read' }, source);
   forbidEnvironment(jobs, 'resolve', source);
 
@@ -336,6 +458,8 @@ export function verifyDeployProductionWorkflow(text, source = deployProductionPa
   }
 
   requireText(jobs.summary, 'if: always()', `${source} job 'summary'`);
+  requireText(jobs.summary, 'ENTRY_POINT: ${{ inputs.entry_point }}', `${source} job 'summary'`);
+  requireText(jobs.summary, '| Entry point |', `${source} job 'summary'`);
   requirePermissions(jobs, 'summary', {}, source);
 }
 
@@ -352,11 +476,15 @@ export function readWorkflows(read = readRepositoryFile) {
 }
 
 export function verifyDeploymentWorkflows(workflows = readWorkflows()) {
-  if (!(deployProductionPath in workflows)) {
-    fail(deployProductionPath, 'missing');
+  for (const path of [deployProductionPath, deployProductionRecoveryPath, deployProductionReleasePath]) {
+    if (!(path in workflows)) {
+      fail(path, 'missing');
+    }
   }
   verifyNoOtherWorkflowDeploys(workflows);
   verifyDeployProductionWorkflow(workflows[deployProductionPath]);
+  verifyDeployProductionRecoveryWorkflow(workflows[deployProductionRecoveryPath]);
+  verifyDeployProductionReleaseWorkflow(workflows[deployProductionReleasePath]);
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
