@@ -14,7 +14,7 @@ import {
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
-import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
+import { NayaxSalesSyncResult, NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { AccessService } from '../../access/access.service';
@@ -30,6 +30,9 @@ import { SupportSessionService } from '../../support-session/support-session.ser
  * `needsOrdering` carries the `mode` its count was produced in - and there is deliberately no
  * second probe for it. The shared availability signal is issue #728.
  */
+
+/** What the synchronization answers when it ran: the `204` the service maps (issue #843). */
+const SYNC_RAN: NayaxSalesSyncResult = { wasRecentlySynced: false, lastSyncedAtUtc: null };
 
 const SALES_THIS_WEEK: DashboardSalesThisWeek = {
   sales: 300,
@@ -176,7 +179,7 @@ function machineAwareAlerts(products: Product[]): ReorderAlertListing {
 interface Doubles {
   summary$?: Observable<DashboardSummary>;
   alerts$?: Observable<ReorderAlertListing>;
-  syncLatest?: () => Observable<void>;
+  syncLatest?: () => Observable<NayaxSalesSyncResult>;
   machines$?: Observable<Machine[]>;
   sites$?: Observable<Site[]>;
   sessionActive?: Observable<boolean>;
@@ -188,7 +191,7 @@ function createComponent(doubles: Doubles = {}): DashboardComponent {
     { getLowStock: () => doubles.alerts$ ?? of(machineAwareAlerts([])) } as unknown as ProductService,
     { getAll: () => doubles.machines$ ?? of([MACHINE]) } as unknown as MachineService,
     { getAll: () => doubles.sites$ ?? of([SITE]) } as unknown as SiteService,
-    { syncLatest: doubles.syncLatest ?? (() => of(undefined)) } as unknown as NayaxSalesSyncService,
+    { syncLatest: doubles.syncLatest ?? (() => of(SYNC_RAN)) } as unknown as NayaxSalesSyncService,
     { getSummary: () => doubles.summary$ ?? of(CONNECTED_SUMMARY) } as unknown as DashboardService,
     // Issue #789's purchase-cost columns are `dashboard.component.purchase-costs.spec.ts`'s
     // subject; this file is about the provider-optional states of the page around them.
@@ -209,7 +212,7 @@ async function renderDashboard(doubles: Doubles = {}): Promise<HTMLElement> {
       },
       { provide: MachineService, useValue: { getAll: () => doubles.machines$ ?? of([MACHINE]) } },
       { provide: SiteService, useValue: { getAll: () => doubles.sites$ ?? of([SITE]) } },
-      { provide: NayaxSalesSyncService, useValue: { syncLatest: doubles.syncLatest ?? (() => of(undefined)) } },
+      { provide: NayaxSalesSyncService, useValue: { syncLatest: doubles.syncLatest ?? (() => of(SYNC_RAN)) } },
       { provide: SupportSessionService, useValue: { active$: doubles.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => doubles.summary$ ?? of(CONNECTED_SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
@@ -255,7 +258,7 @@ describe('Dashboard without a usable provider (issue #727)', () => {
   });
 
   it('never calls the sales sync and shows no sync warning', async () => {
-    const syncLatest = jest.fn(() => of(undefined));
+    const syncLatest = jest.fn(() => of(SYNC_RAN));
     const component = createComponent({ summary$: of(NOT_CONNECTED_SUMMARY), syncLatest });
 
     component.ngOnInit();
@@ -277,7 +280,7 @@ describe('Dashboard without a usable provider (issue #727)', () => {
       { getLowStock: () => of(storageOnlyAlerts([])) } as unknown as ProductService,
       { getAll: machines } as unknown as MachineService,
       { getAll: sites } as unknown as SiteService,
-      { syncLatest: () => of(undefined) } as unknown as NayaxSalesSyncService,
+      { syncLatest: () => of(SYNC_RAN) } as unknown as NayaxSalesSyncService,
       { getSummary: () => of(NOT_CONNECTED_SUMMARY) } as unknown as DashboardService,
       { getSummaries: () => of([]) } as unknown as ProductPurchaseCostService,
       { active$: of(false) } as unknown as SupportSessionService,
@@ -355,7 +358,7 @@ describe('Dashboard for a feature Nayax has not granted (issue #727)', () => {
   });
 
   it('still synchronizes the latest sales, which the connection is usable for', () => {
-    const syncLatest = jest.fn(() => of(undefined));
+    const syncLatest = jest.fn(() => of(SYNC_RAN));
     const component = createComponent({ summary$: of(PERMISSION_NOT_GRANTED_SUMMARY), syncLatest });
 
     component.ngOnInit();
@@ -407,7 +410,7 @@ describe('Dashboard failed requests are never an empty state (issue #727)', () =
    * rather than hiding a connected business's live sections on a transient failure.
    */
   it('keeps every section and still synchronizes when the summary itself failed', async () => {
-    const syncLatest = jest.fn(() => of(undefined));
+    const syncLatest = jest.fn(() => of(SYNC_RAN));
     const component = createComponent({
       summary$: throwError(() => new Error('network error')) as Observable<DashboardSummary>,
       syncLatest
@@ -443,7 +446,7 @@ describe('Dashboard in a support session keeps its existing behaviour (issue #72
   });
 
   it('still skips the sales sync as a session skip, not as a missing provider', () => {
-    const syncLatest = jest.fn(() => of(undefined));
+    const syncLatest = jest.fn(() => of(SYNC_RAN));
     const component = createComponent({
       summary$: of(SUPPORT_VIEW_SUMMARY),
       sessionActive: of(true),
@@ -496,7 +499,7 @@ describe('Dashboard with a usable provider is unchanged (issue #727)', () => {
       {
         syncLatest: () => {
           calls.push('sync');
-          return of(undefined);
+          return of(SYNC_RAN);
         }
       } as unknown as NayaxSalesSyncService,
       { getSummary: () => of(CONNECTED_SUMMARY) } as unknown as DashboardService,

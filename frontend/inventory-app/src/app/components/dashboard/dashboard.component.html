@@ -3,6 +3,34 @@
     <div>
       <h1 class="page-title">Dashboard</h1>
     </div>
+    <!--
+      How current the sales below are, and the control that reads them again (issue #843). The
+      relative age is what an operator actually acts on; the exact instant is on the `title`, in the
+      business's own timezone, because a wall-clock time in the browser's accidental zone would be
+      confidently wrong. The label is absent - rather than saying "unknown" - whenever this page was
+      given no answer about freshness; the notices above say what happened in those cases.
+    -->
+    <div class="flex items-center gap-3">
+      @if (salesSyncedLabel) {
+        <p
+          class="text-md-body value-muted"
+          data-testid="sales-synced-at"
+          [title]="salesSyncedAtUtc | businessDateTime"
+        >{{ salesSyncedLabel }}</p>
+      }
+      @if (isSalesRefreshShown) {
+        <button
+          type="button"
+          class="btn btn-sm btn-secondary"
+          data-testid="refresh-sales"
+          aria-label="Refresh the latest Nayax sales"
+          [disabled]="isRefreshingSales"
+          (click)="refreshSales()"
+        >
+          {{ isRefreshingSales ? 'Refreshing…' : 'Refresh' }}
+        </button>
+      }
+    </div>
   </header>
 
   <app-legacy-business-settings-prompt></app-legacy-business-settings-prompt>
