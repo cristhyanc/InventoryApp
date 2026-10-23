@@ -174,7 +174,7 @@ public class SyncLatestNayaxSalesNayaxLinkTests : IDisposable
         string productName = "Mystery Bar")
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync([new NayaxMachine { MachineID = 1, MachineName = "Machine A" }]);
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync([

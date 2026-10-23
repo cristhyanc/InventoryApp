@@ -33,6 +33,13 @@ public class NayaxLynxClient : INayaxLynxClient
     public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) =>
         SendAsync<List<NayaxMachine>>(nameof(GetMachinesAsync), HttpMethod.Get, _ => "machines", ct);
 
+    // This client caches nothing, so "fresh" and "cached" are the same request here: the machine-list
+    // cache of issue #840 lives in MachineListCachingNayaxLynxClient, which is what the composition
+    // root registers the port as. Keeping the two identical here is the point - the connection test
+    // runner builds this class directly and must never read or write that cache.
+    public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
+        GetMachinesAsync(ct);
+
     public Task<List<NayaxProductGroup>> GetProductGroupssAsync(CancellationToken ct = default) =>
         SendAsync<List<NayaxProductGroup>>(
             nameof(GetProductGroupssAsync),

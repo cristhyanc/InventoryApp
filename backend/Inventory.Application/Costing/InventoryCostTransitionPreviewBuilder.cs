@@ -102,7 +102,10 @@ internal sealed class InventoryCostTransitionPreviewBuilder
     {
         var productIdSet = productIds.ToHashSet();
         var results = productIds.ToDictionary(x => x, _ => new List<InventoryCostTransitionMachineStockDto>());
-        var machines = (await _nayax.GetMachinesAsync(cancellationToken))
+        // Fresh, never the cached list (issue #840): the preview and the apply both record an opening
+        // machine stock per machine, which becomes a costing baseline, so the fleet they are built
+        // over has to be the fleet as it is now.
+        var machines = (await _nayax.GetMachinesFreshAsync(cancellationToken))
             .OrderBy(x => x.MachineName)
             .ThenBy(x => x.MachineID)
             .ToList();

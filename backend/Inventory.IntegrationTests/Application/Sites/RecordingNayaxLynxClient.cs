@@ -44,6 +44,10 @@ public sealed class RecordingNayaxLynxClient : INayaxLynxClient
     public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) =>
         Task.FromResult(_machines);
 
+    // This double caches nothing, so both reads answer with the same fleet (issue #840).
+    public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
+        Task.FromResult(_machines);
+
     public async Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default)
     {
         var inFlight = Interlocked.Increment(ref _inFlight);

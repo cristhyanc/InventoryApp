@@ -48,7 +48,10 @@ public sealed class ReviewProviderMachines
 
     public async Task<ProviderMachineReview> Handle(CancellationToken cancellationToken = default)
     {
-        var fleet = await _nayax.GetMachinesAsync(cancellationToken);
+        // Fresh, never the cached list (issue #840): this is the one place a provider machine becomes
+        // a local machine, so a machine added in Nayax minutes ago must be reviewable now rather than
+        // after the cache's ten minutes - and the auto-link decision is made against this fleet.
+        var fleet = await _nayax.GetMachinesFreshAsync(cancellationToken);
 
         await using var transaction = await _store.BeginTransactionAsync(cancellationToken);
         var local = await _store.ListLocalMachinesAsync(cancellationToken);

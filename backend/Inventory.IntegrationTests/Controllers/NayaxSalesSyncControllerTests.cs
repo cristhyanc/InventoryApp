@@ -28,7 +28,7 @@ public class NayaxSalesSyncControllerTests
     {
         using var cancellation = new CancellationTokenSource();
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(cancellation.Token))
+        nayax.Setup(x => x.GetMachinesFreshAsync(cancellation.Token))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, cancellation.Token))
             .ReturnsAsync(new List<NayaxLastSalesReport>());
@@ -57,7 +57,7 @@ public class NayaxSalesSyncControllerTests
     {
         var clock = new FakeClock(Now);
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>());
@@ -89,7 +89,7 @@ public class NayaxSalesSyncControllerTests
 
         // The refused run reached neither Nayax nor the store: the allowance is claimed first.
         nayax.Verify(
-            x => x.GetMachinesAsync(It.IsAny<CancellationToken>()),
+            x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()),
             Times.Exactly(NayaxSalesSyncRateLimiter.MaxRunsPerWindow));
         store.Verify(
             x => x.PersistLatestSalesAsync(
@@ -108,7 +108,7 @@ public class NayaxSalesSyncControllerTests
     public async Task SyncLatest_lets_simultaneous_dashboard_loads_of_one_business_share_its_allowance()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
         var store = new Mock<ILatestNayaxSalesStore>();
         store.Setup(x => x.PersistLatestSalesAsync(
@@ -134,7 +134,7 @@ public class NayaxSalesSyncControllerTests
     {
         var clock = new FakeClock(Now);
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>());
         var store = new Mock<ILatestNayaxSalesStore>();
         store.Setup(x => x.PersistLatestSalesAsync(

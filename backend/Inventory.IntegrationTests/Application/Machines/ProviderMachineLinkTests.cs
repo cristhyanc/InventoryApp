@@ -615,11 +615,20 @@ public class ProviderMachineLinkTests : IDisposable
             CreatedAtUtc = ReviewedAt,
         };
 
-    /// <summary>One operator fleet, as the Lynx client would answer the machines read.</summary>
+    /// <summary>
+    /// One operator fleet, as the Lynx client would answer the machines read.
+    ///
+    /// <para>Only the <em>fresh</em> read is arranged: provider machine review and apply are declared
+    /// fresh-only callers (issue #840), so a use case that read the cached list instead would get no
+    /// fleet here and fail rather than quietly link against a ten-minute-old one.</para>
+    /// </summary>
     private static INayaxLynxClient Fleet(params NayaxMachine[] machines)
     {
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(client => client.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new NotSupportedException(
+                "Provider machine review and apply must read the fresh machine list, never the cached one."));
+        nayax.Setup(client => client.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(machines.ToList());
         return nayax.Object;
     }

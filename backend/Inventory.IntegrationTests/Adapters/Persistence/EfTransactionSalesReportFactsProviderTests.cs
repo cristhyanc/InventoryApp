@@ -47,6 +47,8 @@ public class EfTransactionSalesReportFactsProviderTests
 
         public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) => Task.FromResult(_machines);
 
+        public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) => Task.FromResult(_machines);
+
         public Task<List<NayaxDevice>> GetDevicesAsync(CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(long machineId, List<NayaxMachineProduct> products, CancellationToken ct = default) => throw new NotImplementedException();
