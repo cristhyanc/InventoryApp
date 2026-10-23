@@ -370,7 +370,7 @@ public class PurchasesControllerTests
         GstClassificationSource.Unknown,
         new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc),
         4,
-        new PurchaseSupplierRecord(4, "Acme", null, null, null, null),
+        new PurchaseSupplierRecord(4, "Acme", null, null, null, null, null),
         [new PurchaseItemRecord(11, 7, 3, 24m, 1.15m, GstClassification.Unknown, GstClassificationSource.Unknown, Product: null)],
         "scan.jpg",
         "abc-def.jpg",

@@ -117,9 +117,13 @@ public class RemoveProductSupplierMigrationTests
             (product.QuantityInStock, product.LowStockThreshold, product.RestockTo, product.Unit,
                 product.IsActive, product.CategoryId, product.ExternalProductId));
 
-        // Every supplier the business recorded independently of a product is untouched.
-        Assert.Equal(["Second Co", "Wholesale Co"], (await after.Suppliers.ToListAsync())
-            .Select(supplier => supplier.Name).Order(StringComparer.Ordinal));
+        // Every supplier the business recorded independently of a product is untouched. Projected
+        // rather than materialised: this schema predates Suppliers.Url (issue #847), which the
+        // current EF model carries.
+        Assert.Equal(
+            ["Second Co", "Wholesale Co"],
+            (await after.Suppliers.Select(supplier => supplier.Name).ToListAsync())
+                .Order(StringComparer.Ordinal));
 
         var purchase = await after.Receipts.Include(receipt => receipt.Items).SingleAsync();
         Assert.Equal((2, 20.90m, 5.00m, 2.70m), (purchase.SupplierId, purchase.TotalAmount,

@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.MachineStock;
 using Inventory.Domain.Providers;
@@ -723,6 +724,10 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<Category>().HasIndex(c => c.Name);
         modelBuilder.Entity<Supplier>().HasIndex(s => s.Name);
+        // The supplier's optional website (issue #847). Configured here rather than with a
+        // [MaxLength] attribute on the entity, which Swashbuckle would publish as a maxLength
+        // keyword on the legacy Supplier component the API pins.
+        modelBuilder.Entity<Supplier>().Property(s => s.Url).HasMaxLength(SupplierUrlPolicy.MaxLength);
         modelBuilder.Entity<Product>().HasIndex(p => p.Sku);
         modelBuilder.Entity<SupplierOrder>().HasIndex(order => new { order.SupplierId, order.Status, order.OrderDate });
         modelBuilder.Entity<SupplierOrderLine>().HasIndex(line => new { line.ProductId, line.SupplierOrderId });

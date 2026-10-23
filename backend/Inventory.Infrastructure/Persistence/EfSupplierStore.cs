@@ -33,15 +33,15 @@ public sealed class EfSupplierStore : ISupplierStore
         return entity is null ? null : ToRecord(entity);
     }
 
-    public async Task<SupplierRecord> AddAsync(string name, string? contactName, string? phone, string? email, string? address, CancellationToken cancellationToken)
+    public async Task<SupplierRecord> AddAsync(string name, string? contactName, string? phone, string? email, string? address, string? url, CancellationToken cancellationToken)
     {
-        var entity = new Supplier { Name = name, ContactName = contactName, Phone = phone, Email = email, Address = address };
+        var entity = new Supplier { Name = name, ContactName = contactName, Phone = phone, Email = email, Address = address, Url = url };
         _db.Suppliers.Add(entity);
         await _db.SaveChangesAsync(cancellationToken);
         return ToRecord(entity);
     }
 
-    public async Task<SupplierRecord?> UpdateAsync(int id, string name, string? contactName, string? phone, string? email, string? address, CancellationToken cancellationToken)
+    public async Task<SupplierRecord?> UpdateAsync(int id, string name, string? contactName, string? phone, string? email, string? address, string? url, CancellationToken cancellationToken)
     {
         var entity = await _db.Suppliers.FindAsync([id], cancellationToken);
         if (entity is null) return null;
@@ -51,6 +51,7 @@ public sealed class EfSupplierStore : ISupplierStore
         entity.Phone = phone;
         entity.Email = email;
         entity.Address = address;
+        entity.Url = url;
         await _db.SaveChangesAsync(cancellationToken);
         return ToRecord(entity);
     }
@@ -98,5 +99,5 @@ public sealed class EfSupplierStore : ISupplierStore
     }
 
     private static SupplierRecord ToRecord(Supplier entity) =>
-        new(entity.Id, entity.Name, entity.ContactName, entity.Phone, entity.Email, entity.Address);
+        new(entity.Id, entity.Name, entity.ContactName, entity.Phone, entity.Email, entity.Address, entity.Url);
 }

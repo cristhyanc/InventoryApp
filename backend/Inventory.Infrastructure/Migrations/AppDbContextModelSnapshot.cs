@@ -2023,6 +2023,10 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int>("ProductLineGstDefault")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("Url")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
 
                     b.HasIndex("BusinessId");

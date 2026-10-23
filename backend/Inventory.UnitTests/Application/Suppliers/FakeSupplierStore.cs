@@ -24,19 +24,19 @@ public sealed class FakeSupplierStore : ISupplierStore
     public Task<SupplierRecord?> FindByIdAsync(int id, CancellationToken cancellationToken) =>
         Task.FromResult(_suppliers.SingleOrDefault(x => x.Id == id));
 
-    public Task<SupplierRecord> AddAsync(string name, string? contactName, string? phone, string? email, string? address, CancellationToken cancellationToken)
+    public Task<SupplierRecord> AddAsync(string name, string? contactName, string? phone, string? email, string? address, string? url, CancellationToken cancellationToken)
     {
-        var record = new SupplierRecord(_nextId++, name, contactName, phone, email, address);
+        var record = new SupplierRecord(_nextId++, name, contactName, phone, email, address, url);
         _suppliers.Add(record);
         return Task.FromResult(record);
     }
 
-    public Task<SupplierRecord?> UpdateAsync(int id, string name, string? contactName, string? phone, string? email, string? address, CancellationToken cancellationToken)
+    public Task<SupplierRecord?> UpdateAsync(int id, string name, string? contactName, string? phone, string? email, string? address, string? url, CancellationToken cancellationToken)
     {
         var existing = _suppliers.SingleOrDefault(x => x.Id == id);
         if (existing is null) return Task.FromResult<SupplierRecord?>(null);
 
-        var updated = existing with { Name = name, ContactName = contactName, Phone = phone, Email = email, Address = address };
+        var updated = existing with { Name = name, ContactName = contactName, Phone = phone, Email = email, Address = address, Url = url };
         _suppliers[_suppliers.IndexOf(existing)] = updated;
         return Task.FromResult<SupplierRecord?>(updated);
     }

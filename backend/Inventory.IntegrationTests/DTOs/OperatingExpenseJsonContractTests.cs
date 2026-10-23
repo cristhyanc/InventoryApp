@@ -33,7 +33,7 @@ public class OperatingExpenseJsonContractTests
             1m,
             11m,
             3,
-            new SupplierResponse(3, "Acme", null, null, null, null),
+            new SupplierResponse(3, "Acme", null, null, null, null, "https://acme.test"),
             null,
             null,
             "invoice.pdf",
@@ -57,7 +57,15 @@ public class OperatingExpenseJsonContractTests
             },
             document.RootElement.EnumerateObject().Select(property => property.Name));
 
-        Assert.Equal("Acme", document.RootElement.GetProperty("supplier").GetProperty("name").GetString());
+        var supplier = document.RootElement.GetProperty("supplier");
+        Assert.Equal("Acme", supplier.GetProperty("name").GetString());
+
+        // The nested supplier object is the legacy Supplier component, which gained `url` as an
+        // additive nullable field in issue #847 and changed in no other way.
+        Assert.Equal(
+            new[] { "id", "name", "contactName", "phone", "email", "address", "url" },
+            supplier.EnumerateObject().Select(property => property.Name));
+        Assert.Equal("https://acme.test", supplier.GetProperty("url").GetString());
     }
 
     [Fact]

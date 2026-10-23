@@ -34,7 +34,7 @@ public sealed record PurchaseRecord(
 
 /// <summary>The supplier detail carried on a purchase, as the Application layer sees it.</summary>
 public sealed record PurchaseSupplierRecord(
-    int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address);
+    int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address, string? Url);
 
 /// <summary>
 /// One persisted purchase line item, with its own GST classification and provenance (issue #429)

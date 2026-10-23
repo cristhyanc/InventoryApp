@@ -10,6 +10,8 @@ export interface SupplierDto {
   phone?: string | null;
   email?: string | null;
   address?: string | null;
+  /** The optional website (issue #847), already normalized by `normalizeSupplierUrl`. */
+  url?: string | null;
 }
 
 /**

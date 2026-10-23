@@ -124,7 +124,7 @@ public sealed class EfOperatingExpenseStore : IOperatingExpenseStore
             ? null
             : new OperatingExpenseSupplier(
                 entity.Supplier.Id, entity.Supplier.Name, entity.Supplier.ContactName,
-                entity.Supplier.Phone, entity.Supplier.Email, entity.Supplier.Address),
+                entity.Supplier.Phone, entity.Supplier.Email, entity.Supplier.Address, entity.Supplier.Url),
         entity.SiteId, entity.MachineId, entity.AttachmentFileName, entity.AttachmentStoredFileName,
         entity.AttachmentContentType, entity.AttachmentFileSizeBytes, entity.ServicePeriodStart,
         entity.ServicePeriodEnd, entity.Notes, entity.CreatedAt, entity.UpdatedAt);

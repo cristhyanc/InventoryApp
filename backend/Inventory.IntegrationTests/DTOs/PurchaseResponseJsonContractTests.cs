@@ -65,7 +65,7 @@ public class PurchaseResponseJsonContractTests
         GstClassificationSource.SupplierFeeDefault,
         new DateTime(2026, 3, 1, 10, 0, 0, DateTimeKind.Utc),
         4,
-        new PurchaseSupplierRecord(4, "Acme", "Pat", "123", "a@b.c", "1 Road"),
+        new PurchaseSupplierRecord(4, "Acme", "Pat", "123", "a@b.c", "1 Road", "https://acme.test"),
         [
             new PurchaseItemRecord(
                 11, 7, 3, 24m, 1.15m, GstClassification.Taxable, GstClassificationSource.Manual, ProductRecord())
@@ -107,6 +107,7 @@ public class PurchaseResponseJsonContractTests
                 Phone = record.Supplier.Phone,
                 Email = record.Supplier.Email,
                 Address = record.Supplier.Address,
+                Url = record.Supplier.Url,
             },
         Items = record.Items.Select(item => new PurchaseItem
         {
@@ -216,7 +217,7 @@ public class PurchaseResponseJsonContractTests
             document.RootElement.EnumerateObject().Select(property => property.Name));
 
         Assert.Equal(
-            new[] { "id", "name", "contactName", "phone", "email", "address" },
+            new[] { "id", "name", "contactName", "phone", "email", "address", "url" },
             document.RootElement.GetProperty("supplier").EnumerateObject().Select(property => property.Name));
 
         Assert.Equal(
@@ -257,7 +258,7 @@ public class PurchaseResponseJsonContractTests
         Assert.Equal((long?)5, product.GetProperty("categoryId").GetInt64());
 
         Assert.Equal(
-            new[] { "id", "name", "contactName", "phone", "email", "address" },
+            new[] { "id", "name", "contactName", "phone", "email", "address", "url" },
             document.RootElement.GetProperty("supplier").EnumerateObject().Select(property => property.Name));
     }
 
