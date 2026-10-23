@@ -75,6 +75,9 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         { "Inventory.Operate", "GET", "/api/products", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/categories", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/sites", "Operator,Manager,Owner" },
+        // Issue #841's light site list declares the same capability as the site list above, which is
+        // the criterion: a site picker reaches exactly the roles the page it filters already does.
+        { "Inventory.Operate", "GET", "/api/sites/list", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/machines", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/stock-history", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/products/1/stock", "Operator,Manager,Owner" },

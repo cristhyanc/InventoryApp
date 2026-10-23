@@ -47,7 +47,7 @@ async function render(overrides: { sessionActive?: Observable<boolean>; recordCo
           recordCommissionPayment
         }
       },
-      { provide: SiteService, useValue: { getAll: jest.fn(() => of([])) } },
+      { provide: SiteService, useValue: { getList: jest.fn(() => of([])) } },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       provideNayaxConnectionStatus()
     ]

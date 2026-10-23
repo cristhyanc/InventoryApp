@@ -70,8 +70,9 @@ public sealed class GetMachineStockReconciliation
             observedSlots.Select(slot => slot.ProductId).Distinct().ToList(),
             cancellationToken);
 
-        var ledger = MachineStockLedger.Project(new MachineStockLedgerInputs(
-            facts.Refills, facts.Sales, facts.Counts, facts.OpeningBaselines));
+        var ledger = MachineStockLedger.Project(
+            new MachineStockLedgerInputs(facts.Refills, facts.Sales, facts.Counts, facts.OpeningBaselines),
+            facts.ProductNames);
 
         // An observed slot whose product is not in this business's catalogue is dropped rather than
         // reported: the catalogue read is tenant-scoped, so "not found" is the ownership boundary and
@@ -84,7 +85,8 @@ public sealed class GetMachineStockReconciliation
         var rows = MachineStockReconciliationPolicy
             .ReconcileMachine(
                 ledger,
-                observedSlots.Where(slot => facts.ProductNames.ContainsKey(slot.ProductId)).ToList())
+                observedSlots.Where(slot => facts.ProductNames.ContainsKey(slot.ProductId)).ToList(),
+                facts.ProductNames)
             .Where(row => facts.ProductNames.ContainsKey(row.ProductId))
             .OrderBy(row => facts.ProductNames[row.ProductId], StringComparer.OrdinalIgnoreCase)
             .ThenBy(row => row.ProductId)
