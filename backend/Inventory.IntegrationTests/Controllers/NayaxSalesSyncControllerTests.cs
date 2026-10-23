@@ -205,13 +205,13 @@ public class NayaxSalesSyncControllerTests
         clock.UtcNow = Now.AddMinutes(1);
 
         Assert.IsType<NoContentResult>(await controller.SyncLatest(force: true, CancellationToken.None));
-        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     private static Mock<INayaxLynxClient> SingleMachineNayax()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>());
