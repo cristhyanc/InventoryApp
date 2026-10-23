@@ -65,6 +65,7 @@ describe('breadcrumbRoutes (issue #457 route inventory)', () => {
       '/admin/nayax-sale-timestamp-repair',
       '/super-admin/diagnostics',
       '/super-admin/businesses',
+      '/super-admin/supplier-presets',
       '/admin/nayax-settings',
       '/admin/site-commission-agreements'
     ]);
@@ -109,6 +110,13 @@ describe('buildBreadcrumbTrail', () => {
     expect(buildBreadcrumbTrail('/super-admin/businesses', null)).toEqual([
       { label: 'Super Admin', path: undefined, current: false },
       { label: 'Businesses', current: true }
+    ]);
+  });
+
+  it('builds Super Admin > Supplier Presets, with no link for the non-routable parent (issue #848)', () => {
+    expect(buildBreadcrumbTrail('/super-admin/supplier-presets', null)).toEqual([
+      { label: 'Super Admin', path: undefined, current: false },
+      { label: 'Supplier Presets', current: true }
     ]);
   });
 

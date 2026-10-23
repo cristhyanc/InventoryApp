@@ -20,7 +20,8 @@ import {
   platformDiagnosticsNavLink,
   primaryNavigation,
   providerSectionHeading,
-  superAdminNavGroup
+  superAdminNavGroup,
+  supplierPresetsNavLink
 } from './navigation';
 
 /**
@@ -269,7 +270,7 @@ describe('primary navigation (issue #391)', () => {
 /**
  * The top-level Super Admin group (issue #546, parent #510 under #328), which took
  * `Platform Diagnostics` out of the business `Admin` group (issue #335) and added Businesses
- * (issue #547).
+ * (issue #547) and Supplier Presets (issue #848).
  *
  * The group is presentation only. `GET /api/admin/diagnostics/access` decides whether it is
  * composed in, and the API is independently authorized on every request, so a navigation without
@@ -282,8 +283,12 @@ describe('navigationFor (issue #546)', () => {
     expect(childRoutes('Admin', ownerNavigation())).toEqual(adminChildRoutes);
   });
 
-  it('adds it last, holding Platform Diagnostics and Businesses, once the API confirms access', () => {
-    expect(group('Super Admin', ownerNavigation(true)).children).toEqual([platformDiagnosticsNavLink, businessesNavLink]);
+  it('adds it last, holding its three destinations, once the API confirms access', () => {
+    expect(group('Super Admin', ownerNavigation(true)).children).toEqual([
+      platformDiagnosticsNavLink,
+      businessesNavLink,
+      supplierPresetsNavLink
+    ]);
   });
 
   it('changes nothing else: the same groups in the same order, with Super Admin appended last', () => {
@@ -295,7 +300,8 @@ describe('navigationFor (issue #546)', () => {
     expect(navLinks(ownerNavigation(true)).map((link) => link.route)).toEqual([
       ...navLinks(primaryNavigation).map((link) => link.route),
       platformDiagnosticsNavLink.route,
-      businessesNavLink.route
+      businessesNavLink.route,
+      supplierPresetsNavLink.route
     ]);
   });
 
@@ -352,7 +358,11 @@ describe('navigationFor (issue #546)', () => {
   it('keeps the group independent of the member capabilities', () => {
     const operator = navigationFor(OPERATOR, true, 'offered');
 
-    expect(group('Super Admin', operator).children).toEqual([platformDiagnosticsNavLink, businessesNavLink]);
+    expect(group('Super Admin', operator).children).toEqual([
+      platformDiagnosticsNavLink,
+      businessesNavLink,
+      supplierPresetsNavLink
+    ]);
     expect(navLinks(navigationFor(OPERATOR, false, 'offered')).map((link) => link.route)).not.toContain(
       platformDiagnosticsNavLink.route
     );
@@ -361,6 +371,18 @@ describe('navigationFor (issue #546)', () => {
   it("declares Businesses with no capability, so no business role is what decides it (#547)", () => {
     expect(businessesNavLink).toEqual({ kind: 'link', label: 'Businesses', route: '/super-admin/businesses' });
     expect(superAdminNavGroup.children).toContain(businessesNavLink);
+  });
+
+  it('declares Supplier Presets with no capability either, for the same reason (#848)', () => {
+    expect(supplierPresetsNavLink).toEqual({
+      kind: 'link',
+      label: 'Supplier Presets',
+      route: '/super-admin/supplier-presets'
+    });
+    expect(superAdminNavGroup.children).toContain(supplierPresetsNavLink);
+    expect(navLinks(navigationFor(OPERATOR, false, 'offered')).map((link) => link.route)).not.toContain(
+      supplierPresetsNavLink.route
+    );
   });
 });
 
@@ -500,7 +522,8 @@ describe('navigationFor capabilities (issue #528)', () => {
     expect(childRoutes('Admin', navigationFor(undefined, true, 'offered'))).toEqual(adminChildRoutes);
     expect(group('Super Admin', navigationFor(undefined, true, 'offered')).children).toEqual([
       platformDiagnosticsNavLink,
-      businessesNavLink
+      businessesNavLink,
+      supplierPresetsNavLink
     ]);
   });
 
@@ -534,7 +557,8 @@ describe('navigationFor with the business navigation withheld (issue #676)', () 
     expect(navigationFor(undefined, true, 'withheld')).toEqual([superAdminNavGroup]);
     expect(navLinks(navigationFor(OWNER, true, 'withheld'))).toEqual([
       platformDiagnosticsNavLink,
-      businessesNavLink
+      businessesNavLink,
+      supplierPresetsNavLink
     ]);
   });
 

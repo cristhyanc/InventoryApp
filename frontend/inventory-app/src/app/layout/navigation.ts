@@ -270,6 +270,17 @@ export const businessesNavLink: NavLink = {
 };
 
 /**
+ * The Supplier presets page (issue #848): the one platform-wide list of suggested suppliers, which
+ * issue #835 child C copies into each newly approved business. Like the two links above it declares
+ * no capability - no business role grants it, only the platform-admin probe below does.
+ */
+export const supplierPresetsNavLink: NavLink = {
+  kind: 'link',
+  label: 'Supplier Presets',
+  route: '/super-admin/supplier-presets'
+};
+
+/**
  * The top-level Super Admin group (issue #546, parent #510 under #328): kept apart from the
  * business `Admin` group because neither of its destinations is granted by a business role.
  * `navigationFor` composes it in only while `GET /api/admin/diagnostics/access` confirms the
@@ -280,7 +291,7 @@ export const superAdminNavGroup: NavGroup = {
   kind: 'group',
   label: 'Super Admin',
   icon: 'settings',
-  children: [platformDiagnosticsNavLink, businessesNavLink]
+  children: [platformDiagnosticsNavLink, businessesNavLink, supplierPresetsNavLink]
 };
 
 /**

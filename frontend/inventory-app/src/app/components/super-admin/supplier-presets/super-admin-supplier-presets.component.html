@@ -1,0 +1,92 @@
+<div class="page">
+  <header class="page-header">
+    <div>
+      <h1 class="page-title">Supplier presets</h1>
+      <p class="page-subtitle">
+        The suggested suppliers copied into each business approved from now on. Editing this list never changes a
+        business that already has its own suppliers.
+      </p>
+    </div>
+    <button type="button" class="btn btn-primary" (click)="requestAdd()">Add preset</button>
+  </header>
+
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">All presets</h2>
+    </div>
+    <div class="card-body">
+      @if (loading) {
+        <p class="text-sm value-muted">Loading supplier presets…</p>
+      } @else if (loadError) {
+        <p class="text-sm text-red-600" role="alert">Unable to load supplier presets.</p>
+      } @else if (presets.length === 0) {
+        <p class="text-sm value-muted">No supplier presets yet.</p>
+      } @else {
+        <table class="table">
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell">Name</th>
+              <th scope="col" class="table-cell">Website</th>
+              <th scope="col" class="table-cell">Suggested</th>
+              <th scope="col" class="table-cell">Last changed</th>
+              <th scope="col" class="table-cell">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (preset of presets; track preset.id) {
+              <tr class="table-row">
+                <td class="table-cell">{{ preset.name }}</td>
+                <td class="table-cell">
+                  @if (preset.url) {
+                    <a [href]="preset.url" target="_blank" rel="noopener noreferrer">{{ preset.url }}</a>
+                  } @else {
+                    <span class="value-muted">—</span>
+                  }
+                </td>
+                <td class="table-cell">
+                  <span class="badge" [class.badge-success]="preset.isEnabled" [class.badge-neutral]="!preset.isEnabled">
+                    {{ preset.isEnabled ? 'Yes' : 'No' }}
+                  </span>
+                </td>
+                <td class="table-cell">{{ preset.updatedAtUtc | date: 'dd/MM/yyyy' : 'UTC' }}</td>
+                <td class="table-cell">
+                  <div class="flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-secondary btn-sm" (click)="requestEdit(preset)">Edit</button>
+                    <button
+                      type="button"
+                      class="btn btn-sm"
+                      [class.btn-danger]="preset.isEnabled"
+                      [class.btn-primary]="!preset.isEnabled"
+                      (click)="requestToggle(preset)"
+                    >
+                      {{ preset.isEnabled ? 'Disable' : 'Enable' }}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </div>
+  </section>
+</div>
+
+@if (dialogOpen) {
+  <app-supplier-preset-dialog
+    [preset]="editTarget"
+    (saved)="onSaved($event)"
+    (canceled)="onDialogCanceled()"
+  ></app-supplier-preset-dialog>
+}
+
+@if (toggleTarget) {
+  <app-confirmation-dialog
+    [title]="toggleTitle"
+    [message]="toggleMessage"
+    confirmLabel="Confirm"
+    cancelLabel="Cancel"
+    (confirmed)="confirmToggle()"
+    (canceled)="cancelToggle()"
+  ></app-confirmation-dialog>
+}

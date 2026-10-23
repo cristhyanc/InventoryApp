@@ -1,0 +1,167 @@
+import { CommonModule, DatePipe } from '@angular/common';
+import { Component, OnDestroy, OnInit } from '@angular/core';
+import { Subject, takeUntil } from 'rxjs';
+import { ToastService } from '../../../services/toast.service';
+import {
+  SuperAdminSupplierPreset,
+  SuperAdminSupplierPresetsService
+} from '../../../services/super-admin-supplier-presets.service';
+import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
+import { SupplierPresetDialogComponent } from './supplier-preset-dialog.component';
+
+/**
+ * The Super Admin Supplier presets page (issue #848), at `/super-admin/supplier-presets`, over the
+ * three endpoints of the platform supplier presets API.
+ *
+ * It is presentation only: the API decides every rule a create or edit might refuse - the name
+ * rules, the website rule and the duplicate-name conflict only it can settle - and this page shows
+ * that refusal's own sentence rather than a second copy of the rule.
+ *
+ * Per docs/architecture.md § Page composition boundary, the page owns the table and the
+ * enable/disable confirmation behind the shared `ConfirmationDialogComponent`, while Add and Edit -
+ * their own form values, validation and submission state - are a dedicated feature component
+ * composed through `[preset]` and its `(saved)`/`(canceled)` outputs.
+ *
+ * **Presets are not suppliers.** Nothing here reads or writes any business's own suppliers, and
+ * copying a preset into a newly approved business is issue #835 child C, not this page.
+ */
+@Component({
+  selector: 'app-super-admin-supplier-presets',
+  standalone: true,
+  imports: [CommonModule, DatePipe, ConfirmationDialogComponent, SupplierPresetDialogComponent],
+  templateUrl: './super-admin-supplier-presets.component.html'
+})
+export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
+  presets: SuperAdminSupplierPreset[] = [];
+  loading = false;
+  loadError = false;
+
+  /** The dialog is open when this is set; `null` inside it means Add. */
+  editTarget: SuperAdminSupplierPreset | null = null;
+  dialogOpen = false;
+
+  /** The preset whose enabled state a confirmation is pending for. */
+  toggleTarget: SuperAdminSupplierPreset | null = null;
+
+  private readonly destroying$ = new Subject<void>();
+
+  constructor(
+    private readonly presetsService: SuperAdminSupplierPresetsService,
+    private readonly toast: ToastService
+  ) {}
+
+  ngOnInit(): void {
+    this.load();
+  }
+
+  ngOnDestroy(): void {
+    this.destroying$.next();
+    this.destroying$.complete();
+  }
+
+  load(): void {
+    this.loading = true;
+    this.loadError = false;
+    this.presetsService
+      .list()
+      .pipe(takeUntil(this.destroying$))
+      .subscribe({
+        next: (presets) => {
+          this.presets = presets;
+          this.loading = false;
+        },
+        error: () => {
+          this.loading = false;
+          this.loadError = true;
+        }
+      });
+  }
+
+  requestAdd(): void {
+    this.editTarget = null;
+    this.dialogOpen = true;
+  }
+
+  requestEdit(preset: SuperAdminSupplierPreset): void {
+    this.editTarget = preset;
+    this.dialogOpen = true;
+  }
+
+  onSaved(preset: SuperAdminSupplierPreset): void {
+    const wasEdit = this.editTarget !== null;
+    this.dialogOpen = false;
+    this.editTarget = null;
+    this.toast.success(wasEdit ? `${preset.name} was updated.` : `${preset.name} was added.`);
+    this.load();
+  }
+
+  onDialogCanceled(): void {
+    this.dialogOpen = false;
+    this.editTarget = null;
+  }
+
+  requestToggle(preset: SuperAdminSupplierPreset): void {
+    this.toggleTarget = preset;
+  }
+
+  cancelToggle(): void {
+    this.toggleTarget = null;
+  }
+
+  get toggleTitle(): string {
+    if (!this.toggleTarget) {
+      return '';
+    }
+    return this.toggleTarget.isEnabled ? 'Disable supplier preset' : 'Enable supplier preset';
+  }
+
+  get toggleMessage(): string {
+    const target = this.toggleTarget;
+    if (!target) {
+      return '';
+    }
+
+    return target.isEnabled
+      ? `Stop suggesting ${target.name}? Businesses approved from now on will not be offered it. ` +
+          'Businesses that already have it keep their own supplier.'
+      : `Suggest ${target.name} again to businesses approved from now on?`;
+  }
+
+  confirmToggle(): void {
+    const target = this.toggleTarget;
+    if (!target) {
+      return;
+    }
+    this.toggleTarget = null;
+
+    const isEnabled = !target.isEnabled;
+    this.presetsService.update(target.id, { name: target.name, url: target.url, isEnabled }).subscribe({
+      next: (preset) => {
+        this.toast.success(isEnabled ? `${preset.name} is suggested again.` : `${preset.name} is no longer suggested.`);
+        this.load();
+      },
+      error: (err: unknown) => {
+        this.toast.error(extractErrorMessage(err, 'Unable to change this supplier preset.'));
+        // A 409 or 404 means the preset changed or disappeared elsewhere (another tab, another
+        // Super Admin), so the row this page shows is stale: re-read the list.
+        if (isStaleStateStatus(err)) {
+          this.load();
+        }
+      }
+    });
+  }
+}
+
+function isStaleStateStatus(err: unknown): boolean {
+  const status = (err as { status?: unknown } | undefined)?.status;
+  return status === 409 || status === 404;
+}
+
+function extractErrorMessage(err: unknown, fallback: string): string {
+  const body = (err as { error?: unknown } | undefined)?.error;
+  if (typeof body === 'string') {
+    return body;
+  }
+  const problem = body as { message?: string; title?: string } | undefined;
+  return problem?.message ?? problem?.title ?? fallback;
+}
