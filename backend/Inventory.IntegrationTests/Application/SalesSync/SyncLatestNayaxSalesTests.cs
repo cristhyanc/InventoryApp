@@ -54,7 +54,7 @@ public class SyncLatestNayaxSalesTests
     {
         await using var db = CreateDb();
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>
             {
                 new() { MachineID = 1, MachineName = "Machine A" },
@@ -73,7 +73,8 @@ public class SyncLatestNayaxSalesTests
 
         await UseCase(db, nayax.Object).Handle();
 
-        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Once);
+        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Never);
         var persisted = await db.NayaxSales.OrderBy(s => s.TransactionID).ToListAsync();
         Assert.Equal(2, persisted.Count);
         Assert.Equal(100, persisted[0].TransactionID);
@@ -85,7 +86,7 @@ public class SyncLatestNayaxSalesTests
     {
         await using var db = CreateDb();
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
@@ -112,7 +113,7 @@ public class SyncLatestNayaxSalesTests
     public async Task Handle_persists_nothing_when_a_machines_sales_read_fails()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>
             {
                 new() { MachineID = 1, MachineName = "Machine A" },
@@ -169,7 +170,7 @@ public class SyncLatestNayaxSalesTests
     private static Mock<INayaxLynxClient> SingleMachineNayax()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>

@@ -167,7 +167,10 @@ public sealed class SyncLatestNayaxSales
         // a sale could still have been authorized at while the run was reading.
         var readStartedAtUtc = _clock.UtcNow;
 
-        var machines = await _nayax.GetMachinesAsync(cancellationToken);
+        // Fresh, never the cached list (issue #840): a successful run records business-wide sales
+        // coverage for the range it read (issue #730), and a machine missing from a ten-minute-old
+        // list would be claimed as covered without ever having been read.
+        var machines = await _nayax.GetMachinesFreshAsync(cancellationToken);
 
         // Every machine's latest sales are read before anything is persisted, so the batch is stored
         // in one save: a machine read that fails part-way through does not leave half a refresh

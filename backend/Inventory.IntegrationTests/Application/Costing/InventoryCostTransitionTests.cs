@@ -258,7 +258,7 @@ public class InventoryCostTransitionTests
         });
         await db.SaveChangesAsync();
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
@@ -301,7 +301,7 @@ public class InventoryCostTransitionTests
             new Product { Id = 20, Name = "Drink", QuantityInStock = 6, AverageUnitCost = 2.00m });
         await db.SaveChangesAsync();
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
@@ -350,7 +350,7 @@ public class InventoryCostTransitionTests
             });
         await db.SaveChangesAsync();
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1 } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
@@ -407,7 +407,7 @@ public class InventoryCostTransitionTests
     private static Mock<INayaxLynxClient> NayaxWithStock(long productId)
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>
             {
                 new() { MachineID = 1, MachineName = "Machine A" },

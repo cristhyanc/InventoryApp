@@ -139,7 +139,10 @@ internal sealed class NayaxSaleTimestampRepairProjection
     {
         var readAt = _clock.UtcNow;
         var evidence = new List<NayaxSaleTimestampEvidence>();
-        foreach (var machine in await _nayax.GetMachinesAsync(cancellationToken))
+        // Fresh, never the cached list (issue #840): the evidence this preview offers is the live
+        // rolling window of every machine, so a machine the cached list predates would silently
+        // contribute no evidence at all.
+        foreach (var machine in await _nayax.GetMachinesFreshAsync(cancellationToken))
             foreach (var sale in await _nayax.GetMachineLastSalesAsync(machine.MachineID, cancellationToken))
             {
                 if (sale.TransactionID <= 0 || sale.MachineID <= 0)

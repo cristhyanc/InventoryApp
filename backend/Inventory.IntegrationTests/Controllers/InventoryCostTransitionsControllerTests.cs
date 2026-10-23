@@ -101,7 +101,7 @@ public class InventoryCostTransitionsControllerTests
     private static InventoryCostTransitionsController Controller(Mock<IInventoryCostTransitionStore> store)
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>())).ReturnsAsync([]);
         var rebuild = new Mock<IRebuildProductCost>(MockBehavior.Strict);
         var clock = new FakeClock(Now);
         return new InventoryCostTransitionsController(

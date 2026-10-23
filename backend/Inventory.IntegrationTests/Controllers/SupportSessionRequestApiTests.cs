@@ -944,6 +944,9 @@ public class SupportSessionRequestApiTests
 
         public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) => CallAsync<NayaxMachine>(ct);
 
+        public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
+            CallAsync<NayaxMachine>(ct);
+
         public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default) =>
             CallAsync<NayaxMachineProduct>(ct);
 

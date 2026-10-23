@@ -60,7 +60,9 @@ public sealed class ApplyProviderMachineLinks
         // Read before the transaction is opened, like every other provider-then-database operation
         // here: it is where the provider's own name for each machine comes from, and a failed read
         // leaves the machines exactly as they are.
-        var fleet = await _nayax.GetMachinesAsync(cancellationToken);
+        // Fresh, never the cached list (issue #840): a link is refused for a provider machine that is
+        // not in the fleet, so the fleet this decision is checked against has to be the current one.
+        var fleet = await _nayax.GetMachinesFreshAsync(cancellationToken);
         var byProviderMachineId = Fleet(fleet);
 
         var planned = Planned(request.Decisions ?? [], byProviderMachineId);

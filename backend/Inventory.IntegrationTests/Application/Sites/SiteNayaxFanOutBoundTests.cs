@@ -395,6 +395,11 @@ public class SiteNayaxFanOutBoundTests
         public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) =>
             Task.FromResult(_machines);
 
+        // This double caches nothing, so both reads answer with the same fleet (issue #840). Neither
+        // read blocks: the bound under test is the one on the per-machine requests below.
+        public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
+            Task.FromResult(_machines);
+
         public async Task<List<NayaxMachineProduct>> GetMachineProductsAsync(
             long machineId, CancellationToken ct = default)
         {

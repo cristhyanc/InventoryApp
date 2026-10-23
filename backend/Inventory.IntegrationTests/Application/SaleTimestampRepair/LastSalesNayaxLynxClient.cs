@@ -21,7 +21,16 @@ public sealed class LastSalesNayaxLynxClient : INayaxLynxClient
 
     public int MachineLastSalesCalls { get; private set; }
 
+    /// <summary>
+    /// The cached machine list of issue #840, which neither the timestamp repair preview nor the
+    /// latest-sales sync may read: both are declared fresh-only callers, so a test that reached this
+    /// member would be proving the opposite of what those use cases promise.
+    /// </summary>
     public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This fake serves the fresh machine list only: its callers must not read the cached one.");
+
+    public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
         Task.FromResult(_salesByMachine.Keys
             .OrderBy(id => id)
             .Select(id => new NayaxMachine { MachineID = id, MachineName = $"Machine {id}" })

@@ -37,6 +37,9 @@ public sealed class E2ETestNayaxLynxClient : INayaxLynxClient
 
     public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) => Empty<NayaxMachine>();
 
+    // This host caches nothing either, so the fresh read is the same empty fleet (issue #840).
+    public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) => Empty<NayaxMachine>();
+
     public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default) =>
         Empty<NayaxMachineProduct>();
 

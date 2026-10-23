@@ -1,6 +1,9 @@
 using Inventory.Application.Nayax;
+using Inventory.Application.Tenancy;
+using Inventory.Application.Time;
 using Inventory.Infrastructure;
 using Inventory.Infrastructure.Nayax;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -69,20 +72,54 @@ public sealed class NayaxLynxClientDependencyInjectionTests
     /// The one registered Nayax client resolves its credentials from the Application port, so a
     /// container without that port cannot produce a client at all - there is no constructor left
     /// that takes a baked-in operator id and token.
+    ///
+    /// <para>Since issue #840 the port resolves to the machine-list caching decorator, which still
+    /// takes that same credential provider (its refusals are what run before every cache hit) and
+    /// still wraps the one HTTP client, which also takes it.</para>
     /// </summary>
     [Fact]
     public void The_registered_client_is_constructed_from_the_per_business_credential_provider()
+    {
+        using var provider = ContainerWithTheRegisteredClient();
+        using var scope = provider.CreateScope();
+
+        Assert.IsType<MachineListCachingNayaxLynxClient>(
+            scope.ServiceProvider.GetRequiredService<INayaxLynxClient>());
+        Assert.IsType<NayaxLynxClient>(scope.ServiceProvider.GetRequiredService<NayaxLynxClient>());
+    }
+
+    /// <summary>
+    /// The machine-list cache of issue #840 is one object for the whole process, because a per-request
+    /// cache would answer nothing a second page load asked for - which is the entire point of the
+    /// issue. The decorator in front of it stays per resolution, like the HTTP client it wraps, so it
+    /// reads the current request's business scope and credentials.
+    /// </summary>
+    [Fact]
+    public void The_machine_list_cache_is_shared_by_every_request_and_the_decorator_is_not()
+    {
+        using var provider = ContainerWithTheRegisteredClient();
+        using var first = provider.CreateScope();
+        using var second = provider.CreateScope();
+
+        Assert.Same(
+            first.ServiceProvider.GetRequiredService<NayaxMachineListCache>(),
+            second.ServiceProvider.GetRequiredService<NayaxMachineListCache>());
+        Assert.NotSame(
+            first.ServiceProvider.GetRequiredService<INayaxLynxClient>(),
+            second.ServiceProvider.GetRequiredService<INayaxLynxClient>());
+    }
+
+    private static ServiceProvider ContainerWithTheRegisteredClient()
     {
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddNayaxLynxClient(new NayaxLynxOptions { BaseUrl = "https://lynx.nayax.com" });
         services.AddScoped<INayaxRequestCredentialProvider>(
             _ => new FakeNayaxRequestCredentialProvider("op-1", "fake-token-not-a-real-credential"));
+        services.AddScoped<IBusinessScope>(_ => new BusinessScope());
+        services.AddSingleton<IClock>(new FakeClock(new DateTime(2026, 10, 23, 0, 0, 0, DateTimeKind.Utc)));
 
-        using var provider = services.BuildServiceProvider();
-        using var scope = provider.CreateScope();
-
-        Assert.IsType<NayaxLynxClient>(scope.ServiceProvider.GetRequiredService<INayaxLynxClient>());
+        return services.BuildServiceProvider();
     }
 
     private static bool PipelineContains<THandler>(HttpMessageHandler handler)

@@ -2885,10 +2885,15 @@ another business's: a business either has its own usable connection or its Nayax
 closed.
 
 **The credential is resolved per call, centrally, and no consumer learns that.** `INayaxLynxClient`
-is unchanged, so none of those ~27 consumers changed either. What changed is one step inside
+was unchanged by this issue, so none of those ~27 consumers changed either (issue #840 later added one
+machine-list member to that port and put a caching decorator in front of the client — see
+[The machine-list cache](#the-machine-list-cache-issue-840) — and the credential resolution described
+here is exactly what that decorator runs before every answer it gives). What changed is one step inside
 `Inventory.Infrastructure.Nayax.NayaxLynxClient`: every operation starts by resolving
 `Inventory.Application.Nayax.INayaxRequestCredentialProvider`, and applies the result to *that
-request* — the `Authorization: Bearer` header Nayax documents
+request* — one resolution per operation, still, for the machine-list read whose caller resolves it a
+layer up (see [The machine-list cache](#the-machine-list-cache-issue-840)) as much as for the other
+twenty-odd — the `Authorization: Bearer` header Nayax documents
 ([Security & Token](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/security)) and the
 `OperatorID` path parameter of the operator endpoints, which are built from the same resolved
 credential so the token and the operator id can never belong to different businesses. Nothing
@@ -3063,6 +3068,133 @@ keeping their local reads off the context while their remote reads run.
 `NayaxConnectionExceptionHandlerTests` pins the `409` contract and its log;
 `NayaxLynxClientDependencyInjectionTests` pins the base address, that registration needs no credential
 and registers none, and that the registered client is built from the provider.
+
+### The machine-list cache (issue #840)
+
+Issue #840 — step 1 of #839 — is the one Nayax read this application holds on to. `GET /v1/machines`
+("[Get All Machine Basic Info](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/machines/retrieve-machine-information)",
+the endpoint `INayaxLynxClient.GetMachinesAsync` is) is called by twelve use cases, and nothing
+cached it: **one Dashboard visit spent five requests on it** — the dashboard summary, low stock, the
+sales sync, the sites read and the machine list — several of them at the same moment. Machine ids,
+names and site `CustomerID`s change rarely, so those repeats bought nothing.
+
+**The port says which read a caller wants, and the composition root decides what that costs.**
+`INayaxLynxClient` has two machine-list members: `GetMachinesAsync`, which may answer with a list up
+to ten minutes old, and `GetMachinesFreshAsync`, which always reads Nayax and replaces what is held.
+`Inventory.Infrastructure.Nayax.MachineListCachingNayaxLynxClient` is what `AddNayaxLynxClient`
+registers the port as; it wraps the typed `NayaxLynxClient` (still registered under its own type,
+still named after the port for its base address and its resilience pipeline) and holds the lists in
+the one singleton `Inventory.Infrastructure.Nayax.NayaxMachineListCache`. `NayaxLynxClient` itself
+caches nothing, so for it the two members are the same request — which is what keeps the connection
+test outside all of this. No cache type exists in `Inventory.Application`: a use case states the
+requirement it has, never where the answer comes from.
+
+**Ten minutes, decided by the repository owner on 23 October 2026.** A machine added in Nayax can
+take up to ten minutes to appear on the pages that read through the cache. It is in memory rather
+than in a column, like `NayaxSalesSyncRateLimiter`'s window and `MemberProfileRefreshThrottle`: which
+machines Nayax reported ten minutes ago is not part of the business's record, and a restart simply
+reads the list again. On a single instance
+([SQLite operating assumptions](#sqlite-operating-assumptions-and-scale-strategy-issue-53))
+that is the whole truth; a second instance would mean one cached list per instance, which is still
+bounded and still correct. A distributed or persisted cache is explicitly out of scope.
+
+**The key is the business id and the credential revision.** The business id is in the key because a
+process-wide list would be the one place in this application where one business could be served
+another's data, and it comes from the request's resolved `IBusinessScope` — never from anything a
+caller passed in. The credential revision is in the key because replacing a connection may point the
+same business at a different Nayax operator account: saving a connection raises the revision, which
+is a new key, so the next read goes to Nayax rather than answering from a list the previous
+credentials fetched. A scope with no resolved business caches nothing at all rather than sharing a
+key. Keys are forgotten once more than `NayaxMachineListCache.MaxTrackedKeys` are remembered, and
+only the ones holding nothing usable, so the clean-up is about memory and never changes an answer.
+
+**And the key names the credentials the request actually carried.** One credential is resolved per
+machine-list call and *that* credential is what the upstream request is sent with: the decorator hands
+it down through `Inventory.Infrastructure.Nayax.INayaxLynxMachineListClient.ReadMachinesAsync`, which
+is `NayaxLynxClient`'s ordinary `GET /v1/machines` — same endpoint, same operation name in logs, same
+`401` and `403` classification — with the resolution step skipped because it has already happened.
+Resolving once for the key and letting the client resolve again for the request would leave a window,
+because the credential provider caches nothing on purpose: a connection saved between the two reads
+would have put the new credentials' fleet under the old revision's key. The extra member lives in
+`Inventory.Infrastructure` for the same reason the cache does — nothing in `Inventory.Application`
+knows that a credential revision or a cache key exists.
+
+**Every refusal still happens, before every answer.** The cache is not an authorization boundary and
+must never become one. The decorator resolves
+[`INayaxRequestCredentialProvider.GetForOperationAsync`](#per-business-nayax-credentials-issue-520)
+first on every machine-list call — the stored connection, `NayaxConnectionStatusGate` and the
+support-session refusal of [issue #551](#support-sessions-in-the-request-pipeline-issue-551) — so a
+business whose connection is now `NotConfigured` or `NeedsAttention`, and a platform administrator
+reading in a support session, get today's refusal even while a list for that key is in memory. A
+cache that answered before that check would be a way to read a business's Nayax data after its
+connection stopped allowing it.
+
+**Simultaneous readers share one request, and share its failure.** The Dashboard's five reads start
+before any of them finishes, so a cache that only stored finished answers would let all five miss.
+The first caller's read is published for the key and the others join it; each gets its own `List` over
+the same machines, so a caller that sorts or trims what it was handed cannot change what the next one
+reads. The shared read runs under the cancellation token of the caller that started it, and a caller
+that joined may still leave early on its own token. **Nothing failed is ever held**: a `401`, a `403`,
+any other upstream status and a cancellation all reach the callers unchanged and leave the entry as it
+was, because a cached failure would turn one bad moment into ten minutes of refusals.
+
+**Ordering is explicit, because results arrive out of order.** Every read takes a sequence number
+before it starts, and a result is stored only while no later read has stored one, no fresh read has
+begun and no invalidation has happened since. So a slow read that started before a fresh read cannot
+store its older list over the fresher one it finished after — the slow caller still receives the
+answer it was given, it simply does not become what the next caller sees. The fence is taken when the
+fresh read *begins*, not when it succeeds: a fresh read that fails or is cancelled has nothing to
+store, and the older read beside it must not become the answer by default. Letting a cached list
+expire is an invalidation too, taken under the same lock that would otherwise hand it out.
+
+**An invalidation also unpublishes the read that is still running.** Forgetting the held list and
+barring older results from being stored is not enough on its own: a caller arriving while a read that
+started before the invalidation is still open would otherwise join it and be handed exactly the
+pre-invalidation list — for the expiry path a list already too old to serve, and after a credential
+change the previous connection's fleet. So that read stops being joinable, its own callers still
+receive what they asked for, and the next caller starts its own read. A fresh read is deliberately
+the other way round: it bars the in-flight read from being stored but leaves it joinable, because it
+is a live read of the same key from seconds ago and refusing to share it would cost the extra Nayax
+request this cache exists to remove.
+
+**Five callers always read fresh, and the connection test is outside the cache entirely.**
+`ReviewProviderMachines` and `ApplyProviderMachineLinks` (a provider machine becoming a local machine,
+and a link refused for a machine outside the fleet), `SyncLatestNayaxSales` (it records business-wide
+sales coverage under issue #730, so a machine missing from an old list would be claimed as covered
+without being read), `InventoryCostTransitionPreviewBuilder` (its
+opening machine stock becomes a costing baseline) and `NayaxSaleTimestampRepairProjection` (its
+evidence is the live rolling window of every machine) all call `GetMachinesFreshAsync` and replace the
+entry for their business and credential revision. Every other caller — the dashboard summary and low
+stock, the sites read and site products, reorder, the pick list, the machine list, the site commission
+report, the transaction report's live site names and the catalogue snapshot — reads through the cache.
+`NayaxConnectionCheckRunner` neither reads from nor writes to it, structurally: it builds its own
+`NayaxLynxClient` over the candidate credentials an Owner pasted and is constructed from an
+`HttpClient` and a logger and nothing else, so it never resolves the decorated port. That matters
+because the pasted pair may belong to a different Nayax operator account, whose fleet is not the
+business's fleet. Nothing else is cached by this change: machine products, machine stock, last sales,
+alerts, one machine, the product catalogue, the product groups, the devices and the machine-product
+write all reach the client every time.
+
+**What proves it.** `Inventory.IntegrationTests/Infrastructure/Nayax/NayaxMachineListCacheTests`
+covers the mechanism over a scripted read whose every call is counted and can be held open: a hit
+inside ten minutes, a per-caller list, expiry exactly at ten minutes on a fake clock, five
+simultaneous readers making one request, each of the three Nayax failures and a cancellation reaching
+every caller and being held by none, two keys never crossing, a fresh read ignoring and replacing what
+is held, a failed fresh read leaving it alone, an older in-flight read overwriting neither a newer
+fresh read nor an invalidation — in either completion order, and including a fresh read that fails —
+a caller after an invalidation not joining the read that was already running, and expired keys being
+forgotten while a live one keeps its list. `MachineListCachingNayaxLynxClientTests` covers the
+decorator: a second read answering from memory, each of the three refusals still happening with a warm
+cache, two businesses never receiving each other's list, new credentials sending the next read to
+Nayax, one credential resolved per call and the read carrying it, the key naming the credentials the
+request really carried — that one over the real `NayaxLynxClient` and a handler that answers each
+request with its own fleet, with the stored connection replaced between two calls — a fresh read
+reaching Nayax with a warm cache, nothing but the machine list being cached, and a scope with no
+business caching nothing.
+`NayaxConnectionCheckRunnerTests` pins the connection test's structural isolation, and
+`NayaxLynxClientDependencyInjectionTests` pins that the port resolves to the decorator over the one
+HTTP client with one process-wide cache behind it. Each fresh caller's own suite refuses the cached
+read outright, so a use case that stopped reading fresh fails loudly.
 
 ### Nayax connection checks and the Test endpoint (issue #536)
 

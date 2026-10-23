@@ -45,7 +45,7 @@ public class SyncLatestNayaxSalesFreshnessTests
         Assert.Equal(Now, skipped.RecentlySyncedAtUtc);
         Assert.Null(skipped.RetryAfter);
         // The first run made these calls; the skipped one added none.
-        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Once);
         nayax.Verify(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()), Times.Once);
         store.Verify(
             x => x.PersistLatestSalesAsync(
@@ -91,7 +91,7 @@ public class SyncLatestNayaxSalesFreshnessTests
         var second = await useCase.Handle();
 
         Assert.Null(second.RecentlySyncedAtUtc);
-        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
         store.Verify(
             x => x.PersistLatestSalesAsync(
                 It.IsAny<IReadOnlyList<NayaxLastSalesReport>>(), It.IsAny<CancellationToken>()),
@@ -106,7 +106,7 @@ public class SyncLatestNayaxSalesFreshnessTests
 
         Assert.Null((await UseCase(nayax, EmptyStore()).Handle()).RecentlySyncedAtUtc);
 
-        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     /// <summary>The Dashboard's Refresh control, which is why the skip is safe to have at all.</summary>
@@ -122,7 +122,7 @@ public class SyncLatestNayaxSalesFreshnessTests
         var forced = await useCase.Handle(force: true);
 
         Assert.Null(forced.RecentlySyncedAtUtc);
-        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     /// <summary>
@@ -162,7 +162,7 @@ public class SyncLatestNayaxSalesFreshnessTests
 
         var nayax = SingleMachine();
         Assert.Null((await UseCase(nayax, EmptyStore(), clock, freshness).Handle()).RecentlySyncedAtUtc);
-        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -225,7 +225,7 @@ public class SyncLatestNayaxSalesFreshnessTests
         var afterSave = await useCase.Handle();
 
         Assert.Null(afterSave.RecentlySyncedAtUtc);
-        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Exactly(2));
     }
 
     /// <summary>
@@ -252,7 +252,7 @@ public class SyncLatestNayaxSalesFreshnessTests
             clock);
 
         Assert.Null((await otherBusiness.Handle()).RecentlySyncedAtUtc);
-        second.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        second.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 
     /// <summary>
@@ -278,7 +278,7 @@ public class SyncLatestNayaxSalesFreshnessTests
             () => UseCase(nayax, EmptyStore(), clock, freshness, credentials: refusing).Handle());
 
         Assert.Equal(status, refusal.Status);
-        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -298,7 +298,7 @@ public class SyncLatestNayaxSalesFreshnessTests
                 freshness,
                 credentials: FakeNayaxOperationCredentials.InSupportSession()).Handle());
 
-        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Never);
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     /// <summary>
@@ -315,7 +315,7 @@ public class SyncLatestNayaxSalesFreshnessTests
 
         await UseCase(nayax, EmptyStore(), clock, coverage: coverage).Handle();
 
-        nayax.Verify(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        nayax.Verify(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()), Times.Once);
         var recorded = Assert.Single(coverage.Recorded);
         Assert.Equal(ProviderDataSource.SalesSync, recorded.Source);
         Assert.Equal(Now.AddMinutes(-30), recorded.FromUtc);
@@ -346,7 +346,7 @@ public class SyncLatestNayaxSalesFreshnessTests
     private static Mock<INayaxLynxClient> SingleMachine(DateTime? saleAtUtc = null)
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
