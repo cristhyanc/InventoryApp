@@ -32,6 +32,15 @@ public static class SiteResponseMapper
         summary.CurrentWeekRevenue,
         summary.PreviousComparableWeekRevenue);
 
+    /// <summary>
+    /// The light site list row (issue #841). Three already-resolved values copied across: the site
+    /// id the fleet read grouped by, the name <c>ISiteNameResolver</c> derived, and the size of that
+    /// group, which <see cref="Inventory.Application.Sites.ListSites"/> counted. This mapper counts
+    /// nothing itself, for the same reason it re-decides no figure above.
+    /// </summary>
+    public static SiteListItemDto ToDto(SiteListItem site) =>
+        new(site.SiteId, site.Name, site.MachineCount);
+
     public static SiteProductDto ToDto(SiteProductRecord product) => new(
         product.ProductId,
         product.Name,

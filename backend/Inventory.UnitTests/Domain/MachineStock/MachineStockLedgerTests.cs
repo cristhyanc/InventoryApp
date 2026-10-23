@@ -21,9 +21,10 @@ public class MachineStockLedgerTests
         IReadOnlyCollection<MachineRefillFact>? refills = null,
         IReadOnlyCollection<MachineSaleFact>? sales = null,
         IReadOnlyCollection<MachineStockCountFact>? counts = null,
-        IReadOnlyCollection<MachineStockOpeningBaselineFact>? baselines = null) =>
+        IReadOnlyCollection<MachineStockOpeningBaselineFact>? baselines = null,
+        IReadOnlyDictionary<long, string>? productNames = null) =>
         Assert.Single(MachineStockLedger.Project(new MachineStockLedgerInputs(
-            refills ?? [], sales ?? [], counts ?? [], baselines ?? [])));
+            refills ?? [], sales ?? [], counts ?? [], baselines ?? []), productNames));
 
     [Fact]
     public void Without_a_baseline_expected_stock_is_unknown_and_the_movements_are_still_reported()
@@ -40,6 +41,28 @@ public class MachineStockLedgerTests
         Assert.Contains(
             MachineStockDataQualityIssueCodes.AwaitingOpeningCount,
             ledger.Issues.Select(issue => issue.Code));
+    }
+
+    [Fact]
+    public void The_awaiting_opening_count_message_names_the_product_when_a_name_is_known()
+    {
+        var ledger = ProjectOne(
+            refills: [new MachineRefillFact(1, Product, -10, At(1))],
+            productNames: new Dictionary<long, string> { [Product] = "Coke" });
+
+        var issue = Assert.Single(
+            ledger.Issues, issue => issue.Code == MachineStockDataQualityIssueCodes.AwaitingOpeningCount);
+        Assert.Contains($"Expected machine stock for product Coke ({Product}) is unknown", issue.Message);
+    }
+
+    [Fact]
+    public void The_awaiting_opening_count_message_falls_back_to_the_bare_id_without_a_name()
+    {
+        var ledger = ProjectOne(refills: [new MachineRefillFact(1, Product, -10, At(1))]);
+
+        var issue = Assert.Single(
+            ledger.Issues, issue => issue.Code == MachineStockDataQualityIssueCodes.AwaitingOpeningCount);
+        Assert.Contains($"Expected machine stock for product {Product} is unknown", issue.Message);
     }
 
     [Fact]
@@ -193,6 +216,31 @@ public class MachineStockLedgerTests
         Assert.Contains(
             MachineStockDataQualityIssueCodes.ExpectedStockNegative,
             ledger.Issues.Select(issue => issue.Code));
+    }
+
+    [Fact]
+    public void The_expected_stock_negative_message_names_the_product_when_a_name_is_known()
+    {
+        var ledger = ProjectOne(
+            sales: [new MachineSaleFact(9001, Product, At(3)), new MachineSaleFact(9002, Product, At(4))],
+            counts: [new MachineStockCountFact(1, Product, 1, At(2))],
+            productNames: new Dictionary<long, string> { [Product] = "Coke" });
+
+        var issue = Assert.Single(
+            ledger.Issues, issue => issue.Code == MachineStockDataQualityIssueCodes.ExpectedStockNegative);
+        Assert.Contains($"Expected machine stock for product Coke ({Product}) went below zero", issue.Message);
+    }
+
+    [Fact]
+    public void The_expected_stock_negative_message_falls_back_to_the_bare_id_without_a_name()
+    {
+        var ledger = ProjectOne(
+            sales: [new MachineSaleFact(9001, Product, At(3)), new MachineSaleFact(9002, Product, At(4))],
+            counts: [new MachineStockCountFact(1, Product, 1, At(2))]);
+
+        var issue = Assert.Single(
+            ledger.Issues, issue => issue.Code == MachineStockDataQualityIssueCodes.ExpectedStockNegative);
+        Assert.Contains($"Expected machine stock for product {Product} went below zero", issue.Message);
     }
 
     [Fact]
