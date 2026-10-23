@@ -92,8 +92,11 @@ export class ProductFormComponent implements OnInit, OnDestroy {
         // Anything but a plain `true` means a delete would be refused: `false` says so, and a
         // response that did not resolve the question is not permission either (issue #737).
         const refusal = p.deletionRefusal?.trim();
-        this.deletionNotice =
-          p.canDelete === true ? null : refusal ? refusal : 'This product cannot be deleted.';
+        if (p.canDelete === true) {
+          this.deletionNotice = null;
+        } else {
+          this.deletionNotice = refusal || 'This product cannot be deleted.';
+        }
         this.form = {
           name: p.name,
           sku: p.sku ?? '',
