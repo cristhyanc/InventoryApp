@@ -339,6 +339,11 @@ public sealed class SiteListApiTests : IClassFixture<SiteListApiTests.ApiFactory
                 [new() { MachineID = machineId, NayaxProductID = 1, PAR = 5, MissingStockByMDB = 1 }]);
         }
 
+        // Likewise for one machine's selections (issue #842): counted exactly like the cached read.
+        public Task<List<NayaxMachineProduct>> GetMachineProductsFreshAsync(
+            long machineId, CancellationToken ct = default) =>
+            GetMachineProductsAsync(machineId, ct);
+
         public Task<List<NayaxDevice>> GetDevicesAsync(CancellationToken ct = default) =>
             throw new NotSupportedException();
 

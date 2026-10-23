@@ -3264,10 +3264,10 @@ HTTP client with one process-wide cache behind it. Each fresh caller's own suite
 read outright, so a use case that stopped reading fresh fails loudly. Issue #846's own staleness is
 proved through this whole composition rather than a stand-in for it:
 `Inventory.IntegrationTests/Application/Machines/MachineProductsSitePricingStalenessTests` runs
-`ListMachineProducts` over the real decorator, the real cache and a fake clock while the fake Nayax
-moves the machine from site A to site B — site A's suggestions, site A's again a second before the
-lifetime, site B's on the first load after it, two list reads for three loads and no machine read at
-all — plus the fallback machine read happening on every load for a machine the list does not hold,
+`ListMachineProducts` over the real decorator, the real machine-list and machine-products caches
+and a fake clock while the fake Nayax moves the machine from site A to site B — site A's
+suggestions, site A's again a second before the lifetime, site B's on the first load after it, two
+list reads for three loads and no machine read at all — plus the fallback machine read happening on every load for a machine the list does not hold,
 the unchanged upstream failure for a machine Nayax does not know, and nothing but the site-based
 suggestions differing across the expiry. It covers the permission answers through the same
 composition: an account refused the fleet list is priced by the machine's own read on every load
