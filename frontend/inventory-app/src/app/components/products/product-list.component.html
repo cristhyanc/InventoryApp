@@ -1,4 +1,9 @@
-<div class="card">
+<!--
+  `mb-6` is the spacing between this toolbar card and the table card below it (issue #825): the
+  routed page is one flex child of the shell's `.page`, so the page's own 1.5rem gap falls between
+  the header and this component, never between the two cards inside it.
+-->
+<div class="card mb-6">
   <div class="card-body flex flex-wrap gap-4">
     <input class="max-w-[220px]" [ngModel]="search" (ngModelChange)="onSearchChange($event)" placeholder="Search name or SKU" />
 
@@ -18,6 +23,17 @@
     </label>
 
     <button type="button" class="btn btn-secondary" (click)="resetFilters()">Reset</button>
+
+    <!--
+      New Product (issue #825), last in the DOM so it is last in the keyboard order, and pushed to
+      the right edge from `sm` up. On a narrow screen it simply wraps onto the next line with the
+      controls before it instead of forcing the toolbar wider than the viewport.
+      Hidden rather than disabled while a support session is active (issue #554): a session grants
+      InventoryOperate, so this write would otherwise still render.
+    -->
+    @if (!sessionActive) {
+      <a routerLink="/products/new" class="btn btn-primary self-center sm:ml-auto">New Product</a>
+    }
   </div>
 </div>
 
@@ -119,15 +135,19 @@
                   <div class="flex flex-wrap gap-2 max-w-[140px] sm:max-w-none">
                     <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
                     <!-- Hidden rather than disabled while a support session is active (issue #554): a
-                         session grants InventoryOperate, so this write would otherwise still render. -->
+                         session grants InventoryOperate, so these writes would otherwise still render. -->
                     @if (!sessionActive) {
+                      <!-- Delete is offered only where the API says it is allowed (issue #737); for
+                           every other product the row simply does not offer an action that must
+                           fail, and the reason is on the product's Edit page (issue #825). -->
                       @if (canDelete(p)) {
                         <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(p)">Delete</button>
-                      } @else {
-                        <!-- Delete is offered only where the API says it is allowed (issue #737). For every
-                             other product the row carries the server's own refusal and names the
-                             Deactivate/Reactivate control instead of offering an action that must fail. -->
-                        <p class="text-xs value-muted">{{ deleteRefusalNote(p) }}</p>
+                      }
+                      <!-- Deactivate is the action that is always available for an active product,
+                           whether or not it may be deleted (issue #825). An inactive product has
+                           nothing to deactivate; the Status toggle reactivates it in one click. -->
+                      @if (p.isActive) {
+                        <button type="button" class="btn btn-sm btn-secondary" (click)="confirmDeactivate(p)">Deactivate</button>
                       }
                     }
                   </div>
@@ -149,3 +169,12 @@
   [message]="`Delete product '${confirmingProduct.name}'?`"
   (confirmed)="deleteConfirmed()"
   (canceled)="cancelDelete()"></app-confirmation-dialog>
+
+<app-confirmation-dialog
+  confirmLabel="Deactivate"
+  cancelLabel="Cancel"
+  *ngIf="confirmingDeactivation"
+  title="Confirm deactivate"
+  [message]="deactivationMessage(confirmingDeactivation)"
+  (confirmed)="deactivateConfirmed()"
+  (canceled)="cancelDeactivate()"></app-confirmation-dialog>

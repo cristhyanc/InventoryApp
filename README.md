@@ -1063,8 +1063,12 @@ does not manage.
   field stays editable.** For a category the provider named, its **name** is managed the
   same way and its description stays editable. Every product and category response says which of
   its fields are managed, in `providerManagedFields`, so a screen can lock exactly those inputs.
-- **The Products and Categories screens use all of this** (issue #737). **Products →
-  New Product** and **Categories → New Category** create a record this business maintains itself.
+- **The Products and Categories screens use all of this** (issue #737, with the Products list
+  actions as issue #825 left them). **Products → New Product** sits in the All Products
+  search/filter toolbar, to the right of search, Category, Status and Reset, and **Categories → New
+  Category** creates a record this business maintains itself. (New Product is on All Products only —
+  it is not in the shared Products header, so Needs Ordering, which orders products that already
+  exist, no longer offers it.)
   Editing a product the provider manages shows its name and category read-only with a note naming
   the provider ("Name and category are managed by Nayax and cannot be edited here."); its price and
   every other local field stay editable in the same form. A provider-managed category's name is
@@ -1074,17 +1078,25 @@ does not manage.
   says it is allowed: the catalogue listing answers `canDelete` for every product, with the
   `deletionRefusal` the delete itself would give when it is `false`, so **Products** renders
   **Delete** only for a product the server would actually delete. For every other product the row
-  shows that refusal — the provider's ("This product is managed by Nayax and cannot be deleted…") or
-  the history's ("…its history refers to it (2 stock movements, 1 sale)…") — followed by the control
-  that retires it instead: "Use the Status toggle to deactivate it.", or "It is deactivated; use the
-  Status toggle to reactivate it." for one already retired. That answer is **advisory**: it is as
+  simply offers no Delete, and **why** is shown once, on that product's **Edit Product** page: a
+  light-red notice directly under the page header carrying the server's refusal word for word — the
+  provider's ("This product is managed by Nayax and cannot be deleted…") or the history's ("…its
+  history refers to it (2 stock movements, 1 sale)…"), or "This product cannot be deleted." when the
+  response carries no wording. The notice is informational; it changes nothing on the form and is
+  shown for an active and a deactivated product alike. Every **active** product's row offers
+  **Deactivate** instead — beside Delete where a delete is possible, and alone where it is not —
+  which asks you to confirm ("Deactivate 'Fanta 375ml'? It will be hidden from the working catalogue
+  and the reorder alerts, keeps its history, stock and costs, and can be reactivated at any time.") and
+  then writes the ordinary product update with `isActive: false`. The **Status** badge deactivates
+  through that same confirmation; reactivating a deactivated product stays one click, and a
+  deactivated product offers no Deactivate. That `canDelete` answer is **advisory**: it is as
   fresh as the last fetch, the delete counts again inside its own transaction, and a refusal for a
   product the screen had offered is still shown as the server worded it. A **category** has no such
   answer published and no retirement flag at all, so **Categories** attempts every delete and shows
-  the server's refusal, which names how many products use the category. **Products** also gained a
-  **Show retired** filter
-  (`includeRetired=true`) so a product just deactivated stays on screen to **Reactivate** instead of
-  disappearing from the only list that can flip it back — the Admin costing-repair and
+  the server's refusal, which names how many products use the category. **Products** also has a
+  **Status** filter — **Only active** (the default, the working catalogue) or **All**
+  (`includeRetired=true`) — so a product just deactivated stays reachable to **Reactivate** instead of
+  disappearing from the only list that can flip it back (issue #791) — the Admin costing-repair and
   AVCO-transition tools and the stock-history product filter still call the endpoint without it and
   are unaffected by this change.
 - **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock

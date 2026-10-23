@@ -35,6 +35,11 @@ function product(overrides: Partial<Product> = {}): Product {
     isLowStock: false,
     isReorderAlert: false,
     providerManagedFields: [],
+    // What `GET api/products/{id}` answers for an ordinary product nothing refers to (issue #737):
+    // the delete is allowed and there is no refusal to show. The issue #825 tests about the
+    // deletion notice override it below.
+    canDelete: true,
+    deletionRefusal: null,
     ...overrides
   };
 }
@@ -360,5 +365,83 @@ describe('ProductFormComponent write control during a support session (issue #55
     const { host } = await render({ sessionActive: of(false) });
 
     expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
+/**
+ * Why this product cannot be deleted, said once, here (issue #825). The Products list used to carry
+ * the server's refusal as a paragraph on every ineligible row; it is a per-product explanation, so
+ * it belongs on the product's own page. `GET api/products/{id}` already answers `canDelete` and the
+ * `deletionRefusal` behind it (issue #737), and this notice shows that refusal **verbatim** - the
+ * page never words the deletion rule a second time. It is informational: it gates no field, no Save
+ * and no other control.
+ */
+describe('ProductFormComponent deletion notice (issue #825)', () => {
+  const historyRefusal =
+    'This product cannot be deleted because its history refers to it (2 stock movements, 1 sale). ' +
+    'Deactivate it instead - a deactivated product keeps its history, stays out of the reorder ' +
+    'alerts and can be reactivated. Nothing was deleted.';
+
+  function notice(host: HTMLElement): HTMLElement | null {
+    return host.querySelector('.alert-danger');
+  }
+
+  it('shows the server’s refusal verbatim, in a light-red alert directly under the Edit Product header', async () => {
+    const { host } = await render({ product: product({ canDelete: false, deletionRefusal: historyRefusal }) });
+
+    const shown = notice(host);
+    expect(shown).not.toBeNull();
+    expect(Array.from(shown!.classList)).toEqual(expect.arrayContaining(['alert', 'alert-danger']));
+    expect(shown!.textContent?.trim()).toBe(historyRefusal);
+    // Directly under the page header, before the form card.
+    expect(host.querySelector('.page > header.page-header')?.nextElementSibling).toBe(shown);
+  });
+
+  it('falls back to its own sentence when the response carries no refusal text', async () => {
+    const { host } = await render({ product: product({ canDelete: false, deletionRefusal: null }) });
+
+    expect(notice(host)?.textContent?.trim()).toBe('This product cannot be deleted.');
+  });
+
+  it('falls back to its own sentence when the refusal text is blank', async () => {
+    const { host } = await render({ product: product({ canDelete: false, deletionRefusal: '   ' }) });
+
+    expect(notice(host)?.textContent?.trim()).toBe('This product cannot be deleted.');
+  });
+
+  it('shows no notice for a product the server would delete', async () => {
+    const { host } = await render({ product: product({ canDelete: true, deletionRefusal: null }) });
+
+    expect(notice(host)).toBeNull();
+  });
+
+  it('shows no notice on New Product, where there is no product to answer for', async () => {
+    const { host } = await render({ routeParams: {} });
+
+    expect(notice(host)).toBeNull();
+  });
+
+  it('shows the notice for an inactive product and during a support session, and changes nothing on the form', async () => {
+    const { host } = await render({
+      product: product({ isActive: false, canDelete: false, deletionRefusal: historyRefusal }),
+      sessionActive: of(true)
+    });
+
+    expect(notice(host)?.textContent?.trim()).toBe(historyRefusal);
+    expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(false);
+    expect((host.querySelector('[name="isActive"]') as HTMLInputElement).checked).toBe(false);
+    // Save stays disabled only for the reason it already was - the session, not this notice.
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('still saves an undeletable product, so the notice gates nothing', async () => {
+    const { component, update, navigate } = await render({
+      product: product({ canDelete: false, deletionRefusal: historyRefusal })
+    });
+
+    component.save();
+
+    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ name: 'E2E Chips' }));
+    expect(navigate).toHaveBeenCalledWith(['/products']);
   });
 });

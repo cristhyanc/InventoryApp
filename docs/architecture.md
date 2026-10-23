@@ -4117,14 +4117,15 @@ withholds entirely, happens to hide itself this way already. `SupportSessionServ
 `distinctUntilChanged` projection of the banner's own `state$` - is the one flag every other write
 control reads instead: presentation only, exactly as a capability-gated control already is, and the
 backend's read-only enforcement is still what would refuse the write if this page failed to hide or
-disable it. `ProductListComponent` (Delete, hidden; the Active/Inactive toggle, disabled) and
+disable it. `ProductListComponent` (Delete and, since issue #825, Deactivate and New Product, hidden; the
+Active/Inactive toggle, disabled) and
 `ProductFormComponent` (Save, disabled) are this slice's representative pages; rolling the same
 `active$` subscription out to every remaining write control across the application is tracked as
 follow-up under #513 - issues #659, #658, #660 and #657 extend this to expenses and site
 commissions, machines and stock, business administration, and Purchases, purchase details/forms
 and Suppliers (below), and issue #661 closes the audit over everything those five left
 ([Auditing the remaining write actions](#auditing-the-remaining-write-actions-across-the-support-view-ui-issue-661)).
-Each page's write method (`confirmDelete`, `toggleActive`, `save`) also
+Each page's write method (`confirmDelete`, `confirmDeactivate`, `toggleActive`, `save`) also
 checks the flag itself and returns before calling the API, the same belt-and-suspenders the
 capability-gated controls already follow - the control actually becomes unavailable rather than
 merely invisible.
@@ -11311,10 +11312,30 @@ person maintains the catalogue from answer the question instead.
 tables the delete counts, for `ListOrderedByNameAsync` and `FindAsync`. `GET api/products` and
 `GET api/products/{id}` publish the answer as two appended keys: `canDelete`, and `deletionRefusal`
 carrying the exact message the delete would answer `409` with. `ProductListComponent` renders
-**Delete** only on `canDelete: true` and otherwise shows that refusal followed by the control that
-retires the product ("Use the Status toggle to deactivate it.", or the reactivation wording for a
-product already retired); `confirmDelete` refuses to open the confirmation for the same rows, so the
-write is unavailable rather than merely invisible.
+**Delete** only on `canDelete: true` and offers nothing in its place on every other row;
+`confirmDelete` refuses to open the confirmation for the same rows, so the write is unavailable
+rather than merely invisible.
+
+**Where the refusal is read, and what the row offers instead** (issue #825). The refusal is a
+per-product explanation, so it is shown once, on that product's own page, rather than as a paragraph
+on every ineligible row of the list: `ProductFormComponent` reads the same `canDelete`/
+`deletionRefusal` from `GET api/products/{id}` and renders `deletionRefusal` **verbatim** in an
+`alert alert-danger` notice directly under the "Edit Product" header whenever `canDelete` is not a
+plain `true`, falling back to "This product cannot be deleted." when the response carries no
+wording. That notice is informational only - it gates no field, no Save and no other control, and is
+rendered for an active product, a deactivated one and a support-session reader alike - and New
+Product has none, because there is no product to answer for. The list row offers the action instead
+of describing it: every **active** product gets a **Deactivate** button (beside Delete where
+`canDelete` is `true`, alone where it is not), which opens the shared `ConfirmationDialogComponent`
+naming the product and what deactivation keeps, and on confirmation writes the one existing
+activation update - `ProductService.update` with `isActive: false` and every other field as it was
+fetched. The Status badge routes a *deactivation* through that same confirmation, so the two
+controls cannot come to mean different things, while a *reactivation* stays the single immediate
+write it always was; an inactive product offers no Deactivate at all. `confirmDeactivate` refuses a
+support session and an already-inactive product in code as well as in the template, the same
+belt-and-suspenders shape `confirmDelete` uses, and a refused deactivation surfaces the API's own
+message through `apiErrorMessage` with the row left as it was fetched. The deletion rule itself is
+untouched: this is presentation, and `ProductDeletionPolicy` stays the one authority.
 
 Three things keep that honest:
 

@@ -59,6 +59,14 @@ export class ProductListComponent implements OnInit, OnDestroy {
   categories: Category[] = [];
   readonly loadState = new ListLoadState();
   confirmingProduct: Product | null = null;
+  /**
+   * The product whose deactivation is waiting to be confirmed (issue #825), or `null` while none
+   * is. Deactivation is reversible and keeps everything, but it does take a product out of the
+   * working catalogue, the product pickers and the reorder alerts, so it is confirmed rather than
+   * being one unexplained click - whether it was started from the Deactivate button or from the
+   * Status toggle. Reactivation stays one click: putting a product back is not a loss.
+   */
+  confirmingDeactivation: Product | null = null;
   search = '';
   categoryId: number | '' = '';
   /**
@@ -202,27 +210,14 @@ export class ProductListComponent implements OnInit, OnDestroy {
    * `Inventory.Domain.Products.ProductDeletionPolicy` that refuses the delete itself - a provider
    * link, stock movements, purchase lines, supplier order lines, sales, machine stock counts and
    * costing records all reach it. Delete is offered only on a plain `true`: an absent answer (a
-   * response that never resolved the question) is not permission, and the row then offers the
-   * retirement path, which is always available.
+   * response that never resolved the question) is not permission, and the row then offers
+   * Deactivate instead, which is always available for an active product.
    *
    * The answer stays advisory - it is as fresh as the last fetch - and the server decides again
    * inside the delete's own transaction, which `deleteConfirmed` still surfaces.
    */
   canDelete(product: Product): boolean {
     return product.canDelete === true;
-  }
-
-  /**
-   * Why Delete is not offered, and which control retires the product instead: the server's own
-   * refusal (so the page never words the rule a second time), followed by the name of the control
-   * on this row that does what the refusal points at.
-   */
-  deleteRefusalNote(product: Product): string {
-    const retirement = product.isActive
-      ? 'Use the Status toggle to deactivate it.'
-      : 'It is deactivated; use the Status toggle to reactivate it.';
-    const refusal = product.deletionRefusal?.trim();
-    return refusal ? `${refusal} ${retirement}` : `This product cannot be deleted. ${retirement}`;
   }
 
   confirmDelete(product: Product): void {
@@ -365,11 +360,69 @@ export class ProductListComponent implements OnInit, OnDestroy {
     return `$${value.toFixed(2)}`;
   }
 
+  /**
+   * The Status badge. Deactivating goes through the same confirmation the Deactivate button opens
+   * (issue #825), so the two controls cannot mean different things; reactivating writes straight
+   * away, as it always has.
+   */
   toggleActive(product: Product): void {
     if (this.sessionActive) {
       return;
     }
-    this.productService.update(product.id, {
+    if (product.isActive) {
+      this.confirmDeactivate(product);
+      return;
+    }
+
+    this.writeActive(product, true).subscribe({
+      next: () => this.applyFilters(),
+      error: () => this.toastService.error('Failed to update product status.')
+    });
+  }
+
+  confirmDeactivate(product: Product): void {
+    // Checked here as well as hidden in the template, so the write is actually unavailable rather
+    // than merely invisible - the endpoint refuses it either way. An already-inactive product has
+    // nothing to deactivate.
+    if (this.sessionActive || !product.isActive) {
+      return;
+    }
+    this.confirmingDeactivation = product;
+  }
+
+  cancelDeactivate(): void {
+    this.confirmingDeactivation = null;
+  }
+
+  deactivateConfirmed(): void {
+    const product = this.confirmingDeactivation;
+    if (!product) {
+      return;
+    }
+
+    this.confirmingDeactivation = null;
+    this.writeActive(product, false).subscribe({
+      // The product leaves the default "Only active" view on success; "All" keeps it on screen to
+      // reactivate.
+      next: () => this.applyFilters(),
+      error: (error) => this.toastService.error(apiErrorMessage(error, 'Failed to deactivate product.'))
+    });
+  }
+
+  /** What the confirmation says deactivation does, and what it leaves alone. */
+  deactivationMessage(product: Product): string {
+    return (
+      `Deactivate '${product.name}'? It will be hidden from the working catalogue and the reorder alerts, ` +
+      'keeps its history, stock and costs, and can be reactivated at any time.'
+    );
+  }
+
+  /**
+   * The one activation write this page makes: the existing product update with `isActive` set and
+   * every other field sent back as it was fetched, so flipping the flag changes nothing else.
+   */
+  private writeActive(product: Product, isActive: boolean) {
+    return this.productService.update(product.id, {
       name: product.name,
       sku: product.sku ?? null,
       description: product.description ?? null,
@@ -377,10 +430,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
       restockTo: product.restockTo,
       unit: product.unit ?? null,
       categoryId: product.categoryId ?? null,
-      isActive: !product.isActive
-    }).subscribe({
-      next: () => this.applyFilters(),
-      error: () => this.toastService.error('Failed to update product status.')
+      isActive
     });
   }
 }
