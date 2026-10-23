@@ -1,3 +1,5 @@
+using Inventory.Domain.Products;
+
 namespace Inventory.Domain.MachineStock;
 
 /// <summary>
@@ -115,7 +117,8 @@ public static class MachineStockReconciliationPolicy
     /// </summary>
     public static IReadOnlyList<MachineStockProductReconciliation> ReconcileMachine(
         IReadOnlyCollection<MachineStockProductLedger> ledger,
-        IReadOnlyCollection<MachineStockObservationSlot> observedSlots)
+        IReadOnlyCollection<MachineStockObservationSlot> observedSlots,
+        IReadOnlyDictionary<long, string>? productNames = null)
     {
         ArgumentNullException.ThrowIfNull(ledger);
         ArgumentNullException.ThrowIfNull(observedSlots);
@@ -130,7 +133,8 @@ public static class MachineStockReconciliationPolicy
             .Distinct()
             .OrderBy(productId => productId)
             .Select(productId => Reconcile(
-                ledgerByProduct.GetValueOrDefault(productId) ?? MachineStockLedger.NoRecordedHistory(productId),
+                ledgerByProduct.GetValueOrDefault(productId)
+                    ?? MachineStockLedger.NoRecordedHistory(productId, productNames?.GetValueOrDefault(productId)),
                 observedByProduct.TryGetValue(productId, out var observed) ? observed : null))
             .ToList();
     }
@@ -154,8 +158,9 @@ public static class MachineStockReconciliationPolicy
         {
             issues.Add(new MachineStockDataQualityIssue(
                 MachineStockDataQualityIssueCodes.ObservedStockUnavailable,
-                $"The machine reported no usable stock quantity for product {ledger.ProductId}, so its "
-                    + "expected stock cannot be confirmed and no discrepancy is reported."));
+                $"The machine reported no usable stock quantity for "
+                    + $"{ProductLabel.Phrase(ledger.ProductId, ledger.ProductName)}, so its expected stock "
+                    + "cannot be confirmed and no discrepancy is reported."));
         }
 
         int? discrepancy = ledger.ExpectedQuantity is { } expected && observedQuantity is { } observed

@@ -326,6 +326,11 @@ public sealed class SiteListApiTests : IClassFixture<SiteListApiTests.ApiFactory
                 : Task.FromException<List<NayaxMachine>>(MachineListFailure);
         }
 
+        // This double caches nothing, so the fresh read answers with the same fleet (issue #840) and
+        // is counted and refusable exactly like the cached one.
+        public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
+            GetMachinesAsync(ct);
+
         public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(
             long machineId, CancellationToken ct = default)
         {
