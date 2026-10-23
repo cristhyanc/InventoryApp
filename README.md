@@ -1123,6 +1123,8 @@ does not manage.
   costing-repair and AVCO-transition tools and the stock-history product filter still call the
   endpoint without it and show active products only — picking up `includeRetired` there is unrelated
   follow-up work, not part of this change.
+- **Searching All Products or Needs Ordering by name or SKU ignores letter case** (issue #827), so
+  "cola", "COLA" and "Cola" all find a product named "Coca Cola".
 - **A category products use is not deleted.** The refusal says how many products use it; move them
   to another category first, otherwise they would be left with no category at all.
 - **Importing the Nayax catalogue is a review you decide, entry by entry** (issue #739). **Admin →

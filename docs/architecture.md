@@ -11422,6 +11422,17 @@ reads of the catalogue, and every caller says which one it wants —
   `ListMachineProducts`, where a machine slot or a refill alert naming a retired product must still
   be able to describe it. Narrowing `None` would silently stop both describing those rows.
 
+**The name/SKU search ignores ASCII letter case** (issue #827), on both `GET api/products` and
+`GET api/products/alerts/low-stock` — the two callers of `ProductCatalogFilter.Search` through the
+same `EfProductCatalogStore.Filtered`. It is matched with `EF.Functions.Like` rather than
+`string.Contains`: EF Core's SQLite provider translates `Contains` to `instr(...)`, which SQLite
+compares byte-for-byte, where SQLite's `LIKE` folds ASCII letter case by default — the only
+case-insensitivity SQLite offers without the collation change this issue left out of scope. `Filtered`
+escapes `%`, `_` and the escape character itself in the typed search before wrapping it in the
+leading and trailing `%` that make it a substring match, so a person searching for a literal `%` or
+`_` matches that character rather than a wildcard. Non-ASCII letters are not folded (for example "É"
+does not match "é"), because SQLite's default `LIKE` only folds ASCII.
+
 Reading one product is unchanged by retirement: `GET api/products/{id}` answers a retired product
 like any other, because retirement decides what a listing offers to work with, never what the
 business may look at. That read, the explicit listing, and `PUT api/products/{id}` with
