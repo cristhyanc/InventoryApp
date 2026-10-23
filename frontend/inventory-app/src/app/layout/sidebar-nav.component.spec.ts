@@ -344,7 +344,7 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     expect(host.textContent).not.toContain('Super Admin');
   });
 
-  it('renders Platform Diagnostics and Businesses once the API confirms access', async () => {
+  it('renders Platform Diagnostics, Businesses and Supplier Presets once the API confirms access', async () => {
     const { fixture, host } = await render({ diagnosticsAccess: of(true) });
     expect(link(host, '/super-admin/diagnostics')).toBeNull();
 
@@ -358,6 +358,10 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     const businesses = link(host, '/super-admin/businesses');
     expect(businesses).not.toBeNull();
     expect(businesses?.textContent?.trim()).toBe('Businesses');
+
+    const presets = link(host, '/super-admin/supplier-presets');
+    expect(presets).not.toBeNull();
+    expect(presets?.textContent?.trim()).toBe('Supplier Presets');
   });
 
   it('marks the diagnostics page active and opens the Super Admin group for it', async () => {
@@ -367,7 +371,7 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     expect(link(host, '/super-admin/diagnostics')?.getAttribute('aria-current')).toBe('page');
   });
 
-  it('adds no other destination when access is confirmed, besides its own two children', async () => {
+  it('adds no other destination when access is confirmed, besides its own three children', async () => {
     const { component } = await render({ diagnosticsAccess: of(true) });
 
     expect(component.navigation.map((entry) => entry.label)).toEqual([
@@ -377,7 +381,8 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
       ...navLinks(primaryNavigation).map((entry) => entry.route),
       '/super-admin/diagnostics',
-      '/super-admin/businesses'
+      '/super-admin/businesses',
+      '/super-admin/supplier-presets'
     ]);
   });
 });

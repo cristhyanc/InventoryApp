@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -353,6 +354,68 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         db.SupportSessions.Add(session);
         await db.SaveChangesAsync();
         return session.Id;
+    }
+
+    /// <summary>
+    /// Puts the platform supplier presets back to exactly the four rows the <c>AddSupplierPresets</c>
+    /// migration inserts (issue #848), so each test starts from the same world rather than from
+    /// whatever its predecessor created, renamed or disabled.
+    ///
+    /// <para>It is deliberately <em>not</em> part of <see cref="ResetAsync"/>: presets are about no
+    /// business at all, so a test about businesses has no reason to touch them, and the migration's
+    /// own seed behaviour is proved by <c>AddSupplierPresetsMigrationTests</c> against a database
+    /// this helper never writes to.</para>
+    /// </summary>
+    public async Task ResetSupplierPresetsAsync()
+    {
+        await using var db = Database();
+        db.SupplierPresets.RemoveRange(await db.SupplierPresets.ToListAsync());
+        await db.SaveChangesAsync();
+
+        foreach (var name in ShippedSupplierPresetNames)
+        {
+            db.SupplierPresets.Add(new SupplierPreset
+            {
+                Name = name,
+                NormalisedName = SupplierPresetPolicy.NormalisedName(name),
+                IsEnabled = true,
+                CreatedAtUtc = CreatedAt,
+                UpdatedAtUtc = CreatedAt,
+            });
+        }
+
+        await db.SaveChangesAsync();
+        ClearLog();
+    }
+
+    /// <summary>The four suggestions the platform ships with (issue #848).</summary>
+    public static readonly string[] ShippedSupplierPresetNames =
+        ["Coles", "Woolworths", "Big W", "Costco"];
+
+    /// <summary>Every stored supplier preset, oldest first (issue #848).</summary>
+    public async Task<IReadOnlyList<SupplierPreset>> SupplierPresetsAsync()
+    {
+        await using var db = Database();
+        return await db.SupplierPresets.AsNoTracking().OrderBy(preset => preset.Id).ToListAsync();
+    }
+
+    /// <summary>One more preset in whichever state a test needs (issue #848).</summary>
+    public async Task<int> SeedSupplierPresetAsync(string name, string? url = null, bool isEnabled = true)
+    {
+        await using var db = Database();
+        var preset = new SupplierPreset
+        {
+            Name = name,
+            NormalisedName = SupplierPresetPolicy.NormalisedName(name),
+            Url = url,
+            IsEnabled = isEnabled,
+            CreatedAtUtc = CreatedAt,
+            UpdatedAtUtc = CreatedAt,
+        };
+
+        db.SupplierPresets.Add(preset);
+        await db.SaveChangesAsync();
+        return preset.Id;
     }
 
     /// <summary>Every stored support session, oldest first (issue #550).</summary>

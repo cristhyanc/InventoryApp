@@ -267,6 +267,11 @@ builder.Services.AddScoped<IPlatformBusinessLifecycleAudit, LoggingPlatformBusin
 // identity, which is what keeps all three out of the trail structurally rather than by a sink's
 // discretion.
 builder.Services.AddScoped<ISupportSessionAudit, LoggingSupportSessionAudit>();
+// The platform supplier-preset audit trail (issue #848): one event per committed create or edit. A
+// separate port on the same terms as the three above, because it is a different event with different
+// fields - and its entry type has no field for the preset's name or its URL, so neither can reach
+// the trail by a sink's discretion.
+builder.Services.AddScoped<ISupplierPresetAudit, LoggingSupplierPresetAudit>();
 // What else happens when a business is deactivated (issue #545's hook point): since issue #550, every
 // active support session for that business ends. It is the single registration #545 declared this
 // hook for, replaced here rather than by editing that transition - the hook runs inside the

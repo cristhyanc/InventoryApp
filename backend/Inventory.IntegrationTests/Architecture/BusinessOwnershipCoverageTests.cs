@@ -54,7 +54,8 @@ public class BusinessOwnershipCoverageTests
     /// the enum-like constants (payment and costing status, expense category, commission basis,
     /// stock adjustment reason) live in code as C# enums, not tables, and every configuration
     /// table that does exist - Nayax processing fee rates included - is business configuration
-    /// and is owned.
+    /// and is owned. The one table that is about no business at all is classified separately, in
+    /// <see cref="PlatformEntities"/> below, and deliberately not here.
     /// </summary>
     private static readonly HashSet<Type> DeliberatelyGlobalEntities =
     [
@@ -63,6 +64,29 @@ public class BusinessOwnershipCoverageTests
         typeof(BusinessBackfillAudit),
         typeof(MemberInvite),
         typeof(SupportSession),
+    ];
+
+    /// <summary>
+    /// The platform tables: rows this application owns on behalf of the platform, about no business
+    /// at all (issue #848).
+    ///
+    /// <para>This is a different classification from <see cref="DeliberatelyGlobalEntities"/> above,
+    /// and the difference is the thing worth stating. Each of those five <em>is</em> about one
+    /// business and carries its key in every statement - "not tenant-owned" never meant "not owned".
+    /// A platform table has no business to carry: <see cref="SupplierPreset"/> is the platform's own
+    /// list of suggested suppliers, and what a business ends up with is its own ordinary tenant-owned
+    /// <see cref="Supplier"/> row that issue #835 child C copies from it. Keeping the two lists apart
+    /// is what stops this table being read as an unassigned tenant table that somebody forgot to
+    /// stamp - and keeps the "still carries a business key" rule below exactly as strong for the five
+    /// it is about.</para>
+    ///
+    /// <para>A platform table is still only writable by the platform-admin surface, which carries a
+    /// <em>denied</em> business scope; that is enforced by the endpoint's authorization, not by the
+    /// ownership mechanism, because there is no ownership here to enforce.</para>
+    /// </summary>
+    private static readonly HashSet<Type> PlatformEntities =
+    [
+        typeof(SupplierPreset),
     ];
 
     /// <summary>
@@ -84,6 +108,56 @@ public class BusinessOwnershipCoverageTests
                 .Select(type => type.Name)
                 .Order(StringComparer.Ordinal)
                 .ToArray());
+
+    /// <summary>
+    /// The platform list is closed in the same way and for the same reason: a second table claiming
+    /// to be about no business is a tenancy decision, not an implementation detail.
+    /// </summary>
+    [Fact]
+    public void Exactly_one_entity_is_declared_a_platform_table() =>
+        Assert.Equal(
+            ["SupplierPreset"],
+            PlatformEntities
+                .Select(type => type.Name)
+                .Order(StringComparer.Ordinal)
+                .ToArray());
+
+    /// <summary>
+    /// The two lists may not overlap. A table is about one business or about none, and a type in
+    /// both would be claiming each rule's exemption while obeying neither.
+    /// </summary>
+    [Fact]
+    public void A_platform_table_is_not_also_a_structurally_global_one() =>
+        Assert.Empty(PlatformEntities.Intersect(DeliberatelyGlobalEntities));
+
+    /// <summary>
+    /// A platform table carries no business key at all, which is the whole of what distinguishes it
+    /// from the five above: adding a <c>BusinessId</c> to one would make it a tenant table that
+    /// nothing filters or stamps - exactly the failure this file exists to prevent.
+    /// </summary>
+    [Fact]
+    public void A_platform_table_carries_no_business_key_and_no_query_filter()
+    {
+        var model = BuildModel();
+
+        Assert.All(PlatformEntities, type =>
+        {
+            Assert.False(
+                typeof(IBusinessOwned).IsAssignableFrom(type),
+                $"{type.Name} is a platform table and must not implement IBusinessOwned.");
+            Assert.Null(type.GetProperty(nameof(IBusinessOwned.BusinessId)));
+
+            var entityType = model.FindEntityType(type)!;
+            Assert.True(
+                entityType.GetDeclaredQueryFilters() is not { Count: > 0 },
+                $"{type.Name} must carry no tenant query filter: it is about no business, so a "
+                    + "filter comparing the current business could only ever match none of its "
+                    + "rows (docs/architecture.md § Tenant ownership).");
+            Assert.DoesNotContain(
+                entityType.GetProperties(),
+                property => property.Name == nameof(IBusinessOwned.BusinessId));
+        });
+    }
 
     /// <summary>
     /// A structurally global table must still be bound to a business by a column every statement
@@ -212,6 +286,7 @@ public class BusinessOwnershipCoverageTests
             .Select(entityType => entityType.ClrType)
             .Where(clrType => !typeof(IBusinessOwned).IsAssignableFrom(clrType))
             .Where(clrType => !DeliberatelyGlobalEntities.Contains(clrType))
+            .Where(clrType => !PlatformEntities.Contains(clrType))
             .Select(clrType => clrType.Name)
             .Distinct()
             .OrderBy(name => name, StringComparer.Ordinal)
@@ -221,8 +296,9 @@ public class BusinessOwnershipCoverageTests
             unowned.Length == 0,
             "These persisted entities have no business ownership and are not declared global: "
                 + $"{string.Join(", ", unowned)}. Implement IBusinessOwned on a tenant-owned "
-                + "entity, or add it to DeliberatelyGlobalEntities with the reason it is not "
-                + "owned by a business. See docs/architecture.md and issue #64.");
+                + "entity, add it to DeliberatelyGlobalEntities with the reason it is not owned by "
+                + "a business, or - if it is about no business at all - to PlatformEntities. See "
+                + "docs/architecture.md and issues #64 and #848.");
     }
 
     /// <summary>

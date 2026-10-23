@@ -35,8 +35,9 @@ import { requireProvider } from './provider/provider-lock.guard';
  * ones it would otherwise send somebody *to* - `/welcome`, `/application-pending`,
  * `/application-rejected`, `/access-unavailable`, `/apply` and the `/invite` acceptance page - because a person already
  * sent to one of them must not be sent away from it; `/access-not-allowed` carries no capability
- * for the reason already documented beside it, and `/super-admin/diagnostics` and
- * `/super-admin/businesses` (issues #546, #547) carry neither guard: their authority is the
+ * for the reason already documented beside it, and `/super-admin/diagnostics`,
+ * `/super-admin/businesses` and `/super-admin/supplier-presets` (issues #546, #547, #848) carry
+ * neither guard: their authority is the
  * platform-admin check, not a business role or membership, so each carries `platformAdminGuard`
  * instead and sends a refusal to the dashboard rather than to any membership-handling destination
  * (see `access/platform-admin.guard.ts`).
@@ -410,6 +411,18 @@ export const routes: Routes = [
     loadComponent: () =>
       import('./components/super-admin/businesses/super-admin-businesses.component').then(
         (m) => m.SuperAdminBusinessesComponent
+      )
+  },
+  {
+    // The Super Admin Supplier presets page (issue #848): the one platform-wide list of suggested
+    // suppliers, which #835 child C copies into each newly approved business. Platform-admin
+    // authority, not a business role, decides it - the same `platformAdminGuard` as the two
+    // super-admin routes above, and for the same reason.
+    path: 'super-admin/supplier-presets',
+    canActivate: [MsalGuard, platformAdminGuard],
+    loadComponent: () =>
+      import('./components/super-admin/supplier-presets/super-admin-supplier-presets.component').then(
+        (m) => m.SuperAdminSupplierPresetsComponent
       )
   },
   {

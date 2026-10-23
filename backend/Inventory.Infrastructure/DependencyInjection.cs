@@ -188,6 +188,10 @@ public static class InfrastructureServiceCollectionExtensions
         // start, the end and the deactivation hook all run on the request's own denied-scope context
         // and inside MembershipWriteGuard's transaction on it.
         services.AddScoped<ISupportSessionStore, EfSupportSessionStore>();
+        // The platform supplier presets (issue #848): one more tiny adapter over one table, and the
+        // one table in this schema that names no business in any statement because it is about none.
+        // Scoped like every adapter here, so it runs on the request's own denied-scope context.
+        services.AddScoped<ISupplierPresetStore, EfSupplierPresetStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has

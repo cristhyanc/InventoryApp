@@ -51,8 +51,17 @@ const ACCOUNT_STATE_PROBE_PATH = 'me/account-state';
  *   refusal here says nothing about a business role either. Issue #553's own calls to it (the "view
  *   as this business" dialog, the banner's end action, and a tab's own-session probe) must not be
  *   read as a member refusal any more than the diagnostics probe is.
+ * - `super-admin/supplier-presets` - the platform supplier presets of issue #848: the collection and
+ *   `{id}`. It names no business at all, so a `403` from it says nothing about a membership or a
+ *   business role, and it must not carry the role-preview or support-session header any more than
+ *   the three above do.
  */
-const PLATFORM_ADMIN_PREFIXES = ['admin/diagnostics', 'super-admin/businesses', 'super-admin/support-sessions'];
+const PLATFORM_ADMIN_PREFIXES = [
+  'admin/diagnostics',
+  'super-admin/businesses',
+  'super-admin/support-sessions',
+  'super-admin/supplier-presets'
+];
 
 /** Static and runtime-configuration assets (`/assets/config.json`), which are not API calls. */
 const ASSETS_SEGMENT = 'assets';
