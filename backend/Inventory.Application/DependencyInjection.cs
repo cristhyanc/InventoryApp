@@ -255,6 +255,10 @@ public static class ApplicationServiceCollectionExtensions
         // remembers is state about the process rather than about one request, so "this business has
         // synchronized ten times in the last two minutes" must be the same answer for every request.
         services.AddSingleton<NayaxSalesSyncRateLimiter>();
+        // The recent-sync skip of issue #843, a singleton for the same reason: "this business's
+        // sales finished synchronizing a minute ago, under the credentials it holds now" is a fact
+        // about the process, and a per-request memory would remember nothing at all.
+        services.AddSingleton<NayaxSalesSyncFreshness>();
         services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<ComputePurchaseGstSummary>();
