@@ -442,6 +442,17 @@ export interface Site {
   previousComparableWeekRevenue?: number | null;
 }
 
+/**
+ * One row of `GET api/sites/list`, the light site list every site picker fills from (issue #841):
+ * the id a filter submits and the name it shows, and deliberately nothing else. A machine count,
+ * stock percentage, alert count or revenue figure would each need the per-machine Nayax read that
+ * endpoint exists to avoid; a screen that shows one of those reads {@link Site} instead.
+ */
+export interface SiteListItem {
+  siteId: number;
+  name: string;
+}
+
 /** One machine's MDB code for a Site Products row (issue #495); null when Nayax has none. */
 export interface SiteProductMachineMdbCode {
   machineId: number;

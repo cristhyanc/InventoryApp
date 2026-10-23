@@ -3,7 +3,13 @@
     <div>
       <h1 class="page-title">Site Products</h1>
       <ng-container *ngIf="site$ | async as site">
-        <p class="page-subtitle">{{ site?.siteName || 'Unnamed site' }} products across {{ site?.machineCount }} machines.</p>
+        <!--
+          The machine count this sentence used to carry is gone with issue #841: the light site list
+          this page now resolves the site from publishes a site id and name only, and counting the
+          site's machines again would mean reading the whole fleet's per-machine products - the cost
+          that issue removed. The site's machines are still named per product in the MDB Code column.
+        -->
+        <p class="page-subtitle">{{ site?.name || 'Unnamed site' }} products.</p>
         <button
           (click)="exportProducts(site)"
           [disabled]="!products.length"

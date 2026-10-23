@@ -5,7 +5,7 @@ import { RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ReportingService, SiteCommissionAgreement } from '../../../services/reporting.service';
 import { ToastService } from '../../../services/toast.service';
-import { Site } from '../../../models/models';
+import { SiteListItem } from '../../../models/models';
 import { SiteService } from '../../../services/site.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 
@@ -37,7 +37,7 @@ import { SupportSessionService } from '../../../support-session/support-session.
           <div class="grid gap-4 sm:grid-cols-2">
             <div class="field">
               <label class="field-label" for="commission-site">Site</label>
-              <select id="commission-site" [(ngModel)]="commissionSiteId"><option [ngValue]="null">Select a site</option>@for (site of sites; track site.siteId) { <option [ngValue]="site.siteId">{{ site.siteName }}</option> }</select>
+              <select id="commission-site" [(ngModel)]="commissionSiteId"><option [ngValue]="null">Select a site</option>@for (site of sites; track site.siteId) { <option [ngValue]="site.siteId">{{ site.name }}</option> }</select>
             </div>
             <div class="field">
               <label class="field-label" for="commission-rate">Rate (%)</label>
@@ -77,7 +77,14 @@ import { SupportSessionService } from '../../../support-session/support-session.
 })
 export class SiteCommissionAgreementsComponent implements OnDestroy {
   loading = false;
-  sites: Site[] = [];
+
+  /**
+   * The site picker's options and the name each stored agreement is labelled with, from the light
+   * site list (issue #841): this page needs a site id and a site name, so it reads the endpoint
+   * that returns exactly those rather than the site summaries, whose stock and revenue figures cost
+   * one Nayax read per machine in the fleet.
+   */
+  sites: SiteListItem[] = [];
   commissionSiteId: number | null = null;
   commissionRate = 0;
   commissionEffectiveFrom = new Date().toISOString().slice(0, 10);
@@ -105,7 +112,7 @@ export class SiteCommissionAgreementsComponent implements OnDestroy {
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
     this.loadCommissionAgreements();
-    this.siteService.getAll().subscribe({ next: sites => this.sites = sites, error: () => this.sites = [] });
+    this.siteService.getList().subscribe({ next: sites => this.sites = sites, error: () => this.sites = [] });
   }
 
   ngOnDestroy(): void {
@@ -136,7 +143,7 @@ export class SiteCommissionAgreementsComponent implements OnDestroy {
     });
   }
 
-  siteName(siteId: number): string { return this.sites.find(site => site.siteId === siteId)?.siteName ?? `Site ${siteId}`; }
+  siteName(siteId: number): string { return this.sites.find(site => site.siteId === siteId)?.name ?? `Site ${siteId}`; }
   frequencyLabel(frequency: number): string { return ['None', 'Monthly', 'Quarterly'][frequency] ?? 'Unknown'; }
   basisLabel(basis: number): string { return ['Gross Sales', 'Card Sales', 'Sales ex GST'][basis] ?? 'Unknown'; }
 

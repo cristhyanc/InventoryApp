@@ -308,7 +308,7 @@ async function renderSiteCommissions(report: SiteCommissionReport) {
     imports: [SiteCommissionsReportComponent],
     providers: [
       { provide: ReportingService, useValue: { siteCommissions: jest.fn(() => of(report)) } },
-      { provide: SiteService, useValue: { getAll: jest.fn(() => of([])) } },
+      { provide: SiteService, useValue: { getList: jest.fn(() => of([])) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       provideNayaxConnectionStatus('Ready'),
     ],

@@ -4,7 +4,7 @@ import { Observable, of, throwError } from 'rxjs';
 import { SiteCommissionAgreementsComponent } from './site-commission-agreements.component';
 import { ReportingService, SiteCommissionAgreement } from '../../../services/reporting.service';
 import { ToastService } from '../../../services/toast.service';
-import { Site } from '../../../models/models';
+import { SiteListItem } from '../../../models/models';
 import { SiteService } from '../../../services/site.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 
@@ -12,13 +12,14 @@ function agreement(overrides: Partial<SiteCommissionAgreement> = {}): SiteCommis
   return { id: 1, siteId: 1, effectiveFrom: '2026-01-01', commissionRate: 0.1, frequency: 1, basis: 0, ...overrides };
 }
 
-function site(overrides: Partial<Site> = {}): Site {
-  return { siteId: 1, siteName: 'Main Office', ...overrides } as Site;
+/** One row of the light site list this page's picker fills from (issue #841). */
+function site(overrides: Partial<SiteListItem> = {}): SiteListItem {
+  return { siteId: 1, name: 'Main Office', ...overrides };
 }
 
 async function render(
   reporting: Partial<ReportingService>,
-  siteService: Partial<SiteService> = { getAll: jest.fn(() => of([site()])) },
+  siteService: Partial<SiteService> = { getList: jest.fn(() => of([site()])) },
   toast?: Partial<ToastService>,
   sessionActive: Observable<boolean> = of(false)
 ) {
@@ -46,6 +47,32 @@ describe('SiteCommissionAgreementsComponent (issue #388)', () => {
     expect(siteCommissionAgreements).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain('Main Office');
     expect(host.textContent).toContain('10.00%');
+  });
+
+  /**
+   * Issue #841: the picker and the agreement table's site labels come from the light site list, and
+   * the site summaries - 1 + M Nayax reads for figures this page never shows - are not asked for.
+   */
+  it('fills the site picker from the light site list and never from the site summaries', async () => {
+    const siteService = { getList: jest.fn(() => of([site()])), getAll: jest.fn(() => of([])) };
+    const { fixture, host } = await render(
+      { siteCommissionAgreements: jest.fn(() => of([agreement()])), saveSiteCommissionAgreement: jest.fn() },
+      siteService
+    );
+
+    expect(siteService.getList).toHaveBeenCalledTimes(1);
+    expect(siteService.getAll).not.toHaveBeenCalled();
+    expect(fixture.componentInstance.sites).toEqual([site()]);
+    expect(Array.from(host.querySelectorAll('#commission-site option')).map((option) => option.textContent?.trim()))
+      .toEqual(['Select a site', 'Main Office']);
+  });
+
+  it('labels an agreement whose site the list does not carry by its id', async () => {
+    const { fixture } = await render(
+      { siteCommissionAgreements: jest.fn(() => of([agreement({ siteId: 7 })])), saveSiteCommissionAgreement: jest.fn() }
+    );
+
+    expect(fixture.componentInstance.siteName(7)).toBe('Site 7');
   });
 
   it('shows an empty state and reports a toast error when loading agreements fails', async () => {

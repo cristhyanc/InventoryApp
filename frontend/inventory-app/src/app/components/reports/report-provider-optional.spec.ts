@@ -2,7 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
 import { Observable, of, throwError } from 'rxjs';
-import { Machine, Site } from '../../models/models';
+import { Machine, SiteListItem } from '../../models/models';
 import {
   SpecConnectionStatus,
   provideNayaxConnectionStatus
@@ -18,8 +18,9 @@ function machine(machineID: number, machineName: string): Machine {
   return { machineID, machineName } as Machine;
 }
 
-function site(): Site {
-  return { siteId: 1, siteName: 'Lobby' } as Site;
+/** One row of the light site list the report's site filter reads (issue #841). */
+function site(): SiteListItem {
+  return { siteId: 1, name: 'Lobby' };
 }
 
 function notConnected(): HttpErrorResponse {
@@ -58,13 +59,20 @@ async function renderMachineReport(options: {
 
 async function renderSiteCommissions(options: {
   status?: SpecConnectionStatus;
-  sites?: Observable<Site[]>;
+  sites?: Observable<SiteListItem[]>;
 } = {}) {
   await TestBed.configureTestingModule({
     imports: [SiteCommissionsReportComponent],
     providers: [
       { provide: ReportingService, useValue: { siteCommissions: jest.fn(() => of({ rows: [] })) } },
-      { provide: SiteService, useValue: { getAll: jest.fn(() => options.sites ?? of([site()])) } },
+      {
+        provide: SiteService,
+        useValue: {
+          getList: jest.fn(() => options.sites ?? of([site()])),
+          // Present so a test can assert the heavy site-summaries read is not made (issue #841).
+          getAll: jest.fn(() => of([]))
+        }
+      },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       provideNayaxConnectionStatus(options.status ?? 'Ready')
     ]
@@ -76,7 +84,7 @@ async function renderSiteCommissions(options: {
   return {
     component: fixture.componentInstance,
     host: fixture.nativeElement as HTMLElement,
-    siteService: TestBed.inject(SiteService) as unknown as { getAll: jest.Mock }
+    siteService: TestBed.inject(SiteService) as unknown as { getList: jest.Mock; getAll: jest.Mock }
   };
 }
 
@@ -152,10 +160,24 @@ describe('Site Commissions site filter without a provider (issue #728)', () => {
     expect(siteFilterError(host)).toBeNull();
   });
 
+  /**
+   * Issue #841: the filter is filled from the light site list, through the same
+   * `loadProviderList` path, so the three outcomes above are unchanged while the request behind
+   * them stops costing one Nayax read per machine in the fleet.
+   */
+  it('fills the filter from the light site list and never asks for the site summaries', async () => {
+    const { host, siteService } = await renderSiteCommissions();
+
+    expect(siteService.getList).toHaveBeenCalledTimes(1);
+    expect(siteService.getAll).not.toHaveBeenCalled();
+    expect(Array.from(host.querySelectorAll('option')).map((option) => option.textContent?.trim()))
+      .toEqual(['All Sites', 'Lobby']);
+  });
+
   it('hides the site filter without a provider, and asks for no sites', async () => {
     const { host, siteService } = await renderSiteCommissions({ status: 'NotConfigured' });
 
-    expect(siteService.getAll).not.toHaveBeenCalled();
+    expect(siteService.getList).not.toHaveBeenCalled();
     expect(siteSelect(host)).toBeUndefined();
     expect(siteFilterError(host)).toBeNull();
   });
