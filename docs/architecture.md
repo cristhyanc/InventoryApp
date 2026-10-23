@@ -8579,6 +8579,23 @@ write their movements as before. All five then rebuild the affected product's co
 #296; see [Historical inventory cost](#historical-inventory-cost)). None of them applies a costing
 rule of its own.
 
+**A purchase write moves the stored physical stock with its movements, before the rebuild (issue
+#831).** Purchase create, update and delete add each product's net change to its purchase-linked
+restock movements - a new line's quantity, an edited line's difference, a removed line's quantity
+taken back - to `Product.QuantityInStock`, and only then save and rebuild, all inside the one
+transaction. That is the same order `IRecordInventoryMovement` already follows, and it matters for a
+product that has never been costed (no transition baseline, a null `CostingQuantity` and
+`InventoryValue`, which is what product creation with no opening stock and the catalogue review
+leave): `WeightedAverageCostReplay` reconciles such a product's stored physical quantity to its
+replayed movement history and refuses a mismatch as `MissingOpening`. Before #831 the rebuild compared
+the quantity from *before* the write with a history that already held the new movement, so adding a
+fresh product to a purchase - new or edited - was refused with "stored physical quantity 0 does not
+reconcile to its movement history (10)". The guard is unchanged and still refuses a product whose
+stock was inconsistent before the write: unrecorded stock stays out by the same amount after it, and
+the whole write rolls back. An unchanged edit changes no movement quantity, so it moves no stock. For
+any product with a baseline or a costing position the rebuild sets the replayed quantity anyway, so
+the outcome there is unchanged.
+
 #### Reorder-alert machine-product fan-out (issue #47)
 
 The low-stock endpoints (`GET /api/products/alerts/low-stock`, and
