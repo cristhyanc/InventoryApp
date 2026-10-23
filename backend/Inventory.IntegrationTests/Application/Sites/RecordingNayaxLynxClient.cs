@@ -14,6 +14,12 @@ namespace InventoryApi.Tests.Application.Sites;
 /// When <c>expectedConcurrentMachineProductCalls</c> is set, each machine-product call waits until that
 /// many calls have started (bounded by a timeout, so a serialized caller fails the assertion instead of
 /// hanging the suite).
+///
+/// <para>It also counts the calls themselves (issue #841), because the light site list's acceptance
+/// criterion is a call count: exactly one fleet read and no per-machine read. A
+/// <c>machineListFailure</c> makes the fleet read fail, which is how the Nayax unavailability
+/// states - not connected, permission not granted - are exercised over a use case that makes that
+/// one call.</para>
 /// </summary>
 public sealed class RecordingNayaxLynxClient : INayaxLynxClient
 {
@@ -23,29 +29,49 @@ public sealed class RecordingNayaxLynxClient : INayaxLynxClient
     private readonly IReadOnlyDictionary<long, List<NayaxMachineProduct>> _productsByMachine;
     private readonly int _expectedConcurrentMachineProductCalls;
     private readonly long? _failingMachineId;
+    private readonly Exception? _machineListFailure;
     private readonly TaskCompletionSource _allStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _started;
     private int _inFlight;
+    private int _machineListCalls;
+    private int _machineProductCalls;
 
     public RecordingNayaxLynxClient(
         IEnumerable<NayaxMachine> machines,
         IReadOnlyDictionary<long, List<NayaxMachineProduct>>? productsByMachine = null,
         int expectedConcurrentMachineProductCalls = 0,
-        long? failingMachineId = null)
+        long? failingMachineId = null,
+        Exception? machineListFailure = null)
     {
         _machines = machines.ToList();
         _productsByMachine = productsByMachine ?? new Dictionary<long, List<NayaxMachineProduct>>();
         _expectedConcurrentMachineProductCalls = expectedConcurrentMachineProductCalls;
         _failingMachineId = failingMachineId;
+        _machineListFailure = machineListFailure;
     }
 
     public int MaxConcurrentMachineProductCalls { get; private set; }
 
-    public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) =>
-        Task.FromResult(_machines);
+    /// <summary>
+    /// How many fleet reads were made, which is what issue #841's light site list is measured by:
+    /// exactly one, with <see cref="MachineProductCalls"/> at zero.
+    /// </summary>
+    public int MachineListCalls => _machineListCalls;
+
+    /// <summary>How many per-machine reads were made (issue #841).</summary>
+    public int MachineProductCalls => _machineProductCalls;
+
+    public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref _machineListCalls);
+        return _machineListFailure is null
+            ? Task.FromResult(_machines)
+            : Task.FromException<List<NayaxMachine>>(_machineListFailure);
+    }
 
     public async Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default)
     {
+        Interlocked.Increment(ref _machineProductCalls);
         var inFlight = Interlocked.Increment(ref _inFlight);
         MaxConcurrentMachineProductCalls = Math.Max(MaxConcurrentMachineProductCalls, inFlight);
 

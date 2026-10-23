@@ -32,6 +32,12 @@ public static class SiteResponseMapper
         summary.CurrentWeekRevenue,
         summary.PreviousComparableWeekRevenue);
 
+    /// <summary>
+    /// The light site list row (issue #841). Two already-resolved values copied across: the site id
+    /// the fleet read grouped by and the name <c>ISiteNameResolver</c> derived.
+    /// </summary>
+    public static SiteListItemDto ToDto(SiteListItem site) => new(site.SiteId, site.Name);
+
     public static SiteProductDto ToDto(SiteProductRecord product) => new(
         product.ProductId,
         product.Name,

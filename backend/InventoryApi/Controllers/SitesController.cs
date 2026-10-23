@@ -32,11 +32,14 @@ public class SitesController : ControllerBase
 {
     private readonly GetSiteSummaries _getSiteSummaries;
     private readonly GetSiteProducts _getSiteProducts;
+    private readonly ListSites _listSites;
 
-    public SitesController(GetSiteSummaries getSiteSummaries, GetSiteProducts getSiteProducts)
+    public SitesController(
+        GetSiteSummaries getSiteSummaries, GetSiteProducts getSiteProducts, ListSites listSites)
     {
         _getSiteSummaries = getSiteSummaries;
         _getSiteProducts = getSiteProducts;
+        _listSites = listSites;
     }
 
     [HttpGet]
@@ -44,6 +47,21 @@ public class SitesController : ControllerBase
     {
         var summaries = await _getSiteSummaries.Handle(CancellationToken.None);
         return Ok(summaries.Select(SiteResponseMapper.ToDto).ToList());
+    }
+
+    /// <summary>
+    /// The light site list a site picker fills from (issue #841): one site id and name per site,
+    /// from one machine-list read and no per-machine read. It requires the same
+    /// <c>Inventory.Operate</c> capability as <c>GET api/sites</c>, which it inherits from this
+    /// controller, and it answers the same Nayax unavailability states, because it fails on the
+    /// same fleet read. <c>GET api/sites</c> is unchanged and still serves the Dashboard and the
+    /// Sites page.
+    /// </summary>
+    [HttpGet("list")]
+    public async Task<ActionResult<List<SiteListItemDto>>> GetList()
+    {
+        var sites = await _listSites.Handle(CancellationToken.None);
+        return Ok(sites.Select(SiteResponseMapper.ToDto).ToList());
     }
 
     [HttpGet("{id:long}/products")]

@@ -211,6 +211,13 @@ public record SiteSummaryDto(
     decimal? PreviousComparableWeekRevenue
 );
 
+// One row of GET /api/sites/list, the light site list a site picker fills from (issue #841): the id
+// a filter submits and the name it shows, and nothing else. It is deliberately not a reduced
+// SiteSummaryDto - a machine count, stock percentage, alert count or revenue figure would each need
+// the per-machine Nayax read this endpoint exists to avoid. GET /api/sites keeps serving the full
+// row to the Dashboard and the Sites page.
+public record SiteListItemDto(long SiteId, string Name);
+
 public record SiteProductMachineMdbCodeDto(long MachineId, string MachineLabel, int? MdbCode);
 
 // One row of GET /api/sites/{id}/products. EstimatedCardProfit was already nullable for an estimate
