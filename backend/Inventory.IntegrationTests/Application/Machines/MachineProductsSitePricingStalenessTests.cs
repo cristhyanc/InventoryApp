@@ -4,6 +4,7 @@ using Inventory.Application.Nayax;
 using Inventory.Application.Products;
 using Inventory.Application.Sites;
 using Inventory.Application.Tenancy;
+using Inventory.Domain.Nayax;
 using Inventory.Domain.Sites;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Nayax;
@@ -27,6 +28,10 @@ namespace InventoryApi.Tests.Application.Machines;
 /// <see cref="NayaxMachineListCache"/> over a <see cref="FakeClock"/> a test moves itself, and the
 /// real <see cref="ResolveMachineProductPricing"/>. A test that faked the ten minutes could not say
 /// whether the pricing catches up at all.</para>
+///
+/// <para>The same composition is what says the endpoint's permission answers are unchanged: an
+/// account Nayax has not granted the fleet list to is still served, by the single-machine read this
+/// listing was made of before #846, while an unusable connection still refuses it outright.</para>
 /// </summary>
 public class MachineProductsSitePricingStalenessTests
 {
@@ -141,6 +146,55 @@ public class MachineProductsSitePricingStalenessTests
     }
 
     /// <summary>
+    /// A Nayax account that has not been granted <c>GET machines</c> but has been granted the two
+    /// reads this listing used to make still gets its listing, priced by the machine's own record -
+    /// issue #846's requirement that the endpoint's permission answers are unchanged. Through the
+    /// real decorator and cache, so it also shows what the cache does with a refusal: it holds
+    /// nothing, and every load asks again and falls back again.
+    /// </summary>
+    [Fact]
+    public async Task An_account_without_the_fleet_list_permission_is_priced_by_the_machines_own_read()
+    {
+        var clock = new FakeClock(Now);
+        var nayax = new ScriptedNayaxClient(SiteA)
+        {
+            MachineListFailure = new NayaxPermissionNotGrantedException("GetMachinesAsync"),
+        };
+        var listing = Listing(nayax, clock);
+
+        var first = Assert.Single(await listing.Handle(MachineId, CancellationToken.None));
+        var second = Assert.Single(await listing.Handle(MachineId, CancellationToken.None));
+
+        // Site A's own suggestions, the same ones the listing answers with when the list is granted.
+        Assert.Equal(2.28m, first.SuggestedNetValue);
+        Assert.Equal(5.55m, first.SuggestedPriceValue);
+        Assert.Equal(2.28m, second.SuggestedNetValue);
+        Assert.Equal(2, nayax.MachineListReads);
+        Assert.Equal(2, nayax.MachineReads);
+        Assert.Equal(2, nayax.MachineProductReads);
+    }
+
+    /// <summary>
+    /// And an unusable connection is still an unusable connection: the refusal propagates and the
+    /// machine is never read, because the single-machine read is refused by the same gate rather than
+    /// being a second opinion about it.
+    /// </summary>
+    [Fact]
+    public async Task An_unusable_connection_still_refuses_the_listing_without_reading_the_machine()
+    {
+        var clock = new FakeClock(Now);
+        var refusal = new NayaxNotConnectedException(NayaxConnectionStatus.NeedsAttention);
+        var nayax = new ScriptedNayaxClient(SiteA) { MachineListFailure = refusal };
+
+        var thrown = await Assert.ThrowsAsync<NayaxNotConnectedException>(() =>
+            Listing(nayax, clock).Handle(MachineId, CancellationToken.None));
+
+        Assert.Same(refusal, thrown);
+        Assert.Equal(0, nayax.MachineReads);
+        Assert.Equal(0, nayax.MachineProductReads);
+    }
+
+    /// <summary>
     /// The machine product listing over the port as the composition root registers it: the
     /// machine-list cache in front of the Nayax client, one business, one credential revision.
     /// </summary>
@@ -232,6 +286,12 @@ public class MachineProductsSitePricingStalenessTests
         /// <summary>What a single-machine read throws, as it does for a machine Nayax does not know.</summary>
         public Exception? MachineReadFailure { get; init; }
 
+        /// <summary>
+        /// What the upstream machine-list read throws, as it does for an account Nayax has not
+        /// granted <c>GET machines</c> to and for a connection the status gate refuses.
+        /// </summary>
+        public Exception? MachineListFailure { get; init; }
+
         /// <summary>The machine is at another site in Nayax from now on.</summary>
         public void MoveTo(long siteId) => Volatile.Write(ref _siteId, siteId);
 
@@ -239,6 +299,9 @@ public class MachineProductsSitePricingStalenessTests
             NayaxRequestCredential credential, CancellationToken ct = default)
         {
             Interlocked.Increment(ref _machineListReads);
+
+            if (MachineListFailure is { } failure)
+                return Task.FromException<List<NayaxMachine>>(failure);
 
             return Task.FromResult<List<NayaxMachine>>(_listTheMachine
                 ? [Machine()]

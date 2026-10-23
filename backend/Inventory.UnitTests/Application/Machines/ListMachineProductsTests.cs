@@ -1,6 +1,8 @@
 using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
 using Inventory.Application.Products;
+using Inventory.Application.SupportSessions;
+using Inventory.Domain.Nayax;
 using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.Products;
 using InventoryApi.Tests.Application.Time;
@@ -371,5 +373,175 @@ public class ListMachineProductsTests
         Assert.Same(upstreamFailure, thrown);
         nayax.Verify(
             client => client.GetMachineProductsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>
+    /// The permission regression issue #846's last criterion asks for: a Nayax account that grants
+    /// <c>GET machines/{id}</c> and <c>GET machines/{id}/machineProducts</c> but refuses
+    /// <c>GET machines</c> still gets its listing, priced by the machine's own record, because that
+    /// is the read this listing was made of before the change. Taking the site from the fleet list
+    /// was a request saving, not a new permission requirement.
+    /// </summary>
+    [Fact]
+    public async Task Handle_ReadsTheMachineItself_WhenNayaxHasNotGrantedTheFleetList()
+    {
+        var catalog = new FakeProductCatalogStore(
+            FakeProductCatalogStore.Product(200, "Coke", averageUnitCost: 2m));
+        var siteFacts = new FakeSiteFactsStore(new Dictionary<decimal, decimal>(), 0.2m);
+        var nayax = NayaxClientRefusingTheFleetList(
+            new NayaxPermissionNotGrantedException("GetMachinesAsync"),
+            mock => mock
+                .Setup(client => client.GetMachineAsync(MachineId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new NayaxMachine { MachineID = MachineId, CustomerID = 91 }),
+            new NayaxMachineProduct { NayaxProductID = 200, RetailPrice = 5m });
+
+        var row = Assert.Single(
+            await UseCase(nayax, catalog, siteFacts: siteFacts).Handle(MachineId, CancellationToken.None));
+
+        Assert.Equal([91L], siteFacts.ResolvedSiteIds);
+        Assert.Equal(2.78m, row.SuggestedNetValue);
+        nayax.Verify(client => client.GetMachineAsync(MachineId, It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    /// <summary>
+    /// And it is the same listing, row for row, as the one a granted fleet list produces: the
+    /// fallback changes which read the site came from and nothing else.
+    /// </summary>
+    [Fact]
+    public async Task Handle_ReturnsTheSameListing_WhenTheFleetListIsRefusedForLackOfPermission()
+    {
+        var slots = new[]
+        {
+            new NayaxMachineProduct
+            {
+                NayaxProductID = 200,
+                RetailPrice = 5m,
+                CommissionValue = 1.5m,
+                MDBCode = 12,
+                PAR = 10,
+                MissingStockByMDB = 4,
+            },
+            new NayaxMachineProduct { NayaxProductID = 201, RetailPrice = 8m, MDBCode = 11 },
+        };
+
+        var catalog = new FakeProductCatalogStore(
+            FakeProductCatalogStore.Product(200, "Coke", averageUnitCost: 2m),
+            FakeProductCatalogStore.Product(201, "Chips", averageUnitCost: 3m));
+
+        var fromTheList = await UseCase(NayaxClient(siteId: 91, slots), catalog)
+            .Handle(MachineId, CancellationToken.None);
+        var afterTheRefusal = await UseCase(
+                NayaxClientRefusingTheFleetList(
+                    new NayaxPermissionNotGrantedException("GetMachinesAsync"),
+                    mock => mock
+                        .Setup(client => client.GetMachineAsync(MachineId, It.IsAny<CancellationToken>()))
+                        .ReturnsAsync(new NayaxMachine { MachineID = MachineId, CustomerID = 91 }),
+                    slots),
+                catalog)
+            .Handle(MachineId, CancellationToken.None);
+
+        Assert.Equal(fromTheList, afterTheRefusal);
+    }
+
+    /// <summary>
+    /// An account that is granted neither read is refused, exactly as it was before issue #846: the
+    /// fallback serves the listing it used to serve, it does not manufacture one.
+    /// </summary>
+    [Fact]
+    public async Task Handle_SurfacesThePermissionRefusal_WhenTheMachineReadIsRefusedToo()
+    {
+        var machineRefusal = new NayaxPermissionNotGrantedException("GetMachineAsync");
+        var nayax = NayaxClientRefusingTheFleetList(
+            new NayaxPermissionNotGrantedException("GetMachinesAsync"),
+            mock => mock
+                .Setup(client => client.GetMachineAsync(MachineId, It.IsAny<CancellationToken>()))
+                .ThrowsAsync(machineRefusal),
+            new NayaxMachineProduct { NayaxProductID = 200, MDBCode = 1 });
+
+        var thrown = await Assert.ThrowsAsync<NayaxPermissionNotGrantedException>(() =>
+            UseCase(nayax, new FakeProductCatalogStore(FakeProductCatalogStore.Product(200, "Coke")))
+                .Handle(MachineId, CancellationToken.None));
+
+        Assert.Same(machineRefusal, thrown);
+        nayax.Verify(
+            client => client.GetMachineProductsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>
+    /// Nothing but that one classified permission answer falls back. An unusable connection - nothing
+    /// stored, <c>NotConfigured</c>, or the <c>NeedsAttention</c> the status gate refuses - refuses
+    /// the single-machine read in the same breath, so asking it would spend a request to reach the
+    /// same refusal.
+    /// </summary>
+    [Fact]
+    public async Task Handle_SurfacesTheNotConnectedRefusal_WithoutReadingTheMachine()
+    {
+        await AssertTheFleetFailurePropagates(
+            new NayaxNotConnectedException(NayaxConnectionStatus.NeedsAttention));
+        await AssertTheFleetFailurePropagates(
+            new NayaxNotConnectedException(NayaxConnectionStatus.NotConfigured));
+    }
+
+    /// <summary>
+    /// A support session resolves no Nayax credentials at all (issue #551), and that refusal is not a
+    /// statement about one permission: it propagates, so a reader from outside the business is still
+    /// told the view is unavailable rather than being served a second request's worth of the
+    /// business's data.
+    /// </summary>
+    [Fact]
+    public async Task Handle_SurfacesTheSupportSessionRefusal_WithoutReadingTheMachine() =>
+        await AssertTheFleetFailurePropagates(new SupportSessionNayaxUnavailableException());
+
+    /// <summary>
+    /// A cancellation is the caller's own and an upstream failure is an outage; neither says the
+    /// fleet list is unavailable to this business, and a machine whose site came from a retry after
+    /// an outage would be a working answer invented out of a broken one.
+    /// </summary>
+    [Fact]
+    public async Task Handle_SurfacesACancellationAndAnUpstreamFleetFailure_WithoutReadingTheMachine()
+    {
+        await AssertTheFleetFailurePropagates(new OperationCanceledException());
+        await AssertTheFleetFailurePropagates(new InvalidOperationException("The fleet read failed upstream."));
+    }
+
+    /// <summary>
+    /// <paramref name="failure"/> reaches the caller unchanged, with neither the machine nor its
+    /// products read: the one fallback is the classified fleet-permission answer and nothing else.
+    /// </summary>
+    private static async Task AssertTheFleetFailurePropagates(Exception failure)
+    {
+        var nayax = NayaxClientRefusingTheFleetList(
+            failure,
+            mock => mock
+                .Setup(client => client.GetMachineAsync(MachineId, It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new NayaxMachine { MachineID = MachineId, CustomerID = 91 }),
+            new NayaxMachineProduct { NayaxProductID = 200, MDBCode = 1 });
+
+        var thrown = await Assert.ThrowsAnyAsync<Exception>(() =>
+            UseCase(nayax, new FakeProductCatalogStore(FakeProductCatalogStore.Product(200, "Coke")))
+                .Handle(MachineId, CancellationToken.None));
+
+        Assert.Same(failure, thrown);
+        nayax.Verify(client => client.GetMachineAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+        nayax.Verify(
+            client => client.GetMachineProductsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    /// <summary>
+    /// A client whose machine-list read fails with <paramref name="fleetFailure"/>, with the
+    /// single-machine read set up by <paramref name="machineRead"/> so a test can say whether the
+    /// failure fell back to it or reached the caller.
+    /// </summary>
+    private static Mock<INayaxLynxClient> NayaxClientRefusingTheFleetList(
+        Exception fleetFailure,
+        Action<Mock<INayaxLynxClient>> machineRead,
+        params NayaxMachineProduct[] machineProducts)
+    {
+        var nayax = new Mock<INayaxLynxClient>();
+        nayax.Setup(client => client.GetMachinesAsync(It.IsAny<CancellationToken>())).ThrowsAsync(fleetFailure);
+        nayax.Setup(client => client.GetMachineProductsAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([.. machineProducts]);
+        machineRead(nayax);
+        return nayax;
     }
 }

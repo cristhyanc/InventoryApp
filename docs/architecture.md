@@ -3189,6 +3189,24 @@ machine read exactly as before, and still before the machine products are read, 
 machine still answers with today's controlled `502`. A listed machine with no `CustomerID` is at no
 site and is priced with none: that is the list's answer, not a reason to ask again.
 
+**The saving did not buy a new permission.** A Nayax account may grant `GET machines/{id}` and
+`GET machines/{id}/machineProducts` while refusing `GET machines`, and that is precisely the account
+whose connection the test of issue #536 concludes `PendingPermissions` for — which is what makes its
+`403` the classified per-feature `NayaxPermissionNotGrantedException` rather than an upstream
+failure. So a `NayaxPermissionNotGrantedException` on the fleet read falls back to the single-machine
+read, and the listing answers exactly as it did before issue #846 instead of refusing an endpoint
+that worked. That one classified refusal is the **only** thing the fallback catches. A
+`NayaxNotConnectedException` (nothing stored, `NotConfigured`, or the `NeedsAttention` the status
+gate refuses) refuses the single-machine read in the same breath; a support session resolves no Nayax
+credentials at all (issue #551); a cancellation is the caller's own; and a transport or `5xx` failure
+is an outage. All four propagate untouched, because retrying them against another endpoint would
+either spend a request to reach the same answer slower or report a working site where there is an
+outage. A `403` on a connection that is already `Ready` stays what it is everywhere else in this
+application — an upstream failure, and so a `502` — because `NayaxUpstreamException` is an
+Infrastructure type and `Inventory.Application` classifies availability by the two exceptions of
+issue #726 and nothing else; a `Ready` connection is in any case one whose own `Machines` check
+passed.
+
 **Which means site pricing can be up to ten minutes stale after a site move**, the cost the
 repository owner accepted with the lifetime on 23 October 2026. When a machine moves from site A to
 site B in Nayax, its products page keeps suggesting site A's commission until the cached list
@@ -3226,8 +3244,13 @@ moves the machine from site A to site B — site A's suggestions, site A's again
 lifetime, site B's on the first load after it, two list reads for three loads and no machine read at
 all — plus the fallback machine read happening on every load for a machine the list does not hold,
 the unchanged upstream failure for a machine Nayax does not know, and nothing but the site-based
-suggestions differing across the expiry. `ListMachineProductsTests` pins the same choice against a
-mocked port, including the listing being identical whichever read the site came from.
+suggestions differing across the expiry. It covers the permission answers through the same
+composition: an account refused the fleet list is priced by the machine's own read on every load
+(the cache holds no refusal), and an unusable connection still refuses the listing without the
+machine being read at all. `ListMachineProductsTests` pins the same choices against a mocked port —
+the listing being identical whichever read the site came from, including after a fleet-permission
+refusal; both reads refused still refusing; and the not-connected, support-session, cancellation and
+upstream fleet failures reaching the caller with neither the machine nor its products read.
 
 ### Nayax connection checks and the Test endpoint (issue #536)
 
