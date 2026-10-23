@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { BehaviorSubject, catchError, map, Observable, of, Subscription, switchMap, tap } from 'rxjs';
-import { Site, SiteProduct } from '../../models/models';
+import { SiteListItem, SiteProduct } from '../../models/models';
 import { SiteService } from '../../services/site.service';
 import { NayaxStatusBannerComponent } from '../shared/nayax-status-banner/nayax-status-banner.component';
 import { AccessService } from '../../access/access.service';
@@ -14,7 +14,15 @@ import { AccessService } from '../../access/access.service';
   templateUrl: './site-products.component.html'
 })
 export class SiteProductsComponent implements OnInit, OnDestroy {
-  site$!: Observable<Site | null>;
+  /**
+   * The site this page is about, resolved from the light site list (issue #841): the page needs the
+   * site's name and its machine count for the subtitle, and the site summaries it used to read for
+   * both cost one Nayax read per machine in the whole fleet - on top of the per-machine reads this
+   * page's own product list already makes. The light row carries the count from that list's single
+   * fleet grouping, so the subtitle is unchanged. `null` when the list holds no such site, exactly
+   * as before.
+   */
+  site$!: Observable<SiteListItem | null>;
   products$!: Observable<SiteProduct[]>;
   products: SiteProduct[] = [];
   loading$ = new BehaviorSubject(true);
@@ -60,7 +68,7 @@ export class SiteProductsComponent implements OnInit, OnDestroy {
           return of(null);
         }
 
-        return this.siteService.getAll().pipe(
+        return this.siteService.getList().pipe(
           map(sites => sites.find(site => site.siteId === siteId) ?? null),
           tap(() => this.loading$.next(false)),
           catchError(() => {
@@ -158,7 +166,7 @@ export class SiteProductsComponent implements OnInit, OnDestroy {
     return 'badge-success';
   }
 
-  exportProducts(site: Site): void {
+  exportProducts(site: SiteListItem): void {
     if (!this.products.length) return;
 
     // Estimated Card Profit is a profit figure hidden from a role without `Dashboard.ViewFinancials`
@@ -179,7 +187,7 @@ export class SiteProductsComponent implements OnInit, OnDestroy {
     const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    const filename = (site.siteName || 'site').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
+    const filename = (site.name || 'site').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
 
     link.href = url;
     link.download = `${filename || 'site'}-products.csv`;

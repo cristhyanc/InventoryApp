@@ -2,7 +2,7 @@ import { CommonModule } from '@angular/common';
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
-import { Site } from '../../models/models';
+import { SiteListItem } from '../../models/models';
 import { ReportingService, SiteCommissionReport, SiteCommissionRow } from '../../services/reporting.service';
 import { SiteService } from '../../services/site.service';
 import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
@@ -22,7 +22,7 @@ import { SupportSessionService } from '../../support-session/support-session.ser
       @if (sitesError) {
         <p data-testid="site-filter-error" class="ml-auto mr-2 text-md-body text-md-danger-text">{{ sitesError }}</p>
       } @else if (sites.length > 0) {
-        <label class="ml-auto mr-2 text-md-body text-md-gray-600">Site <select class="ml-2 inline-block w-auto" [(ngModel)]="siteId"><option [ngValue]="null">All Sites</option>@for (site of sites; track site.siteId) { <option [ngValue]="site.siteId">{{ site.siteName }}</option> }</select></label>
+        <label class="ml-auto mr-2 text-md-body text-md-gray-600">Site <select class="ml-2 inline-block w-auto" [(ngModel)]="siteId"><option [ngValue]="null">All Sites</option>@for (site of sites; track site.siteId) { <option [ngValue]="site.siteId">{{ site.name }}</option> }</select></label>
       }
       <button type="button" class="btn btn-primary ml-auto" (click)="load()">Apply</button>
     </div>
@@ -70,7 +70,12 @@ import { SupportSessionService } from '../../support-session/support-session.ser
 </div>
 ` })
 export class SiteCommissionsReportComponent implements OnInit, OnDestroy {
-  sites: Site[] = []; report: SiteCommissionReport | null = null; selected: SiteCommissionRow | null = null;
+  /**
+   * The site filter's options, from the light site list (issue #841): the filter submits a site id
+   * and shows a site name, so it reads the endpoint that returns exactly those instead of the site
+   * summaries, whose stock and revenue figures cost one Nayax read per machine in the fleet.
+   */
+  sites: SiteListItem[] = []; report: SiteCommissionReport | null = null; selected: SiteCommissionRow | null = null;
   /**
    * Set when the site list could not be read for a reason that is not an availability answer
    * (issue #728). Sites come from the live Nayax fleet, so a business with no provider has no site
@@ -123,7 +128,7 @@ export class SiteCommissionsReportComponent implements OnInit, OnDestroy {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
   }
   ngOnInit(): void {
-    loadProviderList(this.provider, 'machineFleet', () => this.siteService.getAll()).subscribe(outcome => {
+    loadProviderList(this.provider, 'machineFleet', () => this.siteService.getList()).subscribe(outcome => {
       this.sites = outcome.kind === 'listed' ? outcome.items : [];
       this.sitesError = outcome.kind === 'failed'
         ? 'The site list could not be loaded, so this report cannot be narrowed to one site.'

@@ -31,6 +31,7 @@ public class MachineAndSiteRouteTests
 
     [Theory]
     [InlineData("GET", "api/Sites")]
+    [InlineData("GET", "api/Sites/list")]
     [InlineData("GET", "api/Sites/{id}/products")]
     public void Site_endpoint_is_available(string httpMethod, string relativePath) =>
         AssertEndpoint<SitesController>(httpMethod, relativePath);
@@ -39,14 +40,15 @@ public class MachineAndSiteRouteTests
     /// The complete surface, so an action cannot be added or dropped silently either: adding or
     /// removing an endpoint is an API contract change issue #302 excludes. The machine count rose
     /// from seven to nine with issue #56's two machine-stock-ledger endpoints, and to ten with issue
-    /// #768's latest-sales read; each is listed individually above, and the lock is what made every
-    /// one of those additions a deliberate, reviewed change.
+    /// #768's latest-sales read; the site count rose from two to three with issue #841's light site
+    /// list. Each is listed individually above, and the lock is what made every one of those
+    /// additions a deliberate, reviewed change.
     /// </summary>
     [Fact]
     public void Machine_and_site_controllers_expose_no_other_endpoint()
     {
         Assert.Equal(10, ApiContractTestHost.GetApiDescriptionsFor<MachinesController>().Count);
-        Assert.Equal(2, ApiContractTestHost.GetApiDescriptionsFor<SitesController>().Count);
+        Assert.Equal(3, ApiContractTestHost.GetApiDescriptionsFor<SitesController>().Count);
     }
 
     private static void AssertEndpoint<TController>(string httpMethod, string relativePath)

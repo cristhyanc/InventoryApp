@@ -129,6 +129,7 @@ public class MachineStockSyncNayaxLinkTests
         var evt = Assert.Single(preview.Events);
         Assert.Equal(NayaxStockEventMatchStatus.NeedsReview, evt.MatchStatus);
         Assert.Null(evt.MatchedProductId);
-        Assert.Contains($"No local product is mapped to Nayax product {NayaxProductId}", evt.NeedsReviewReason);
+        Assert.Contains(
+            $"No local product is mapped to Nayax product {ProductName} ({NayaxProductId})", evt.NeedsReviewReason);
     }
 }

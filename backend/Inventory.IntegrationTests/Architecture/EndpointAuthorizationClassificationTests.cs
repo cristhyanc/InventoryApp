@@ -357,6 +357,10 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/machine-link-review", "POST", Capability.InventoryOperate)]
     [InlineData("api/machine-link-review/apply", "POST", Capability.InventoryOperate)]
     [InlineData("api/Sites", "GET", Capability.InventoryOperate)]
+    // The light site list (issue #841) is the same read as the site list above, with the per-machine
+    // stock and revenue left out, so it declares the same capability rather than a weaker one: a
+    // site's id and name are no more public than the row they were taken from.
+    [InlineData("api/Sites/list", "GET", Capability.InventoryOperate)]
     [InlineData("api/purchases", "POST", Capability.PurchasingOperate)]
     [InlineData("api/purchases/{id:int}/file", "GET", Capability.PurchasingOperate)]
     [InlineData("api/SupplierOrders", "POST", Capability.PurchasingOperate)]
