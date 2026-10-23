@@ -1,0 +1,22 @@
+<!-- The choice itself is the edit page's panel, deferred (issue #829): it reads nothing and saves
+     nothing, so the vocabulary, the labels and the help stay the ones that page uses. -->
+<app-product-gst-rule [deferred]="true" (ruleChange)="rule = $event"></app-product-gst-rule>
+
+<!-- Only ever shown once the product exists: until then there is nothing to retry and no partial
+     outcome to report, and the create's own control saves the rule with the product. -->
+@if (createdProductId !== null) {
+  <div class="mt-3 space-y-3">
+    @if (error) {
+      <p class="text-sm text-red-600">{{ error }}</p>
+    }
+
+    <button
+      type="button"
+      class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+      [disabled]="saving || sessionActive"
+      (click)="save()"
+    >
+      {{ saving ? 'Saving...' : 'Save GST rule' }}
+    </button>
+  </div>
+}
