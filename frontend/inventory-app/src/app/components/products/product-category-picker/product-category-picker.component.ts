@@ -411,8 +411,11 @@ export class ProductCategoryPickerComponent implements OnInit, OnChanges, OnDest
       this.activeIndex = -1;
       return;
     }
-    const next = this.activeIndex < 0 ? (step > 0 ? 0 : count - 1) : (this.activeIndex + step + count) % count;
-    this.activeIndex = next;
+    if (this.activeIndex < 0) {
+      this.activeIndex = step > 0 ? 0 : count - 1;
+      return;
+    }
+    this.activeIndex = (this.activeIndex + step + count) % count;
   }
 
   private sorted(categories: Category[]): Category[] {
