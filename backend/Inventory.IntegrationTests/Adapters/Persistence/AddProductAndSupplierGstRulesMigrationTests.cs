@@ -97,7 +97,19 @@ public class AddProductAndSupplierGstRulesMigrationTests
                 })
                 .SingleAsync();
             Assert.Equal(GstRules.None, product.GstRule);
-            var supplier = await after.Suppliers.SingleAsync();
+            // Projected rather than materialised, for the same reason the product above is: this
+            // schema predates Suppliers.Url (issue #847), which the current EF model carries.
+            var supplier = await after.Suppliers
+                .Select(row => new
+                {
+                    row.ProductLineGstDefault,
+                    row.DeliveryGstDefault,
+                    row.PackageGstDefault,
+                    row.Name,
+                    row.ContactName,
+                    row.Address,
+                })
+                .SingleAsync();
             Assert.Equal(GstRules.None, supplier.ProductLineGstDefault);
             Assert.Equal(GstRules.None, supplier.DeliveryGstDefault);
             Assert.Equal(GstRules.None, supplier.PackageGstDefault);

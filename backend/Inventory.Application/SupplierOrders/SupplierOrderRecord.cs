@@ -19,7 +19,7 @@ public sealed record SupplierOrderRecord(
 
 /// <summary>The supplier detail carried on a supplier order, as the Application layer sees it.</summary>
 public sealed record SupplierOrderSupplierRecord(
-    int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address);
+    int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address, string? Url);
 
 /// <summary>One persisted supplier-order line, with its product's catalogue snapshot.</summary>
 public sealed record SupplierOrderLineRecord(

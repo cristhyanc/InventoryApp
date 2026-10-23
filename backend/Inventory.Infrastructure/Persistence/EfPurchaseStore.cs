@@ -620,7 +620,8 @@ public sealed class EfPurchaseStore : IPurchaseStore
         purchase.CreatedAt);
 
     private static PurchaseSupplierRecord ToSupplierRecord(Supplier supplier) => new(
-        supplier.Id, supplier.Name, supplier.ContactName, supplier.Phone, supplier.Email, supplier.Address);
+        supplier.Id, supplier.Name, supplier.ContactName, supplier.Phone, supplier.Email, supplier.Address,
+        supplier.Url);
 
     private static PurchaseItemRecord ToItemRecord(PurchaseItem item) => new(
         item.Id, item.ReceiptId, item.ProductId, item.Quantity, item.UnitCost,

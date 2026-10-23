@@ -165,7 +165,7 @@ public sealed class OperatingExpensesController : ControllerBase
             ? null
             : new SupplierResponse(
                 record.Supplier.Id, record.Supplier.Name, record.Supplier.ContactName, record.Supplier.Phone,
-                record.Supplier.Email, record.Supplier.Address),
+                record.Supplier.Email, record.Supplier.Address, record.Supplier.Url),
         record.SiteId, record.MachineId, record.AttachmentFileName, record.AttachmentContentType,
         record.AttachmentFileSizeBytes, record.ServicePeriodStart, record.ServicePeriodEnd, record.Notes,
         record.CreatedAt, record.UpdatedAt);

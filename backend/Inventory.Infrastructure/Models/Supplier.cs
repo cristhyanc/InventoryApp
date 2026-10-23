@@ -21,6 +21,21 @@ public class Supplier : IBusinessOwned
     public string? Address { get; set; }
 
     /// <summary>
+    /// The supplier's optional website (issue #847). <c>null</c> when none is recorded; otherwise
+    /// an absolute <c>http</c>/<c>https</c> address of at most
+    /// <see cref="Inventory.Application.Suppliers.SupplierUrlPolicy.MaxLength"/> characters, which
+    /// that policy accepted before the write. The server never fetches, resolves or follows it.
+    ///
+    /// Deliberately <em>on</em> the wire, unlike the GST defaults below: this entity's serialisable
+    /// surface is the published legacy <c>Supplier</c> component, and the 23 October 2026 decision
+    /// on issue #847 is that <c>url</c> is an additive nullable field of it and so appears in every
+    /// nested <c>supplier</c> object. The column length is configured in <c>AppDbContext</c> rather
+    /// than with a data annotation, which would have added a <c>maxLength</c> keyword to that
+    /// published component.
+    /// </summary>
+    public string? Url { get; set; }
+
+    /// <summary>
     /// This supplier's explicitly configured GST default for its product lines (issue #430),
     /// <see cref="GstRules.None"/> until an administrator sets one. A supplier being GST-registered
     /// is never enough to classify its products, so nothing infers this value.

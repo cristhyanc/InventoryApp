@@ -9722,8 +9722,10 @@ shape of the `Supplier` and `Product` components they point at, that every publi
 reference resolves, that `ProductResponse`/`SupplierResponse` are untouched by the boundary, that
 the internal DTO names and a requiredness declaration are absent, and that no Receipt-named schema
 or tag exists. The `Product` property list it compares against lost `supplierId`/`supplier` in issue
-#787, the one approved break in that component; the `Supplier` component it is compared to is
-byte-identical, because the purchase and the supplier order still reference it.
+#787, the one approved break in that component; the `Supplier` component it is compared to gained
+one nullable string, `url`, in issue #847 and is otherwise unchanged, because the purchase and the
+supplier order still reference it (see
+[A supplier's optional website](#a-suppliers-optional-website-issue-847)).
 
 | Layer | Canonical Purchase language | Left as a legacy/compatibility surface | Why |
 | --- | --- | --- | --- |
@@ -11631,6 +11633,70 @@ name, or creates one. See
 and [The catalogue review screen](#the-catalogue-review-screen-issue-739) below. Nothing else about
 this section changed: the provider still owns a linked row's name and category, the price is still
 local and still editable, and a row with no external id is still the business's own in full.
+
+### A supplier's optional website (issue #847)
+
+A supplier record carries an optional website, `Supplier.Url`, so a buyer can open the supplier's
+own ordering page from the Suppliers list. It is child A of #835 and independent of that issue's
+other children.
+
+**The schema.** `AddSupplierUrl` adds one nullable `Url` column of at most 2048 characters to
+`Suppliers`. It is purely additive: no backfill, no table rebuild, no index and no other table.
+Every supplier recorded before it keeps every value and gets `NULL`, which is the real state "no
+website recorded" and is never an empty string. `Down` drops only that column.
+`AddSupplierUrlMigrationTests` proves both directions, including that the upgrade adds exactly one
+column and leaves the index list and the table list alone. The length is configured in
+`AppDbContext` rather than with a `[MaxLength]` attribute on the entity, deliberately: an attribute
+would have published a `maxLength` keyword on the legacy `Supplier` component below.
+
+**One rule, written in the Application layer.** `Inventory.Application.Suppliers.SupplierUrlPolicy`
+is the only place the rule lives on the server, and `CreateSupplier`/`UpdateSupplier` run it before
+anything is stored, so a refused value creates nothing and leaves an existing supplier exactly as it
+was. It is not a DTO attribute, because an attribute guards only the one contract it is written on,
+and a stored URL is rendered as a link — which makes the accepted scheme a security boundary rather
+than a formatting preference. The rule: the value is optional; blank or whitespace-only becomes
+`null`; otherwise it is trimmed, must be at most 2048 characters, and must be an absolute URI with
+scheme `http` or `https` (compared case-insensitively) and a non-empty host. `javascript:`, `data:`,
+`file:`, `ftp:`, `mailto:`, a relative path and a scheme-less host name such as `coles.com.au` are
+all refused with `400` and a field-level message on `url`
+(`ValidationProblemDetails`, the same error contract model binding already produces). An accepted
+value is stored as the operator typed it, trimmed and nothing else: re-serialising through `Uri`
+would re-encode a path or append a trailing slash, storing a value nobody typed. An over-long value
+is reported against the length rather than the scheme, so the message names the limit the caller
+can act on.
+
+**The server never fetches the URL.** Nothing resolves, follows, previews, scrapes or checks the
+reachability of a supplier's website, and nothing infers GST status, an ABN or anything else from
+it. The server stores text.
+
+**It is in the nested `Supplier` component.** The `Supplier` entity's serialisable surface *is* the
+published legacy `Supplier` component that a purchase's, a supplier order's and an operating
+expense's nested `supplier` object references (see
+[Purchase rename plan](#purchase-rename-plan)), so under the
+owner's decision of 23 October 2026 `url` appears in all of them as an additive nullable string,
+not hidden with `[JsonIgnore]` the way the GST defaults are. `SupplierResponse` gains it too and
+stays schema-identical to that component. Nothing else about either schema moved: no rename, no
+requiredness, no `maxLength` keyword and no repointed reference, which
+`PublishedResponseSchemaContractTests` compares literally. `SupplierDto` accepts `url` on create and
+update; `GET /api/suppliers`, `GET /api/suppliers/{id}` and every nested `supplier` return it, and
+`null` when the supplier has none.
+
+**The frontend mirrors the rule and links carefully.**
+`components/suppliers/supplier-url.ts` is the browser-side copy — same limit, same schemes, same two
+messages — used both by the create/edit form, which refuses before the request, and by the list,
+which renders a website as
+`<a href=… target="_blank" rel="noopener noreferrer">` only when that same check still accepts the
+stored value. Anything else renders as plain text, so a value that somehow reached the database
+without passing the server rule is never clickable. Angular's own URL sanitisation stays in place
+behind that; no `bypassSecurityTrust*` call belongs anywhere near a supplier's website. The server
+remains the authority: the form check is for the operator's benefit and for defence in depth, never
+instead of the server's.
+
+Everything else about a supplier is unchanged: its contacts, its
+[GST defaults](#product-and-supplier-gst-rules-issue-430) on their own resource, the purchases,
+supplier orders and operating expenses that name it, the `Purchasing.Operate` capability the
+controller requires, the tenant query filters and the `BusinessId` stamp — which is still never read
+from input.
 
 ### A product carries no supplier (issue #787)
 
