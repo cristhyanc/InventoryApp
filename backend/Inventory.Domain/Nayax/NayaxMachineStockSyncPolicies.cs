@@ -1,3 +1,4 @@
+using Inventory.Domain.Products;
 using Inventory.Domain.Reporting.ProductMatching;
 
 namespace Inventory.Domain.Nayax;
@@ -47,7 +48,8 @@ public static class NayaxMachineStockMatchPolicy
         if (!localProductsByNayaxId.TryGetValue(nayaxProductId, out var product))
         {
             return Unresolved(
-                $"No local product is mapped to Nayax product {nayaxProductId} (MDB {parsed.Mdb}).");
+                $"No local product is mapped to Nayax {ProductLabel.Phrase(nayaxProductId, parsed.ProductName)} "
+                    + $"(MDB {parsed.Mdb}).");
         }
 
         // The product is identified; a name disagreement is a material mismatch to review rather
