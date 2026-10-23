@@ -68,8 +68,9 @@ public sealed class SyncMachineStockFromNayax
         if (newAlerts.Count > 0)
         {
             // Machine + MDB is the primary mapping, read from the same live machine-products
-            // projection the machine detail view already uses.
-            var machineProducts = await _nayax.GetMachineProductsAsync(machineId, cancellationToken);
+            // projection the machine detail view already uses - and read fresh (issue #842), because
+            // this mapping decides which product a stock adjustment is recorded against.
+            var machineProducts = await _nayax.GetMachineProductsFreshAsync(machineId, cancellationToken);
             var nayaxProductIdByMdb = machineProducts
                 .Where(product => product.MDBCode.HasValue && product.NayaxProductID.HasValue)
                 .GroupBy(product => product.MDBCode!.Value)

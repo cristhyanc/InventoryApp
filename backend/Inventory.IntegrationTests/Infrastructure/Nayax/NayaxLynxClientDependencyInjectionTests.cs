@@ -73,7 +73,7 @@ public sealed class NayaxLynxClientDependencyInjectionTests
     /// container without that port cannot produce a client at all - there is no constructor left
     /// that takes a baked-in operator id and token.
     ///
-    /// <para>Since issue #840 the port resolves to the machine-list caching decorator, which still
+    /// <para>Since issues #840 and #842 the port resolves to the caching decorator, which still
     /// takes that same credential provider (its refusals are what run before every cache hit) and
     /// still wraps the one HTTP client, which also takes it.</para>
     /// </summary>
@@ -83,19 +83,20 @@ public sealed class NayaxLynxClientDependencyInjectionTests
         using var provider = ContainerWithTheRegisteredClient();
         using var scope = provider.CreateScope();
 
-        Assert.IsType<MachineListCachingNayaxLynxClient>(
+        Assert.IsType<CachingNayaxLynxClient>(
             scope.ServiceProvider.GetRequiredService<INayaxLynxClient>());
         Assert.IsType<NayaxLynxClient>(scope.ServiceProvider.GetRequiredService<NayaxLynxClient>());
     }
 
     /// <summary>
-    /// The machine-list cache of issue #840 is one object for the whole process, because a per-request
-    /// cache would answer nothing a second page load asked for - which is the entire point of the
-    /// issue. The decorator in front of it stays per resolution, like the HTTP client it wraps, so it
-    /// reads the current request's business scope and credentials.
+    /// Both caches - the machine lists of issue #840 and the machine products of issue #842 - are one
+    /// object each for the whole process, because a per-request cache would answer nothing a second
+    /// page load, or a simultaneous one, asked for, which is the entire point of both issues. The
+    /// decorator in front of them stays per resolution, like the HTTP client it wraps, so it reads the
+    /// current request's business scope and credentials.
     /// </summary>
     [Fact]
-    public void The_machine_list_cache_is_shared_by_every_request_and_the_decorator_is_not()
+    public void Both_caches_are_shared_by_every_request_and_the_decorator_is_not()
     {
         using var provider = ContainerWithTheRegisteredClient();
         using var first = provider.CreateScope();
@@ -104,6 +105,9 @@ public sealed class NayaxLynxClientDependencyInjectionTests
         Assert.Same(
             first.ServiceProvider.GetRequiredService<NayaxMachineListCache>(),
             second.ServiceProvider.GetRequiredService<NayaxMachineListCache>());
+        Assert.Same(
+            first.ServiceProvider.GetRequiredService<NayaxMachineProductsCache>(),
+            second.ServiceProvider.GetRequiredService<NayaxMachineProductsCache>());
         Assert.NotSame(
             first.ServiceProvider.GetRequiredService<INayaxLynxClient>(),
             second.ServiceProvider.GetRequiredService<INayaxLynxClient>());

@@ -421,13 +421,16 @@ public class InventoryCostTransitionUseCaseTests
                         new() { MachineID = 2, MachineName = "Machine B" },
                         new() { MachineID = 1, MachineName = "Machine A" }
                     });
-            _mock.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            _mock.Setup(x => x.GetMachineProductsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new NotSupportedException(
+                    "The cost transition must read each machine's selections fresh, never the cached ones."));
+            _mock.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(() => new List<NayaxMachineProduct>
                 {
                     new() { NayaxProductID = 10, PAR = 10, MissingStockByMDB = MissingInMachineA },
                     new() { NayaxProductID = 20, PAR = 6, MissingStockByMDB = 1 }
                 });
-            _mock.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+            _mock.Setup(x => x.GetMachineProductsFreshAsync(2, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(() => new List<NayaxMachineProduct> { new() { NayaxProductID = 10, PAR = 8, MissingStockByMDB = 3 } });
         }
 

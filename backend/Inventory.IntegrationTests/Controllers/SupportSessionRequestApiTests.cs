@@ -950,6 +950,10 @@ public class SupportSessionRequestApiTests
         public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default) =>
             CallAsync<NayaxMachineProduct>(ct);
 
+        public Task<List<NayaxMachineProduct>> GetMachineProductsFreshAsync(
+            long machineId, CancellationToken ct = default) =>
+            CallAsync<NayaxMachineProduct>(ct);
+
         public Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(
             long machineId,
             List<NayaxMachineProduct> products,

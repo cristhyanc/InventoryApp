@@ -15,11 +15,11 @@ public interface INayaxLynxClient
     /// The business's machine list (<c>GET /v1/machines</c>).
     ///
     /// <para>The answer may be up to ten minutes old. The composition root decorates this port with
-    /// <c>Inventory.Infrastructure.Nayax.MachineListCachingNayaxLynxClient</c> (issue #840), which
-    /// keeps one list per business and credential revision for that long, because one Dashboard
-    /// visit used to read it five times and the fleet changes rarely. The decorator still resolves
-    /// the current business's connection, status gate and support-session refusal before every
-    /// answer, so a caller sees the same refusals at the same moments as before.</para>
+    /// <c>Inventory.Infrastructure.Nayax.CachingNayaxLynxClient</c> (issue #840), which keeps one
+    /// list per business and credential revision for that long, because one Dashboard visit used to
+    /// read it five times and the fleet changes rarely. The decorator still resolves the current
+    /// business's connection, status gate and support-session refusal before every answer, so a
+    /// caller sees the same refusals at the same moments as before.</para>
     ///
     /// <para>A caller whose correctness depends on seeing a machine added minutes ago - one that
     /// records business-wide coverage, links provider machines, or builds a plan over the whole
@@ -36,7 +36,39 @@ public interface INayaxLynxClient
     /// both methods identically, which is exactly what <c>NayaxLynxClient</c> itself does.</para>
     /// </summary>
     Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// One machine's current selections (<c>GET /v1/machines/{MachineID}/machineProducts</c>).
+    ///
+    /// <para>The answer may be up to 60 seconds old. The same decorator
+    /// (<c>Inventory.Infrastructure.Nayax.CachingNayaxLynxClient</c>, issue #842) keeps one list per
+    /// business, credential revision and machine for that long, because one Dashboard visit used to
+    /// read every machine three times - the dashboard summary, low stock and the sites page - and
+    /// those reads happen at the same moment. The refusals still run before every answer, and a
+    /// successful <see cref="CreateMachineProductsAsync"/> forgets the machine's entry.</para>
+    ///
+    /// <para>This payload carries the machine's live stock levels (<c>PAR</c>,
+    /// <c>MissingStockByMDB</c>, <c>VendOutAlertThreshold</c>), so a caller whose correctness depends
+    /// on the current moment - one that plans a refill, records a count, reconciles a ledger or
+    /// establishes a costing baseline - calls <see cref="GetMachineProductsFreshAsync"/>
+    /// instead.</para>
+    /// </summary>
     Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default);
+
+    /// <summary>
+    /// One machine's selections read from Nayax now, never from the cache above, replacing whatever
+    /// that cache held for this business, credential revision and machine (issue #842).
+    ///
+    /// <para>It exists so a caller can state that requirement in its own code rather than inherit it
+    /// from how the port happens to be composed: an implementation that caches nothing answers both
+    /// methods identically, which is exactly what <c>NayaxLynxClient</c> itself does.</para>
+    /// </summary>
+    Task<List<NayaxMachineProduct>> GetMachineProductsFreshAsync(long machineId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Creates selections on one machine (<c>POST /v1/machines/{MachineID}/machineProducts</c>).
+    /// A successful write forgets that machine's cached selections (issue #842).
+    /// </summary>
     Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(long machineId, List<NayaxMachineProduct> products, CancellationToken ct = default);
     Task<List<NayaxProduct>> GetProductsAsync(CancellationToken ct = default);
     Task<List<NayaxProductGroup>> GetProductGroupssAsync(CancellationToken ct = default);

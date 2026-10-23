@@ -13,11 +13,11 @@ namespace InventoryApi.Tests.Infrastructure.Nayax;
 /// The machine-list cache of issue #840, on its own: what it holds, for how long, how simultaneous
 /// readers share one request, and which result wins when two reads of one key overlap.
 ///
-/// <para>Nothing here makes an access decision - that is
-/// <see cref="MachineListCachingNayaxLynxClient"/>'s job and has its own tests. These tests are
-/// about the mechanism, so the "read" is a scripted function whose every call is counted and can be
-/// held open on demand: a cache whose behaviour depended on timing that a test could not control
-/// would be a cache nobody could reason about.</para>
+/// <para>Nothing here makes an access decision - that is <see cref="CachingNayaxLynxClient"/>'s job
+/// and has its own tests. These tests are about the mechanism it shares with the machine-products
+/// cache (<see cref="NayaxReadCache{TKey,TValue}"/>), so the "read" is a scripted function whose
+/// every call is counted and can be held open on demand: a cache whose behaviour depended on timing
+/// that a test could not control would be a cache nobody could reason about.</para>
 /// </summary>
 public class NayaxMachineListCacheTests
 {

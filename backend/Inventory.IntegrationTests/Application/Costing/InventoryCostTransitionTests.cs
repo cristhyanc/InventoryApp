@@ -78,7 +78,7 @@ public class InventoryCostTransitionTests
         db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 19, AverageUnitCost = 1.25m });
         await db.SaveChangesAsync();
         var nayax = NayaxWithStock(10);
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 10, PAR = 10, MissingStockByMDB = null } });
 
         var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
@@ -272,7 +272,7 @@ public class InventoryCostTransitionTests
                     AuthorizationDateTimeGmt = cutoff.AddMinutes(30)
                 }
             });
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 10, ProductName = "Snack", PAR = 5, MissingStockByMDB = 1 }
@@ -303,7 +303,7 @@ public class InventoryCostTransitionTests
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 10, PAR = 8, MissingStockByMDB = 3 },
@@ -413,12 +413,12 @@ public class InventoryCostTransitionTests
                 new() { MachineID = 1, MachineName = "Machine A" },
                 new() { MachineID = 2, MachineName = "Machine B" }
             });
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = productId, PAR = 10, MissingStockByMDB = 4 }
             });
-        nayax.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = productId, PAR = 8, MissingStockByMDB = 3 }

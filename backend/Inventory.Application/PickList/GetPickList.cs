@@ -7,7 +7,7 @@ namespace Inventory.Application.PickList;
 /// <summary>
 /// The read-only Pick List projection use case (issue #221). For the selected machines it fetches
 /// each machine's current live Nayax product mappings through the same
-/// <see cref="INayaxLynxClient.GetMachineProductsAsync"/> port and PAR/<c>MissingStockByMDB</c>
+/// <see cref="INayaxLynxClient.GetMachineProductsFreshAsync"/> port and PAR/<c>MissingStockByMDB</c>
 /// arithmetic <c>InventoryApi.Services.MachineService.GetMachineProducts</c> already uses for a single
 /// machine's product list, aggregates them into a per-product/machine pick matrix, and compares the
 /// combined pick quantity per product against its physical storage quantity from
@@ -87,7 +87,10 @@ public sealed class GetPickList
             },
             async (machineId, machineCancellationToken) =>
             {
-                var machineProducts = await _nayax.GetMachineProductsAsync(machineId, machineCancellationToken);
+                // Fresh, never the cached selections (issue #842): the pick list is what an operator
+                // loads a van from, so the quantity to pick has to be the machine's need now.
+                var machineProducts = await _nayax.GetMachineProductsFreshAsync(
+                    machineId, machineCancellationToken);
                 foreach (var machineProduct in machineProducts)
                 {
                     if (machineProduct.NayaxProductID is not long nayaxProductId)

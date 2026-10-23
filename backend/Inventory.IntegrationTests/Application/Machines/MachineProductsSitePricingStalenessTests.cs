@@ -24,9 +24,9 @@ namespace InventoryApi.Tests.Application.Machines;
 /// expires ten minutes later (the staleness Cristhyan accepted on 23 October 2026).
 ///
 /// <para>The whole composition is the real one apart from the clock and what Nayax answers: the
-/// <see cref="MachineListCachingNayaxLynxClient"/> decorator, its
-/// <see cref="NayaxMachineListCache"/> over a <see cref="FakeClock"/> a test moves itself, and the
-/// real <see cref="ResolveMachineProductPricing"/>. A test that faked the ten minutes could not say
+/// <see cref="CachingNayaxLynxClient"/> decorator, its <see cref="NayaxMachineListCache"/> and
+/// <see cref="NayaxMachineProductsCache"/> (issue #842) over a <see cref="FakeClock"/> a test moves
+/// itself, and the real <see cref="ResolveMachineProductPricing"/>. A test that faked the ten minutes could not say
 /// whether the pricing catches up at all.</para>
 ///
 /// <para>The same composition is what says the endpoint's permission answers are unchanged: an
@@ -77,9 +77,11 @@ public class MachineProductsSitePricingStalenessTests
         Assert.Equal(7.4m, atSiteB.SuggestedPriceValue);
 
         // Two machine-list reads for three loads - the second load was held - and no machine read.
+        // Two machine-product reads: the third load came one second after the second, inside the
+        // machine-products cache's sixty seconds (issue #842), so it shared the second's selections.
         Assert.Equal(2, nayax.MachineListReads);
         Assert.Equal(0, nayax.MachineReads);
-        Assert.Equal(3, nayax.MachineProductReads);
+        Assert.Equal(2, nayax.MachineProductReads);
     }
 
     /// <summary>
@@ -108,7 +110,7 @@ public class MachineProductsSitePricingStalenessTests
     /// <summary>
     /// A machine the cached list does not hold - added in Nayax within the last ten minutes - is read
     /// on its own and priced by what that read says, every load: the decorator caches the machine list
-    /// and nothing else.
+    /// and the machine products, never a single-machine read.
     /// </summary>
     [Fact]
     public async Task A_machine_the_list_does_not_hold_is_read_itself_on_every_load()
@@ -171,7 +173,8 @@ public class MachineProductsSitePricingStalenessTests
         Assert.Equal(2.28m, second.SuggestedNetValue);
         Assert.Equal(2, nayax.MachineListReads);
         Assert.Equal(2, nayax.MachineReads);
-        Assert.Equal(2, nayax.MachineProductReads);
+        // The selections are held for sixty seconds (issue #842), so the second load reuses them.
+        Assert.Equal(1, nayax.MachineProductReads);
     }
 
     /// <summary>
@@ -196,18 +199,20 @@ public class MachineProductsSitePricingStalenessTests
 
     /// <summary>
     /// The machine product listing over the port as the composition root registers it: the
-    /// machine-list cache in front of the Nayax client, one business, one credential revision.
+    /// machine-list and machine-products caches in front of the Nayax client, one business, one
+    /// credential revision.
     /// </summary>
     private static ListMachineProducts Listing(ScriptedNayaxClient nayax, FakeClock clock)
     {
         var scope = new BusinessScope();
         scope.Resolve(BusinessId.From(1));
 
-        var decorated = new MachineListCachingNayaxLynxClient(
+        var decorated = new CachingNayaxLynxClient(
             nayax,
             new FakeNayaxRequestCredentialProvider(OperatorId, FakeToken),
             scope,
-            new NayaxMachineListCache(clock));
+            new NayaxMachineListCache(clock),
+            new NayaxMachineProductsCache(clock));
 
         return new ListMachineProducts(
             decorated,
@@ -258,12 +263,13 @@ public class MachineProductsSitePricingStalenessTests
     /// counts each read, so a test can say which read an answer came from and how many requests a
     /// load spent.
     ///
-    /// <para>Both port machine-list members throw, exactly as
-    /// <c>MachineListCachingNayaxLynxClientTests</c>' double does: the decorator must read the
-    /// upstream list through <see cref="INayaxLynxMachineListClient.ReadMachinesAsync"/>, with the
-    /// credential it resolved and gated itself.</para>
+    /// <para>The port machine-list and machine-product members throw, exactly as
+    /// <c>CachingNayaxLynxClientTests</c>' double does: the decorator must read upstream through
+    /// <see cref="INayaxLynxCachedReadClient.ReadMachinesAsync"/> and
+    /// <see cref="INayaxLynxCachedReadClient.ReadMachineProductsAsync"/>, with the credential it
+    /// resolved and gated itself.</para>
     /// </summary>
-    private sealed class ScriptedNayaxClient : INayaxLynxMachineListClient
+    private sealed class ScriptedNayaxClient : INayaxLynxCachedReadClient
     {
         private readonly bool _listTheMachine;
         private long _siteId;
@@ -317,8 +323,8 @@ public class MachineProductsSitePricingStalenessTests
                 : Task.FromResult(Machine());
         }
 
-        public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(
-            long machineId, CancellationToken ct = default)
+        public Task<List<NayaxMachineProduct>> ReadMachineProductsAsync(
+            long machineId, NayaxRequestCredential credential, CancellationToken ct = default)
         {
             Interlocked.Increment(ref _machineProductReads);
 
@@ -352,6 +358,25 @@ public class MachineProductsSitePricingStalenessTests
             throw new NotSupportedException(
                 "The decorator reads the upstream machine list through ReadMachinesAsync, with the "
                 + "credential it resolved and gated itself.");
+
+        public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(
+            long machineId, CancellationToken ct = default) =>
+            throw new NotSupportedException(
+                "The decorator reads the machine's selections through ReadMachineProductsAsync, with "
+                + "the credential it resolved and gated itself.");
+
+        public Task<List<NayaxMachineProduct>> GetMachineProductsFreshAsync(
+            long machineId, CancellationToken ct = default) =>
+            throw new NotSupportedException(
+                "The decorator reads the machine's selections through ReadMachineProductsAsync, with "
+                + "the credential it resolved and gated itself.");
+
+        public Task<List<NayaxMachineProduct>> WriteMachineProductsAsync(
+            long machineId,
+            List<NayaxMachineProduct> products,
+            NayaxRequestCredential credential,
+            CancellationToken ct = default) =>
+            throw new NotSupportedException();
 
         public Task<List<NayaxDevice>> GetDevicesAsync(CancellationToken ct = default) =>
             throw new NotSupportedException();
