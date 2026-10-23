@@ -50,6 +50,9 @@ public class NayaxLynxClientTests
     [InlineData(HttpStatusCode.NotFound)]
     [InlineData(HttpStatusCode.BadGateway)]
     [InlineData(HttpStatusCode.ServiceUnavailable)]
+    // A 429 the resilience handler decided not to retry (issue #844) reaches this method as it
+    // stands, and must still be the upstream failure the caller already handles as a 502.
+    [InlineData(HttpStatusCode.TooManyRequests)]
     public async Task Other_non_success_statuses_follow_the_same_upstream_error_path(HttpStatusCode status)
     {
         var (client, _) = CreateClient(status, SensitiveUpstreamBody);
