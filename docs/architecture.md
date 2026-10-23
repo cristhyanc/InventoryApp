@@ -1663,6 +1663,8 @@ The other is `NayaxConnectionController` since issue #537: its test, save and re
 
   It is also **rate-limited per business** since issue #681: `Inventory.Application.SalesSync.NayaxSalesSyncRateLimiter` allows ten runs per business per two minutes, claimed before the first Nayax call, and a refused run answers `429` with `Retry-After` and reaches neither Nayax nor the database. One run is one Nayax request per machine plus one, and the Dashboard triggers one per load — which a browser repeats on every visit, back-navigation and refresh — so this was the most expensive call in the application and the easiest to repeat, with nothing bounding either the requests against someone else's API or the write amplification in this one. The limit is per business rather than per actor for the reason the connection test's is: what it protects is the business's own Nayax account and its own rows. The window is kept in memory, like every other limiter here (docs § SQLite operating assumptions). Because the allowance is the business's, members opening the Dashboard together share it: ten simultaneous loads all synchronize (`NayaxSalesSyncControllerTests`), and a load past that is refused. A refusal proves the business started runs inside the last two minutes, so the Dashboard loads its persisted figures and says they were refreshed in the last couple of minutes, not that synchronization failed (`isSalesSyncRecentlyRefreshed`); any other error still shows the not-synchronized warning. The `429` body names no wait and points at `Retry-After`, because the wait can be up to the whole window.
 
+  Since issue #843 a **second**, different bound sits beside it: a run that finished less than three minutes ago is **skipped** rather than rationed, with no Nayax request, no write and **no rate-limit allowance claimed at all**, keyed by the business *and* its credential revision; the connection and support-session refusals are resolved before that decision, and the Dashboard's Refresh control forces a run past it while still spending an allowance. The two bounds answer different questions and neither replaces the other — see [Skipping a sync that just happened](#skipping-a-sync-that-just-happened-issue-843).
+
 - `GET api/products/inventory-value-summary` → **`Inventory.Operate` and `Dashboard.ViewFinancials`** (issue #681). It is an action on `ProductsController`, so it carries the catalogue's own capability; the second one is declared on the action. The endpoint reports the exact value of the business's inventory at cost, broken down — the figure [issue #527](#dashboard-financial-redaction-issue-527) omits from the dashboard response entirely for a role without `Dashboard.ViewFinancials`, today an Operator. On the catalogue's capability alone, that redaction was a presentation detail rather than a boundary: an Operator could read the number directly. No page calls this endpoint (`ProductService.getInventoryValuationSummary` has no caller since the dashboard stopped using it), so it was gated rather than removed — gating preserves the API contract, which AGENTS.md § Architecture rules asks for, while removing it would be a breaking change for a caller nobody has surveyed. A Manager and an Owner hold both capabilities and are unaffected; an Operator gets the ordinary bare `403`. Gating this one action left the figure reachable by summing the catalogue's own `inventoryValue`, which is what [issue #698](#machine-and-product-financial-redaction-issue-698) closed, along with the machine endpoints' revenue, profit and profitability-status figures: those endpoints stay on `Inventory.Operate` for every role, because an Operator restocks from them, and only the figures inside the response are withheld. [Issue #700](#operator-readable-financial-disclosure-issue-700) closed the last two routes to the same figure — a stock movement's `inventoryValueAfter` and the catalogue snapshot nested in a purchase or supplier-order line — and audited every other Operator-readable endpoint for one.
 - `GET api/products/purchase-cost-summary` → **`Dashboard.ViewFinancials`**, so a Manager and an Owner (issue #788, B of parent #786). It reports what every product was last bought for and what it was cheapest at, with the supplier of each — supplier purchasing facts over the whole catalogue, which is the same kind of figure `GET api/products/{id}/price-history` shows one product at a time. **It is its own controller, `ProductPurchaseCostsController`, for exactly that reason**: a controller declares one capability for every action it holds, so adding this action to `ProductsController` would either have inherited the catalogue's `Inventory.Operate` — handing those figures to every role that may operate inventory — or, declared per action, left the catalogue and this read looking alike when they are not. The first page that calls it is the home Dashboard's Reorder Alerts table (issue #789, see [Provider-optional dashboard and Needs Ordering screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)); Products → Needs Ordering (issue #790, D of #786) is the second, and All Products (issue #791, E of #786) the third, requesting it once for its listed product ids and showing the Last/Cheapest purchase columns only with `Dashboard.ViewFinancials`. The Angular client is `ProductPurchaseCostService`. It is read-only and `GET`, so a support session may call it under the central `GET`/`HEAD` rule of issue #551, which grants `Dashboard.ViewFinancials`. See [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63).
 - `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
@@ -1755,7 +1757,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | --- | --- | --- | --- |
 | `Dashboard.View` | `GET api/dashboard/summary` | `salesThisWeek` (and its `sales`/`comparisonSales`), `inventory.inventoryValueAtCost` | Withheld by [#527](#dashboard-financial-redaction-issue-527) — the property is **absent** from the redacted shape, and the week's sales are not read |
 | `Dashboard.View` | `GET api/business/current`, `GET api/settings/nayax-connection/status` | none | Already safe |
-| `Dashboard.View` + `Inventory.Operate` | `POST api/nayax-sales-sync` | none — `204`, or `429` with `Retry-After` | Already safe |
+| `Dashboard.View` + `Inventory.Operate` | `POST api/nayax-sales-sync` | none — `204`, `200` with the last-synced instant (issue #843), or `429` with `Retry-After` | Already safe |
 | `PickList.View` | `GET api/pick-list` | none — storage quantity, target, quantity to pick and MDB codes | Already safe |
 | `PickList.View` + `Inventory.Operate` | `POST api/pick-list/refills` (issue #743) | none — the submitted quantities, the recorded movement ids and the per-row refusal sentences | Already safe |
 | `Inventory.Operate` | `GET api/products`, `GET api/products/{id}`, `GET api/products/alerts/low-stock`, `GET api/machines/{id}/products`, `POST api/products` (issue #736, which answers the created product in the same shape) | `inventoryValue`; and, nested in `stockAdjustments`, each movement's `inventoryValueAfter` | `inventoryValue` withheld by [#698](#machine-and-product-financial-redaction-issue-698); `inventoryValueAfter` **redacted here** |
@@ -7896,6 +7898,72 @@ and `SiteService.getAll()` - so Sites and Machines always calculate from the sam
 component still loads Sites and Machines from whatever `NayaxSales` data is already persisted
 (never fabricating zero sales) and sets `isSalesSyncFailed`, which the template surfaces as a
 banner so the UI never silently presents both sections as freshly synchronized.
+
+##### Skipping a sync that just happened (issue #843)
+
+The Dashboard calls this endpoint on **every** load, and a browser repeats that on every visit, every
+back-navigation and every refresh. One run is a Nayax request per machine plus one, then persisting,
+costing and rebuilding inventory costs, so a visit seconds after the last one used to repeat the
+whole thing for sales nobody could have made yet. The run limit of issue #681 does not bound that,
+and is not meant to: ten runs per two minutes is deliberately invisible to people.
+
+**The rule.** `Inventory.Application.SalesSync.NayaxSalesSyncFreshness` remembers, in memory, when
+each business's last **fully successful** run finished. When that was less than
+`NayaxSalesSyncFreshness.RecentWindow` - **three minutes**, decided by the repository owner on 23
+October 2026 - an unforced call answers `NayaxSalesSyncOutcome.RecentlySynced` immediately: no Nayax
+request is made, nothing is persisted, costed or rebuilt, and no coverage row is written, because
+nothing was read to account for. The window is "less than three minutes", strictly: exactly at the
+window the run happens.
+
+**The key is the business *and* its credential revision**, which is the half that is easy to get
+wrong. A sync is only already done for the credentials it was done with, and saving or replacing the
+business's Nayax connection is exactly the moment an operator needs to see whether sales now arrive -
+so the new `CredentialRevision` is a key nothing has recorded and the next visit runs in full, inside
+the window or not. Keyed by business alone, a credential change would have had to wait the window
+out. One business's run never lets another skip, which matters because the memory is a process-wide
+singleton.
+
+**The three decisions are ordered, and the order is the security-relevant part.** The use case
+resolves `INayaxRequestCredentialProvider.GetForOperationAsync` **first**, before it considers
+skipping: a business with no stored connection, one in `NotConfigured` or `NeedsAttention`, and a
+request inside a support session (which resolves no Nayax credentials at all, issue #551) each get
+exactly the refusal they got before - never a reassuring "synchronized moments ago" about sales
+nobody can read. Only then is the skip considered, and only then - if the run is going ahead - is the
+rate-limit allowance claimed. **A skip therefore spends no allowance**: it makes no request, so
+rationing it would let a tab stuck in a reload loop spend the business's own Refresh on nothing.
+Resolving the credential before the claim is a change from #681's order, and it means a refused
+connection no longer costs an allowance either.
+
+**Only a run that finished everything records freshness**, which is the same boundary issue #730
+gives the coverage record, and for the same reason: a skip claims the figures in front of the
+operator are current. A run that threw, was cancelled, or was refused by the limiter records nothing,
+so the next visit runs. The rate-limited case is the one that would otherwise be self-sustaining -
+a refusal recording freshness would let the skip take over from the limit and stretch one stale
+snapshot indefinitely.
+
+**After a restart there is nothing remembered**, so the first Dashboard visit syncs. That is the
+deliberate trade the two rate limiters already make (docs § SQLite operating assumptions): when the
+Dashboard was last opened is not part of the business's record, and a second instance would mean one
+extra full run per instance per window.
+
+**The HTTP contract gains one answer and changes neither of the existing two.** `POST
+api/nayax-sales-sync` still answers `204` when the run happened and `429` with `Retry-After` when the
+run limit refused it. A skip is `200` with `NayaxSalesRecentlySyncedResponse`
+(`wasRecentlySynced: true`, `lastSyncedAtUtc`), and the optional query parameter `force=true` is the
+Dashboard's Refresh control: it bypasses the freshness window and nothing else - the run limit and
+the connection refusals still apply. The response carries no business id, operator id or credential
+revision; the freshness key is the server's own.
+
+**On the Dashboard**, `salesSyncedAtUtc` is set from the server's instant on a skip and from the
+browser's own clock on a run that just finished, and the header renders `salesSyncedLabel` - "Sales
+synced just now" / "Sales synced N min ago" - with the exact wall-clock instant on the element's
+`title`, in the business's own timezone through `BusinessDateTimePipe` (issue #499), which for this
+business is Sydney. A skip shows **no** notice: it is neither `isSalesSyncFailed` nor the run limit's
+`isSalesSyncRecentlyRefreshed`, both of which keep exactly the wording and the meaning they had. The
+`Refresh` control calls `refreshSales()`, which forces the run and then reloads Sites and Machines
+from it; it is not offered for a business with no usable provider or inside a support session, where
+the call could only be refused. Nothing is remembered about freshness for a failure, a `429` or a
+support session - the label is absent rather than claiming an age it does not know.
 
 ### Profit levels
 
