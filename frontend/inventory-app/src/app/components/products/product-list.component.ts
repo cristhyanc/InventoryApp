@@ -201,7 +201,26 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.search = '';
     this.categoryId = '';
     this.statusFilter = 'active';
+    this.clearStatusSortWhenHidden();
     this.applyFilters();
+  }
+
+  /**
+   * The Status filter's own change handler (issue #828): switching to "Only active" hides the
+   * Status column, so a sort by it would otherwise point at a column no longer on screen.
+   */
+  onStatusFilterChange(value: ProductStatusFilter): void {
+    this.statusFilter = value;
+    this.clearStatusSortWhenHidden();
+    this.applyFilters();
+  }
+
+  /** Clears a Status sort back to the default order once "Only active" hides the column it sorts. */
+  private clearStatusSortWhenHidden(): void {
+    if (this.statusFilter === 'active' && this.sortColumn === 'status') {
+      this.sortColumn = null;
+      this.sortDirection = 'asc';
+    }
   }
 
   /**

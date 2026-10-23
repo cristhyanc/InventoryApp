@@ -1098,7 +1098,10 @@ does not manage.
   (`includeRetired=true`) — so a product just deactivated stays reachable to **Reactivate** instead of
   disappearing from the only list that can flip it back (issue #791) — the Admin costing-repair and
   AVCO-transition tools and the stock-history product filter still call the endpoint without it and
-  are unaffected by this change.
+  are unaffected by this change. The **Status** column itself is shown only under **All**: under
+  **Only active**, every row would say "Active" anyway, so the column (and a sort on it) is hidden
+  instead, and switching back to **Only active** clears a Status sort rather than leaving it pointed
+  at a hidden column (issue #828).
 - **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock
   movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
   the delete is refused with what is in the way and nothing is written — deleting it would erase

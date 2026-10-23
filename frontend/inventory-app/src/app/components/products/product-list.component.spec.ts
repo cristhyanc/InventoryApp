@@ -1,5 +1,5 @@
 import { HttpErrorResponse } from '@angular/common/http';
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { Observable, Subject, of, throwError } from 'rxjs';
 import { ProductListComponent } from './product-list.component';
@@ -126,7 +126,7 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
   });
 
   it('preserves every product field already shown alongside the Actions column', async () => {
-    const { host } = await render([
+    const { fixture, host } = await render([
       product({
         id: 7,
         name: 'Widget',
@@ -137,6 +137,10 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
         isLowStock: false
       })
     ]);
+    // Status is shown only under "All" (issue #828); switched here so this field-preservation check
+    // still covers it.
+    fixture.componentInstance.statusFilter = 'all';
+    fixture.detectChanges();
 
     expect(host.textContent).toContain('Widget');
     expect(host.textContent).toContain('Snacks');
@@ -268,7 +272,10 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
   });
 
   it('does not navigate when the Status badge button is clicked', async () => {
-    const { host, navigate } = await render([product({ id: 9, name: 'Widget', isActive: true })]);
+    const { fixture, host, navigate } = await render([product({ id: 9, name: 'Widget', isActive: true })]);
+    // Status is shown only under "All" (issue #828).
+    fixture.componentInstance.statusFilter = 'all';
+    fixture.detectChanges();
 
     const statusButton = Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Active') as HTMLButtonElement;
     statusButton.click();
@@ -373,6 +380,10 @@ describe('ProductListComponent write controls during a support session (issue #5
     }).compileComponents();
 
     const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    // Status is shown only under "All" (issue #828); this block's tests are about the status toggle,
+    // so it is switched here rather than in each one.
+    fixture.componentInstance.statusFilter = 'all';
     fixture.detectChanges();
     return { fixture, host: fixture.nativeElement as HTMLElement, update };
   }
@@ -512,7 +523,7 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
 
   it('does not offer Delete for a product whose history blocks it, and offers Deactivate alone without wording the refusal', async () => {
     const deleteFn = jest.fn(() => of(undefined));
-    const { host } = await render(deleteFn, [
+    const { fixture, host } = await render(deleteFn, [
       product({
         id: 1,
         name: 'Widget',
@@ -524,6 +535,9 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
           'alerts and can be reactivated. Nothing was deleted.'
       })
     ]);
+    // Status is shown only under "All" (issue #828).
+    fixture.componentInstance.statusFilter = 'all';
+    fixture.detectChanges();
 
     expect(deleteButtonOf(host)).toBeUndefined();
     // Issue #825: the refusal is shown once, on the Edit page - not as a paragraph on every row.
@@ -539,7 +553,7 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
 
   it('does not offer Delete for a provider-linked product, and offers Deactivate instead', async () => {
     const deleteFn = jest.fn(() => of(undefined));
-    const { host } = await render(deleteFn, [
+    const { fixture, host } = await render(deleteFn, [
       product({
         id: 1,
         name: 'Coke',
@@ -552,6 +566,9 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
           'out of the reorder alerts and can be reactivated. Nothing was deleted.'
       })
     ]);
+    // Status is shown only under "All" (issue #828).
+    fixture.componentInstance.statusFilter = 'all';
+    fixture.detectChanges();
 
     expect(deleteButtonOf(host)).toBeUndefined();
     expect(host.textContent).not.toContain('managed by Nayax and cannot be deleted');
@@ -564,7 +581,7 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
 
   it('offers neither Delete nor Deactivate for an undeletable product that is already retired', async () => {
     const deleteFn = jest.fn(() => of(undefined));
-    const { host } = await render(deleteFn, [
+    const { fixture, host } = await render(deleteFn, [
       product({
         id: 1,
         name: 'Coke',
@@ -573,6 +590,10 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
         deletionRefusal: 'This product cannot be deleted because its history refers to it (2 sales).'
       })
     ]);
+    // Status is shown only under "All" (issue #828); this product is retired, so viewing it at all
+    // on this page already means "All" is selected.
+    fixture.componentInstance.statusFilter = 'all';
+    fixture.detectChanges();
 
     expect(deleteButtonOf(host)).toBeUndefined();
     expect(deactivateButtonOf(host)).toBeUndefined();
@@ -728,12 +749,139 @@ describe('ProductListComponent Status filter (issue #791)', () => {
    * cell when `Dashboard.ViewFinancials` is granted, as the default stub here grants it.
    */
   it('offers no supplier or price filter, column or sort', async () => {
-    const { host } = await render(jest.fn(() => of([product({ id: 7, name: 'Widget' })])));
+    const { fixture, host } = await render(jest.fn(() => of([product({ id: 7, name: 'Widget' })])));
 
     expect(host.textContent).not.toContain('All Suppliers');
+    // Status is excluded here: under "Only active" (the default) it is hidden entirely (issue #828).
+    expect(
+      Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim())
+    ).toEqual(['Name', 'Category', 'Stock', 'Average cost', 'Last purchase', 'Cheapest purchase', '']);
+
+    statusSelect(host).value = 'all';
+    statusSelect(host).dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+
     expect(
       Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim())
     ).toEqual(['Name', 'Category', 'Stock', 'Status', 'Average cost', 'Last purchase', 'Cheapest purchase', '']);
+  });
+});
+
+/**
+ * The Status column is shown only while the Status filter is "All" (issue #828): under "Only
+ * active" - the default, including on first load and after Reset - every row would say "Active"
+ * anyway, so the column (and a sort on it) would be redundant and is hidden instead. The Status
+ * toggle (issue #825) still works exactly as before once "All" is selected, so a just-deactivated
+ * product stays reachable to reactivate.
+ */
+describe('ProductListComponent Status column visibility (issue #828)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(products: Product[]) {
+    const getAll = jest.fn(() => of(products));
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll } },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement, getAll };
+  }
+
+  function statusSelect(host: HTMLElement): HTMLSelectElement {
+    return host.querySelector('[name="statusFilter"]') as HTMLSelectElement;
+  }
+
+  function selectStatusFilter(fixture: ComponentFixture<ProductListComponent>, host: HTMLElement, value: 'active' | 'all'): void {
+    statusSelect(host).value = value;
+    statusSelect(host).dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+  }
+
+  function headerLabels(host: HTMLElement): (string | undefined)[] {
+    return Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim());
+  }
+
+  it('hides the Status header and every row\'s Status cell on first load ("Only active")', async () => {
+    const { host } = await render([product({ id: 1, name: 'Widget', isActive: true })]);
+
+    expect(headerLabels(host)).not.toContain('Status');
+    expect(Array.from(host.querySelectorAll('tbody button')).find((b) => b.textContent?.trim() === 'Active')).toBeUndefined();
+  });
+
+  it('shows the Status header and cells once "All" is selected, with the toggle still usable', async () => {
+    const { fixture, host, getAll } = await render([product({ id: 1, name: 'Widget', isActive: true })]);
+
+    selectStatusFilter(fixture, host, 'all');
+
+    expect(headerLabels(host)).toContain('Status');
+    const statusButton = Array.from(host.querySelectorAll('tbody button')).find((b) => b.textContent?.trim() === 'Active') as
+      | HTMLButtonElement
+      | undefined;
+    expect(statusButton).toBeDefined();
+    expect(statusButton!.disabled).toBe(false);
+    expect(getAll).toHaveBeenCalledWith(expect.objectContaining({ includeRetired: true }));
+  });
+
+  it('hides the Status column again after Reset', async () => {
+    const { fixture, host } = await render([product({ id: 1, name: 'Widget', isActive: true })]);
+
+    selectStatusFilter(fixture, host, 'all');
+    expect(headerLabels(host)).toContain('Status');
+
+    (Array.from(host.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Reset') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    // NgModel's model-to-view write for a standalone control is a deferred microtask (to avoid
+    // ExpressionChangedAfterItHasBeenCheckedError), so the reset state needs one more tick.
+    await Promise.resolve();
+    fixture.detectChanges();
+
+    expect(headerLabels(host)).not.toContain('Status');
+  });
+
+  it('keeps the header and row cell counts equal whether the Status column is hidden or shown', async () => {
+    const { fixture, host } = await render([product({ id: 1, name: 'Widget', isActive: true })]);
+
+    const headerCount = () => host.querySelectorAll('thead th').length;
+    const rowCellCount = () => (host.querySelector('tbody tr') as HTMLTableRowElement).querySelectorAll('td').length;
+    expect(headerCount()).toBe(rowCellCount());
+
+    selectStatusFilter(fixture, host, 'all');
+
+    expect(headerCount()).toBe(rowCellCount());
+  });
+
+  it('clears a Status sort back to the default order when switching to "Only active"', async () => {
+    const { fixture, host } = await render([
+      product({ id: 1, name: 'B', isActive: false }),
+      product({ id: 2, name: 'A', isActive: true })
+    ]);
+    const component = fixture.componentInstance;
+
+    selectStatusFilter(fixture, host, 'all');
+
+    const statusHeader = Array.from(host.querySelectorAll('thead th')).find((th) => th.textContent?.includes('Status')) as HTMLTableCellElement;
+    (statusHeader.querySelector('button') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(component.sortColumn).toBe('status');
+
+    selectStatusFilter(fixture, host, 'active');
+
+    expect(component.sortColumn).toBeNull();
+    // Back to the order the products were fetched in, not a sort on a now-hidden column.
+    expect(Array.from(host.querySelectorAll('tbody tr')).map((row) => row.querySelector('td')?.textContent?.trim())).toEqual([
+      'B',
+      'A'
+    ]);
   });
 });
 
@@ -775,6 +923,10 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
     }).compileComponents();
 
     const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    // Status is shown only under "All" (issue #828); switched here so this block's existing
+    // column-index assertions keep describing the same cells.
+    fixture.componentInstance.statusFilter = 'all';
     fixture.detectChanges();
     return { fixture, host: fixture.nativeElement as HTMLElement, getSummaries };
   }
@@ -924,6 +1076,10 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
     }).compileComponents();
 
     const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    // Status is shown only under "All" (issue #828); switched here so this test's column-index
+    // assertions keep describing the same cells.
+    fixture.componentInstance.statusFilter = 'all';
     fixture.detectChanges();
     const host = fixture.nativeElement as HTMLElement;
 
@@ -1217,6 +1373,9 @@ describe('ProductListComponent Deactivate (issue #825)', () => {
 
   it('confirms a deactivation started from the Status toggle, instead of writing it straight away', async () => {
     const { fixture, host, update } = await render([product({ id: 1, name: 'Widget', isActive: true })]);
+    // Status is shown only under "All" (issue #828).
+    fixture.componentInstance.statusFilter = 'all';
+    fixture.detectChanges();
 
     (
       Array.from(host.querySelectorAll('tbody button')).find((b) => b.textContent?.trim() === 'Active') as HTMLButtonElement
@@ -1233,6 +1392,10 @@ describe('ProductListComponent Deactivate (issue #825)', () => {
 
   it('reactivates from the Status toggle in one click, with no confirmation', async () => {
     const { fixture, host, update } = await render([product({ id: 1, name: 'Widget', isActive: false })]);
+    // Status is shown only under "All" (issue #828); this product is retired, so viewing it at all
+    // on this page already means "All" is selected.
+    fixture.componentInstance.statusFilter = 'all';
+    fixture.detectChanges();
 
     (
       Array.from(host.querySelectorAll('tbody button')).find(
