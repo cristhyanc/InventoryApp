@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 using Inventory.Application.PlatformAdmin;
 
 namespace InventoryApi.DTOs;
@@ -61,5 +63,12 @@ public sealed record SuperAdminCreateSupplierPresetRequest(string? Name, string?
 /// </summary>
 /// <param name="Name">The preset's name. Required, trimmed, at most 200 characters.</param>
 /// <param name="Url">Its website, or <c>null</c>/blank to record none.</param>
-/// <param name="IsEnabled">Whether it stays suggested.</param>
-public sealed record SuperAdminUpdateSupplierPresetRequest(string? Name, string? Url, bool IsEnabled);
+/// <param name="IsEnabled">
+/// Whether it stays suggested. Marked <see cref="JsonRequiredAttribute"/> so a body that omits it
+/// is refused with <c>400</c> rather than silently disabling the preset - the field is a
+/// <c>bool</c>, so a missing value and <c>false</c> are otherwise indistinguishable.
+/// </param>
+public sealed record SuperAdminUpdateSupplierPresetRequest(
+    string? Name,
+    string? Url,
+    [property: JsonRequired] bool IsEnabled);

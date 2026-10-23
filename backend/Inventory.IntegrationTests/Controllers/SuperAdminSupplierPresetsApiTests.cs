@@ -468,6 +468,27 @@ public class SuperAdminSupplierPresetsApiTests
     }
 
     /// <summary>
+    /// <c>IsEnabled</c> is a <c>bool</c>, so a body that omits it would otherwise bind to
+    /// <c>false</c> indistinguishably from an explicit <c>isEnabled: false</c> and silently disable
+    /// the preset. <c>JsonRequiredAttribute</c> refuses the under-posted body instead.
+    /// </summary>
+    [Fact]
+    public async Task An_edit_without_isEnabled_is_refused_and_changes_nothing()
+    {
+        var preset = (await _factory.SupplierPresetsAsync()).Single(p => p.Name == "Coles");
+
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(
+            PresetUrl(preset.Id),
+            new { name = "Coles" });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(p => p.Id == preset.Id);
+        Assert.Equal(preset.IsEnabled, stored.IsEnabled);
+        Assert.Equal(preset.UpdatedAtUtc, stored.UpdatedAtUtc);
+    }
+
+    /// <summary>
     /// There is no delete, and no preset can be removed through this surface. The controller routes
     /// no <c>DELETE</c> action, so the request matches no action at all; the method-not-allowed
     /// candidate routing selects carries none of the controller's authorization metadata either, so
