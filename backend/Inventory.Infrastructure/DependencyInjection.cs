@@ -54,6 +54,7 @@ using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Sites;
 using Inventory.Infrastructure.Time;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Inventory.Infrastructure;
 
@@ -410,6 +411,11 @@ public static class InfrastructureServiceCollectionExtensions
 
         var baseAddress = NayaxLynxConfiguration.BuildBaseAddress(options);
 
+        // The resilience handler reads the current instant through the application's clock port to
+        // interpret an HTTP-date Retry-After on a 429 (issue #844). TryAdd because
+        // AddInfrastructureServices registers the same singleton, and either call may come first:
+        // attaching the handler must never depend on the order the two registrations ran in.
+        services.TryAddSingleton<IClock, SystemClock>();
         services.AddTransient<NayaxResilienceHandler>();
         services.AddHttpClient<INayaxLynxClient, NayaxLynxClient>(http => http.BaseAddress = baseAddress)
             .AddHttpMessageHandler<NayaxResilienceHandler>();

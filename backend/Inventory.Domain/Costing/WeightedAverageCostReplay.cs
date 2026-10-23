@@ -1,3 +1,4 @@
+using Inventory.Domain.Products;
 using Inventory.Domain.Stock;
 
 namespace Inventory.Domain.Costing;
@@ -63,7 +64,8 @@ public static class WeightedAverageCostReplay
 
         if (baseline is null && events.Count == 0 && product.QuantityInStock != 0 &&
             product.CostingQuantity is null && product.InventoryValue is null)
-            issues.Add(new(CostDataQualityIssueCodes.MissingOpening, $"Product {product.ProductId} has physical stock but no opening stock movement."));
+            issues.Add(new(CostDataQualityIssueCodes.MissingOpening,
+                $"{ProductLabel.Sentence(product.ProductId, product.Name)} has physical stock but no opening stock movement."));
 
         foreach (var entry in events)
         {
@@ -99,10 +101,11 @@ public static class WeightedAverageCostReplay
             {
                 physicalQuantity = checked(physicalQuantity + adjustment.QuantityChange);
                 if (physicalQuantity < 0)
-                    issues.Add(new(CostDataQualityIssueCodes.NegativePhysicalStock, $"Product {product.ProductId} becomes physically negative at stock adjustment {adjustment.Id}."));
+                    issues.Add(new(CostDataQualityIssueCodes.NegativePhysicalStock,
+                        $"{ProductLabel.Sentence(product.ProductId, product.Name)} becomes physically negative at stock adjustment {adjustment.Id}."));
 
                 var (assignedUnitCost, assignedTotalCost) = ApplyAdjustmentCost(
-                    product.ProductId, adjustment, ref costingQuantity, ref inventoryValue, ref hasCostedAcquisition, issues);
+                    product, adjustment, ref costingQuantity, ref inventoryValue, ref hasCostedAcquisition, issues);
                 adjustmentOutcomes.Add(new(
                     adjustment,
                     physicalQuantity,
@@ -119,14 +122,15 @@ public static class WeightedAverageCostReplay
             if (!unitCost.HasValue || unitCost.Value < 0)
             {
                 issues.Add(new(hasCostedAcquisition ? CostDataQualityIssueCodes.UnknownCost : CostDataQualityIssueCodes.MissingOpening,
-                    $"Completed Nayax sale {sale.TransactionId} for product {product.ProductId} has no known opening cost at {sale.AuthorizationTime:O}."));
+                    $"Completed Nayax sale {sale.TransactionId} for {ProductLabel.Phrase(product.ProductId, product.Name)} has no known opening cost at {sale.AuthorizationTime:O}."));
                 uncostableSales.Add(sale);
                 continue;
             }
 
             costingQuantity--;
             if (costingQuantity < 0)
-                issues.Add(new(CostDataQualityIssueCodes.NegativeCostingStock, $"Product {product.ProductId} becomes cost-negative at completed Nayax sale {sale.TransactionId}."));
+                issues.Add(new(CostDataQualityIssueCodes.NegativeCostingStock,
+                    $"{ProductLabel.Sentence(product.ProductId, product.Name)} becomes cost-negative at completed Nayax sale {sale.TransactionId}."));
             inventoryValue -= unitCost.Value;
             saleCosts.Add(new(sale, unitCost.Value));
         }
@@ -135,7 +139,7 @@ public static class WeightedAverageCostReplay
             product.QuantityInStock != physicalQuantity)
         {
             issues.Add(new(CostDataQualityIssueCodes.MissingOpening,
-                $"Product {product.ProductId} stored physical quantity {product.QuantityInStock} does not reconcile to its movement history ({physicalQuantity})."));
+                $"{ProductLabel.Sentence(product.ProductId, product.Name)} stored physical quantity {product.QuantityInStock} does not reconcile to its movement history ({physicalQuantity})."));
         }
 
         return new(physicalQuantity, costingQuantity, inventoryValue, AverageUnitCost(costingQuantity, inventoryValue),
@@ -177,7 +181,7 @@ public static class WeightedAverageCostReplay
         (entry.Timestamp, entry.Priority, entry.SourceId);
 
     private static (decimal? UnitCost, decimal? TotalCost) ApplyAdjustmentCost(
-        long productId,
+        CostReplayProduct product,
         CostReplayAdjustment adjustment,
         ref int costingQuantity,
         ref decimal inventoryValue,
@@ -188,13 +192,14 @@ public static class WeightedAverageCostReplay
         {
             if (!adjustment.UnitCost.HasValue || adjustment.UnitCost.Value < 0)
             {
-                issues.Add(new(CostDataQualityIssueCodes.UnknownCost, $"Restock adjustment {adjustment.Id} for product {productId} has no valid unit cost."));
+                issues.Add(new(CostDataQualityIssueCodes.UnknownCost,
+                    $"Restock adjustment {adjustment.Id} for {ProductLabel.Phrase(product.ProductId, product.Name)} has no valid unit cost."));
                 return (null, null);
             }
 
             if (!adjustment.HasReceiptItemLink)
                 issues.Add(new(CostDataQualityIssueCodes.LegacyUnlinkedCostedRestock,
-                    $"Restock adjustment {adjustment.Id} for product {productId} is a legacy costed opening/purchase without a receipt item link."));
+                    $"Restock adjustment {adjustment.Id} for {ProductLabel.Phrase(product.ProductId, product.Name)} is a legacy costed opening/purchase without a receipt item link."));
 
             costingQuantity = checked(costingQuantity + adjustment.QuantityChange);
             inventoryValue += adjustment.QuantityChange * adjustment.UnitCost.Value;
@@ -208,13 +213,14 @@ public static class WeightedAverageCostReplay
             if (!correctionUnitCost.HasValue || correctionUnitCost.Value < 0)
             {
                 issues.Add(new(hasCostedAcquisition ? CostDataQualityIssueCodes.UnknownCost : CostDataQualityIssueCodes.MissingOpening,
-                    $"Correction adjustment {adjustment.Id} for product {productId} has no known cost."));
+                    $"Correction adjustment {adjustment.Id} for {ProductLabel.Phrase(product.ProductId, product.Name)} has no known cost."));
                 return (null, null);
             }
 
             costingQuantity = checked(costingQuantity + adjustment.QuantityChange);
             if (costingQuantity < 0)
-                issues.Add(new(CostDataQualityIssueCodes.NegativeCostingStock, $"Product {productId} becomes cost-negative at adjustment {adjustment.Id}."));
+                issues.Add(new(CostDataQualityIssueCodes.NegativeCostingStock,
+                    $"{ProductLabel.Sentence(product.ProductId, product.Name)} becomes cost-negative at adjustment {adjustment.Id}."));
             inventoryValue += adjustment.QuantityChange * correctionUnitCost.Value;
 
             return (correctionUnitCost, Math.Abs(adjustment.QuantityChange) * correctionUnitCost.Value);
@@ -230,11 +236,12 @@ public static class WeightedAverageCostReplay
         var unitCost = AverageUnitCost(costingQuantity, inventoryValue);
         if (!unitCost.HasValue || unitCost.Value < 0)
             issues.Add(new(hasCostedAcquisition ? CostDataQualityIssueCodes.UnknownCost : CostDataQualityIssueCodes.MissingOpening,
-                $"{adjustment.Reason} adjustment {adjustment.Id} for product {productId} has no known cost."));
+                $"{adjustment.Reason} adjustment {adjustment.Id} for {ProductLabel.Phrase(product.ProductId, product.Name)} has no known cost."));
 
         costingQuantity -= quantity;
         if (costingQuantity < 0)
-            issues.Add(new(CostDataQualityIssueCodes.NegativeCostingStock, $"Product {productId} becomes cost-negative at adjustment {adjustment.Id}."));
+            issues.Add(new(CostDataQualityIssueCodes.NegativeCostingStock,
+                $"{ProductLabel.Sentence(product.ProductId, product.Name)} becomes cost-negative at adjustment {adjustment.Id}."));
         if (unitCost.HasValue && unitCost.Value >= 0)
             inventoryValue -= quantity * unitCost.Value;
 

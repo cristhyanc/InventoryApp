@@ -129,9 +129,18 @@ public record CategoryResponse(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<string>? ProviderManagedFields = null);
 
-public record SupplierDto(string Name, string? ContactName, string? Phone, string? Email, string? Address);
+/// <summary>
+/// The supplier create/update body. <c>url</c> is the optional website (issue #847) and is
+/// validated by <c>Inventory.Application.Suppliers.SupplierUrlPolicy</c> rather than by an
+/// attribute here, so every write path runs the one rule.
+/// </summary>
+public record SupplierDto(string Name, string? ContactName, string? Phone, string? Email, string? Address, string? Url);
 
-public record SupplierResponse(int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address);
+/// <summary>
+/// A supplier as the API publishes it. Schema-identical to the legacy <c>Supplier</c> component
+/// that every nested <c>supplier</c> object references, <c>url</c> included (issue #847).
+/// </summary>
+public record SupplierResponse(int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address, string? Url);
 
 /// <summary>
 /// One purchase line in the JSON <c>items</c> field of a purchase create/update form (issue #429).

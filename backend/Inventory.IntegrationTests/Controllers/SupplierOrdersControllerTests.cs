@@ -152,7 +152,7 @@ public class SupplierOrdersControllerTests
         9,
         BusinessId: 1,
         4,
-        new SupplierOrderSupplierRecord(4, "Acme", null, null, null, null),
+        new SupplierOrderSupplierRecord(4, "Acme", null, null, null, null, null),
         new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc),
         null,
         null,

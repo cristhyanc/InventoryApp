@@ -2,6 +2,7 @@ using System.Globalization;
 using Inventory.Application.Access;
 using Inventory.Application.SalesSync;
 using InventoryApi.Auth;
+using InventoryApi.DTOs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -13,7 +14,8 @@ namespace InventoryApi.Controllers;
 // figures from the same freshness boundary, instead of Machines importing the latest transactions
 // as a side effect of MachineService.GetAll(). The controller is a thin adapter over the
 // Inventory.Application.SalesSync.SyncLatestNayaxSales use case: it binds nothing but the request's
-// cancellation token and maps the use case's outcome to 204 or 429.
+// cancellation token and the `force` flag the Dashboard's Refresh control sets (issue #843), and
+// maps the use case's outcome to 204, 200 or 429.
 //
 // It requires Dashboard.View (issue #526), because issue #526 says this endpoint follows the page
 // that calls it, and that page is the home Dashboard: putting it on Imports.Run instead would leave
@@ -47,9 +49,20 @@ public class NayaxSalesSyncController : ControllerBase
     }
 
     /// <summary>
-    /// Reads this business's latest Nayax sales and persists the batch.
+    /// Reads this business's latest Nayax sales and persists the batch, unless they were
+    /// synchronized moments ago.
     /// </summary>
+    /// <param name="force">
+    /// The Dashboard's Refresh control (issue #843): <c>true</c> synchronizes even when the last run
+    /// finished moments ago. It is not a way past the run limit or the connection refusals, and it is
+    /// the only thing this request carries - never a business, a machine or an instant.
+    /// </param>
+    /// <param name="ct">The request's cancellation token.</param>
     /// <response code="204">The synchronization ran.</response>
+    /// <response code="200">
+    /// This business's sales were already synchronized less than three minutes ago, so nothing was
+    /// read or written (issue #843). The body says when they were synchronized.
+    /// </response>
     /// <response code="429">
     /// This business has synchronized too many times too recently (issue #681). <c>Retry-After</c>
     /// carries the wait, in seconds. The Dashboard shows its persisted figures flagged as not
@@ -58,12 +71,22 @@ public class NayaxSalesSyncController : ControllerBase
     [HttpPost]
     [RequireCapability(Capability.InventoryOperate)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(NayaxSalesRecentlySyncedResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status429TooManyRequests)]
-    public async Task<IActionResult> SyncLatest(CancellationToken ct)
+    public async Task<IActionResult> SyncLatest([FromQuery] bool force, CancellationToken ct)
     {
-        var outcome = await _syncLatestSales.Handle(ct);
+        var outcome = await _syncLatestSales.Handle(force, ct);
 
-        return outcome.RetryAfter is { } retryAfter ? TooManySyncs(retryAfter) : NoContent();
+        if (outcome.RetryAfter is { } retryAfter)
+        {
+            return TooManySyncs(retryAfter);
+        }
+
+        // A skip is its own answer, kept off 204 and 429 so both of those keep exactly the meaning
+        // every existing caller already has.
+        return outcome.RecentlySyncedAtUtc is { } lastSyncedAtUtc
+            ? Ok(new NayaxSalesRecentlySyncedResponse(true, lastSyncedAtUtc))
+            : NoContent();
     }
 
     /// <summary>

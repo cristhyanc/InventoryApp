@@ -1,6 +1,7 @@
 using Inventory.Application.Access;
 using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
+using Inventory.Application.Reorder;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Sites;
@@ -11,7 +12,9 @@ namespace Inventory.Application.Sites;
 /// The site dashboard listing use case: groups the live Nayax machine fleet by site (<c>CustomerID</c>)
 /// and, per site, aggregates its machines' stock and recent completed-sale revenue. Mirrors the former
 /// <c>InventoryApi.Services.SiteService.GetAll</c>/<c>BuildSummary</c> exactly (issue #241), including
-/// the bounded per-site fan-out to Nayax through <see cref="INayaxLynxClient.GetMachineProductsAsync"/>.
+/// the per-machine fan-out to Nayax through <see cref="INayaxLynxClient.GetMachineProductsAsync"/>,
+/// which runs at most <see cref="CalculateReorderNeeds.MaxConcurrentMachineRequests"/> requests at a
+/// time across the whole fleet (issue #845) rather than one per machine at once.
 /// The two <see cref="ISiteFactsStore"/> reads are awaited one at a time and the completed-sale facts
 /// for every site are loaded by one scoped read and distributed per machine in memory (issue #313),
 /// because the scoped store's EF adapter shares a single <c>AppDbContext</c>, which supports only one
@@ -97,33 +100,50 @@ public sealed class GetSiteSummaries
             .ToDictionary(fact => fact.ProductId, fact => fact.IsActive);
         if (sites.Count == 0) return [];
 
-        // The per-machine Nayax requests stay a concurrent fan-out: that bound belongs to the remote
-        // system, not to the database. Since issue #520 each of them does resolve the business's
-        // Nayax credentials through the request's own scoped AppDbContext, so the fan-out is awaited
-        // before the completed-sales read starts (issue #667) - a remote read in flight beside a
-        // facts-store read would be two operations on a context that supports one.
-        var pending = sites
-            .Select(site => (
-                site.SiteId,
-                site.Machines,
-                MachineProducts: Task.WhenAll(site.Machines.Select(
-                    machine => _nayax.GetMachineProductsAsync(machine.MachineID, cancellationToken)))))
-            .ToList();
-
-        // Resolved while the fan-out runs, exactly where it was before: the periods every summary is
-        // built from come from one instant, taken once.
+        // The periods every summary is built from come from one instant, taken once, before the
+        // fan-out below rather than beside it.
         var window = MachineDashboardWindow.Resolve(_clock, _businessCalendar);
 
-        // One await over every site's fan-out, so a failing machine request propagates and no task
-        // is left unobserved when another one fails first.
-        await Task.WhenAll(pending.Select(site => site.MachineProducts));
+        // The per-machine Nayax requests stay a concurrent fan-out - that bound belongs to the remote
+        // system, not to the database - but a bounded one (issue #845): at most
+        // CalculateReorderNeeds.MaxConcurrentMachineRequests of them are in flight across the whole
+        // fleet, the same limit CalculateReorderNeeds and GetPickList already fan this exact call out
+        // under, rather than one request per machine at once. Since issue #520 each of them does
+        // resolve the business's Nayax credentials through the request's own scoped AppDbContext, so
+        // the fan-out completes before the completed-sales read starts (issue #667) - a remote read in
+        // flight beside a facts-store read would be two operations on a context that supports one -
+        // and Parallel.ForEachAsync observes every request, so a failing one propagates and none is
+        // left unobserved when another fails first.
+        //
+        // Each request writes to the slot of the machine it was made for, so a site's mappings are the
+        // same sequence in the same order whatever order the bounded requests completed in.
+        var machineRequests = sites
+            .SelectMany((site, siteIndex) => site.Machines.Select((machine, machineIndex) =>
+                (SiteIndex: siteIndex, MachineIndex: machineIndex, machine.MachineID)))
+            .ToList();
+        var productsByMachine = sites
+            .Select(site => new List<NayaxMachineProduct>[site.Machines.Count])
+            .ToList();
 
-        var sitesWithProducts = new List<(long SiteId, List<NayaxMachine> Machines, List<NayaxMachineProduct> Products)>(
-            pending.Count);
-        foreach (var site in pending)
-        {
-            sitesWithProducts.Add((site.SiteId, site.Machines, (await site.MachineProducts).SelectMany(items => items).ToList()));
-        }
+        await Parallel.ForEachAsync(
+            machineRequests,
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = CalculateReorderNeeds.MaxConcurrentMachineRequests,
+                CancellationToken = cancellationToken,
+            },
+            async (request, machineCancellationToken) =>
+            {
+                productsByMachine[request.SiteIndex][request.MachineIndex] =
+                    await _nayax.GetMachineProductsAsync(request.MachineID, machineCancellationToken);
+            });
+
+        var sitesWithProducts = sites
+            .Select((site, siteIndex) => (
+                site.SiteId,
+                site.Machines,
+                Products: productsByMachine[siteIndex].SelectMany(products => products).ToList()))
+            .ToList();
 
         // One link read for the whole fleet, awaited after the fan-out and before the completed-sales
         // read below: they land on the request's own scoped AppDbContext, which supports one

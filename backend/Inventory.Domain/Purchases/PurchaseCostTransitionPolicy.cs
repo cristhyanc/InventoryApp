@@ -1,3 +1,5 @@
+using Inventory.Domain.Products;
+
 namespace Inventory.Domain.Purchases;
 
 /// <summary>
@@ -16,8 +18,12 @@ public static class PurchaseCostTransitionPolicy
     public static string ProtectedMovementMessage(int movementId) =>
         $"Purchase movement {movementId} is part of preserved pre-cutover history and cannot be changed or deleted.";
 
-    public static string DateBeforeCutoffMessage(DateTime cutoffAt, long productId) =>
-        $"Purchase date must be after the inventory-cost transition cutoff {cutoffAt:O} for product {productId}.";
+    /// <summary>
+    /// The refusal the operator sees. <paramref name="productName"/> is optional (issue #833): a
+    /// caller that has it names the product, and one that does not keeps the bare-ID wording.
+    /// </summary>
+    public static string DateBeforeCutoffMessage(DateTime cutoffAt, long productId, string? productName = null) =>
+        $"Purchase date must be after the inventory-cost transition cutoff {cutoffAt:O} for {ProductLabel.Phrase(productId, productName)}.";
 
     /// <summary>
     /// The first product among <paramref name="productIds"/> whose cutoff the proposed

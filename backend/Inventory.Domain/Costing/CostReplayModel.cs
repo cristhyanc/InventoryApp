@@ -47,12 +47,19 @@ public sealed record CostReplayBaseline(
 /// <summary>
 /// The product's currently stored stock and costing state, used only to detect a missing opening
 /// (stored physical stock that the movement history cannot explain).
+///
+/// <see cref="Name"/> is the product's name for the replay's data-quality messages (issue #833) and
+/// nothing else: it is optional because a caller may not have loaded one, it changes no quantity,
+/// cost or issue classification, and it is deliberately not part of
+/// <see cref="CostLedgerFingerprint"/>, so renaming a product never invalidates an outstanding
+/// costing-repair preview.
 /// </summary>
 public sealed record CostReplayProduct(
     long ProductId,
     int QuantityInStock,
     int? CostingQuantity,
-    decimal? InventoryValue);
+    decimal? InventoryValue,
+    string? Name = null);
 
 /// <summary>A data-quality problem found while replaying a product's cost history.</summary>
 public sealed record CostDataQualityIssue(string Code, string Message)

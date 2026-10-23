@@ -9,8 +9,9 @@ public class WeightedAverageCostReplayTests
     private const long ProductId = 7;
     private static readonly DateTime T0 = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
-    private static CostReplayProduct Product(int quantityInStock = 0, int? costingQuantity = 0, decimal? inventoryValue = 0m) =>
-        new(ProductId, quantityInStock, costingQuantity, inventoryValue);
+    private static CostReplayProduct Product(
+        int quantityInStock = 0, int? costingQuantity = 0, decimal? inventoryValue = 0m, string? name = null) =>
+        new(ProductId, quantityInStock, costingQuantity, inventoryValue, name);
 
     private static CostReplayAdjustment Adjustment(
         int id, int minutes, StockAdjustmentReason reason, int quantityChange, decimal? unitCost = null, bool linked = true) =>
@@ -549,6 +550,68 @@ public class WeightedAverageCostReplayTests
         Assert.Throws<OverflowException>(() => Replay(
             [Adjustment(1, 0, StockAdjustmentReason.Restock, int.MaxValue, 1m)],
             repairs: [Repair(1, 1, 1, 1m)]));
+    }
+
+    /// <summary>
+    /// Issue #833: these messages reach the operator as a 400 from a purchase write or a sales
+    /// import, and in the Costing repair page's issue list, so they name the product rather than
+    /// only its ID. Every message the replay builds is covered here, in one replay each, because
+    /// the wording is the whole behaviour.
+    /// </summary>
+    [Fact]
+    public void Write_off_issues_name_the_product()
+    {
+        var result = Replay(
+            [Adjustment(1, 0, StockAdjustmentReason.Expired, -2)],
+            product: Product(quantityInStock: 3, costingQuantity: null, inventoryValue: null, name: "Coke"));
+
+        Assert.Equal(
+            [
+                $"Product Coke ({ProductId}) becomes physically negative at stock adjustment 1.",
+                $"Expired adjustment 1 for product Coke ({ProductId}) has no known cost.",
+                $"Product Coke ({ProductId}) becomes cost-negative at adjustment 1.",
+                $"Product Coke ({ProductId}) stored physical quantity 3 does not reconcile to its movement history (-2).",
+            ],
+            result.Issues.Select(x => x.Message));
+    }
+
+    [Fact]
+    public void Restock_correction_sale_and_opening_issues_name_the_product()
+    {
+        Assert.Equal(
+            $"Product Coke ({ProductId}) has physical stock but no opening stock movement.",
+            Replay([], product: Product(3, null, null, "Coke")).Issues[0].Message);
+        Assert.Equal(
+            $"Restock adjustment 1 for product Coke ({ProductId}) has no valid unit cost.",
+            Assert.Single(Replay([Adjustment(1, 0, StockAdjustmentReason.Restock, 5)], product: Product(name: "Coke")).Issues).Message);
+        Assert.Equal(
+            $"Restock adjustment 1 for product Coke ({ProductId}) is a legacy costed opening/purchase without a receipt item link.",
+            Assert.Single(Replay([Adjustment(1, 0, StockAdjustmentReason.Restock, 5, 2m, linked: false)], product: Product(name: "Coke")).Issues).Message);
+        Assert.Equal(
+            $"Correction adjustment 1 for product Coke ({ProductId}) has no known cost.",
+            Assert.Single(Replay([Adjustment(1, 0, StockAdjustmentReason.Correction, 2)], product: Product(name: "Coke")).Issues).Message);
+        Assert.Equal(
+            $"Completed Nayax sale 100 for product Coke ({ProductId}) has no known opening cost at {T0:O}.",
+            Assert.Single(Replay([], [Sale(100, 0)], product: Product(name: "Coke")).Issues).Message);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_ledger_without_a_usable_product_name_keeps_the_bare_id_wording(string? name)
+    {
+        var result = Replay(
+            [Adjustment(1, 0, StockAdjustmentReason.Expired, -2)],
+            product: Product(name: name));
+
+        Assert.Equal(
+            [
+                $"Product {ProductId} becomes physically negative at stock adjustment 1.",
+                $"Expired adjustment 1 for product {ProductId} has no known cost.",
+                $"Product {ProductId} becomes cost-negative at adjustment 1.",
+            ],
+            result.Issues.Select(x => x.Message));
     }
 
     [Theory]

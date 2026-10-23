@@ -4,7 +4,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 
 ## Capabilities
 
-- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
+- Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A supplier can record an optional **website**, which the Suppliers list opens in a new tab and the application never visits itself (see [A supplier's website](#a-suppliers-website)). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
 - Nayax is an optional add-on: inventory, purchasing, expenses and the reports over sales already imported work without it, while the features that read live Nayax data are grouped together in the menu and shown locked until a provider is connected (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
@@ -1051,6 +1051,19 @@ does not manage.
   unique within the business (compared without case, so
   "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
   the initial restock movement it always did, at the optional initial unit **cost**.
+- **Choose the new product's GST rule while creating it** (issue #829). **Products → New Product**
+  offers the same **GST rule** picker the edit page does — **Taxable**, **GST-free** or **No rule**,
+  with the same meanings and the same help. The rule is its own resource, so creating a product with
+  one is two writes: `POST /api/products`, then `PUT /api/products/{id}/gst-rule` on the id the
+  create answered. **No rule** needs no second write, because a new product already carries no rule.
+  If the rule write fails the page says exactly that — "The product was created, but its GST rule
+  was not saved." — keeps the product that now exists along with the rule you chose, and offers
+  **Save GST rule** beside the picker, which retries the rule alone with the choice on screen now.
+  **Create Product** is gone at that point, so there is no way to create a second product; a create
+  whose rule was not stored is never reported as finished, and you can also leave the page and set
+  the rule later by editing the product.
+  Choosing the rule here classifies no purchase and is not retroactive — see
+  [Product and supplier GST rules](#product-and-supplier-gst-rules).
 - **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name and
   category** as well as the SKU, description, unit, low-stock threshold, restock target
   and active flag. There is no supplier among them — see
@@ -1098,7 +1111,10 @@ does not manage.
   (`includeRetired=true`) — so a product just deactivated stays reachable to **Reactivate** instead of
   disappearing from the only list that can flip it back (issue #791) — the Admin costing-repair and
   AVCO-transition tools and the stock-history product filter still call the endpoint without it and
-  are unaffected by this change.
+  are unaffected by this change. The **Status** column itself is shown only under **All**: under
+  **Only active**, every row would say "Active" anyway, so the column (and a sort on it) is hidden
+  instead, and switching back to **Only active** clears a Status sort rather than leaving it pointed
+  at a hidden column (issue #828).
 - **Deleting keeps history.** A product is deleted only while nothing refers to it. If it has stock
   movements, purchase lines, supplier order lines, sales, machine stock counts or costing records,
   the delete is refused with what is in the way and nothing is written — deleting it would erase
@@ -1142,6 +1158,28 @@ does not manage.
   take Nayax's), the SKU, the **unit/volume**, the low-stock threshold, the restock
   target, the active flag and all of your stock, costing and history. Nayax publishes no unit or
   volume label at all, so the review never proposes one.
+
+## A supplier's website
+
+A supplier can record an optional **Website** beside its name, contact and address, so you can open
+the supplier's own ordering page from the Suppliers list. It is optional everywhere: a supplier with
+no website is normal, and editing one you recorded earlier works without touching the field.
+
+- **What is accepted.** A complete web address starting with `http://` or `https://`, up to 2048
+  characters. Leading and trailing spaces are trimmed, and leaving the field empty records no
+  website at all rather than a blank one. A scheme-less address such as `coles.com.au`, a relative
+  path, and anything with another scheme — `javascript:`, `data:`, `file:`, `ftp:`, `mailto:` — are
+  refused, with the message shown on the field. The form checks this before saving and the server
+  checks it again on every create and update; a refused value changes nothing.
+- **It is a link, and only a link.** On the Suppliers list a recorded website opens in a new tab,
+  with `rel="noopener noreferrer"`. **The application never visits it.** Nothing fetches, follows,
+  previews, scrapes or checks that the address works, and nothing reads a GST status, an ABN or
+  anything else out of it. A stored value that is not an `http(s)` address is shown as plain text
+  and is never clickable.
+- **Where it appears.** `GET /api/suppliers` and `GET /api/suppliers/{id}` return `url`, `null` when
+  none is recorded, and `POST`/`PUT /api/suppliers` accept it. It is also part of the nested
+  `supplier` object on a purchase, a supplier order and an operating expense, as an additive
+  nullable field; nothing else about those payloads changed.
 
 ## A product carries no supplier
 
@@ -1241,6 +1279,11 @@ classified:
 - **Products → edit a product → GST rule.** Choose **Taxable**, **GST-free**, or **No rule**, then
   **Save GST rule**. It saves separately from the rest of the product form, because it is
   bookkeeping configuration rather than a catalogue field.
+- **Products → New Product → GST rule** (issue #829). The same picker, for a product that does not
+  exist yet: there is no stored rule to read, so it is ready to use immediately and has no Save of
+  its own — **Create Product** saves it with the product, as described under
+  [Products and categories](#products-and-categories). A **Save GST rule** button appears there only
+  if the product was created and its rule was not, to retry that one write.
 - **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
   lines** and separate defaults for its **delivery charge** and **package charge**, then **Save GST
   defaults**. The three are independent: a charge never inherits the product-line default.
@@ -1262,6 +1305,13 @@ not classify its products, because a supplier may sell both taxable and GST-free
 rule or a default never changes a purchase that is already recorded; applying rules to purchases
 already recorded is the separate, explicit
 [Historical GST classification](#historical-gst-classification-admin-page) maintenance action below.
+
+**A rule has no effective date of its own, and it is never retroactive.** It is simply the current
+configuration: the rule a product carries is the one the Historical GST classification action can
+apply, it reads the rules as they are configured at the moment you press **Apply**, and it only ever
+classifies components nobody has classified yet. Recording a purchase does not read a rule at all —
+you classify each line and charge on the purchase itself — so a rule chosen while creating a product,
+or changed afterwards, classifies nothing by itself and restates nothing that is already recorded.
 
 ## Historical GST classification (Admin page)
 

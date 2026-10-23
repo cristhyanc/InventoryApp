@@ -56,6 +56,11 @@ export interface Supplier {
   phone?: string | null;
   email?: string | null;
   address?: string | null;
+  /**
+   * The supplier's optional website (issue #847): `null` when none is recorded, otherwise an
+   * absolute http(s) address the server accepted. Render it only through `isSafeSupplierUrl`.
+   */
+  url?: string | null;
 }
 
 export interface Product {

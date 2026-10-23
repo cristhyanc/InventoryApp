@@ -40,6 +40,42 @@ async function render(
   return { fixture, host, select, saveButton, save, openProduct, getGstRule, setGstRule };
 }
 
+/**
+ * The same panel on New Product, where the product does not exist yet (issue #829): it chooses the
+ * rule and reports it, and `ProductCreateGstRuleComponent` - which composes it there - writes it
+ * once the product has an id.
+ */
+async function renderDeferred(
+  getGstRule: jest.Mock = jest.fn(),
+  setGstRule: jest.Mock = jest.fn(),
+  sessionActive: Observable<boolean> = of(false)
+) {
+  await TestBed.configureTestingModule({
+    imports: [ProductGstRuleComponent],
+    providers: [
+      { provide: ProductService, useValue: { getGstRule, setGstRule } },
+      { provide: SupportSessionService, useValue: { active$: sessionActive } }
+    ]
+  }).compileComponents();
+
+  const fixture = TestBed.createComponent(ProductGstRuleComponent);
+  fixture.componentRef.setInput('deferred', true);
+  const reported: GstClassification[] = [];
+  fixture.componentInstance.ruleChange.subscribe((rule) => reported.push(rule));
+  fixture.detectChanges();
+
+  const host = fixture.nativeElement as HTMLElement;
+  const select = () => host.querySelector<HTMLSelectElement>('#product-gst-rule')!;
+  const choose = (label: string) => {
+    const picker = select();
+    picker.selectedIndex = Array.from(picker.options).findIndex((option) => option.textContent?.trim() === label);
+    picker.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+  };
+
+  return { fixture, host, select, choose, reported, getGstRule, setGstRule };
+}
+
 describe('ProductGstRuleComponent', () => {
   it('loads the product rule and offers no-rule, taxable and GST-free', async () => {
     const { fixture, host, getGstRule } = await render(
@@ -215,6 +251,65 @@ describe('ProductGstRuleComponent', () => {
 
     expect(host.textContent).toContain('takes precedence over any supplier default');
     expect(host.textContent).toContain('does not change the GST classification of any');
+  });
+
+  /**
+   * Choosing the rule for a product that does not exist yet (issue #829). The panel reads nothing -
+   * there is no stored rule, and a new product is created with none - so the picker is usable
+   * immediately, it offers exactly the choices the edit page offers, and it writes nothing itself:
+   * the component composing it persists the choice after the product has been created, which is the
+   * only moment there is a product to write it to.
+   */
+  describe('choosing the rule for a product that does not exist yet (issue #829)', () => {
+    it('reads no stored rule and offers the same three choices, ready to use', async () => {
+      const { fixture, host, select, getGstRule } = await renderDeferred();
+
+      expect(getGstRule).not.toHaveBeenCalled();
+      expect(fixture.componentInstance.rule).toBe(GstClassification.Unknown);
+      expect(Array.from(host.querySelectorAll('option')).map((option) => option.textContent?.trim())).toEqual([
+        'No rule',
+        'Taxable',
+        'GST-free'
+      ]);
+      expect(select().disabled).toBe(false);
+      expect(host.textContent).not.toContain('Failed to load the GST rule.');
+    });
+
+    it('reports each choice to the component it is composed into', async () => {
+      const { fixture, choose, reported } = await renderDeferred();
+
+      choose('Taxable');
+      expect(reported).toEqual([GstClassification.Taxable]);
+      expect(fixture.componentInstance.rule).toBe(GstClassification.Taxable);
+
+      choose('GST-free');
+      expect(reported).toEqual([GstClassification.Taxable, GstClassification.GstFree]);
+    });
+
+    it('offers no Save button of its own, because the rule is saved with the product', async () => {
+      const { host } = await renderDeferred();
+
+      expect(
+        Array.from(host.querySelectorAll('button')).filter((button) => button.textContent?.trim().startsWith('Save'))
+      ).toEqual([]);
+    });
+
+    it('writes nothing itself, even if its guarded save handler is invoked', async () => {
+      const { fixture, setGstRule } = await renderDeferred();
+
+      fixture.componentInstance.save();
+
+      expect(setGstRule).not.toHaveBeenCalled();
+    });
+
+    it('keeps the edit page’s help and adds that the rule is saved with the product', async () => {
+      const { host } = await renderDeferred();
+
+      expect(host.textContent).toContain('takes precedence over any supplier default');
+      expect(host.textContent).toContain('does not change the GST classification of any');
+      expect(host.textContent).toContain('"No rule" leaves the product unclassified');
+      expect(host.textContent).toContain('saved with the new product');
+    });
   });
 
   describe('in a support session (issue #661)', () => {

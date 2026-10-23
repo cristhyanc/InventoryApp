@@ -39,7 +39,7 @@ internal sealed class InventoryCostTransitionPreviewBuilder
         CancellationToken cancellationToken)
     {
         var ids = products.Select(x => x.Id).ToArray();
-        var machineStocks = await ReadMachineStocksAsync(ids, cancellationToken);
+        var machineStocks = await ReadMachineStocksAsync(products, cancellationToken);
         var cutoffAt = _clock.UtcNow;
         var replayedByProduct = await _store.SumPhysicalMovementsAsync(ids, cutoffAt, cancellationToken);
         var previews = products.Select(product => BuildProductPreview(
@@ -96,10 +96,15 @@ internal sealed class InventoryCostTransitionPreviewBuilder
             preview.InventoryValue,
             preview.LegacyReplayedPhysicalQuantity);
 
+    /// <summary>
+    /// Takes the products rather than their ids because a refused slot names the product (issue
+    /// #833), and this is where the name the preview already holds reaches the policy.
+    /// </summary>
     private async Task<Dictionary<long, List<InventoryCostTransitionMachineStockDto>>> ReadMachineStocksAsync(
-        IReadOnlyCollection<long> productIds,
+        IReadOnlyCollection<InventoryCostTransitionProduct> products,
         CancellationToken cancellationToken)
     {
+        var productIds = products.Select(x => x.Id).ToList();
         var productIdSet = productIds.ToHashSet();
         var results = productIds.ToDictionary(x => x, _ => new List<InventoryCostTransitionMachineStockDto>());
         var machines = (await _nayax.GetMachinesAsync(cancellationToken))
@@ -115,14 +120,16 @@ internal sealed class InventoryCostTransitionPreviewBuilder
         foreach (var snapshot in snapshots)
         {
             var machineLabel = snapshot.Machine.MachineName ?? snapshot.Machine.MachineID.ToString(CultureInfo.CurrentCulture);
-            foreach (var productId in productIds)
+            foreach (var product in products)
             {
+                var productId = product.Id;
                 var quantity = InventoryCostTransitionPolicy.MachineQuantity(
                     productId,
                     machineLabel,
                     snapshot.Slots
                         .Where(x => x.NayaxProductID == productId)
-                        .Select(x => new InventoryCostTransitionSlot(x.PAR, x.MissingStockByMDB)));
+                        .Select(x => new InventoryCostTransitionSlot(x.PAR, x.MissingStockByMDB)),
+                    product.Name);
                 results[productId].Add(new(
                     snapshot.Machine.MachineID,
                     snapshot.Machine.MachineName ?? $"Machine {snapshot.Machine.MachineID}",
