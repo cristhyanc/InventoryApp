@@ -36,9 +36,15 @@
             @for (preset of presets; track preset.id) {
               <tr class="table-row">
                 <td class="table-cell">{{ preset.name }}</td>
+                <!-- Only an http(s) address the client rule also accepts becomes a link (issue
+                     #847's helper, the one the Suppliers list uses); anything else shows as plain
+                     text, so a value that reached the table without passing the server rule is
+                     never clickable. -->
                 <td class="table-cell">
-                  @if (preset.url) {
+                  @if (canLinkTo(preset)) {
                     <a [href]="preset.url" target="_blank" rel="noopener noreferrer">{{ preset.url }}</a>
+                  } @else if (preset.url) {
+                    {{ preset.url }}
                   } @else {
                     <span class="value-muted">—</span>
                   }

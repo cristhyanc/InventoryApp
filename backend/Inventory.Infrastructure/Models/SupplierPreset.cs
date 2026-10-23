@@ -59,7 +59,8 @@ public class SupplierPreset
 
     /// <summary>
     /// The supplier's website, or <see langword="null"/> when none is recorded. Validated by
-    /// <c>SupplierUrlPolicy</c>, the one rule issue #847 reuses for a business's own suppliers:
+    /// <c>Inventory.Application.Suppliers.SupplierUrlPolicy</c> - issue #847's rule, the only
+    /// supplier-website rule there is, and the one a business's own <c>Supplier.Url</c> uses:
     /// absolute http(s), at most 2048 characters, blank stored as null rather than as an empty
     /// string. Nothing fetches or resolves it.
     /// </summary>

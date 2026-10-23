@@ -77,18 +77,16 @@ public class SupplierPresetPolicyTests
         Assert.Equal(string.Empty, SupplierPresetPolicy.NormalisedName(name));
 
     /// <summary>
-    /// The preset's URL is the shared rule rather than a second copy of it, which is what makes the
-    /// value issue #847 stores and the value copied into a business the same value.
+    /// The website is not one of this policy's rules, and that absence is the point: issue #847's
+    /// <c>Inventory.Application.Suppliers.SupplierUrlPolicy</c> is the only supplier-website rule
+    /// there is, so the value a preset carries and the value a business's own supplier carries
+    /// cannot disagree. <c>SupplierUrlRuleSingleSourceOfTruthTests</c> holds that structurally, and
+    /// <c>SuperAdminSupplierPresetsApiTests</c> proves the preset surface answers that rule's own
+    /// two sentences.
     /// </summary>
     [Fact]
-    public void The_preset_url_is_the_shared_supplier_url_rule()
+    public void The_preset_policy_holds_no_website_rule_of_its_own()
     {
-        Assert.Null(SupplierPresetPolicy.NormaliseUrl("  "));
-        Assert.Equal("https://www.coles.com.au", SupplierPresetPolicy.NormaliseUrl(" https://www.coles.com.au "));
-
-        var error = Assert.Throws<DomainValidationException>(() =>
-            SupplierPresetPolicy.NormaliseUrl("www.coles.com.au"));
-
-        Assert.Equal(SupplierUrlPolicy.InvalidMessage, error.Message);
+        Assert.Null(typeof(SupplierPresetPolicy).GetMethod("NormaliseUrl"));
     }
 }

@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.MachineStock;
 using Inventory.Domain.Providers;
@@ -1089,8 +1090,10 @@ public class AppDbContext : DbContext
             .HasMaxLength(SupplierPresetPolicy.MaxNameLength);
         preset.HasIndex(x => x.NormalisedName).IsUnique();
 
-        // The optional website. Bounded here at the shared rule's limit; the shape is
-        // SupplierUrlPolicy's, which a column constraint cannot express.
+        // The optional website. Bounded here at the one supplier-website rule's limit - issue #847's
+        // Inventory.Application.Suppliers.SupplierUrlPolicy, the same rule and the same column
+        // length a business's own Suppliers.Url carries; the shape is that policy's too, which a
+        // column constraint cannot express.
         preset.Property(x => x.Url).HasMaxLength(SupplierUrlPolicy.MaxLength);
 
         // Both instants are persisted UTC and both are reported by this feature's API, so each is

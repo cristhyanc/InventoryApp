@@ -3,8 +3,15 @@ using Inventory.Domain.Exceptions;
 namespace Inventory.Domain.Suppliers;
 
 /// <summary>
-/// The rules of one platform supplier preset (issue #848, child B of #835): what its name must be,
-/// how two names are compared, and what the one website address it may carry must look like.
+/// The rules of one platform supplier preset (issue #848, child B of #835): what its name must be
+/// and how two names are compared.
+///
+/// <para>The optional website is deliberately <em>not</em> here. It is the same value a business's
+/// own supplier carries, and issue #847 (merged as PR #858) owns that one rule in
+/// <c>Inventory.Application.Suppliers.SupplierUrlPolicy</c>; the preset use cases run it before
+/// anything is stored. A second copy of it beside this policy would be the duplication #848's
+/// fourth criterion forbids - and a value one of the two accepted and the other refused would be a
+/// copy that fails when issue #835 child C starts copying presets into businesses.</para>
 ///
 /// <para>A preset is platform configuration, not business data: it belongs to no business, and
 /// issue #835 child C is what copies it into a business that is approved later. This policy
@@ -75,11 +82,4 @@ public static class SupplierPresetPolicy
     /// </summary>
     public static string NormalisedName(string? name) =>
         (name ?? string.Empty).Trim().ToUpperInvariant();
-
-    /// <summary>
-    /// The preset's optional website address as it is to be stored - the shared rule of
-    /// <see cref="SupplierUrlPolicy"/>, which issue #847 reuses for a business's own suppliers.
-    /// </summary>
-    /// <exception cref="DomainValidationException">The address is not an absolute http(s) one, or is too long.</exception>
-    public static string? NormaliseUrl(string? url) => SupplierUrlPolicy.Normalise(url);
 }

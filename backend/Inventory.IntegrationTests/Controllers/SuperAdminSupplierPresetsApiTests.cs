@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Inventory.Application.Suppliers;
 using Inventory.Domain.Suppliers;
 using Xunit;
 
@@ -390,6 +391,12 @@ public class SuperAdminSupplierPresetsApiTests
         await AssertOnlyTheShippedPresetsExistAsync();
     }
 
+    /// <summary>
+    /// The refusal is issue #847's own sentence, asserted against
+    /// <see cref="SupplierUrlPolicy.InvalidMessage"/> itself: the preset surface runs the one
+    /// supplier-website rule there is rather than a second copy of it, so this test fails the day
+    /// a preset starts accepting or refusing an address a business's own supplier would not.
+    /// </summary>
     [Theory]
     [InlineData("www.aldi.com.au")]
     [InlineData("aldi.com.au")]

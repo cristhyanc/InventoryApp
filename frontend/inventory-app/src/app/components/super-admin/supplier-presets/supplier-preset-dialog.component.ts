@@ -5,7 +5,7 @@ import {
   SuperAdminSupplierPreset,
   SuperAdminSupplierPresetsService
 } from '../../../services/super-admin-supplier-presets.service';
-import { SUPPLIER_URL_MAX_LENGTH, normaliseSupplierUrl, supplierUrlError } from '../../shared/supplier-url';
+import { SUPPLIER_URL_MAX_LENGTH, normalizeSupplierUrl } from '../../suppliers/supplier-url';
 
 /** The server's own name rules, mirrored so the form can say what is wrong before it submits. */
 export const SUPPLIER_PRESET_NAME_MAX_LENGTH = 200;
@@ -22,11 +22,13 @@ const NAME_TOO_LONG_MESSAGE = 'A supplier preset name must be 200 characters or 
  * existing one is an Edit; the only difference is which call is made and whether the enabled toggle
  * is offered, because a new preset is always created enabled.
  *
- * **Field validation mirrors the server and never replaces it.** The name and website rules are the
- * ones `SupplierPresetPolicy` and `SupplierUrlPolicy` apply, so a Super Admin is told about a
- * mistyped address in the field rather than after a round trip - and when the server refuses
- * anyway, including the duplicate-name `409` that only it can decide, its own sentence is what is
- * shown.
+ * **Field validation mirrors the server and never replaces it.** The name rule is
+ * `SupplierPresetPolicy`'s; the website rule is the one supplier-website helper there is,
+ * `components/suppliers/supplier-url.ts`, which mirrors issue #847's
+ * `Inventory.Application.Suppliers.SupplierUrlPolicy` - the same rule and the same sentences a
+ * business's own supplier form shows. A Super Admin is therefore told about a mistyped address in
+ * the field rather than after a round trip, and when the server refuses anyway, including the
+ * duplicate-name `409` that only it can decide, its own sentence is what is shown.
  */
 @Component({
   selector: 'app-supplier-preset-dialog',
@@ -168,8 +170,9 @@ export class SupplierPresetDialogComponent implements OnInit {
   }
 
   submit(): void {
+    const website = normalizeSupplierUrl(this.url);
     this.nameError = nameErrorFor(this.name);
-    this.urlError = supplierUrlError(this.url);
+    this.urlError = website.error;
     this.errorMessage = null;
 
     if (this.nameError || this.urlError) {
@@ -177,7 +180,7 @@ export class SupplierPresetDialogComponent implements OnInit {
     }
 
     const name = this.name.trim();
-    const url = normaliseSupplierUrl(this.url);
+    const url = website.url;
     this.submitting = true;
 
     const request = this.preset

@@ -5,6 +5,7 @@ import {
   SuperAdminSupplierPresetsService
 } from '../../../services/super-admin-supplier-presets.service';
 import { SUPPLIER_PRESET_NAME_MAX_LENGTH, SupplierPresetDialogComponent } from './supplier-preset-dialog.component';
+import { SUPPLIER_URL_INVALID_MESSAGE } from '../../suppliers/supplier-url';
 
 function preset(overrides: Partial<SuperAdminSupplierPreset> = {}): SuperAdminSupplierPreset {
   return {
@@ -136,6 +137,9 @@ describe('SupplierPresetDialogComponent (issue #848)', () => {
     expect(create).not.toHaveBeenCalled();
   });
 
+  // The sentence is the one supplier website helper's own (issue #847), not a copy of it: this
+  // dialog and the Suppliers form refuse the same addresses with the same words, which is what the
+  // server does too.
   it.each(['www.aldi.com.au', 'javascript:alert(1)', 'ftp://files.aldi.com.au'])(
     'refuses a website that is not an absolute http(s) address (%s)',
     async (url) => {
@@ -147,7 +151,7 @@ describe('SupplierPresetDialogComponent (issue #848)', () => {
       buttonWithText(host, 'Save').click();
       fixture.detectChanges();
 
-      expect(host.textContent).toContain('A website address must be a complete http:// or https:// address.');
+      expect(host.textContent).toContain(SUPPLIER_URL_INVALID_MESSAGE);
       expect(create).not.toHaveBeenCalled();
     }
   );

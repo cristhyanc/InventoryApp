@@ -77,6 +77,21 @@ describe('SuperAdminSupplierPresetsComponent (issue #848)', () => {
     expect(rowFor(host, 'Retired Wholesaler').querySelector('a')).toBeNull();
   });
 
+  /**
+   * The API refuses anything but an absolute http(s) address, so this is about a value that
+   * reached the table another way - a direct edit of the database, or a row older than the rule.
+   * The one website helper (issue #847) decides, exactly as it does on the Suppliers list: the text
+   * is still shown, and it is not clickable.
+   */
+  it('shows a stored website that the website rule refuses as plain text, not as a link', async () => {
+    const list = jest.fn(() => of([preset({ id: 3, name: 'Smuggled', url: 'javascript:alert(1)' })]));
+    const { host } = await render({ list });
+
+    const row = rowFor(host, 'Smuggled');
+    expect(row.querySelector('a')).toBeNull();
+    expect(row.textContent).toContain('javascript:alert(1)');
+  });
+
   it('offers Disable for an enabled preset and Enable for a disabled one', async () => {
     const list = jest.fn(() =>
       of([preset({ id: 1, name: 'Coles' }), preset({ id: 2, name: 'Retired Wholesaler', isEnabled: false })])

@@ -1,3 +1,4 @@
+using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Exceptions;
@@ -84,7 +85,7 @@ public sealed class CreateSupplierPreset
 
         var validatedName = SupplierPresetPolicy.NormaliseName(name);
         var normalisedName = SupplierPresetPolicy.NormalisedName(validatedName);
-        var validatedUrl = SupplierPresetPolicy.NormaliseUrl(url);
+        var validatedUrl = SupplierPresetWebsite.Normalise(url);
 
         if (await _store
             .ExistsWithNormalisedNameAsync(normalisedName, excludingId: null, cancellationToken)
@@ -185,7 +186,7 @@ public sealed class UpdateSupplierPreset
 
         var validatedName = SupplierPresetPolicy.NormaliseName(name);
         var normalisedName = SupplierPresetPolicy.NormalisedName(validatedName);
-        var validatedUrl = SupplierPresetPolicy.NormaliseUrl(url);
+        var validatedUrl = SupplierPresetWebsite.Normalise(url);
 
         if (await _store
             .ExistsWithNormalisedNameAsync(normalisedName, excludingId: id, cancellationToken)
@@ -231,4 +232,30 @@ public sealed class UpdateSupplierPreset
 
         return stored;
     }
+}
+
+/// <summary>
+/// A preset's optional website, normalised by the <em>one</em> supplier-website rule there is:
+/// issue #847's <see cref="SupplierUrlPolicy"/>, which a business's own suppliers use through
+/// <see cref="Inventory.Application.Suppliers.CreateSupplier"/> and
+/// <see cref="Inventory.Application.Suppliers.UpdateSupplier"/>. A preset and a supplier therefore
+/// cannot disagree about what a valid address is, which matters because issue #835 child C is to
+/// copy the one into the other.
+///
+/// <para>The rule reports a field-level message rather than throwing, because the suppliers surface
+/// answers it as a <c>ValidationProblemDetails</c> against <c>url</c>. This surface answers a
+/// refusal with the <c>400</c> and the sentence <c>DomainExceptionHandler</c> already gives every
+/// other preset refusal, so the message is raised as the exception that carries it - the same
+/// shape, and the same wording, as the name rules beside it.</para>
+/// </summary>
+internal static class SupplierPresetWebsite
+{
+    /// <exception cref="DomainValidationException">
+    /// The address is not an absolute http(s) one, or is longer than
+    /// <see cref="SupplierUrlPolicy.MaxLength"/> characters. Nothing is written.
+    /// </exception>
+    internal static string? Normalise(string? url) =>
+        SupplierUrlPolicy.TryNormalize(url, out var normalised, out var error)
+            ? normalised
+            : throw new DomainValidationException(error!);
 }

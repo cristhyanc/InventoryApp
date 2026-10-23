@@ -8,6 +8,7 @@ import {
 } from '../../../services/super-admin-supplier-presets.service';
 import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
 import { SupplierPresetDialogComponent } from './supplier-preset-dialog.component';
+import { isSafeSupplierUrl } from '../../suppliers/supplier-url';
 
 /**
  * The Super Admin Supplier presets page (issue #848), at `/super-admin/supplier-presets`, over the
@@ -75,6 +76,17 @@ export class SuperAdminSupplierPresetsComponent implements OnInit, OnDestroy {
           this.loadError = true;
         }
       });
+  }
+
+  /**
+   * Whether a stored website may be rendered as a link, asked of the one supplier website helper
+   * there is (issue #847). The API refuses anything but an absolute http(s) address, so this only
+   * ever matters for a value that reached the table another way - a direct edit of the database,
+   * or a row that predates the rule - and such a value shows as plain text rather than as something
+   * clickable, exactly as the Suppliers list does it.
+   */
+  canLinkTo(preset: SuperAdminSupplierPreset): boolean {
+    return isSafeSupplierUrl(preset.url);
   }
 
   requestAdd(): void {
