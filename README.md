@@ -1099,8 +1099,12 @@ does not manage.
   creates one category, not two. If it is refused — most often because the name already exists, which
   is what happens when somebody created it in the meantime — the message from the server is shown as
   it worded it, your typed name stays, the list is re-read so you can simply pick the category that
-  now exists, and nothing else on the form is changed. **Editing** a product keeps its existing
-  category dropdown, because a category the provider manages is locked there.
+  now exists, and nothing else on the form is changed. If your categories could not be read at all,
+  the field says so and offers **Retry**: until that succeeds there is nothing to search and no
+  **Create category** entry, because a list nobody could read cannot say whether the name you typed
+  is already one of your categories — you can still save the product without a category and set it
+  later. **Editing** a product keeps its existing category dropdown, because a category the provider
+  manages is locked there.
 - **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name and
   category** as well as the SKU, description, unit, low-stock threshold, restock target
   and active flag. There is no supplier among them — see

@@ -11743,9 +11743,10 @@ leaves the box: the rows carry `tabindex="-1"` and the active one is published t
 `aria-activedescendant`, with Arrow keys moving (wrapping at both ends), Enter acting on the active
 row, Escape dismissing, and Enter *while the list is open* kept off the product form's submit.
 
-**Creating is explicit, and it is the existing create.** The create row appears only while the typed
-name is non-blank and no existing category's name equals it ignoring case and surrounding whitespace
-— the same comparison `CategoryCataloguePolicy` makes — and is labelled with the proposed name
+**Creating is explicit, and it is the existing create.** The create row appears only while the
+options are known — read, and read successfully — the typed name is non-blank and no existing
+category's name equals it ignoring case and surrounding whitespace — the same comparison
+`CategoryCataloguePolicy` makes — and is labelled with the proposed name
 ("Create category “Choc Bars”"). Typing offers it; only activating it writes. `CategoryService.create`
 posts the trimmed name to `POST api/categories`, so that endpoint's validation, its per-business
 duplicate-name refusal and its `Inventory.Operate` capability decide the outcome, and the picker
@@ -11760,6 +11761,15 @@ that the category now exists — created in another tab or by somebody else — 
 that the existing category becomes selectable while the create row withdraws. The picker invents no
 duplicate policy of its own. A failed option read says so and offers **Retry**, and still lets the
 product be saved without a category, because a product's category is optional.
+
+**While the options are unknown the list says nothing about them.** The create row is the answer to
+"no category of yours is called this", and a read that is still in flight or has failed is not a
+business with no such category — so neither it nor the "No category matches …" line is shown until
+a read has succeeded, and the load error's own wording ("none can be searched or created here")
+is what the panel then offers. A successful **Retry** keeps the typed name and the open list, so the
+create it now knows is missing appears without the name being typed again. The alternative — offering
+the create over options nobody read — would contradict both that message and the server's
+duplicate-name refusal, which is the only authority on the name either way.
 
 **A read-only support session is offered no create** (issue #551): a session grants
 `Inventory.Operate`, so the row would otherwise render, and the backend refuses the write only by its

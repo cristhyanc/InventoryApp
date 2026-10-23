@@ -52,7 +52,7 @@
           }
         </ul>
 
-        @if (!loading && noMatches) {
+        @if (noMatches) {
           <p class="px-2 py-1 text-sm text-md-gray-500">No category matches “{{ query.trim() }}”.</p>
         }
 

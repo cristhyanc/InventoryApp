@@ -293,6 +293,65 @@ describe('ProductCategoryPickerComponent creating a missing category (issue #830
     expect(optionLabels()).toEqual(['No category']);
   });
 
+  /**
+   * The create row is the answer to "no category of yours is called this", so it is offered only
+   * when the categories are known. A read that failed knows nothing about them - the typed name may
+   * well be one of them - and the load error already says nothing can be created here, so offering
+   * the action anyway would be the UI contradicting both itself and the server's duplicate-name
+   * rule.
+   */
+  it('offers no Create action while the options could not be read, as its own load error says', async () => {
+    const getAll = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })));
+    const { type, createOption, host, optionLabels } = await render({ getAll });
+
+    type('Choc Bars');
+
+    expect(createOption()).toBeNull();
+    expect(optionLabels()).toEqual(['No category']);
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+      'none can be searched or created here'
+    );
+    // Nor does the list claim the name matches nothing, which it cannot know either.
+    expect(host.textContent).not.toContain('No category matches');
+  });
+
+  it('offers no Create action while the options are still being read, and offers it once they arrive', async () => {
+    const pending = new Subject<Category[]>();
+    const { type, createOption, host, fixture } = await render({
+      getAll: jest.fn(() => pending.asObservable())
+    });
+
+    type('Choc Bars');
+    expect(createOption()).toBeNull();
+    expect(host.querySelector('[role="status"]')?.textContent).toContain('Loading categories');
+
+    pending.next(existing.map((category) => ({ ...category })));
+    pending.complete();
+    fixture.detectChanges();
+
+    expect(createOption()?.textContent?.trim()).toBe('Create category “Choc Bars”');
+  });
+
+  it('offers the Create action once a retry has read the options', async () => {
+    const getAll = jest
+      .fn()
+      .mockReturnValueOnce(throwError(() => new HttpErrorResponse({ status: 500 })))
+      .mockReturnValueOnce(of(existing.map((category) => ({ ...category }))));
+    const { host, fixture, type, createOption, create, click } = await render({ getAll });
+
+    type('Choc Bars');
+    expect(createOption()).toBeNull();
+
+    host.querySelector<HTMLButtonElement>('button[data-retry-categories]')!.click();
+    fixture.detectChanges();
+
+    // The typed name and the open list survive the retry, so the create it now knows is missing is
+    // offered without the name being typed again.
+    expect(createOption()?.textContent?.trim()).toBe('Create category “Choc Bars”');
+    click(createOption()!);
+    expect(create).toHaveBeenCalledWith({ name: 'Choc Bars', description: null });
+  });
+
   it('retries the option read on request', async () => {
     const getAll = jest
       .fn()

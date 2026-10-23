@@ -53,6 +53,11 @@ export type CategoryPickerEntry =
  * created in another tab or by somebody else - and the answer to that is to select it, not to invent
  * a duplicate policy here. A support session is refused the write by the backend's read-only method
  * rule, so the action is not offered in one either (issue #551, as on the Categories page).</p>
+ *
+ * <p><strong>The create needs the options.</strong> It is offered only for a name none of the
+ * options holds, so it is offered only while the options are known: a read still in flight or one
+ * that failed is not a business with no such category, and the failure's own message says that
+ * nothing can be searched or created here until a Retry succeeds.</p>
  */
 @Component({
   selector: 'app-product-category-picker',
@@ -144,9 +149,22 @@ export class ProductCategoryPickerComponent implements OnInit, OnChanges, OnDest
       : null;
   }
 
+  /**
+   * Whether this business's categories are actually known here: read, and read successfully. While
+   * they are not, the list can say nothing about them - neither that nothing matches the typed name
+   * nor that it is a name no category has - so it says neither.
+   */
+  get optionsLoaded(): boolean {
+    return !this.loading && !this.loadError;
+  }
+
   /** Whether the typed name matched no existing category, which the list says rather than implies. */
   get noMatches(): boolean {
-    return this.filterText.length > 0 && !this.entries.some((entry) => entry.kind === 'category');
+    return (
+      this.optionsLoaded &&
+      this.filterText.length > 0 &&
+      !this.entries.some((entry) => entry.kind === 'category')
+    );
   }
 
   /** The trimmed search term, which is empty until the box has been typed into. */
@@ -376,11 +394,14 @@ export class ProductCategoryPickerComponent implements OnInit, OnChanges, OnDest
     ];
 
     // Surrounding whitespace and case are not a second category (`CategoryCataloguePolicy`), so a
-    // name that already exists offers no create - only the existing category, to select.
+    // name that already exists offers no create - only the existing category, to select. That
+    // comparison is only answerable over options that were actually read, which is why the create
+    // is offered only once they have been: while the read is in flight or has failed, every name
+    // looks like a missing one, and the load error already says nothing can be created here.
     const alreadyExists = this.categories.some(
       (category) => category.name.trim().toLowerCase() === proposed.toLowerCase()
     );
-    if (proposed.length > 0 && !alreadyExists && !this.sessionActive) {
+    if (this.optionsLoaded && proposed.length > 0 && !alreadyExists && !this.sessionActive) {
       entries.push({ kind: 'create', name: proposed });
     }
 
