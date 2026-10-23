@@ -506,6 +506,14 @@ public class BusinessBootstrapTests : IDisposable
         Assert.Null(business.AppliedAtUtc);
         Assert.Null(business.DecidedAtUtc);
         Assert.Null(business.RejectionReason);
+
+        // And it copies no platform supplier preset (issue #849). The bootstrap adopts a business
+        // that is already trading, with the suppliers it already uses - the "Legacy Supplier" the
+        // fixture seeded is the whole of its supplier list - so it records no copy and makes none,
+        // even though the migrated database it runs against holds the shipped presets.
+        Assert.Null(business.SupplierPresetsCopiedAtUtc);
+        Assert.NotEmpty(db.SupplierPresets.Where(preset => preset.IsEnabled).ToList());
+        Assert.Equal(["Legacy Supplier"], db.Suppliers.Select(supplier => supplier.Name).ToList());
     }
 
     /// <summary>

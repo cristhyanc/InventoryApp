@@ -1537,7 +1537,7 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Tenant-owned versus global.** Everything persisted is tenant-owned — products, categories, suppliers, purchases and items, stock adjustments, supplier orders and allocations, sales, imports and their children, expenses, commissions, fee rates, costing transition records, each business's own Nayax credentials (issue #518) and report facts — except **five** structural exceptions: `Business` (the boundary itself), `BusinessMembership` (what resolves the boundary, so filtering it would be circular), `BusinessBackfillAudit` (operational evidence about the rollout, which must stay readable precisely when a run assigned rows to the wrong business), `MemberInvite` (the reviewed decision on issue #532: the redemption has to find an invite by the token a caller with no membership presents, and under the denied scope such a request carries a filtered read matches no row at all — see [Invite redemption](#invite-redemption-issue-532)), and `SupportSession` (the reviewed decision on issue #550: every request that reaches it is a platform-admin request, and a platform administrator is a member of no business, so such a request resolves nothing — a filter would match none of its rows and the ownership stamp would have no business to stamp — see [Support sessions](#support-sessions-the-store-and-the-control-endpoints-issue-550)). There is no "global reference data" among *business* tables: the enum-like constants live in code as C# enums, not tables. `BusinessOwnershipCoverageTests` enforces this — a new entity with no ownership fails the build rather than quietly arriving unfiltered — and it asserts the exemption list itself, so a sixth table is a visible edit rather than an addition nobody reviewed.
 
-**And one *platform* table, which is a different classification (issue #848).** `SupplierPreset` is the platform's own list of suggested suppliers, kept by the Super Admin (see [Super Admin supplier presets](#super-admin-supplier-presets-issue-848)). It is about **no business at all**, which is what distinguishes it from the five above: each of those *is* about one business and carries its key in every statement, while this one has no `BusinessId` to carry, no query filter to apply and no ownership stamp to make. The two lists are therefore kept apart in `BusinessOwnershipCoverageTests` — `PlatformEntities` beside `DeliberatelyGlobalEntities`, each closed and asserted, with a test that they do not overlap and that a platform table carries neither a business column nor a filter — so this table is never read as an unassigned tenant table somebody forgot to stamp, and the "still carries a business key" rule stays exactly as strong for the five it is about. What keeps it bounded is not ownership but authorization: only the platform-admin surface of issue #848 reads or writes it, every such request carries a **denied** `BusinessScope` (so everything tenant-owned stays unreachable to it), and the copying that issue #835 child C will do goes one way only — into a business, as an ordinary tenant-owned `Supplier` row that business then owns outright. Nothing reads back out of a business, and no business endpoint knows this table exists.
+**And one *platform* table, which is a different classification (issue #848).** `SupplierPreset` is the platform's own list of suggested suppliers, kept by the Super Admin (see [Super Admin supplier presets](#super-admin-supplier-presets-issue-848)). It is about **no business at all**, which is what distinguishes it from the five above: each of those *is* about one business and carries its key in every statement, while this one has no `BusinessId` to carry, no query filter to apply and no ownership stamp to make. The two lists are therefore kept apart in `BusinessOwnershipCoverageTests` — `PlatformEntities` beside `DeliberatelyGlobalEntities`, each closed and asserted, with a test that they do not overlap and that a platform table carries neither a business column nor a filter — so this table is never read as an unassigned tenant table somebody forgot to stamp, and the "still carries a business key" rule stays exactly as strong for the five it is about. What keeps it bounded is not ownership but authorization: only the platform-admin surface of issue #848 reads or writes it, every such request carries a **denied** `BusinessScope` (so everything tenant-owned stays unreachable to it), and the copying issue #835 child C does (issue #849) goes one way only — into a business, as an ordinary tenant-owned `Supplier` row that business then owns outright. Nothing reads back out of a business, and no business endpoint knows this table exists. The copy *write* is the one reviewed provisioning exception below; it writes a `Supplier`, never this table.
 
 **The one-time seed, and why it is a migration (issue #848).** The four shipped presets — Coles, Woolworths, Big W, Costco — are inserted by `AddSupplierPresets` with a single `InsertData`, and by nothing else. EF Core's `HasData` and a startup seeding step both re-apply themselves, and **Production applies migrations at startup** (see [Database and migrations](#database-and-migrations)), so either one would quietly undo a Super Admin's edit, or switch a deliberately disabled preset back on, at the next deployment. A one-off `InsertData` runs exactly once, when that migration is applied; `AddSupplierPresetsMigrationTests` proves it by editing and disabling a seeded row, migrating and starting again, and finding the edit intact and no row re-inserted or re-enabled. Name uniqueness ignoring case is the database's rule too, not a query's: a stored normalised name (`Name.Trim().ToUpperInvariant()`) under a unique index, with a pre-check that turns the ordinary case into a clear `409` and the index's own violation translated into the same `409`, so two creates of one name leave one row and one conflict rather than a `500`. The normalisation is invariant rather than culture-dependent, and stored rather than computed by a collation, because SQLite's `NOCASE` folds ASCII only.
 
@@ -1545,13 +1545,15 @@ Authentication answers "who is this?". Tenant ownership answers "whose data is t
 
 **Central read enforcement.** `AppDbContext.ConfigureBusinessOwnership` walks the model rather than naming entities: every `IBusinessOwned` type gets a required business key, an index leading with it, and a global query filter. A new tenant-owned entity is protected the day it implements the interface. There is no per-entity list to forget and no controller `Where` clause that could be omitted on one endpoint — which is why adding redundant filters in controllers or services is discouraged rather than merely unnecessary.
 
-**Central write enforcement.** Query filters protect reads only. `BusinessOwnershipEnforcer` runs on both `SaveChanges` overloads. Since issue #551 it enforces one rule before the other four: a request in `BusinessScopeState.SupportReadOnly` may write **nothing at all** — every table, not only the tenant-owned ones — because in that state there is no write this application wants. The other four rules are about ownership: new rows are **stamped** with the caller's business (callers never supply it); inserts, updates, and deletes of another business's row are **rejected**, which is what stops a detached entity attached by ID from slipping through to an `UPDATE`; the business key is **immutable**, so a record cannot be moved between businesses; and every foreign key between tenant-owned entities must **stay inside one business**. The relationship rule is driven by EF model metadata, not a hand-written list, so a new foreign key is covered as soon as it is mapped. Resolving a principal's owner deliberately uses `IgnoreQueryFilters`, because a principal in another business must be reported as a boundary violation rather than mistaken for "does not exist".
+**Central write enforcement.** Query filters protect reads only. `BusinessOwnershipEnforcer` runs on both `SaveChanges` overloads. Since issue #849 the denied-scope refusal has one reviewed exception, narrower than the rule rather than a way around it — see § The one reviewed provisioning write below. Since issue #551 it enforces one rule before the other four: a request in `BusinessScopeState.SupportReadOnly` may write **nothing at all** — every table, not only the tenant-owned ones — because in that state there is no write this application wants. The other four rules are about ownership: new rows are **stamped** with the caller's business (callers never supply it); inserts, updates, and deletes of another business's row are **rejected**, which is what stops a detached entity attached by ID from slipping through to an `UPDATE`; the business key is **immutable**, so a record cannot be moved between businesses; and every foreign key between tenant-owned entities must **stay inside one business**. The relationship rule is driven by EF model metadata, not a hand-written list, so a new foreign key is covered as soon as it is mapped. Resolving a principal's owner deliberately uses `IgnoreQueryFilters`, because a principal in another business must be reported as a boundary violation rather than mistaken for "does not exist".
 
 **Tenant-scoped uniqueness.** Constraints over externally supplied values are scoped by business, because two businesses may legitimately hold the same external value: Nayax transaction IDs, import file hashes, site commission agreements, fee effective dates, and costing baselines. `NayaxSales` consequently has its own local key with `TransactionID` unique *per business* — a remote identifier is an external identity, not a primary key. This also keeps import de-duplication correct: one business must never be told its own import is a duplicate because another imported the same bytes first, and a shared remote ID must never cause one business's import to update another's row. The one-active-membership index of issue #522 is deliberately *not* scoped this way, and is not an exception to this rule: `BusinessMembership` is one of the five structural non-tenant-owned tables above, and the value it constrains is an Entra identity that must mean the same person everywhere rather than an externally supplied value two businesses may legitimately share. The invite token hash *is* scoped this way — `(BusinessId, TokenHash)` — even though the invite table is now non-tenant-owned too, because that value is not an identity: a global constraint over it would let one business's row deny another's, and 256 bits of cryptographic randomness is what makes a token unambiguous. The support-session id hash of issue #550 is deliberately the other way round — unique across the whole table — and that is not an exception either: the rule is about values a *business* supplies, and a session id is generated by this server, supplied by nobody, and matched by a request that carries no business to narrow the lookup with, so global uniqueness is what makes "which session is this?" have one answer.
 
 **Protected documents.** A document's bytes live outside the database, so hiding the row is not enough. Retrieval always resolves the tenant-owned parent record first — `GET /api/purchases/{id}/file` and `GET /api/operating-expenses/{id}/attachment` both go through the filtered `DbSet` — and the stored file name is read from that record, never from the request. No endpoint accepts a file name or path as input, and `FileSystemDocumentStorage` reduces any stored name with `Path.GetFileName` and then proves the result is inside the category folder, so a crafted value cannot escape it. Knowing another business's purchase ID, attachment ID, stored file name, and on-disk path therefore yields nothing.
 
 **The unrestricted-context rule.** `new AppDbContext(options)` is fail-closed. Unrestricted, all-business access requires passing `UnscopedBusinessScope.Instance` explicitly, so every such place is greppable. Outside tests it exists only in the three human-invoked commands — `migrate-database`, `bootstrap-business` and `migrate-documents`, the last of which reads every business's document metadata to migrate it (see [Document storage](#document-storage)). Being a human-invoked command is not what grants it: `migrate-nayax-connection` (issue #519) is a fourth such command and constructs no unrestricted context at all, because it needs none — the tenancy tables it reads to resolve the target business carry no tenant filter, and the credential itself is read and written through a context scoped to that one business (see [Migrating the Nayax connection](#migrating-the-nayax-connection-issue-519)). `resolve-nayax-sale-products` (issue #758) is a fifth, on the same pattern: it enumerates businesses through a denied-scope context and reads and writes every sale, product and audit row through a context scoped to the one business that sale belongs to (see [The sale's own product](#the-sales-own-product-issue-758)). No controller, service, or request path may run unrestricted; a composition-root test pins down that the DI container never produces an unscoped context, and issue #544 extended that test to the platform-admin store below — it is registered scoped and its only constructor dependency is the request's own `AppDbContext`, so nothing can hand it anything else. Issue #550's support-session store is held to the same three things, for the same reason: it is the second adapter a platform administrator's denied-scope request reaches. **A support session is not unrestricted either, and is narrower than a membership rather than wider** (issue #551): `BusinessScopeState.SupportReadOnly` names exactly one business and is compared by the same filter expression as `Resolved`, so such a request reads that one business and — because `BusinessOwnershipEnforcer` refuses every `SaveChanges` in that state — writes nothing at all. See [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551). The platform diagnostics API (issue #336) does **not** change this and is deliberately not implemented with it: a diagnostics request carries a *denied* `BusinessScope`, so the query filters and `BusinessOwnershipEnforcer` stay in force and it reads nothing at all through `AppDbContext`. Its cross-business read is a separate read-only SQLite connection restricted by SQLite's own authorizer — see [Platform diagnostics](#platform-diagnostics-issue-336) for the exception's exact boundaries.
+
+**The one reviewed provisioning write (issue #849).** A denied scope writes nothing tenant-owned — that is the rule immediately above, and it is what makes the whole platform-admin surface unable to touch a business's own data. Approving a business application needs exactly one thing more: the business being approved has to receive its own copies of the enabled platform supplier presets, which are tenant-owned `Supplier` rows, in the same transaction as the status change. The exception is therefore cut as narrowly as the fact requires and no wider. `AppDbContext.BeginSupplierProvisioning(businessId)` opens a lease; while it is open `BusinessOwnershipEnforcer` accepts **new `Supplier` rows of that one business and nothing else**, stamping them through the same `StampOrVerifyNewRow` every ordinary insert goes through; disposing it closes the window. It is narrower than the denied-scope rule in four directions at once: **one entity type** (a product, a purchase, a sale are all still refused), **one state** (an insert — never an update, never a delete, so no existing row of any business can be changed or removed), **one business**, whose id is the key of the row the approval's own write transaction read rather than anything a request supplied, and **one save** rather than one request. The method is `internal`, its only caller is `EfBusinessSupplierProvisioningStore`, and a lease may be taken only while the context's own scope is `Denied` — so neither an ordinary member's request nor a support session can open one, and an endpoint cannot borrow the adapter to write a supplier outside the ordinary tenant path. Nothing becomes *readable*: `CurrentBusinessId` and `TenantFilteringEnabled` deliberately do not consult the lease, so while it is open every tenant-owned query still matches nothing — the copy path cannot see another business's suppliers, or even the ones it has just created, and there is no `IgnoreQueryFilters` over `Suppliers` anywhere. See [Supplier presets copied into an approved business](#supplier-presets-copied-into-an-approved-business-issue-849).
 
 **The one reviewed `IgnoreQueryFilters` in a request path (issue #544).** The Super Admin's business directory reports whether each business has stored Nayax credentials, `BusinessNayaxConnection` is tenant-owned, and the request carries a denied scope — so the central filter matches none of its rows and the fact is otherwise unreadable. `EfPlatformBusinessDirectoryStore` makes exactly one `IgnoreQueryFilters` statement, projecting `BusinessId` alone, and the rest of the adapter is ordinary reads and writes of the structurally non-tenant-owned tables. It is a *narrowed* exception rather than a loosened rule: the column it reads is the ownership key, not business data, and the alternatives — an unscoped request context, a second read-only cross-business connection, or resolving each business into the request scope in turn — were each strictly worse. See [Super Admin businesses API](#super-admin-businesses-api-issue-544).
 
@@ -2155,7 +2157,9 @@ Until this slice the platform administrator could only *look* (the read-only dia
 ```text
 GET  /api/super-admin/businesses                        every business, pending applications first
 GET  /api/super-admin/businesses/pending-count          { pendingCount }
-POST /api/super-admin/businesses/{businessId}/approve   Pending -> Active, + DecidedAtUtc
+POST /api/super-admin/businesses/{businessId}/approve   Pending -> Active, + DecidedAtUtc,
+                                                        and the enabled supplier presets copied in
+                                                        (issue #849)
 POST /api/super-admin/businesses/{businessId}/reject    Pending -> Rejected, + reason, + DecidedAtUtc,
                                                         and the applicant's membership released
 ```
@@ -2178,7 +2182,7 @@ POST /api/super-admin/businesses/{businessId}/reject    Pending -> Rejected, + r
 
 **Audit: one structured log event per committed decision, and no table.** `LoggingPlatformBusinessDecisionAudit` writes one `ILogger` `Information` event carrying the deciding administrator's `(tid, oid)`, the business id, the old → new status, whether a reason was recorded, the instant and the request/correlation id. It never carries the business name, the contact address, the ABN, the applicant's identity or the rejection reason's *text* — `PlatformBusinessDecisionAuditEntry` has no field for any of them, so even a sink that printed the whole entry could not emit one. A refused decision is not audited, because nothing happened. There is deliberately no audit table and no migration, for the reasons the diagnostics audit has none; **the log destination and retention period are platform configuration a human must verify**, exactly as for that one.
 
-**No schema change.** Issue #540's lifecycle status, `DecidedAtUtc` and `RejectionReason` are the columns this writes; nothing is added, and there is no migration in this slice.
+**No schema change in this slice.** Issue #540's lifecycle status, `DecidedAtUtc` and `RejectionReason` are the columns #544 writes; nothing is added, and there is no migration in it. Issue #849 later added one nullable column to `Businesses` and one more thing an approval writes — see [Supplier presets copied into an approved business](#supplier-presets-copied-into-an-approved-business-issue-849).
 
 **What proves it.** `Inventory.UnitTests/Domain/Tenancy/BusinessDecisionPolicyTests` covers the decidable statuses, the reason bounds and the refusal wording. `Inventory.UnitTests/Application/PlatformAdmin/BusinessApplicationDecisionTests` runs both decisions over the real `MembershipWriteGuard`: the exclusion that makes an approval possible, the refusals for an applicant who joined elsewhere or cannot be identified, the status and applicant changing while the write lock is awaited, and what each refusal leaves unwritten and unaudited. `Inventory.IntegrationTests/Adapters/Persistence/EfPlatformBusinessDirectoryStoreTests` is the relational half over two businesses and a denied scope: the cross-business list, the active-member counts, the Nayax flag beside the proof that the ordinary read of that table still sees nothing, the tenant-owned read and write still refused, and a membership of another business that cannot be released by a decision on this one. `PlatformBusinessDecisionConcurrencyTests` is the race. `Inventory.IntegrationTests/Controllers/SuperAdminBusinessesApiTests` is the HTTP boundary: every endpoint refused for an Owner, a Manager, the applicant, a stranger, an anonymous caller and a caller without the delegated scope; the administrator still refused by every business endpoint; the applicant reaching their own business only once it is approved; the response carrying exactly the ten declared properties and neither a product name nor a token ciphertext; and the unconfigured host refusing everyone. `BusinessScopeCompositionTests` pins the store's registration and dependencies, and `EndpointAuthorizationClassificationTests` pins all thirteen platform-admin endpoints — the two diagnostics ones, these eight, and the three support-session ones of #550 — as class 2 with no capability.
 
@@ -2229,7 +2233,7 @@ The two slices above are the API; this one, one slice of [#510](https://github.c
 
 #### Super Admin supplier presets (issue #848)
 
-The surfaces above decide things about a *business*. This one, child B of [#835](https://github.com/cristhyanc/InventoryApp/issues/835), decides nothing about any business at all: it is the platform's own list of suggested suppliers — Coles, Woolworths, Big W and Costco as shipped — that child C will copy into each newly approved business. **This slice does not do the copying**, deliberately, so the list exists and is editable before anything depends on it.
+The surfaces above decide things about a *business*. This one, child B of [#835](https://github.com/cristhyanc/InventoryApp/issues/835), decides nothing about any business at all: it is the platform's own list of suggested suppliers — Coles, Woolworths, Big W and Costco as shipped — that child C copies into each newly approved business. **This slice does not do the copying**, deliberately, so the list exists and is editable before anything depends on it; the copying is [Supplier presets copied into an approved business](#supplier-presets-copied-into-an-approved-business-issue-849) below.
 
 **The table is the one *platform* table in the schema, which is a classification of its own.** `SupplierPreset` is not `IBusinessOwned` and has no `BusinessId` — see [Tenant ownership](#tenant-ownership-issue-64) for why that is a different thing from the five structurally non-tenant-owned tables and for the one-time seed semantics. What bounds it is authorization, not ownership.
 
@@ -2248,6 +2252,22 @@ The surfaces above decide things about a *business*. This one, child B of [#835]
 **The page** is `/super-admin/supplier-presets`, in the sidebar's `Super Admin` group behind `platformAdminGuard`, exactly like the two routes beside it. Per [Page composition boundary](#page-composition-boundary-issue-191) `SuperAdminSupplierPresetsComponent` owns the table and the enable/disable confirmation behind the shared `ConfirmationDialogComponent`, while Add and Edit — their own form values, field validation and submission state — are `SupplierPresetDialogComponent`, composed through `[preset]` and its `(saved)`/`(canceled)` outputs. Field validation mirrors the server's rules and sentences so a mistyped address is reported in the field; the server stays the authority, and its refusals — the duplicate-name `409` above all, which only it can decide — are shown verbatim. The website half of that is not a second mirror: the dialog and the list both use `components/suppliers/supplier-url.ts`, the one browser-side copy of #847's rule, so the presets form and the Suppliers form refuse the same addresses in the same words. A website is rendered with `target="_blank" rel="noopener noreferrer"` **only when that helper still accepts the stored value** — anything else shows as plain text, so a value that reached the table without passing the server rule is never clickable. `super-admin/supplier-presets` is also in `classifyMemberRequest`'s platform-admin prefix list, so a `403` from it drives no capability re-read and no member message, and neither the role-preview nor the support-session header is attached to it.
 
 **What proves it.** `SupplierPresetPolicyTests` covers the name rule, its boundary and the case-insensitive key, and that this policy holds no website rule of its own; #847's `SupplierUrlPolicyTests` covers the website rule the preset surface reuses, and `SupplierUrlRuleSingleSourceOfTruthTests` holds it to one home. `SuperAdminSupplierPresetsApiTests` asserts the two website refusals against `SupplierUrlPolicy.InvalidMessage` and `.TooLongMessage` themselves, so a preset that started accepting an address a business's own supplier would not would fail. `AddSupplierPresetsMigrationTests` covers the table, the four seeded rows, the unique index, the absent business column, the `Down`, and — the criterion the design exists for — that an edited and disabled seeded row survives a second migrate and restart with nothing re-inserted or re-enabled. `EfSupplierPresetStoreTests` covers the adapter under a denied scope and stages the pre-check/index race deterministically, so "a conflict, never a `500`" is proved for the create and the edit alike without depending on two threads interleaving. `SupplierPresetConcurrencyTests` then races it for real — a SQLite **file**, two service scopes with their own `AppDbContext` and connection, both released from a barrier *after* both pre-checks have answered "no such name" — and asserts one created preset, one `DomainConflictException` carrying the duplicate sentence (the `409` the surface answers with), one row and exactly one audit event. `SuperAdminSupplierPresetsApiTests` covers the whole surface over HTTP: `403` for an Owner, a Manager, an applicant, a stranger, a member presenting a support-session id and the administrator without the delegated scope, `401` anonymous, `read_only_role_preview` on both writes with nothing stored, the two answers the issue's `403` criterion does not distinguish (a previewed read, and the administrator holding a live support session), the list's fields and ordering, each create and edit refusal, the duplicate `409`, the audit event's contents and absences, and that `/api/suppliers` is unchanged in both directions. `BusinessOwnershipCoverageTests` and `EndpointAuthorizationClassificationTests` hold the two classifications. On the frontend, `super-admin-supplier-presets.service.spec.ts`, `supplier-preset-dialog.component.spec.ts`, `super-admin-supplier-presets.component.spec.ts`, #847's `components/suppliers/supplier-url.spec.ts`, `navigation.spec.ts`, `sidebar-nav.component.spec.ts`, `breadcrumb-routes.spec.ts`, `app.routes.spec.ts` and `member-endpoint.spec.ts` cover the client, the list, the form, the validation, the confirmation, the navigation, the breadcrumb, the guarded route and the `403` classification.
+
+#### Supplier presets copied into an approved business (issue #849)
+
+Child C of [#835](https://github.com/cristhyanc/InventoryApp/issues/835) is the other half of the list above: a business that has just been approved starts with **its own copies of the enabled presets** rather than with an empty supplier list. Nothing else changes about either surface — the presets stay platform configuration, and what lands in the business is an ordinary tenant-owned `Supplier` row it owns outright from that moment on.
+
+**Copy at approval, inside the approval's own transaction.** Not at application time: an application may be refused, and a refused business must not be left holding suppliers. `BusinessApplicationDecisionWriter`, on the approval branch and immediately after `IPlatformBusinessDirectoryStore.ApproveAsync`, calls `IBusinessSupplierProvisioningStore.CopyEnabledSupplierPresetsAsync` with the **decision instant** and with **`current.BusinessId`** — the key of the business row that transaction read, never the route value the request carried, exactly as the deactivation's invite cancellation hands over the id it read ([Tenant ownership](#tenant-ownership-issue-64)). Both writes are inside issue #522's shared `BEGIN IMMEDIATE` transaction, so it is **all or nothing**: a copy that fails rolls the status change back with it, the business is still `Pending`, it holds no supplier, its marker is still `NULL`, and no audit event is emitted — a refused decision is not audited, because nothing happened. The audit event itself is unchanged and says nothing about suppliers: `PlatformBusinessDecisionAuditEntry` has no field for a count or a name, and adding one would be a change to what that trail may carry.
+
+**The marker is the whole of the idempotency rule.** `Business.SupplierPresetsCopiedAtUtc` is an additive nullable column (`AddBusinessSupplierPresetsCopiedAt`); the copy happens only while it is `NULL`, and the copy sets it in the same `SaveChanges` as the suppliers. Supplier **names** are deliberately never consulted: a business may rename, add and delete its own suppliers the moment it starts trading, so a name is not evidence about whether a copy was made, and a name-based rule would duplicate the list for a business that had tidied it. Zero enabled presets still sets the marker — the copy *was* made and what it contained was nothing — because leaving it `NULL` would turn a later attempt into a second copy.
+
+**What is copied, and what is not.** One `Supplier` per `IsEnabled` preset, read in **one snapshot** inside the transaction, with `Name` and `Url` copied. Contact fields stay `null`, because the platform knows no contact for a suggested supplier, and all three GST defaults keep `GstRules.None`, because a supplier GST default is explicit configuration a business makes about a supplier it buys from and is never inferred from a name or a website ([Product and supplier GST rules](#product-and-supplier-gst-rules-issue-430)). Disabled presets are not copied. Nothing is written back to `SupplierPresets`: editing, renaming or disabling a preset afterwards changes no existing copy, editing a copy changes no preset and no other business's copy, and a business's copies are subject to the ordinary supplier permissions, edit and delete rules from the first request.
+
+**Nothing else copies, ever.** A rejection, a deactivation, a reactivation (`BusinessLifecycleWriter.ReactivateAsync`), a second approval attempt, `bootstrap-business` and `E2ETestFixture` all leave both the suppliers and the marker alone — the first five because only the approval branch calls the port, the last two because they create a business that is already `Active` and has no application to approve. **Existing businesses are never backfilled**: the migration stamps nothing and inserts nothing, so every business that predates the column reads `NULL` and stays as it is. An application that is still `Pending` when this ships *does* get its copies when it is approved, because it is a new business.
+
+**The write is a provisioning path, and it is the one reviewed exception to "a denied scope writes nothing tenant-owned".** The design of that exception — the one entity type, the one state, the one business, the one save, the `internal` lease, the `Denied`-only precondition, and the fact that nothing becomes readable and no `IgnoreQueryFilters` over `Suppliers` exists — is in [Tenant ownership](#tenant-ownership-issue-64) § The one reviewed provisioning write. `IBusinessSupplierProvisioningStore` is a separate one-method Application port rather than a method on `IPlatformBusinessDirectoryStore` on purpose: that port's stated boundary is that no method on it reaches a tenant-owned row, and widening it would make the sentence that bounds it untrue. The new port takes no predicate, no filter, no supplier field and no preset id, is registered scoped with the request's own `AppDbContext` as its only dependency, and is reachable from the approval and from nowhere else.
+
+**What proves it.** `BusinessApplicationDecisionTests` (unit) covers the hand-off: the copy is made once, inside the transaction and before the commit, with the in-transaction business id and the decision instant; a rejection provisions nothing; a refused approval provisions nothing; and a failed copy refuses the approval with nothing audited. `EfBusinessSupplierProvisioningStoreTests` is the relational half over two businesses and a denied scope: only enabled presets, the website carried across, contacts null and GST defaults `None`, the marker, the second call writing nothing even after the business renamed its copy, a business whose marker is already set receiving nothing, the copies invisible to the other business, preset and copy edits not reaching each other, an unknown business writing nothing, and — the boundary itself — the same denied context still refusing a product insert, a supplier insert of its own outside the lease and every other tenant-owned write, plus a resolved scope and a support session being unable to provision at all. `PlatformBusinessDecisionConcurrencyTests` races it: approve/approve leaves exactly one set of copies and one marker, approve/reject leaves the copies only if the approval won, and an injected copy failure rolls the whole approval back. `SuperAdminBusinessesApiTests` is the HTTP boundary: the copies and the marker after an approval, zero enabled presets, a rejection copying nothing, deactivate/reactivate copying nothing for either business, the copies being ordinary suppliers the new Owner lists, edits and deletes through `/api/suppliers` while another business's Owner sees none of them, and a preset edited afterwards leaving the copies alone. `AddBusinessSupplierPresetsCopiedAtMigrationTests` is the upgrade from the previous schema: the column arrives `NULL` for every existing business, no supplier is invented, and the seeded presets are untouched. `BusinessBootstrapTests` and `E2ETestAuthenticationTests` prove the two paths that must not copy, and `BusinessScopeCompositionTests` pins the adapter's registration and its single dependency.
 
 #### Support sessions: the store and the control endpoints (issue #550)
 
@@ -3168,8 +3188,9 @@ without being read), `InventoryCostTransitionPreviewBuilder` (its
 opening machine stock becomes a costing baseline) and `NayaxSaleTimestampRepairProjection` (its
 evidence is the live rolling window of every machine) all call `GetMachinesFreshAsync` and replace the
 entry for their business and credential revision. Every other caller — the dashboard summary and low
-stock, the sites read and site products, reorder, the pick list, the machine list, the site commission
-report, the transaction report's live site names and the catalogue snapshot — reads through the cache.
+stock, the sites read and site products, reorder, the pick list, the machine list, the machine
+products listing's site lookup (issue #846, below), the site commission report, the transaction
+report's live site names and the catalogue snapshot — reads through the cache.
 `NayaxConnectionCheckRunner` neither reads from nor writes to it, structurally: it builds its own
 `NayaxLynxClient` over the candidate credentials an Owner pasted and is constructed from an
 `HttpClient` and a logger and nothing else, so it never resolves the decorated port. That matters
@@ -3178,6 +3199,47 @@ business's fleet. Nothing else was cached by this change: machine products — c
 [issue #842](#the-machine-products-cache-issue-842), under their own key and their own sixty seconds —
 machine stock, last sales, alerts, one machine, the product catalogue, the product groups, the devices
 and the machine-product write all reached the client every time.
+
+**The machine products listing takes the machine's site from that list** (issue #846, step 2 of
+#839). Opening a machine loads `GET api/machines/{id}` and `GET api/machines/{id}/products` together,
+and both used to read the machine from Nayax — the listing only ever wanted one field of it, the
+`CustomerID` that `Inventory.Application.Products.ResolveMachineProductPricing` prices each slot's
+site commission by. So `Inventory.Application.Machines.ListMachineProducts` reads that `CustomerID`
+from the machine list instead, which the same page has just read through this cache, and **opening a
+machine makes one Nayax machine read across both requests** rather than two. A machine the list does
+not hold — one
+added in Nayax within the last ten minutes, or one Nayax does not know — falls back to the single
+machine read exactly as before, and still before the machine products are read, so an unknown
+machine still answers with today's controlled `502`. A listed machine with no `CustomerID` is at no
+site and is priced with none: that is the list's answer, not a reason to ask again.
+
+**The saving did not buy a new permission.** A Nayax account may grant `GET machines/{id}` and
+`GET machines/{id}/machineProducts` while refusing `GET machines`, and that is precisely the account
+whose connection the test of issue #536 concludes `PendingPermissions` for — which is what makes its
+`403` the classified per-feature `NayaxPermissionNotGrantedException` rather than an upstream
+failure. So a `NayaxPermissionNotGrantedException` on the fleet read falls back to the single-machine
+read, and the listing answers exactly as it did before issue #846 instead of refusing an endpoint
+that worked. That one classified refusal is the **only** thing the fallback catches. A
+`NayaxNotConnectedException` (nothing stored, `NotConfigured`, or the `NeedsAttention` the status
+gate refuses) refuses the single-machine read in the same breath; a support session resolves no Nayax
+credentials at all (issue #551); a cancellation is the caller's own; and a transport or `5xx` failure
+is an outage. All four propagate untouched, because retrying them against another endpoint would
+either spend a request to reach the same answer slower or report a working site where there is an
+outage. A `403` on a connection that is already `Ready` stays what it is everywhere else in this
+application — an upstream failure, and so a `502` — because `NayaxUpstreamException` is an
+Infrastructure type and `Inventory.Application` classifies availability by the two exceptions of
+issue #726 and nothing else; a `Ready` connection is in any case one whose own `Machines` check
+passed.
+
+**Which means site pricing can be up to ten minutes stale after a site move**, the cost the
+repository owner accepted with the lifetime on 23 October 2026. When a machine moves from site A to
+site B in Nayax, its products page keeps suggesting site A's commission until the cached list
+expires, and prices with site B's on the first load after that. Nothing else about the listing goes
+stale: the slots, their machine prices, their MDB codes and their stock all still come from that
+machine's own live `GET .../machineProducts` read, and the machine dashboard beside it still reads
+the machine itself. `GetMachineDashboard` is deliberately not changed to read the list — it is the
+read that remains, it needs the whole machine record rather than one field, and a machine page whose
+header came from a ten-minute-old list would be a second, staler answer to what the page is about.
 
 **What proves it.** `Inventory.IntegrationTests/Infrastructure/Nayax/NayaxMachineListCacheTests`
 covers the mechanism over a scripted read whose every call is counted and can be held open: a hit
@@ -3199,7 +3261,21 @@ business caching nothing.
 `NayaxConnectionCheckRunnerTests` pins the connection test's structural isolation, and
 `NayaxLynxClientDependencyInjectionTests` pins that the port resolves to the decorator over the one
 HTTP client with one process-wide cache behind it. Each fresh caller's own suite refuses the cached
-read outright, so a use case that stopped reading fresh fails loudly.
+read outright, so a use case that stopped reading fresh fails loudly. Issue #846's own staleness is
+proved through this whole composition rather than a stand-in for it:
+`Inventory.IntegrationTests/Application/Machines/MachineProductsSitePricingStalenessTests` runs
+`ListMachineProducts` over the real decorator, the real cache and a fake clock while the fake Nayax
+moves the machine from site A to site B — site A's suggestions, site A's again a second before the
+lifetime, site B's on the first load after it, two list reads for three loads and no machine read at
+all — plus the fallback machine read happening on every load for a machine the list does not hold,
+the unchanged upstream failure for a machine Nayax does not know, and nothing but the site-based
+suggestions differing across the expiry. It covers the permission answers through the same
+composition: an account refused the fleet list is priced by the machine's own read on every load
+(the cache holds no refusal), and an unusable connection still refuses the listing without the
+machine being read at all. `ListMachineProductsTests` pins the same choices against a mocked port —
+the listing being identical whichever read the site came from, including after a fleet-permission
+refusal; both reads refused still refusing; and the not-connected, support-session, cancellation and
+upstream fleet failures reaching the caller with neither the machine nor its products read.
 
 ### The machine-products cache (issue #842)
 
@@ -11816,6 +11892,76 @@ reactivate; the Admin costing-repair and AVCO-transition tools and the stock-his
 still call the endpoint without it and show active products only - picking those three up is
 unrelated follow-up work, not part of #737. Nothing on the server depends on any of them.
 
+#### Searchable category with inline category creation on New Product (issue #830)
+
+Creating a product whose category does not exist yet meant leaving the form for **Categories**,
+creating it there and starting the product again. Issue #830 removes that detour, and **no API, DTO,
+schema, Domain rule, capability or duplicate-name policy changed with it**: this is one Angular
+control sequencing the two endpoints #736 already shipped, `GET api/categories` and
+`POST api/categories`.
+
+**It is a dedicated feature component, not markup on the page.** Searching the options, filtering
+them, offering the create, making that write and owning its pending, refusal and retry states is a
+workflow with its own state and lifecycle, so `ProductCategoryPickerComponent`
+(`components/products/product-category-picker`) owns all of it and the routed `ProductFormComponent`
+keeps only the answer — the category id to submit, reported through `(categoryIdChange)`, with the
+current selection passed down through `[categoryId]`. That is the
+[page composition boundary](#page-composition-boundary-issue-191) applied the same way issue #829's
+`ProductCreateGstRuleComponent` applies it, and it is what makes a pending or refused *category*
+write unable to touch a *product* field: the picker holds no product state and the page holds no
+category state.
+
+**What is submitted is an id, never text.** The box is a combobox (`role="combobox"`,
+`aria-autocomplete="list"`, `aria-expanded`, `aria-activedescendant`) over a labelled
+`role="listbox"` of `role="option"` rows: "No category" first — the optional-category semantics the
+replaced `<select>` carried as its `None` option — then the matching categories, then the create
+action. Matching is a case-insensitive substring of the typed text, and whenever the list closes the
+box's text is set back to the selected category's name (or empty). So text that matched nothing can
+never be read as a selection, and leaving the field creates and selects nothing. Keyboard focus never
+leaves the box: the rows carry `tabindex="-1"` and the active one is published through
+`aria-activedescendant`, with Arrow keys moving (wrapping at both ends), Enter acting on the active
+row, Escape dismissing, and Enter *while the list is open* kept off the product form's submit.
+
+**Creating is explicit, and it is the existing create.** The create row appears only while the
+options are known — read, and read successfully — the typed name is non-blank and no existing
+category's name equals it ignoring case and surrounding whitespace — the same comparison
+`CategoryCataloguePolicy` makes — and is labelled with the proposed name
+("Create category “Choc Bars”"). Typing offers it; only activating it writes. `CategoryService.create`
+posts the trimmed name to `POST api/categories`, so that endpoint's validation, its per-business
+duplicate-name refusal and its `Inventory.Operate` capability decide the outcome, and the picker
+words none of them: a refusal is shown verbatim through `apiErrorMessage`. On success the returned
+category is added to the options in the server's own by-name order and selected, with every other
+field on the product form untouched and no navigation.
+
+**A pending create is the only thing that prevents a second one**, and it is checked in the component
+as well as disabling the row, so the write is unavailable rather than merely inert. A refusal keeps
+the typed name and the open list and **re-reads the options**, because the usual reason for one is
+that the category now exists — created in another tab or by somebody else — and the answer to that is
+that the existing category becomes selectable while the create row withdraws. The picker invents no
+duplicate policy of its own. A failed option read says so and offers **Retry**, and still lets the
+product be saved without a category, because a product's category is optional.
+
+**While the options are unknown the list says nothing about them.** The create row is the answer to
+"no category of yours is called this", and a read that is still in flight or has failed is not a
+business with no such category — so neither it nor the "No category matches …" line is shown until
+a read has succeeded, and the load error's own wording ("none can be searched or created here")
+is what the panel then offers. A successful **Retry** keeps the typed name and the open list, so the
+create it now knows is missing appears without the name being typed again. The alternative — offering
+the create over options nobody read — would contradict both that message and the server's
+duplicate-name refusal, which is the only authority on the name either way.
+
+**A read-only support session is offered no create** (issue #551): a session grants
+`Inventory.Operate`, so the row would otherwise render, and the backend refuses the write only by its
+central `GET`/`HEAD` rule — the same reason the Categories page hides its own create. Searching and
+selecting stay available, as every other field on the form does; Save is already disabled in a
+session.
+
+**The edit page is deliberately untouched.** `ProductFormComponent` renders the picker only on New
+Product and keeps its `<select>` whenever there is a product id, because a provider-managed category
+is locked there (`providerManagedFields`, above) and preserving that restriction exactly is worth
+more than one shared control. The page also no longer reads the category list itself on New Product —
+the picker reads it — so the options are fetched once either way.
+
 #### Average cost and purchase cost columns, and the retired-product filter, on All Products (issue #791)
 
 Issue #791 — E of parent #786 — is one of the three product screens (issues #789-#791) to
@@ -12972,9 +13118,12 @@ files" as the historical record of that slice, not as a test to look for today.
        catalogue with the live machine replenishment need and outstanding supplier-order quantity from
        `CalculateReorderNeeds` (issue #47), clamps a negative outstanding quantity at zero, filters to
        the alerting products and ranks them by `NeedToOrder` descending then name - the same steps the
-       legacy service performed. `ListMachineProducts` makes the same two `INayaxLynxClient` calls in
-       the same order with the same arguments, drops a Nayax mapping with no matching local product,
-       overlays the machine slot's price/commission/MDB/PAR facts, and orders by MDB code.
+       legacy service performed. `ListMachineProducts` drops a Nayax mapping with no matching local
+       product, overlays the machine slot's price/commission/MDB/PAR facts, and orders by MDB code.
+       It made the legacy service's same two `INayaxLynxClient` calls in the same order with the same
+       arguments until issue #846 took the machine's site from the cached machine list, with the
+       single-machine read kept as the fallback for a machine that list does not hold (see
+       [The machine-list cache](#the-machine-list-cache-issue-840)).
      - **Ports and adapters.** `IProductStore` (create/update/delete) and `IProductCatalogStore`
        (reads: filtered by-name listing, unordered listing, single lookup) are the narrow persistence
        ports; `Inventory.Infrastructure.Persistence.EfProductStore`/`EfProductCatalogStore` are their

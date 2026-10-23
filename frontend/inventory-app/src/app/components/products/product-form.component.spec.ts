@@ -59,10 +59,14 @@ async function render(
     setGstRule?: jest.Mock;
     sessionActive?: Observable<boolean>;
     routeParams?: Record<string, string>;
+    getCategories?: jest.Mock;
+    createCategory?: jest.Mock;
   } = {}
 ) {
   const update = overrides.update ?? jest.fn(() => of(undefined));
   const create = overrides.create ?? jest.fn(() => of(product()));
+  const getCategories = overrides.getCategories ?? jest.fn(() => of(categories.map((category) => ({ ...category }))));
+  const createCategory = overrides.createCategory ?? jest.fn(() => of({ id: 9, name: 'Chocolate' } as Category));
   const getGstRule =
     overrides.getGstRule ?? jest.fn(() => of({ productId: 7, gstRule: GstClassification.Unknown }));
   const setGstRule = overrides.setGstRule ?? jest.fn(() => of(undefined));
@@ -82,7 +86,7 @@ async function render(
           getPriceComparison: jest.fn(() => of({ productId: 7, entries: [] }))
         }
       },
-      { provide: CategoryService, useValue: { getAll: jest.fn(() => of(categories)) } },
+      { provide: CategoryService, useValue: { getAll: getCategories, create: createCategory } },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       provideRouter([]),
       { provide: ActivatedRoute, useValue: { snapshot: { paramMap: convertToParamMap(overrides.routeParams ?? { id: '7' }) } } }
@@ -118,6 +122,28 @@ async function render(
   const gstRuleRetry = () =>
     host.querySelector<HTMLButtonElement>('app-product-create-gst-rule button');
 
+  /** Types into the composed category combobox the way a person does (issue #830). */
+  const typeCategory = (text: string) => {
+    const element = host.querySelector<HTMLInputElement>('app-product-category-picker input[role="combobox"]')!;
+    element.value = text;
+    element.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  };
+
+  const categoryOption = (label: string) =>
+    Array.from(host.querySelectorAll<HTMLButtonElement>('app-product-category-picker [role="option"]')).find(
+      (option) => option.textContent?.trim() === label
+    );
+
+  const createCategoryOption = () =>
+    host.querySelector<HTMLButtonElement>('app-product-category-picker [role="option"][data-entry-kind="create"]');
+
+  /** Presses a row of the category list and lets the page see the selection it reported. */
+  const clickCategoryOption = (option: HTMLButtonElement) => {
+    option.click();
+    fixture.detectChanges();
+  };
+
   return {
     fixture,
     component: fixture.componentInstance,
@@ -126,9 +152,15 @@ async function render(
     create,
     getGstRule,
     setGstRule,
+    getCategories,
+    createCategory,
     chooseGstRule,
     submit,
     gstRuleRetry,
+    typeCategory,
+    categoryOption,
+    createCategoryOption,
+    clickCategoryOption,
     navigate
   };
 }
@@ -313,7 +345,11 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     expect(host.querySelector('h1')?.textContent).toContain('New Product');
     expect((host.querySelector('[name="name"]') as HTMLInputElement).value).toBe('');
     expect((host.querySelector('[name="name"]') as HTMLInputElement).readOnly).toBe(false);
-    expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).disabled).toBe(false);
+    // The category is chosen through the searchable picker here since issue #830, not the dropdown
+    // the edit page still uses; its own describe below covers what that control does.
+    expect(
+      (host.querySelector('app-product-category-picker input[role="combobox"]') as HTMLInputElement).value
+    ).toBe('');
     expect(host.querySelector('.alert-info')).toBeNull();
     expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).textContent).toContain('Create Product');
     expect(host.querySelector('[name="quantityInStock"]')).not.toBeNull();
@@ -382,6 +418,159 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     expect(component.error).toBe('Product name is required.');
     expect(component.saving).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Choosing the category while creating a product (issue #830), seen from the page.
+ *
+ * The searchable list, the filtering, the explicit create and that write's own pending/refusal
+ * lifecycle belong to `app-product-category-picker` (the page composition boundary), and
+ * `product-category-picker.component.spec.ts` covers them there. What these tests pin is the page's
+ * side of it: which control New Product offers, that the edit page is untouched, and that what the
+ * picker reports is the id the product is created with - with every other typed field, and the GST
+ * rule chosen beside it (issue #829), still intact.
+ */
+describe('ProductFormComponent category on New Product (issue #830)', () => {
+  it('offers the searchable category picker instead of a dropdown, and reads the options once', async () => {
+    const { host, getCategories } = await render({ routeParams: {} });
+
+    expect(host.querySelector('app-product-category-picker')).not.toBeNull();
+    expect(host.querySelector('[name="categoryId"]')).toBeNull();
+    // The picker owns that read; the page makes no second one of its own.
+    expect(getCategories).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the edit page on its dropdown, so the provider-managed category restriction is unchanged', async () => {
+    const { host } = await render({ product: product({ providerManagedFields: ['name', 'categoryId'] }) });
+
+    expect(host.querySelector('app-product-category-picker')).toBeNull();
+    expect((host.querySelector('[name="categoryId"]') as HTMLSelectElement).disabled).toBe(true);
+  });
+
+  it('creates the product with the id of the category selected in the picker', async () => {
+    const { component, typeCategory, categoryOption, clickCategoryOption, create, submit } = await render({
+      routeParams: {}
+    });
+
+    component.form.name = 'New Snack';
+    typeCategory('sn');
+    clickCategoryOption(categoryOption('Snacks')!);
+    submit();
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'New Snack', categoryId: 2 }));
+  });
+
+  it('creates the product with no category while none is selected', async () => {
+    const { component, create, submit } = await render({ routeParams: {} });
+
+    component.form.name = 'New Snack';
+    submit();
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ categoryId: null }));
+  });
+
+  it('clears the category back to none through the picker', async () => {
+    const { component, typeCategory, categoryOption, clickCategoryOption, create, submit } = await render({
+      routeParams: {}
+    });
+
+    component.form.name = 'New Snack';
+    typeCategory('dri');
+    clickCategoryOption(categoryOption('Drinks')!);
+    typeCategory('');
+    clickCategoryOption(categoryOption('No category')!);
+    submit();
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ categoryId: null }));
+  });
+
+  /**
+   * The point of the issue: a missing category is created without leaving the form, and neither
+   * that create nor the GST rule chosen beside it (issue #829) costs the other its state.
+   */
+  it('creates a missing category inline and keeps every other product field and the GST rule', async () => {
+    const { component, fixture, host, typeCategory, createCategoryOption, clickCategoryOption, chooseGstRule, createCategory, create, setGstRule, submit, navigate } =
+      await render({ routeParams: {}, create: jest.fn(() => of(product({ id: 55 }))) });
+
+    component.form.name = 'New Snack';
+    component.form.sku = 'SNK-900';
+    component.form.quantityInStock = 12;
+    component.form.initialUnitCost = 1.25;
+    component.form.lowStockThreshold = 3;
+    component.form.restockTo = 9;
+    chooseGstRule('Taxable');
+    fixture.detectChanges();
+
+    typeCategory('Chocolate');
+    clickCategoryOption(createCategoryOption()!);
+
+    expect(createCategory).toHaveBeenCalledWith({ name: 'Chocolate', description: null });
+    // Still on the form, with nothing navigated away from and no product created by the category
+    // write.
+    expect(navigate).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(host.querySelector('h1')?.textContent).toContain('New Product');
+
+    submit();
+
+    expect(create).toHaveBeenCalledWith({
+      name: 'New Snack',
+      sku: 'SNK-900',
+      description: null,
+      lowStockThreshold: 3,
+      restockTo: 9,
+      unit: 'unit',
+      categoryId: 9,
+      isActive: true,
+      quantityInStock: 12,
+      initialUnitCost: 1.25
+    });
+    expect(setGstRule).toHaveBeenCalledWith(55, GstClassification.Taxable);
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('keeps the created category selected when the GST rule is chosen afterwards', async () => {
+    const { component, typeCategory, createCategoryOption, clickCategoryOption, chooseGstRule, create, setGstRule, submit } =
+      await render({ routeParams: {}, create: jest.fn(() => of(product({ id: 55 }))) });
+
+    component.form.name = 'New Snack';
+    typeCategory('Chocolate');
+    clickCategoryOption(createCategoryOption()!);
+    chooseGstRule('GST-free');
+    submit();
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ categoryId: 9 }));
+    expect(setGstRule).toHaveBeenCalledWith(55, GstClassification.GstFree);
+  });
+
+  it('keeps the typed product fields when the inline category create is refused', async () => {
+    const createCategory = jest.fn(() =>
+      throwError(
+        () => new HttpErrorResponse({ status: 400, error: 'This business already has a category called "Chocolate".' })
+      )
+    );
+    const { component, host, typeCategory, createCategoryOption, clickCategoryOption, create, submit } = await render({
+      routeParams: {},
+      createCategory
+    });
+
+    component.form.name = 'New Snack';
+    component.form.sku = 'SNK-900';
+    typeCategory('Chocolate');
+    clickCategoryOption(createCategoryOption()!);
+
+    expect(host.querySelector('app-product-category-picker [role="alert"]')?.textContent).toContain(
+      'This business already has a category called "Chocolate".'
+    );
+    expect(component.form.name).toBe('New Snack');
+    expect(component.form.sku).toBe('SNK-900');
+    expect(component.form.categoryId).toBe('');
+    expect(create).not.toHaveBeenCalled();
+
+    // The product itself is still saveable, without a category.
+    submit();
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'New Snack', categoryId: null }));
   });
 });
 

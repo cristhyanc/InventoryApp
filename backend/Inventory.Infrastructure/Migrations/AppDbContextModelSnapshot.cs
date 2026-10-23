@@ -54,6 +54,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("SupplierPresetsCopiedAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("TimeZoneId")
                         .IsRequired()
                         .HasColumnType("TEXT");

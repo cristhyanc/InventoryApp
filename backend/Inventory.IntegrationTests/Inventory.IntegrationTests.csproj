@@ -68,8 +68,10 @@
     <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeBusinessApplicationAudit.cs" Link="Application\Onboarding\FakeBusinessApplicationAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" Link="Application\Onboarding\FakeSelfServiceOnboardingFlag.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PickList\FakePickListRefillStore.cs" Link="Application\PickList\FakePickListRefillStore.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakeBusinessSupplierProvisioningStore.cs" Link="Application\PlatformAdmin\FakeBusinessSupplierProvisioningStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakePlatformBusinessDecisionAudit.cs" Link="Application\PlatformAdmin\FakePlatformBusinessDecisionAudit.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\PlatformAdmin\FakePlatformBusinessLifecycleAudit.cs" Link="Application\PlatformAdmin\FakePlatformBusinessLifecycleAudit.cs" />
+    <Compile Include="..\Inventory.UnitTests\Application\Products\FakeProductCatalogStore.cs" Link="Application\Products\FakeProductCatalogStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Products\FakeSiteFactsStore.cs" Link="Application\Products\FakeSiteFactsStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Providers\FakeProviderDataCoverageStore.cs" Link="Application\Providers\FakeProviderDataCoverageStore.cs" />
     <Compile Include="..\Inventory.UnitTests\Application\Reporting\Bookkeeping\FakeBookkeepingReportFactsProvider.cs" Link="Application\Reporting\Bookkeeping\FakeBookkeepingReportFactsProvider.cs" />

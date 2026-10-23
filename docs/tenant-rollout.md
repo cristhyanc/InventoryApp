@@ -18,6 +18,7 @@ only the schema-migration step's "deploy and let startup apply it" alternative i
 | Add any **later** member | An **Owner of that business**, by creating an invite link the person redeems — no operator run and no Entra ids needed (issue #532; see [Adding a member after the bootstrap](#adding-a-member-after-the-bootstrap-invite-links-issues-531-and-532)) |
 | Release a member whose own business has been deactivated, so they can join elsewhere | A **Super Admin**, through the Businesses page's member list (`POST /api/super-admin/businesses/{businessId}/members/{membershipId}/release`, issues #545 and #547) — no Owner of a deactivated business can be reached, which is why this is a platform-admin action rather than a hand-written row revocation |
 | Approve or reject a self-service business application | A **Super Admin**, through the same Businesses page (`POST /api/super-admin/businesses/{businessId}/approve` and `.../reject`, issues #544 and #547) |
+| Give a newly approved business its own copies of the enabled supplier presets | **Application**, in the approval's own transaction (issue #849; see [Supplier presets on approval](#supplier-presets-on-approval-issue-849)) — never for a business that already exists |
 | Assign existing rows to that business | **Human**, via `bootstrap-business --apply` |
 | Move the global Nayax operator id and token into that business's record | **Human**, via `migrate-nayax-connection --apply` (issue #519; see [Migrating the Nayax connection](#migrating-the-nayax-connection-into-the-business-issue-519)) |
 | Remove the global `NayaxLynx` operator id and token | **Human**, once the per-business record is in use and verified (the client reads it since issue #520; `NayaxLynx__BaseUrl` stays) |
@@ -725,6 +726,36 @@ What to do when you see that explanation:
    deactivation of that business also ends it.
 
 Nothing here needs configuration, and no step of the rollout procedure changes.
+
+## Supplier presets on approval (issue #849)
+
+Approving a business application now also gives that business its own copies of the **enabled**
+platform supplier presets (Super Admin → Supplier Presets), as ordinary suppliers it owns outright.
+It happens inside the approval's own transaction: either the business becomes `Active` with its
+copies, or neither happens and it is still waiting for a decision. See
+[docs/architecture.md § Supplier presets copied into an approved business](architecture.md#supplier-presets-copied-into-an-approved-business-issue-849)
+for the design.
+
+**Existing businesses get nothing, and nothing backfills them.** The migration adds one nullable
+column (`Businesses.SupplierPresetsCopiedAtUtc`) and no data: every business that exists before it is
+applied reads `NULL`, which means "no copy was ever made", and stays exactly as it is. Those
+businesses already hold the suppliers they use, and the copy only ever happens when a `Pending`
+application is approved — an `Active` business has no application left to approve. If such a business
+wants a suggested supplier, somebody with the supplier permission adds it on the Suppliers page, the
+same as any other supplier.
+
+**An application that is still `Pending` when this is deployed gets its copies when it is
+approved.** That is the intended behaviour: it is a new business, and the copy is decided by the
+approval rather than by when the application was submitted.
+
+**The bootstrap is unaffected.** `bootstrap-business` adopts a business that is already trading, with
+the suppliers that are already in the database; it copies no preset and records no copy instant. So
+does the disposable E2E fixture.
+
+**Nothing else copies**, either: a rejection, a deactivation, a reactivation and a second approval
+attempt all leave both the suppliers and the marker alone. A preset edited, renamed or disabled later
+changes no copy any business already has, and a business editing or deleting its own copy changes no
+preset.
 
 ## Not part of this rollout
 

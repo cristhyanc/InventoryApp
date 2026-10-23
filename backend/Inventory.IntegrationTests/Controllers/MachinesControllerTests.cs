@@ -420,8 +420,11 @@ public class MachinesControllerTests
     public async Task GetMachineProducts_answers_the_catalogue_response_with_the_slot_values_overlaid()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineAsync(MachineId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new NayaxMachine { MachineID = MachineId, CustomerID = 91 });
+
+        // The slot listing takes the machine's site from the machine list since issue #846, and reads
+        // the machine itself only for one the list does not hold.
+        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new NayaxMachine { MachineID = MachineId, CustomerID = 91 }]);
         nayax.Setup(x => x.GetMachineProductsAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([
                 new NayaxMachineProduct

@@ -192,6 +192,14 @@ public static class InfrastructureServiceCollectionExtensions
         // one table in this schema that names no business in any statement because it is about none.
         // Scoped like every adapter here, so it runs on the request's own denied-scope context.
         services.AddScoped<ISupplierPresetStore, EfSupplierPresetStore>();
+        // The one provisioning write of issue #849: the copies of those presets a business receives
+        // when its application is approved. A separate one-method adapter rather than a method on
+        // the directory store above, because this is the only platform-admin path that writes a
+        // tenant-owned row and that is exactly what makes it worth reading on its own. Scoped like
+        // every adapter here, so it runs on the request's own denied-scope context and inside the
+        // approval's transaction on it - which is also the only way its narrow provisioning lease
+        // can be taken at all.
+        services.AddScoped<IBusinessSupplierProvisioningStore, EfBusinessSupplierProvisioningStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has
