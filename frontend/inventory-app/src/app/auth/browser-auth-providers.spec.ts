@@ -6,6 +6,7 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRouteSnapshot, RouterStateSnapshot, UrlTree, provideRouter } from '@angular/router';
 import { MsalBroadcastService, MsalGuard, MsalInterceptor, MsalService, MSAL_INSTANCE } from '@azure/msal-angular';
 import { InteractionStatus } from '@azure/msal-browser';
+import { initializeMsal } from '../app.config';
 import { apiScopeFor } from '../auth-config';
 import { ConfigService } from '../services/config.service';
 import {
@@ -320,6 +321,14 @@ describe('browser auth providers', () => {
 
       expect(msal.instance.getActiveAccount()?.name).toBe('E2E Test Actor');
       expect(msal.instance.getAllAccounts()).toHaveLength(1);
+    });
+
+    it('satisfies the MSAL application initializer, so the E2E build bootstraps at all', async () => {
+      // `app.config.ts` runs `initializeMsal` as an APP_INITIALIZER on every build, including the
+      // E2E one, and an initializer that throws aborts bootstrap and renders a blank page - so a
+      // member missing from this stub takes the whole browser suite down rather than one test. The
+      // real initializer is what asserts that here, so the two cannot drift apart.
+      await expect(initializeMsal(createE2ETestMsalService())()).resolves.toBeUndefined();
     });
 
     it('settles MSAL interaction immediately so the shell does not wait for a redirect', () => {
