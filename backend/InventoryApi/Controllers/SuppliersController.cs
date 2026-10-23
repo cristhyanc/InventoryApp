@@ -74,7 +74,8 @@ public class SuppliersController : ControllerBase
         ArgumentNullException.ThrowIfNull(dto);
 
         var result = await _createSupplier.Handle(
-            dto.Name, dto.ContactName, dto.Phone, dto.Email, dto.Address, dto.Url, cancellationToken);
+            new SupplierFields(dto.Name, dto.ContactName, dto.Phone, dto.Email, dto.Address, dto.Url),
+            cancellationToken);
 
         return result.Outcome switch
         {
@@ -90,7 +91,9 @@ public class SuppliersController : ControllerBase
         ArgumentNullException.ThrowIfNull(dto);
 
         var result = await _updateSupplier.Handle(
-            id, dto.Name, dto.ContactName, dto.Phone, dto.Email, dto.Address, dto.Url, cancellationToken);
+            id,
+            new SupplierFields(dto.Name, dto.ContactName, dto.Phone, dto.Email, dto.Address, dto.Url),
+            cancellationToken);
 
         return result.Outcome switch
         {

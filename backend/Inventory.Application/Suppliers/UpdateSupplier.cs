@@ -15,20 +15,12 @@ public sealed class UpdateSupplier
     /// refused value leaves the stored supplier exactly as it was.
     /// </summary>
     public async Task<SupplierWriteResult> Handle(
-        int id,
-        string name,
-        string? contactName,
-        string? phone,
-        string? email,
-        string? address,
-        string? url,
-        CancellationToken cancellationToken)
+        int id, SupplierFields fields, CancellationToken cancellationToken)
     {
-        if (!SupplierUrlPolicy.TryNormalize(url, out var normalizedUrl, out var urlError))
+        if (!SupplierUrlPolicy.TryNormalize(fields.Url, out var normalizedUrl, out var urlError))
             return SupplierWriteResult.Invalid(urlError!);
 
-        var updated = await _store.UpdateAsync(
-            id, name, contactName, phone, email, address, normalizedUrl, cancellationToken);
+        var updated = await _store.UpdateAsync(id, fields with { Url = normalizedUrl }, cancellationToken);
 
         return updated is null ? SupplierWriteResult.NotFound() : SupplierWriteResult.Success(updated);
     }

@@ -101,7 +101,8 @@ public class SupplierGstDefaultsUseCaseTests
             GstClassification.Taxable, GstClassification.GstFree, GstClassification.Taxable);
 
         await new SetSupplierGstDefaults(store).Handle(supplier.Id, configured, CancellationToken.None);
-        await new UpdateSupplier(store).Handle(supplier.Id, "Acme Renamed", "Pat", "555", "a@b.c", "1 Road", null, CancellationToken.None);
+        await new UpdateSupplier(store).Handle(
+            supplier.Id, new SupplierFields("Acme Renamed", "Pat", "555", "a@b.c", "1 Road", null), CancellationToken.None);
 
         var fetched = await new GetSupplier(store).Handle(supplier.Id, CancellationToken.None);
         Assert.Equal("Acme Renamed", fetched!.Name);
@@ -112,7 +113,7 @@ public class SupplierGstDefaultsUseCaseTests
         FakeSupplierStore store, string name, string? contactName, string? phone, string? email, string? address)
     {
         var result = await new CreateSupplier(store).Handle(
-            name, contactName, phone, email, address, null, CancellationToken.None);
+            new SupplierFields(name, contactName, phone, email, address, null), CancellationToken.None);
 
         return result.Supplier!;
     }

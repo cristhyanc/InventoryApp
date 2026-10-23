@@ -14,19 +14,12 @@ public sealed class CreateSupplier
     /// <see cref="SupplierUrlPolicy"/> before anything is stored (issue #847), so a refused value
     /// creates nothing at all.
     /// </summary>
-    public async Task<SupplierWriteResult> Handle(
-        string name,
-        string? contactName,
-        string? phone,
-        string? email,
-        string? address,
-        string? url,
-        CancellationToken cancellationToken)
+    public async Task<SupplierWriteResult> Handle(SupplierFields fields, CancellationToken cancellationToken)
     {
-        if (!SupplierUrlPolicy.TryNormalize(url, out var normalizedUrl, out var urlError))
+        if (!SupplierUrlPolicy.TryNormalize(fields.Url, out var normalizedUrl, out var urlError))
             return SupplierWriteResult.Invalid(urlError!);
 
         return SupplierWriteResult.Success(
-            await _store.AddAsync(name, contactName, phone, email, address, normalizedUrl, cancellationToken));
+            await _store.AddAsync(fields with { Url = normalizedUrl }, cancellationToken));
     }
 }

@@ -1,3 +1,4 @@
+using Inventory.Application.Suppliers;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Microsoft.Data.Sqlite;
@@ -28,7 +29,9 @@ public class EfSupplierStoreTests
         await using var db = TestAppDbContext.For(options, BusinessA);
         var store = new EfSupplierStore(db);
 
-        var created = await store.AddAsync("Acme", "Jane", "555-1234", "jane@acme.test", "1 Main St", "https://acme.test/trade", CancellationToken.None);
+        var created = await store.AddAsync(
+            new SupplierFields("Acme", "Jane", "555-1234", "jane@acme.test", "1 Main St", "https://acme.test/trade"),
+            CancellationToken.None);
 
         Assert.True(created.Id > 0);
         Assert.Equal("Acme", created.Name);
@@ -53,21 +56,26 @@ public class EfSupplierStoreTests
         var options = await CreateSqliteAsync(connection);
         await using var db = TestAppDbContext.For(options, BusinessA);
         var store = new EfSupplierStore(db);
-        var created = await store.AddAsync("Acme", "Jane", null, null, null, null, CancellationToken.None);
+        var created = await store.AddAsync(new SupplierFields("Acme", "Jane", null, null, null, null), CancellationToken.None);
 
         Assert.Null(created.Url);
         Assert.Null((await store.FindByIdAsync(created.Id, CancellationToken.None))!.Url);
         Assert.Null(Assert.Single(await store.ListOrderedByNameAsync(CancellationToken.None)).Url);
 
         // An edit of the other fields that carries the stored null through leaves it null.
-        var renamed = await store.UpdateAsync(created.Id, "Acme Renamed", "Jane", null, null, null, null, CancellationToken.None);
+        var renamed = await store.UpdateAsync(
+            created.Id, new SupplierFields("Acme Renamed", "Jane", null, null, null, null), CancellationToken.None);
         Assert.Null(renamed!.Url);
 
-        var linked = await store.UpdateAsync(created.Id, "Acme Renamed", "Jane", null, null, null, "https://acme.test", CancellationToken.None);
+        var linked = await store.UpdateAsync(
+            created.Id,
+            new SupplierFields("Acme Renamed", "Jane", null, null, null, "https://acme.test"),
+            CancellationToken.None);
         Assert.Equal("https://acme.test", linked!.Url);
         Assert.Equal("https://acme.test", (await store.FindByIdAsync(created.Id, CancellationToken.None))!.Url);
 
-        var cleared = await store.UpdateAsync(created.Id, "Acme Renamed", "Jane", null, null, null, null, CancellationToken.None);
+        var cleared = await store.UpdateAsync(
+            created.Id, new SupplierFields("Acme Renamed", "Jane", null, null, null, null), CancellationToken.None);
         Assert.Null(cleared!.Url);
 
         await using var verify = TestAppDbContext.Unrestricted(options);
@@ -81,9 +89,14 @@ public class EfSupplierStoreTests
         var options = await CreateSqliteAsync(connection);
         await using var db = TestAppDbContext.For(options, BusinessA);
         var store = new EfSupplierStore(db);
-        var created = await store.AddAsync("Acme", "Jane", "555-1234", "jane@acme.test", "1 Main St", "https://acme.test", CancellationToken.None);
+        var created = await store.AddAsync(
+            new SupplierFields("Acme", "Jane", "555-1234", "jane@acme.test", "1 Main St", "https://acme.test"),
+            CancellationToken.None);
 
-        var updated = await store.UpdateAsync(created.Id, "Acme Updated", "John", "555-9999", "john@acme.test", "2 Main St", "https://acme.test/wholesale", CancellationToken.None);
+        var updated = await store.UpdateAsync(
+            created.Id,
+            new SupplierFields("Acme Updated", "John", "555-9999", "john@acme.test", "2 Main St", "https://acme.test/wholesale"),
+            CancellationToken.None);
 
         Assert.NotNull(updated);
         Assert.Equal(created.Id, updated!.Id);
@@ -100,7 +113,8 @@ public class EfSupplierStoreTests
         await using var db = TestAppDbContext.For(options, BusinessA);
         var store = new EfSupplierStore(db);
 
-        var updated = await store.UpdateAsync(999, "name", null, null, null, null, null, CancellationToken.None);
+        var updated = await store.UpdateAsync(
+            999, new SupplierFields("name", null, null, null, null, null), CancellationToken.None);
 
         Assert.Null(updated);
     }
@@ -112,7 +126,7 @@ public class EfSupplierStoreTests
         var options = await CreateSqliteAsync(connection);
         await using var db = TestAppDbContext.For(options, BusinessA);
         var store = new EfSupplierStore(db);
-        var created = await store.AddAsync("Acme", null, null, null, null, null, CancellationToken.None);
+        var created = await store.AddAsync(new SupplierFields("Acme", null, null, null, null, null), CancellationToken.None);
 
         var deleted = await store.DeleteAsync(created.Id, CancellationToken.None);
 
@@ -146,8 +160,8 @@ public class EfSupplierStoreTests
         await using var db = TestAppDbContext.For(options, BusinessA);
         var store = new EfSupplierStore(db);
 
-        await store.AddAsync("Same Name", null, null, null, null, null, CancellationToken.None);
-        await store.AddAsync("Same Name", null, null, null, null, null, CancellationToken.None);
+        await store.AddAsync(new SupplierFields("Same Name", null, null, null, null, null), CancellationToken.None);
+        await store.AddAsync(new SupplierFields("Same Name", null, null, null, null, null), CancellationToken.None);
 
         var all = await store.ListOrderedByNameAsync(CancellationToken.None);
         Assert.Equal(2, all.Count);
@@ -166,7 +180,9 @@ public class EfSupplierStoreTests
         await using (var seed = TestAppDbContext.For(options, BusinessB))
         {
             var store = new EfSupplierStore(seed);
-            var created = await store.AddAsync("B Supplier", null, null, null, null, "https://b-supplier.test", CancellationToken.None);
+            var created = await store.AddAsync(
+                new SupplierFields("B Supplier", null, null, null, null, "https://b-supplier.test"),
+                CancellationToken.None);
             otherBusinessSupplierId = created.Id;
         }
 
@@ -175,7 +191,10 @@ public class EfSupplierStoreTests
 
         Assert.Empty(await storeAsA.ListOrderedByNameAsync(CancellationToken.None));
         Assert.Null(await storeAsA.FindByIdAsync(otherBusinessSupplierId, CancellationToken.None));
-        Assert.Null(await storeAsA.UpdateAsync(otherBusinessSupplierId, "Hijacked", null, null, null, null, "https://hijacked.test", CancellationToken.None));
+        Assert.Null(await storeAsA.UpdateAsync(
+            otherBusinessSupplierId,
+            new SupplierFields("Hijacked", null, null, null, null, "https://hijacked.test"),
+            CancellationToken.None));
         Assert.False(await storeAsA.DeleteAsync(otherBusinessSupplierId, CancellationToken.None));
 
         await using var verify = TestAppDbContext.Unrestricted(options);

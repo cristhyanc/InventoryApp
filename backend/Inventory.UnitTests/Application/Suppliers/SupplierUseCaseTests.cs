@@ -9,8 +9,8 @@ public class SupplierUseCaseTests
     public async Task Create_then_list_returns_supplier_ordered_by_name()
     {
         var store = new FakeSupplierStore();
-        await new CreateSupplier(store).Handle("Zebra Co", null, null, null, null, null, CancellationToken.None);
-        await new CreateSupplier(store).Handle("Apple Co", "Contact", "555", "a@b.com", "1 Street", null, CancellationToken.None);
+        await CreateAsync(store, "Zebra Co", null, null, null, null, null);
+        await CreateAsync(store, "Apple Co", "Contact", "555", "a@b.com", "1 Street", null);
 
         var result = await new ListSuppliers(store).Handle(CancellationToken.None);
 
@@ -46,7 +46,7 @@ public class SupplierUseCaseTests
         var created = await CreateAsync(store, "s1", "cn", "p", "e", "a", null);
 
         var updated = await new UpdateSupplier(store).Handle(
-            created.Id, "s1-up", "cn2", "p2", "e2", "a2", null, CancellationToken.None);
+            created.Id, new SupplierFields("s1-up", "cn2", "p2", "e2", "a2", null), CancellationToken.None);
 
         Assert.Equal(SupplierWriteOutcome.Success, updated.Outcome);
         var fetched = await new GetSupplier(store).Handle(created.Id, CancellationToken.None);
@@ -59,7 +59,7 @@ public class SupplierUseCaseTests
         var store = new FakeSupplierStore();
 
         var updated = await new UpdateSupplier(store).Handle(
-            999, "name", null, null, null, null, null, CancellationToken.None);
+            999, new SupplierFields("name", null, null, null, null, null), CancellationToken.None);
 
         Assert.Equal(SupplierWriteOutcome.NotFound, updated.Outcome);
         Assert.Null(updated.Supplier);
@@ -132,7 +132,7 @@ public class SupplierUseCaseTests
         var created = await CreateAsync(store, "Acme", null, null, null, null, "https://coles.com.au");
 
         var cleared = await new UpdateSupplier(store).Handle(
-            created.Id, "Acme", null, null, null, null, "  ", CancellationToken.None);
+            created.Id, new SupplierFields("Acme", null, null, null, null, "  "), CancellationToken.None);
 
         Assert.Equal(SupplierWriteOutcome.Success, cleared.Outcome);
         Assert.Null(cleared.Supplier!.Url);
@@ -151,7 +151,7 @@ public class SupplierUseCaseTests
         var store = new FakeSupplierStore();
 
         var result = await new CreateSupplier(store).Handle(
-            "Acme", null, null, null, null, submitted, CancellationToken.None);
+            new SupplierFields("Acme", null, null, null, null, submitted), CancellationToken.None);
 
         Assert.Equal(SupplierWriteOutcome.Invalid, result.Outcome);
         Assert.Equal(SupplierUrlPolicy.InvalidMessage, result.ValidationError);
@@ -166,7 +166,9 @@ public class SupplierUseCaseTests
         var created = await CreateAsync(store, "Acme", "Pat", "555", "pat@acme.test", "1 Road", "https://acme.test");
 
         var result = await new UpdateSupplier(store).Handle(
-            created.Id, "Renamed", null, null, null, null, "javascript:alert(1)", CancellationToken.None);
+            created.Id,
+            new SupplierFields("Renamed", null, null, null, null, "javascript:alert(1)"),
+            CancellationToken.None);
 
         Assert.Equal(SupplierWriteOutcome.Invalid, result.Outcome);
         Assert.Equal(SupplierUrlPolicy.InvalidMessage, result.ValidationError);
@@ -187,7 +189,7 @@ public class SupplierUseCaseTests
         var tooLong = "https://coles.com.au/" + new string('a', SupplierUrlPolicy.MaxLength);
 
         var result = await new CreateSupplier(store).Handle(
-            "Acme", null, null, null, null, tooLong, CancellationToken.None);
+            new SupplierFields("Acme", null, null, null, null, tooLong), CancellationToken.None);
 
         Assert.Equal(SupplierWriteOutcome.Invalid, result.Outcome);
         Assert.Equal(SupplierUrlPolicy.TooLongMessage, result.ValidationError);
@@ -199,7 +201,7 @@ public class SupplierUseCaseTests
         string? address, string? url)
     {
         var result = await new CreateSupplier(store).Handle(
-            name, contactName, phone, email, address, url, CancellationToken.None);
+            new SupplierFields(name, contactName, phone, email, address, url), CancellationToken.None);
 
         Assert.Equal(SupplierWriteOutcome.Success, result.Outcome);
         return result.Supplier!;

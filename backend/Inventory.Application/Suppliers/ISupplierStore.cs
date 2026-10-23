@@ -11,11 +11,11 @@ public interface ISupplierStore
 
     Task<SupplierRecord?> FindByIdAsync(int id, CancellationToken cancellationToken);
 
-    /// <summary><paramref name="url"/> has already been normalized by <see cref="SupplierUrlPolicy"/>.</summary>
-    Task<SupplierRecord> AddAsync(string name, string? contactName, string? phone, string? email, string? address, string? url, CancellationToken cancellationToken);
+    /// <summary><paramref name="fields"/>.Url has already been normalized by <see cref="SupplierUrlPolicy"/>.</summary>
+    Task<SupplierRecord> AddAsync(SupplierFields fields, CancellationToken cancellationToken);
 
-    /// <summary><paramref name="url"/> has already been normalized by <see cref="SupplierUrlPolicy"/>.</summary>
-    Task<SupplierRecord?> UpdateAsync(int id, string name, string? contactName, string? phone, string? email, string? address, string? url, CancellationToken cancellationToken);
+    /// <summary><paramref name="fields"/>.Url has already been normalized by <see cref="SupplierUrlPolicy"/>.</summary>
+    Task<SupplierRecord?> UpdateAsync(int id, SupplierFields fields, CancellationToken cancellationToken);
 
     Task<bool> DeleteAsync(int id, CancellationToken cancellationToken);
 
