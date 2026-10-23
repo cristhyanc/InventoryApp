@@ -27,13 +27,19 @@ namespace InventoryApi.Tests.Controllers;
 /// SQLite with the real migration history.
 ///
 /// <para>Three things only a hosted test can show. The first is the <b>published shape</b>: the rows
-/// carry <c>siteId</c> and <c>name</c> and nothing else - no stock percentage, alert count or
-/// revenue, each of which would need the per-machine read this endpoint exists to avoid, and no
-/// machine count either, which the fleet read's own grouping would give for free but which the
-/// published shape issue #841 fixed does not include. The second is the <b>cost</b>, counted on the
-/// registered Nayax client across a whole request: one fleet read, and no
-/// <c>GetMachineProductsAsync</c> call at all, where <c>GET /api/sites</c> makes one per machine.
-/// The third is that the fleet read is made with the <b>request's own</b> cancellation token.</para>
+/// carry <c>siteId</c>, <c>name</c> and <c>machineCount</c> and nothing else - no stock percentage,
+/// alert count or revenue, each of which would need the per-machine read this endpoint exists to
+/// avoid. The machine count is on the row under the owner's decision of 23 October 2026 because the
+/// fleet read's own <c>CustomerID</c> grouping already holds it; that it stays free is the second
+/// thing, the <b>cost</b>, counted on the registered Nayax client across a whole request: one fleet
+/// read, and no <c>GetMachineProductsAsync</c> call at all, where <c>GET /api/sites</c> makes one
+/// per machine. The third is that the fleet read is made with the <b>request's own</b> cancellation
+/// token.</para>
+///
+/// <para>That the count includes a machine with no mapped products belongs to the use-case tests,
+/// where a fleet can be given a machine without them; the fleet below deliberately has products for
+/// every machine, so the zero per-machine reads here are about a choice and not about an empty
+/// fixture.</para>
 ///
 /// <para>The caller is an Operator, the least-privileged role, because the endpoint declares the
 /// same capability as <c>GET /api/sites</c> and every role holds it; the role matrix itself - all
@@ -47,7 +53,7 @@ public sealed class SiteListApiTests : IClassFixture<SiteListApiTests.ApiFactory
     private const string SiteListUri = "/api/sites/list";
 
     /// <summary>The light row's whole property set, in ordinal order.</summary>
-    private static readonly string[] SiteListProperties = ["name", "siteId"];
+    private static readonly string[] SiteListProperties = ["machineCount", "name", "siteId"];
 
     private readonly ApiFactory _factory;
 
@@ -55,12 +61,13 @@ public sealed class SiteListApiTests : IClassFixture<SiteListApiTests.ApiFactory
 
     /// <summary>
     /// The acceptance criterion's shape half: one row per site the fleet is mapped to, carrying the
-    /// id a filter submits and the name <c>SiteNameResolver</c> derived, ordered by name. The fleet
-    /// holds a machine with no <c>CustomerID</c>, which stands at no site and is excluded exactly as
-    /// <c>GET /api/sites</c> excludes it.
+    /// id a filter submits, the name <c>SiteNameResolver</c> derived and the site's machine count,
+    /// ordered by name. The fleet holds a machine with no <c>CustomerID</c>, which stands at no site
+    /// and is excluded exactly as <c>GET /api/sites</c> excludes it - and so is counted at no site:
+    /// the three machines that are mapped come out as Alpha 1 and Bravo 2, not four between them.
     /// </summary>
     [Fact]
-    public async Task The_site_list_publishes_one_site_id_and_name_per_site()
+    public async Task The_site_list_publishes_one_site_id_name_and_machine_count_per_site()
     {
         await _factory.SeedAsync();
         _factory.Fleet.Reset();
@@ -75,6 +82,7 @@ public sealed class SiteListApiTests : IClassFixture<SiteListApiTests.ApiFactory
             [ApiFactory.AlphaSiteId, ApiFactory.BravoSiteId],
             sites.Select(site => site.GetProperty("siteId").GetInt64()));
         Assert.Equal(["Alpha", "Bravo"], sites.Select(site => site.GetProperty("name").GetString()));
+        Assert.Equal([1, 2], sites.Select(site => site.GetProperty("machineCount").GetInt32()));
     }
 
     /// <summary>

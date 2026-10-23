@@ -16,9 +16,11 @@ import { AccessService } from '../../access/access.service';
 export class SiteProductsComponent implements OnInit, OnDestroy {
   /**
    * The site this page is about, resolved from the light site list (issue #841): the page needs the
-   * site's name, and the site summaries it used to read for it cost one Nayax read per machine in
-   * the whole fleet - on top of the per-machine reads this page's own product list already makes.
-   * `null` when the list holds no such site, exactly as before.
+   * site's name and its machine count for the subtitle, and the site summaries it used to read for
+   * both cost one Nayax read per machine in the whole fleet - on top of the per-machine reads this
+   * page's own product list already makes. The light row carries the count from that list's single
+   * fleet grouping, so the subtitle is unchanged. `null` when the list holds no such site, exactly
+   * as before.
    */
   site$!: Observable<SiteListItem | null>;
   products$!: Observable<SiteProduct[]>;

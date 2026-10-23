@@ -23,8 +23,9 @@ export class SiteService {
   }
 
   /**
-   * The light site list (issue #841): one site id and name per site, from one machine-list read and
-   * no per-machine read at all. It answers the same Nayax unavailability states `getAll()` does, so
+   * The light site list (issue #841): one site id, name and machine count per site, from one
+   * machine-list read and no per-machine read at all - the count is the size of the site's group in
+   * that same read. It answers the same Nayax unavailability states `getAll()` does, so
    * a caller still distinguishes "this business has no site filter" from "this business has no
    * sites" through `loadProviderList`.
    */

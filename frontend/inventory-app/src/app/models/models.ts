@@ -444,16 +444,19 @@ export interface Site {
 
 /**
  * One row of `GET api/sites/list`, the light site list every site picker fills from (issue #841):
- * the id a filter submits and the name it shows, and deliberately nothing else. A stock percentage,
- * alert count or revenue figure would each need the per-machine Nayax read that endpoint exists to
- * avoid; a screen that shows one of those reads {@link Site} instead. A machine count is absent for
- * a different reason: the backend's one fleet read already groups every machine by its site, so the
- * count would cost nothing extra - it is simply not part of the row shape issue #841 fixed, and
- * widening that shape is a human contract decision.
+ * the id a filter submits, the name it shows, and how many machines the fleet has at that site. A
+ * stock percentage, alert count or revenue figure would each need the per-machine Nayax read that
+ * endpoint exists to avoid; a screen that shows one of those reads {@link Site} instead.
+ *
+ * `machineCount` is here because it is free: the backend's one fleet read already groups every
+ * machine by its site, so the count is the size of that group, counted from the fleet and never
+ * from product mappings - a machine with no mapped product still counts, and a machine with no site
+ * counts nowhere. The Site Products subtitle states it; the two other pickers ignore it.
  */
 export interface SiteListItem {
   siteId: number;
   name: string;
+  machineCount: number;
 }
 
 /** One machine's MDB code for a Site Products row (issue #495); null when Nayax has none. */

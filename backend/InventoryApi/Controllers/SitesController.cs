@@ -50,8 +50,9 @@ public class SitesController : ControllerBase
     }
 
     /// <summary>
-    /// The light site list a site picker fills from (issue #841): one site id and name per site,
-    /// from one machine-list read and no per-machine read. It requires the same
+    /// The light site list a site picker fills from (issue #841): one site id, name and machine
+    /// count per site, from one machine-list read and no per-machine read - the count is the size of
+    /// the site's group in that same read, so it adds no request. It requires the same
     /// <c>Inventory.Operate</c> capability as <c>GET api/sites</c>, which it inherits from this
     /// controller, and it answers the same Nayax unavailability states, because it fails on the
     /// same fleet read. <c>GET api/sites</c> is unchanged and still serves the Dashboard and the

@@ -4,15 +4,13 @@
       <h1 class="page-title">Site Products</h1>
       <ng-container *ngIf="site$ | async as site">
         <!--
-          The machine count this sentence used to carry is gone with issue #841: the light site list
-          this page now resolves the site from publishes a site id and name only. Not because the
-          count is expensive - the fleet read behind that list groups every machine by its site, so
-          the count is the size of that group and costs no further Nayax call - but because the
-          published shape issue #841 fixed is the id and the name, and widening it is a contract
-          decision a human owns. Whether the count comes back here is open with the owner. The
-          site's machines are still named per product in the MDB Code column.
+          The machine count is unchanged from before issue #841, but it now comes from the light
+          site list rather than the site summary: `SiteListItem.machineCount` is the size of the
+          site's group in the one fleet read behind `GET api/sites/list`, so this sentence costs no
+          per-machine Nayax read. The site's machines are also named per product in the MDB Code
+          column.
         -->
-        <p class="page-subtitle">{{ site?.name || 'Unnamed site' }} products.</p>
+        <p class="page-subtitle">{{ site?.name || 'Unnamed site' }} products across {{ site?.machineCount }} machines.</p>
         <button
           (click)="exportProducts(site)"
           [disabled]="!products.length"

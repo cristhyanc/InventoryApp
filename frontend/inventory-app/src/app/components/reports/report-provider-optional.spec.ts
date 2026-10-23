@@ -18,9 +18,13 @@ function machine(machineID: number, machineName: string): Machine {
   return { machineID, machineName } as Machine;
 }
 
-/** One row of the light site list the report's site filter reads (issue #841). */
+/**
+ * One row of the light site list the report's site filter reads (issue #841). The filter shows the
+ * name only, so `machineCount` is carried here purely to keep the fixture the shape the endpoint
+ * publishes - this picker deliberately ignores it.
+ */
 function site(): SiteListItem {
-  return { siteId: 1, name: 'Lobby' };
+  return { siteId: 1, name: 'Lobby', machineCount: 2 };
 }
 
 function notConnected(): HttpErrorResponse {

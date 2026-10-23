@@ -15,6 +15,12 @@ namespace InventoryApi.Tests.Application.Sites;
 /// <see cref="ISiteNameResolver"/>, with a machine that stands at no site excluded exactly as
 /// <c>GetSiteSummaries</c> excludes it.
 ///
+/// <para>The <b>machine count</b> is measured against the same cost assertion, because that is the
+/// whole basis on which the owner approved publishing it (23 October 2026): it has to come from the
+/// fleet grouping already in hand, so the tests below pin the count and the call counts over the
+/// same fleets - including a fleet whose machine has no mapped product at all, which still counts as
+/// a machine at its site precisely because the count is not derived from product rows.</para>
+///
 /// <para>The real <see cref="SiteNameResolver"/> is used rather than a stub, because "names from
 /// <c>SiteNameResolver</c>" is the criterion: a second naming rule here would let a site be called
 /// one thing in the picker and another in the report it filters.</para>
@@ -56,9 +62,52 @@ public class ListSitesTests
     }
 
     /// <summary>
+    /// Each site's machine count is the size of its own <c>CustomerID</c> group, so a site holding
+    /// several machines reports all of them and a single-machine site is not given its neighbour's
+    /// total: Bravo has two, Alpha one. This is the figure the Site Products subtitle states, and it
+    /// has to agree with <c>SiteSummary.MachineCount</c>, which is <c>machines.Count</c> over the
+    /// same grouping.
+    /// </summary>
+    [Fact]
+    public async Task Handle_CountsEachSitesOwnMachines()
+    {
+        var sites = await UseCase(Fleet()).Handle(CancellationToken.None);
+
+        Assert.Equal(
+            new[] { (AlphaSiteId, 1), (BravoSiteId, 2) },
+            sites.Select(site => (site.SiteId, site.MachineCount)));
+    }
+
+    /// <summary>
+    /// A machine with no mapped products is still a machine standing at the site, and it is counted:
+    /// the count comes from the fleet grouping, not from product rows, which is exactly why it costs
+    /// no per-machine read. The fleet here maps products for one of Bravo's two machines only, and
+    /// Bravo still reports two - with the per-machine read still never made.
+    /// </summary>
+    [Fact]
+    public async Task Handle_CountsAMachineWithNoMappedProducts()
+    {
+        var nayax = new RecordingNayaxLynxClient(
+            [
+                new NayaxMachine { MachineID = 10, CustomerID = BravoSiteId, MachineName = "Bravo Left" },
+                new NayaxMachine { MachineID = 11, CustomerID = BravoSiteId, MachineName = "Bravo Right" },
+            ],
+            new Dictionary<long, List<NayaxMachineProduct>>
+            {
+                [10] = [new() { MachineID = 10, NayaxProductID = 1, PAR = 5, MissingStockByMDB = 1 }],
+            });
+
+        var site = Assert.Single(await UseCase(nayax).Handle(CancellationToken.None));
+
+        Assert.Equal(2, site.MachineCount);
+        Assert.Equal(0, nayax.MachineProductCalls);
+        Assert.Equal(1, nayax.MachineListCalls);
+    }
+
+    /// <summary>
     /// A machine Nayax returns with no <c>CustomerID</c> stands at no site: it is excluded, and it
     /// does not become a site of its own or an unnamed entry. The site it would have polluted keeps
-    /// its own name.
+    /// its own name - and its own count, which is one machine and not the two the fleet holds.
     /// </summary>
     [Fact]
     public async Task Handle_ExcludesAMachineWithNoCustomerId()
@@ -74,6 +123,7 @@ public class ListSitesTests
         var site = Assert.Single(sites);
         Assert.Equal(BravoSiteId, site.SiteId);
         Assert.Equal("Bravo", site.Name);
+        Assert.Equal(1, site.MachineCount);
     }
 
     /// <summary>

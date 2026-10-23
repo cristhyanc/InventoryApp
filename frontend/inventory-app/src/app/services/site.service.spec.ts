@@ -32,7 +32,7 @@ describe('SiteService (issue #841)', () => {
   afterEach(() => http.verify());
 
   it('asks the light site list endpoint for the picker list', () => {
-    const sites: SiteListItem[] = [{ siteId: 42, name: 'Lobby' }];
+    const sites: SiteListItem[] = [{ siteId: 42, name: 'Lobby', machineCount: 2 }];
     let received: SiteListItem[] | undefined;
 
     service.getList().subscribe((items) => (received = items));

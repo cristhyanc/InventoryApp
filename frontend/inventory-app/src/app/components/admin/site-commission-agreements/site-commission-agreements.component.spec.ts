@@ -12,9 +12,12 @@ function agreement(overrides: Partial<SiteCommissionAgreement> = {}): SiteCommis
   return { id: 1, siteId: 1, effectiveFrom: '2026-01-01', commissionRate: 0.1, frequency: 1, basis: 0, ...overrides };
 }
 
-/** One row of the light site list this page's picker fills from (issue #841). */
+/**
+ * One row of the light site list this page's picker fills from (issue #841). The picker shows the
+ * name only; `machineCount` is here to keep the fixture the shape the endpoint publishes.
+ */
 function site(overrides: Partial<SiteListItem> = {}): SiteListItem {
-  return { siteId: 1, name: 'Main Office', ...overrides };
+  return { siteId: 1, name: 'Main Office', machineCount: 3, ...overrides };
 }
 
 async function render(
