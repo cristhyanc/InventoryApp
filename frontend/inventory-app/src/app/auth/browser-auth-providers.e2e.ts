@@ -49,8 +49,12 @@ export const e2eTestAccount = {
 } as unknown as AccountInfo;
 
 /**
- * Only the members the application shell actually uses (`app.component.ts`): redirect handling,
- * the active account, and the login/logout commands, which an E2E run never issues.
+ * Only the members the composition actually calls: `initialize`, which `app.config.ts` runs as an
+ * APP_INITIALIZER on every build, and the ones the application shell uses (`app.component.ts`) -
+ * redirect handling, the active account, and the login/logout commands, which an E2E run never
+ * issues. The initializer is not optional: an APP_INITIALIZER that throws aborts bootstrap, so a
+ * member missing here renders a blank page for the whole suite rather than failing one test.
+ * `browser-auth-providers.spec.ts` asserts the real initializer against this stub.
  */
 export function createE2ETestMsalService(): MsalService {
   return {
@@ -59,6 +63,7 @@ export function createE2ETestMsalService(): MsalService {
       getAllAccounts: () => [e2eTestAccount],
       setActiveAccount: () => undefined
     },
+    initialize: () => of(undefined),
     handleRedirectObservable: () => of(null),
     loginRedirect: () => undefined,
     logoutRedirect: () => undefined

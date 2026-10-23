@@ -1081,7 +1081,9 @@ does not manage.
   search/filter toolbar, to the right of search, Category, Status and Reset, and **Categories → New
   Category** creates a record this business maintains itself. (New Product is on All Products only —
   it is not in the shared Products header, so Needs Ordering, which orders products that already
-  exist, no longer offers it.)
+  exist, no longer offers it.) **Needs Ordering → Mark as ordered** sits the same way, in that
+  page's own search/filter toolbar to the right of search, Category and Reset (issue #832) — it used
+  to sit in its own row below the toolbar.
   Editing a product the provider manages shows its name and category read-only with a note naming
   the provider ("Name and category are managed by Nayax and cannot be edited here."); its price and
   every other local field stay editable in the same form. A provider-managed category's name is
