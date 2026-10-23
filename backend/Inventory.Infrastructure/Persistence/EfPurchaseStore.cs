@@ -79,14 +79,26 @@ public sealed class EfPurchaseStore : IPurchaseStore
         return existingCount == productIds.Count;
     }
 
-    public async Task<(long ProductId, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
+    public async Task<(long ProductId, string? ProductName, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
         IReadOnlyCollection<long> productIds, DateTime purchaseDate, CancellationToken cancellationToken)
     {
         if (productIds.Count == 0) return null;
         var cutoffsByProduct = await _db.InventoryCostTransitionBaselines.AsNoTracking()
             .Where(x => productIds.Contains(x.ProductId))
             .ToDictionaryAsync(x => x.ProductId, x => x.CutoffAt, cancellationToken);
-        return PurchaseCostTransitionPolicy.FindConflictingBaseline(productIds, purchaseDate, cutoffsByProduct);
+        if (PurchaseCostTransitionPolicy.FindConflictingBaseline(productIds, purchaseDate, cutoffsByProduct)
+            is not { } conflict)
+        {
+            return null;
+        }
+
+        // Only the refused product's name, and only on the refusal path, so the ordinary write is
+        // unchanged (issue #833). Which product conflicts is still decided by the policy above.
+        var productName = await _db.Products.AsNoTracking()
+            .Where(product => product.Id == conflict.ProductId)
+            .Select(product => product.Name)
+            .FirstOrDefaultAsync(cancellationToken);
+        return (conflict.ProductId, productName, conflict.CutoffAt);
     }
 
     public async Task<PurchaseRecord> CreateAsync(
@@ -420,7 +432,8 @@ public sealed class EfPurchaseStore : IPurchaseStore
     {
         var conflict = await FindConflictingCostTransitionBaselineAsync(productIds, purchaseDate, cancellationToken);
         if (conflict is { } found)
-            throw new InvalidOperationException(PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(found.CutoffAt, found.ProductId));
+            throw new InvalidOperationException(
+                PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(found.CutoffAt, found.ProductId, found.ProductName));
     }
 
     private async Task EnsureLegacyPurchaseMovementsArePreservedAsync(

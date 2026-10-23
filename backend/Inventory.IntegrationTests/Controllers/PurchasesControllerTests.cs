@@ -215,7 +215,7 @@ public class PurchasesControllerTests
             .ReturnsAsync(true);
         store.Setup(s => s.FindConflictingCostTransitionBaselineAsync(
                 It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<DateTime>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(((long, DateTime)?)null);
+            .ReturnsAsync(((long, string?, DateTime)?)null);
         store.Setup(s => s.CreateAsync(
                 It.IsAny<PurchaseFields>(),
                 It.IsAny<IReadOnlyList<PurchaseItemInput>>(),

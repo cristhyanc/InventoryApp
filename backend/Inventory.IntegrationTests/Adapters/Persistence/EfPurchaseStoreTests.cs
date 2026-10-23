@@ -40,6 +40,48 @@ public sealed class EfPurchaseStoreTests : IDisposable
 
     private static PurchaseFileMetadata FileMetadata() => new("stored.jpg", "image/jpeg", "receipt.jpg", 3);
 
+    /// <summary>
+    /// Issue #833: the conflict lookup reports the product's name beside its ID and cutoff, so the
+    /// refusal the operator sees names the product to fix. Which product is reported - the first
+    /// conflicting one, in the given order - is unchanged.
+    /// </summary>
+    [Fact]
+    public async Task FindConflictingCostTransitionBaselineAsync_reports_the_conflicting_products_name()
+    {
+        var cutoff = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc);
+        await using (var seed = TestAppDbContext.Unrestricted(_options))
+        {
+            seed.Products.AddRange(
+                new Product { Id = 1, Name = "Coke" },
+                new Product { Id = 2, Name = "Chips" });
+            seed.InventoryCostTransitionBaselines.AddRange(
+                new InventoryCostTransitionBaseline
+                {
+                    ProductId = 1,
+                    CutoffAt = cutoff,
+                    HomeStockQuantity = 0,
+                    CostSource = InventoryCostBaselineSource.ManualAuthoritative,
+                },
+                new InventoryCostTransitionBaseline
+                {
+                    ProductId = 2,
+                    CutoffAt = cutoff.AddDays(1),
+                    HomeStockQuantity = 0,
+                    CostSource = InventoryCostBaselineSource.ManualAuthoritative,
+                });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = TestAppDbContext.Unrestricted(_options);
+        var store = new EfPurchaseStore(db, TestCostingUseCases.Rebuild(db));
+
+        Assert.Equal(
+            (2L, "Chips", cutoff.AddDays(1)),
+            await store.FindConflictingCostTransitionBaselineAsync([2, 1], cutoff, CancellationToken.None));
+        Assert.Null(await store.FindConflictingCostTransitionBaselineAsync(
+            [1, 2], cutoff.AddDays(2), CancellationToken.None));
+    }
+
     [Fact]
     public async Task CreateAsync_allocates_the_oldest_outstanding_supplier_order_first()
     {

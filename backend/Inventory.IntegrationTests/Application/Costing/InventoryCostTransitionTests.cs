@@ -66,6 +66,30 @@ public class InventoryCostTransitionTests
         Assert.Equal("The opening average unit cost cannot be negative.", exception.Message);
     }
 
+    /// <summary>
+    /// Issue #833: the preview refuses incomplete Nayax slot data, and the refusal the operator
+    /// sees names the product rather than only its ID. The name comes from the product the preview
+    /// was asked for, which the builder already holds.
+    /// </summary>
+    [Fact]
+    public async Task Preview_rejecting_incomplete_machine_stock_names_the_product()
+    {
+        await using var db = CreateDb();
+        db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 19, AverageUnitCost = 1.25m });
+        await db.SaveChangesAsync();
+        var nayax = NayaxWithStock(10);
+        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 10, PAR = 10, MissingStockByMDB = null } });
+
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            TestCostingUseCases.PreviewTransition(db, nayax.Object)
+                .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative)));
+
+        Assert.Equal(
+            "Nayax stock is incomplete for product Snack (10) in machine Machine A: PAR and MissingStockByMDB are required.",
+            exception.Message);
+    }
+
     [Fact]
     public async Task Apply_without_confirmation_throws_a_domain_validation_exception()
     {
