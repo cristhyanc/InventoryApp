@@ -32,6 +32,7 @@ import {
   nayaxUnavailableMessage,
   storageOnlyReorderLabel
 } from '../../provider/nayax-availability';
+import { BusinessDateTimePipe } from '../../formatting/business-date-time.pipe';
 import { trendLabel, trendClass } from '../../formatting/revenue-trend';
 import { siteStockClass } from '../../formatting/site-stock-status';
 import { money } from '../reports/report-formatting';
@@ -74,7 +75,13 @@ export type PurchaseCostLoadState = 'idle' | 'loading' | 'loaded' | 'failed';
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, RouterLink, IconComponent, LegacyBusinessSettingsPromptComponent],
+  imports: [
+    CommonModule,
+    RouterLink,
+    IconComponent,
+    LegacyBusinessSettingsPromptComponent,
+    BusinessDateTimePipe
+  ],
   templateUrl: './dashboard.component.html'
 })
 export class DashboardComponent implements OnInit, OnDestroy {
@@ -109,6 +116,23 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * last two minutes, so it is shown as "refreshed recently", never as {@link isSalesSyncFailed}.
    */
   isSalesSyncRecentlyRefreshed = false;
+
+  /**
+   * When the sales these figures are calculated from last finished synchronizing, as a true
+   * instant, or `null` when this page does not know (issue #843).
+   *
+   * Two answers set it and they are both "current": a run that happened - where the instant is now,
+   * because the page was waiting for it - and a run the server skipped because it had finished less
+   * than three minutes ago, where the instant is the server's own. It stays `null` for everything
+   * that is *not* an answer about freshness: a failure, the run limit's `429`, and a support
+   * session. Never a fabricated instant for those - "synced 0 min ago" for figures nobody read
+   * would be exactly the wrong claim.
+   */
+  salesSyncedAtUtc: string | null = null;
+
+  /** Whether a Refresh the operator asked for is still in flight; see {@link refreshSales}. */
+  isRefreshingSales = false;
+
   summary: DashboardSummary | null = null;
   isLoadingSummary = false;
   isSummaryFailed = false;
@@ -275,11 +299,17 @@ export class DashboardComponent implements OnInit, OnDestroy {
    * synchronize, the call could only be refused, and the two sections it refreshes are not
    * rendered. No notice is shown either - a sync that was never attempted neither failed nor
    * succeeded, and the page says what the business *does* have instead.
+   *
+   * Since issue #843 the server may answer that it skipped the run because this business
+   * synchronized less than three minutes ago. That is a third answer and not a refusal: the figures
+   * below are current, so no notice is shown and {@link salesSyncedAtUtc} carries the instant the
+   * server reported instead. `force` is the Refresh control's, and the only thing that bypasses it.
    */
-  refreshSalesDashboard(): void {
+  refreshSalesDashboard(force = false): void {
     this.isSalesSyncFailed = false;
     this.isSalesSyncRecentlyRefreshed = false;
     this.isSalesSyncSkippedInSupportView = false;
+    this.salesSyncedAtUtc = null;
     if (!this.isProviderUsable) {
       this.isLoadingSites = false;
       this.isLoadingMachines = false;
@@ -293,12 +323,18 @@ export class DashboardComponent implements OnInit, OnDestroy {
       this.refreshSites();
       return;
     }
-    this.nayaxSalesSyncService.syncLatest().subscribe({
-      next: () => {
+    this.isRefreshingSales = true;
+    this.nayaxSalesSyncService.syncLatest(force).subscribe({
+      next: (result) => {
+        this.isRefreshingSales = false;
+        // A skipped run reports when the sales were synchronized; a run that happened has just
+        // finished, so the instant is this moment.
+        this.salesSyncedAtUtc = result.lastSyncedAtUtc ?? new Date().toISOString();
         this.refreshMachines();
         this.refreshSites();
       },
       error: (error: unknown) => {
+        this.isRefreshingSales = false;
         if (error instanceof HttpErrorResponse && error.status === 429) {
           this.isSalesSyncRecentlyRefreshed = true;
         } else {
@@ -308,6 +344,20 @@ export class DashboardComponent implements OnInit, OnDestroy {
         this.refreshSites();
       }
     });
+  }
+
+  /**
+   * The Refresh control: synchronizes the latest sales even when the server would have skipped the
+   * run as recent, then reloads Sites and Machines from the result (issue #843).
+   *
+   * It exists because the three-minute skip is a default and not a verdict - an operator who has
+   * just restocked a machine or taken a payment wants to see it now - and it is the only caller
+   * that forces a run. A forced run is still bounded by the business's run limit, so holding the
+   * button down costs the upstream the same ten runs per two minutes it already allowed, answered
+   * as the existing "refreshed recently" notice.
+   */
+  refreshSales(): void {
+    this.refreshSalesDashboard(true);
   }
 
   refreshSites(): void {
@@ -427,6 +477,35 @@ export class DashboardComponent implements OnInit, OnDestroy {
    */
   get isProviderUsable(): boolean {
     return this.providerAvailability !== 'notConnected';
+  }
+
+  /**
+   * How old the sales behind this page's figures are, or `null` when that is not known (issue
+   * #843) - a failure, the run limit, a support session, or a provider there is nothing to
+   * synchronize for.
+   *
+   * Whole minutes, floored, because that is the precision the statement is worth: the exact
+   * wall-clock instant is on the same element's `title`, in the business's own timezone. An age of
+   * zero - or a negative one, which a browser clock behind the server's produces - reads as "just
+   * now" rather than "0 min ago", which would look like a stopped clock.
+   */
+  get salesSyncedLabel(): string | null {
+    if (this.salesSyncedAtUtc === null) return null;
+    const syncedAt = new Date(this.salesSyncedAtUtc);
+    if (Number.isNaN(syncedAt.getTime())) return null;
+    const minutes = Math.floor((Date.now() - syncedAt.getTime()) / 60_000);
+    return minutes <= 0 ? 'Sales synced just now' : `Sales synced ${minutes} min ago`;
+  }
+
+  /**
+   * Whether to offer the Refresh control. It belongs to the live-fleet half of the page, so it is
+   * hidden for a business with no usable provider, and inside a support session, where the call
+   * resolves no Nayax credentials at all and could only be refused (issue #551). It stays offered
+   * after a failure and after the run limit's refusal: asking again is exactly what an operator
+   * wants then, and the limit answers for itself.
+   */
+  get isSalesRefreshShown(): boolean {
+    return this.isLiveFleetShown && !this.sessionActive;
   }
 
   /**
