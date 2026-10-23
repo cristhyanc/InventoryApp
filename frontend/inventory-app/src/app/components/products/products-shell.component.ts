@@ -1,31 +1,17 @@
-import { Component, OnDestroy } from '@angular/core';
-import { CommonModule } from '@angular/common';
+import { Component } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
-import { Subscription } from 'rxjs';
-import { SupportSessionService } from '../../support-session/support-session.service';
 
+/**
+ * The Products area's shared header: the page title and the view navigation, and nothing else.
+ *
+ * It holds no write action since issue #825 - "New Product" moved into the All Products
+ * search/filter toolbar (`ProductListComponent`), which is the one view that creates a product, so
+ * this component no longer reads the support-session state either: there is nothing here to hide.
+ */
 @Component({
   selector: 'app-products-shell',
   standalone: true,
-  imports: [CommonModule, RouterLink, RouterLinkActive, RouterOutlet],
+  imports: [RouterLink, RouterLinkActive, RouterOutlet],
   templateUrl: './products-shell.component.html'
 })
-export class ProductsShellComponent implements OnDestroy {
-  /**
-   * Whether a support session is active (issue #737, extending #554): "New Product" is hidden
-   * while it is, because a session grants `InventoryOperate` - the capability this write would
-   * otherwise be gated on - and the backend refuses the write itself only by its read-only method
-   * rule, never by withholding the capability. See `SupportSessionService.active$`.
-   */
-  sessionActive = false;
-
-  private readonly sessionActiveSubscription: Subscription;
-
-  constructor(supportSession: SupportSessionService) {
-    this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
-  }
-
-  ngOnDestroy(): void {
-    this.sessionActiveSubscription.unsubscribe();
-  }
-}
+export class ProductsShellComponent {}

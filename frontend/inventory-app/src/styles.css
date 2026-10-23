@@ -2613,6 +2613,10 @@ img {
     margin-right: -1.5rem;
   }
 
+  .sm\:ml-auto {
+    margin-left: auto;
+  }
+
   .sm\:max-w-md {
     max-width: 28rem;
   }

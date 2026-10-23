@@ -3,6 +3,14 @@
     <h1 class="page-title">{{ productId ? 'Edit Product' : 'New Product' }}</h1>
   </header>
 
+  <!-- Why this product may not be deleted, in the server's own words (issue #825). Informational
+       only: it explains the product and changes nothing about the form below it. -->
+  @if (deletionNotice) {
+    <div class="alert alert-danger">
+      <p class="alert-title">{{ deletionNotice }}</p>
+    </div>
+  }
+
   <div class="card w-full">
     <div class="card-body">
       @if (error) {

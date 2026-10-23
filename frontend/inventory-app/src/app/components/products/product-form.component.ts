@@ -38,6 +38,18 @@ export class ProductFormComponent implements OnInit, OnDestroy {
    */
   providerManagedFields: string[] = [];
 
+  /**
+   * Why this product may not be deleted, for the notice under the page header (issue #825), or
+   * `null` when the loaded product may be deleted and on New Product.
+   *
+   * It is the server's own refusal, verbatim - `GET api/products/{id}`'s `deletionRefusal`, decided
+   * by the one `Inventory.Domain.Products.ProductDeletionPolicy` (issue #737) - so this page never
+   * words the deletion rule a second time. It is informational: it gates no field, no Save and no
+   * other control, and it is shown for an active and an inactive product alike and during a
+   * support session, because it explains the product rather than offering an action.
+   */
+  deletionNotice: string | null = null;
+
   private readonly sessionActiveSubscription: Subscription;
 
   form = {
@@ -77,6 +89,14 @@ export class ProductFormComponent implements OnInit, OnDestroy {
       this.productId = Number(idParam);
       this.productService.get(this.productId).subscribe((p) => {
         this.providerManagedFields = p.providerManagedFields ?? [];
+        // Anything but a plain `true` means a delete would be refused: `false` says so, and a
+        // response that did not resolve the question is not permission either (issue #737).
+        const refusal = p.deletionRefusal?.trim();
+        if (p.canDelete === true) {
+          this.deletionNotice = null;
+        } else {
+          this.deletionNotice = refusal || 'This product cannot be deleted.';
+        }
         this.form = {
           name: p.name,
           sku: p.sku ?? '',

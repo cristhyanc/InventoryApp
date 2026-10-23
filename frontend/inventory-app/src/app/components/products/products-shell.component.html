@@ -1,11 +1,10 @@
 <div class="page">
   <header class="page-header">
     <h1 class="page-title">Products</h1>
-    <!-- Hidden rather than disabled while a support session is active (issue #554): a session
-         grants InventoryOperate, so this write would otherwise still render. -->
-    @if (!sessionActive) {
-      <a routerLink="/products/new" class="btn btn-primary">New Product</a>
-    }
+    <!-- "New Product" is not here (issue #825): a create action in the shared header reached every
+         view the shell wraps, including Needs Ordering, which orders products that already exist.
+         It lives in the All Products search/filter toolbar instead, which is also where it is
+         hidden during a support session. -->
     <nav
       aria-label="Products views"
       class="flex overflow-hidden rounded-md-control border border-md-gray-300 bg-white text-md-body text-md-gray-800"
