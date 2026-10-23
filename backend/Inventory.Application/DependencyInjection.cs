@@ -150,6 +150,13 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetActiveSupportSession>();
         services.AddScoped<EndSupportSession>();
 
+        // The Super Admin's platform supplier presets (issue #848). Scoped like the two surfaces
+        // above because they read and write through the request's own AppDbContext - which here
+        // carries a denied business scope, since a preset belongs to no business at all.
+        services.AddScoped<ListSupplierPresets>();
+        services.AddScoped<CreateSupplierPreset>();
+        services.AddScoped<UpdateSupplierPreset>();
+
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
         // state about the process rather than about one request: "this membership was refreshed

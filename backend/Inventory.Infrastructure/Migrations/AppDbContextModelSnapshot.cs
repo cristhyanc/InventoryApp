@@ -2144,6 +2144,43 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("SupplierOrderReceiptAllocations");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierPreset", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalisedName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Url")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalisedName")
+                        .IsUnique();
+
+                    b.ToTable("SupplierPresets");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupportSession", b =>
                 {
                     b.Property<int>("Id")

@@ -3,6 +3,7 @@ using Inventory.Application.Tenancy;
 using Inventory.Domain.MachineStock;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Stock;
+using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Inventory.Infrastructure.Models;
@@ -205,6 +206,14 @@ public class AppDbContext : DbContext
         Set<ProviderCatalogueFieldDecision>();
 
     /// <summary>
+    /// The platform-wide suggested suppliers a Super Admin keeps (issue #848). The one
+    /// <em>platform</em> table in this schema: it belongs to no business and carries no business key
+    /// at all, which is a different classification from the five structurally non-tenant-owned
+    /// tables above; see <see cref="SupplierPreset"/>.
+    /// </summary>
+    public DbSet<SupplierPreset> SupplierPresets => Set<SupplierPreset>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -254,6 +263,7 @@ public class AppDbContext : DbContext
         ConfigureTenancy(modelBuilder);
         ConfigureMemberInvites(modelBuilder);
         ConfigureSupportSessions(modelBuilder);
+        ConfigureSupplierPresets(modelBuilder);
         ConfigureProviderLinks(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
         ConfigureMachines(modelBuilder);
@@ -1052,6 +1062,46 @@ public class AppDbContext : DbContext
             fromProvider => fromProvider.HasValue
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                 : fromProvider);
+    }
+
+    /// <summary>
+    /// Maps the platform supplier presets of issue #848.
+    ///
+    /// <para>This is the one <em>platform</em> table in the schema: it is about no business, so it
+    /// has no business key, no <c>BusinessId</c> index and no query filter - not as an exemption from
+    /// tenant ownership, but because there is no owner for one to compare against. Everything a
+    /// business ends up with is its own ordinary tenant-owned <see cref="Supplier"/> row that issue
+    /// #835 child C copies; nothing reads back the other way.</para>
+    /// </summary>
+    private static void ConfigureSupplierPresets(ModelBuilder modelBuilder)
+    {
+        var preset = modelBuilder.Entity<SupplierPreset>();
+
+        // The displayed name, bounded in the schema as well as in SupplierPresetPolicy.
+        preset.Property(x => x.Name).IsRequired().HasMaxLength(SupplierPresetPolicy.MaxNameLength);
+
+        // The comparison key, and the reason it is a column at all: name uniqueness ignoring case has
+        // to be the database's rule rather than a read-then-insert, which two concurrent creates can
+        // both pass. It is a stored ToUpperInvariant() rather than a NOCASE collation because NOCASE
+        // folds ASCII only, so "Café"/"CAFÉ" would be two rows under one and one row under the other.
+        preset.Property(x => x.NormalisedName)
+            .IsRequired()
+            .HasMaxLength(SupplierPresetPolicy.MaxNameLength);
+        preset.HasIndex(x => x.NormalisedName).IsUnique();
+
+        // The optional website. Bounded here at the shared rule's limit; the shape is
+        // SupplierUrlPolicy's, which a column constraint cannot express.
+        preset.Property(x => x.Url).HasMaxLength(SupplierUrlPolicy.MaxLength);
+
+        // Both instants are persisted UTC and both are reported by this feature's API, so each is
+        // marked UTC on the way out - see the StockAdjustment.CreatedAt comment below for why the
+        // SQLite provider makes that necessary.
+        preset.Property(x => x.CreatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        preset.Property(x => x.UpdatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
 
     /// <summary>
