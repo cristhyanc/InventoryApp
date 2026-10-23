@@ -56,11 +56,18 @@ public class SitesController : ControllerBase
     /// controller, and it answers the same Nayax unavailability states, because it fails on the
     /// same fleet read. <c>GET api/sites</c> is unchanged and still serves the Dashboard and the
     /// Sites page.
+    ///
+    /// <para>It invokes the use case with the <b>request's own</b> cancellation token, so a caller
+    /// that navigates away abandons the Nayax fleet read instead of leaving it to finish
+    /// unobserved. The two actions beside it still pass <c>CancellationToken.None</c>: that is the
+    /// signature issue #302 deliberately left alone when it moved them off the legacy delegator,
+    /// and threading a real token through them changes their cancellation behaviour, which is not
+    /// this endpoint's to decide.</para>
     /// </summary>
     [HttpGet("list")]
-    public async Task<ActionResult<List<SiteListItemDto>>> GetList()
+    public async Task<ActionResult<List<SiteListItemDto>>> GetList(CancellationToken ct)
     {
-        var sites = await _listSites.Handle(CancellationToken.None);
+        var sites = await _listSites.Handle(ct);
         return Ok(sites.Select(SiteResponseMapper.ToDto).ToList());
     }
 

@@ -444,9 +444,12 @@ export interface Site {
 
 /**
  * One row of `GET api/sites/list`, the light site list every site picker fills from (issue #841):
- * the id a filter submits and the name it shows, and deliberately nothing else. A machine count,
- * stock percentage, alert count or revenue figure would each need the per-machine Nayax read that
- * endpoint exists to avoid; a screen that shows one of those reads {@link Site} instead.
+ * the id a filter submits and the name it shows, and deliberately nothing else. A stock percentage,
+ * alert count or revenue figure would each need the per-machine Nayax read that endpoint exists to
+ * avoid; a screen that shows one of those reads {@link Site} instead. A machine count is absent for
+ * a different reason: the backend's one fleet read already groups every machine by its site, so the
+ * count would cost nothing extra - it is simply not part of the row shape issue #841 fixed, and
+ * widening that shape is a human contract decision.
  */
 export interface SiteListItem {
   siteId: number;

@@ -26,12 +26,14 @@ namespace InventoryApi.Tests.Controllers;
 /// <c>BusinessScopeMiddleware</c>, the controller, the shared Nayax exception handler and relational
 /// SQLite with the real migration history.
 ///
-/// <para>Two things only a hosted test can show. The first is the <b>published shape</b>: the rows
-/// carry <c>siteId</c> and <c>name</c> and nothing else - no machine count, stock percentage, alert
-/// count or revenue, each of which would need the per-machine read this endpoint exists to avoid.
-/// The second is the <b>cost</b>, counted on the registered Nayax client across a whole request:
-/// one fleet read, and no <c>GetMachineProductsAsync</c> call at all, where <c>GET /api/sites</c>
-/// makes one per machine.</para>
+/// <para>Three things only a hosted test can show. The first is the <b>published shape</b>: the rows
+/// carry <c>siteId</c> and <c>name</c> and nothing else - no stock percentage, alert count or
+/// revenue, each of which would need the per-machine read this endpoint exists to avoid, and no
+/// machine count either, which the fleet read's own grouping would give for free but which the
+/// published shape issue #841 fixed does not include. The second is the <b>cost</b>, counted on the
+/// registered Nayax client across a whole request: one fleet read, and no
+/// <c>GetMachineProductsAsync</c> call at all, where <c>GET /api/sites</c> makes one per machine.
+/// The third is that the fleet read is made with the <b>request's own</b> cancellation token.</para>
 ///
 /// <para>The caller is an Operator, the least-privileged role, because the endpoint declares the
 /// same capability as <c>GET /api/sites</c> and every role holds it; the role matrix itself - all
@@ -91,6 +93,25 @@ public sealed class SiteListApiTests : IClassFixture<SiteListApiTests.ApiFactory
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(1, _factory.Fleet.MachineListCalls);
         Assert.Equal(0, _factory.Fleet.MachineProductCalls);
+    }
+
+    /// <summary>
+    /// The fleet read is made with the request's own cancellation token, so a caller that navigates
+    /// away abandons the Nayax call instead of leaving it to finish unobserved. What this
+    /// distinguishes is the token itself: <c>CancellationToken.None</c> can never be cancelled,
+    /// while the token MVC binds from the request can, so a controller that passed the former would
+    /// fail here.
+    /// </summary>
+    [Fact]
+    public async Task The_site_list_reads_the_fleet_with_the_requests_own_cancellation_token()
+    {
+        await _factory.SeedAsync();
+        _factory.Fleet.Reset();
+
+        var response = await _factory.Authenticated().GetAsync(SiteListUri);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(_factory.Fleet.LastMachineListToken.CanBeCanceled);
     }
 
     /// <summary>
@@ -274,15 +295,23 @@ public sealed class SiteListApiTests : IClassFixture<SiteListApiTests.ApiFactory
         /// <summary>Set to refuse the fleet read, as an unusable Nayax connection does.</summary>
         public Exception? MachineListFailure { get; set; }
 
+        /// <summary>
+        /// The cancellation token the last fleet read was asked to observe, so a test can tell the
+        /// request's own token from <c>CancellationToken.None</c>.
+        /// </summary>
+        public CancellationToken LastMachineListToken { get; private set; }
+
         public void Reset()
         {
             Interlocked.Exchange(ref _machineListCalls, 0);
             Interlocked.Exchange(ref _machineProductCalls, 0);
             MachineListFailure = null;
+            LastMachineListToken = CancellationToken.None;
         }
 
         public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default)
         {
+            LastMachineListToken = ct;
             Interlocked.Increment(ref _machineListCalls);
             return MachineListFailure is null
                 ? Task.FromResult(Machines)

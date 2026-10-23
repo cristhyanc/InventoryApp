@@ -213,9 +213,11 @@ public record SiteSummaryDto(
 
 // One row of GET /api/sites/list, the light site list a site picker fills from (issue #841): the id
 // a filter submits and the name it shows, and nothing else. It is deliberately not a reduced
-// SiteSummaryDto - a machine count, stock percentage, alert count or revenue figure would each need
-// the per-machine Nayax read this endpoint exists to avoid. GET /api/sites keeps serving the full
-// row to the Dashboard and the Sites page.
+// SiteSummaryDto - a stock percentage, alert count or revenue figure would each need the per-machine
+// Nayax read this endpoint exists to avoid. A machine count would not: the fleet read behind this
+// list already groups every machine by its site, so the count is the size of that group. It is
+// absent because this is the shape issue #841 fixed, and widening it is a human contract decision.
+// GET /api/sites keeps serving the full row to the Dashboard and the Sites page.
 public record SiteListItemDto(long SiteId, string Name);
 
 public record SiteProductMachineMdbCodeDto(long MachineId, string MachineLabel, int? MdbCode);
