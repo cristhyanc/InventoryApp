@@ -5,6 +5,13 @@
     precedence over any supplier default. Saving it does not change the GST classification of any
     purchase that is already recorded.
   </p>
+  @if (deferred) {
+    <!-- New Product (issue #829): the rule is written to the product's own GST resource as soon as
+         the product has an id, so this panel offers no separate Save. -->
+    <p class="mb-4 text-sm text-slate-600">
+      The rule is saved with the new product, and it applies to purchases recorded from then on.
+    </p>
+  }
 
   @if (loading) {
     <p class="mb-3 text-sm text-slate-600">Loading the GST rule...</p>
@@ -22,8 +29,9 @@
       <select
         id="product-gst-rule"
         name="productGstRule"
-        [(ngModel)]="rule"
-        [disabled]="!loaded || saving"
+        [ngModel]="rule"
+        (ngModelChange)="selectRule($event)"
+        [disabled]="!deferred && (!loaded || saving)"
       >
         @for (option of options; track option.value) {
           <option [ngValue]="option.value">{{ option.label }}</option>
@@ -34,13 +42,15 @@
       </p>
     </div>
 
-    <button
-      type="button"
-      class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-      [disabled]="!loaded || saving || sessionActive"
-      (click)="save()"
-    >
-      {{ saving ? 'Saving...' : 'Save GST rule' }}
-    </button>
+    @if (!deferred) {
+      <button
+        type="button"
+        class="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+        [disabled]="!loaded || saving || sessionActive"
+        (click)="save()"
+      >
+        {{ saving ? 'Saving...' : 'Save GST rule' }}
+      </button>
+    }
   </div>
 </section>

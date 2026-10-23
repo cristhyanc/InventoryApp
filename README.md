@@ -1051,6 +1051,17 @@ does not manage.
   unique within the business (compared without case, so
   "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
   the initial restock movement it always did, at the optional initial unit **cost**.
+- **Choose the new product's GST rule while creating it** (issue #829). **Products → New Product**
+  offers the same **GST rule** picker the edit page does — **Taxable**, **GST-free** or **No rule**,
+  with the same meanings and the same help. The rule is its own resource, so creating a product with
+  one is two writes: `POST /api/products`, then `PUT /api/products/{id}/gst-rule` on the id the
+  create answered. **No rule** needs no second write, because a new product already carries no rule.
+  If the rule write fails the page says exactly that — "The product was created, but its GST rule
+  was not saved." — keeps the product that now exists, and relabels its button **Save GST Rule**,
+  which retries the rule alone and never creates a second product; a create whose rule was not
+  stored is never reported as finished, and you can also set the rule later by editing the product.
+  Choosing the rule here classifies no purchase and is not retroactive — see
+  [Product and supplier GST rules](#product-and-supplier-gst-rules).
 - **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name and
   category** as well as the SKU, description, unit, low-stock threshold, restock target
   and active flag. There is no supplier among them — see
@@ -1241,6 +1252,10 @@ classified:
 - **Products → edit a product → GST rule.** Choose **Taxable**, **GST-free**, or **No rule**, then
   **Save GST rule**. It saves separately from the rest of the product form, because it is
   bookkeeping configuration rather than a catalogue field.
+- **Products → New Product → GST rule** (issue #829). The same picker, for a product that does not
+  exist yet: there is no stored rule to read, so it is ready to use immediately and has no Save of
+  its own — **Create Product** saves it with the product, as described under
+  [Products and categories](#products-and-categories).
 - **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
   lines** and separate defaults for its **delivery charge** and **package charge**, then **Save GST
   defaults**. The three are independent: a charge never inherits the product-line default.
@@ -1262,6 +1277,13 @@ not classify its products, because a supplier may sell both taxable and GST-free
 rule or a default never changes a purchase that is already recorded; applying rules to purchases
 already recorded is the separate, explicit
 [Historical GST classification](#historical-gst-classification-admin-page) maintenance action below.
+
+**A rule has no effective date of its own, and it is never retroactive.** It is simply the current
+configuration: the rule a product carries is the one the Historical GST classification action can
+apply, it reads the rules as they are configured at the moment you press **Apply**, and it only ever
+classifies components nobody has classified yet. Recording a purchase does not read a rule at all —
+you classify each line and charge on the purchase itself — so a rule chosen while creating a product,
+or changed afterwards, classifies nothing by itself and restates nothing that is already recorded.
 
 ## Historical GST classification (Admin page)
 

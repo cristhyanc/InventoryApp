@@ -55,12 +55,17 @@ async function render(
     product?: Product;
     update?: jest.Mock;
     create?: jest.Mock;
+    getGstRule?: jest.Mock;
+    setGstRule?: jest.Mock;
     sessionActive?: Observable<boolean>;
     routeParams?: Record<string, string>;
   } = {}
 ) {
   const update = overrides.update ?? jest.fn(() => of(undefined));
   const create = overrides.create ?? jest.fn(() => of(product()));
+  const getGstRule =
+    overrides.getGstRule ?? jest.fn(() => of({ productId: 7, gstRule: GstClassification.Unknown }));
+  const setGstRule = overrides.setGstRule ?? jest.fn(() => of(undefined));
   const navigate = jest.fn();
 
   await TestBed.configureTestingModule({
@@ -72,7 +77,8 @@ async function render(
           get: jest.fn(() => of(overrides.product ?? product())),
           update,
           create,
-          getGstRule: jest.fn(() => of({ productId: 7, gstRule: GstClassification.Unknown })),
+          getGstRule,
+          setGstRule,
           getPriceComparison: jest.fn(() => of({ productId: 7, entries: [] }))
         }
       },
@@ -87,7 +93,27 @@ async function render(
   jest.spyOn(TestBed.inject(Router), 'navigate').mockImplementation(navigate);
   fixture.detectChanges();
 
-  return { fixture, component: fixture.componentInstance, host: fixture.nativeElement as HTMLElement, update, create, navigate };
+  const host = fixture.nativeElement as HTMLElement;
+
+  /** Chooses a GST rule the way a person does, through the composed panel's own picker. */
+  const chooseGstRule = (label: string) => {
+    const picker = host.querySelector<HTMLSelectElement>('app-product-gst-rule select')!;
+    picker.selectedIndex = Array.from(picker.options).findIndex((option) => option.textContent?.trim() === label);
+    picker.dispatchEvent(new Event('change'));
+    fixture.detectChanges();
+  };
+
+  return {
+    fixture,
+    component: fixture.componentInstance,
+    host,
+    update,
+    create,
+    getGstRule,
+    setGstRule,
+    chooseGstRule,
+    navigate
+  };
 }
 
 afterEach(() => TestBed.resetTestingModule());
@@ -276,8 +302,9 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     expect(host.querySelector('[name="quantityInStock"]')).not.toBeNull();
     expect(host.querySelector('[name="initialUnitCost"]')).not.toBeNull();
 
-    // No GST rule/price history for a product that does not exist yet.
-    expect(host.querySelector('app-product-gst-rule')).toBeNull();
+    // No price history for a product that does not exist yet. The GST rule panel *is* offered
+    // here since issue #829 - the choices it makes are written once the product has an id - and is
+    // covered by its own describe below.
     expect(host.querySelector('app-product-price-history')).toBeNull();
   });
 
@@ -338,6 +365,235 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     expect(component.error).toBe('Product name is required.');
     expect(component.saving).toBe(false);
     expect(navigate).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Choosing a product's GST treatment while creating it (issue #829).
+ *
+ * The product GST rule is its own API resource (`PUT api/products/{id}/gst-rule`) and the product
+ * payload is a pinned contract, so creating a product with a rule is two writes: the create, then
+ * the rule on the id the create answered. This page therefore has to own the partial failure - a
+ * product that exists with its rule unsaved - and must never report that as a completed create.
+ */
+describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
+  /** The create answers the product it stored, with the id the database assigned it. */
+  const createdProduct = () => jest.fn(() => of(product({ id: 55 })));
+  const refusedRule = () => jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })));
+
+  /** Fills in the one field the create validation requires. */
+  function named(component: ProductFormComponent): ProductFormComponent {
+    component.form.name = 'New Snack';
+    return component;
+  }
+
+  it('offers the GST choices the edit page offers, through the same panel', async () => {
+    const { host, getGstRule } = await render({ routeParams: {} });
+
+    const panel = host.querySelector('app-product-gst-rule');
+    expect(panel).not.toBeNull();
+    expect(Array.from(panel!.querySelectorAll('option')).map((option) => option.textContent?.trim())).toEqual([
+      'No rule',
+      'Taxable',
+      'GST-free'
+    ]);
+    expect(panel!.textContent).toContain('takes precedence over any supplier default');
+    expect(panel!.textContent).toContain('does not change the GST classification of any');
+
+    // Nothing is read for a product that does not exist, and the panel offers no Save of its own:
+    // the rule is written with the product.
+    expect(getGstRule).not.toHaveBeenCalled();
+    expect(
+      Array.from(panel!.querySelectorAll('button')).filter((button) => button.textContent?.trim().startsWith('Save'))
+    ).toEqual([]);
+  });
+
+  it('creates the product and then persists the chosen rule before returning to the list', async () => {
+    const create = createdProduct();
+    const { component, chooseGstRule, setGstRule, navigate } = await render({ routeParams: {}, create });
+
+    chooseGstRule('Taxable');
+    named(component).save();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(setGstRule).toHaveBeenCalledTimes(1);
+    expect(setGstRule).toHaveBeenCalledWith(55, GstClassification.Taxable);
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+    expect(component.error).toBe('');
+  });
+
+  it('persists GST-free as GST-free, not as the unclassified state', async () => {
+    const { component, chooseGstRule, setGstRule } = await render({ routeParams: {}, create: createdProduct() });
+
+    chooseGstRule('GST-free');
+    named(component).save();
+
+    expect(setGstRule).toHaveBeenCalledWith(55, GstClassification.GstFree);
+  });
+
+  /**
+   * "No rule" is what a created product already carries (`Product.GstRule` starts at
+   * `GstRules.None`), so the choice is persisted by the create itself and a second write would say
+   * nothing. It must not be sent as GST-free either, which is why this is asserted rather than
+   * left to read as an omission.
+   */
+  it('writes no rule resource when "No rule" is chosen, because a new product carries no rule', async () => {
+    const create = createdProduct();
+    const { component, chooseGstRule, setGstRule, navigate } = await render({ routeParams: {}, create });
+
+    chooseGstRule('No rule');
+    named(component).save();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(setGstRule).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('attempts no rule write when the create itself is refused', async () => {
+    const create = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 400, error: 'The selected category does not exist.' })));
+    const { component, chooseGstRule, setGstRule, navigate } = await render({ routeParams: {}, create });
+
+    chooseGstRule('Taxable');
+    named(component).save();
+
+    expect(setGstRule).not.toHaveBeenCalled();
+    expect(component.createdProductId).toBeNull();
+    expect(component.error).toBe('The selected category does not exist.');
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('reports a created product whose rule was not saved, and never claims the create finished', async () => {
+    const { component, host, fixture, chooseGstRule, navigate } = await render({
+      routeParams: {},
+      create: createdProduct(),
+      setGstRule: refusedRule()
+    });
+
+    chooseGstRule('Taxable');
+    named(component).save();
+    fixture.detectChanges();
+
+    expect(navigate).not.toHaveBeenCalled();
+    expect(component.saving).toBe(false);
+    expect(component.createdProductId).toBe(55);
+    expect(component.error).toContain('The product was created, but its GST rule was not saved.');
+    expect(host.querySelector('.field-error')?.textContent).toContain('GST rule was not saved');
+  });
+
+  it('retries the rule alone, so a retry never creates a second product', async () => {
+    const create = createdProduct();
+    const setGstRule = jest
+      .fn()
+      .mockReturnValueOnce(throwError(() => new HttpErrorResponse({ status: 500 })))
+      .mockReturnValueOnce(of(undefined));
+    const { component, chooseGstRule, navigate } = await render({ routeParams: {}, create, setGstRule });
+
+    chooseGstRule('Taxable');
+    named(component).save();
+    expect(navigate).not.toHaveBeenCalled();
+
+    component.save();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(setGstRule).toHaveBeenCalledTimes(2);
+    expect(setGstRule).toHaveBeenLastCalledWith(55, GstClassification.Taxable);
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('retries with the rule now on screen, so a corrected choice is the one stored', async () => {
+    const setGstRule = jest
+      .fn()
+      .mockReturnValueOnce(throwError(() => new HttpErrorResponse({ status: 500 })))
+      .mockReturnValueOnce(of(undefined));
+    const { component, fixture, chooseGstRule } = await render({
+      routeParams: {},
+      create: createdProduct(),
+      setGstRule
+    });
+
+    chooseGstRule('Taxable');
+    named(component).save();
+    fixture.detectChanges();
+
+    chooseGstRule('GST-free');
+    component.save();
+
+    expect(setGstRule).toHaveBeenLastCalledWith(55, GstClassification.GstFree);
+  });
+
+  it('labels the outstanding write for the rule alone and keeps it reachable', async () => {
+    const { component, host, fixture, chooseGstRule } = await render({
+      routeParams: {},
+      create: createdProduct(),
+      setGstRule: refusedRule()
+    });
+
+    chooseGstRule('Taxable');
+    named(component).save();
+    fixture.detectChanges();
+
+    const submit = host.querySelector('button[type="submit"]') as HTMLButtonElement;
+    expect(submit.textContent).toContain('Save GST Rule');
+    expect(submit.disabled).toBe(false);
+  });
+
+  /**
+   * The product is already stored, so the create form's own field rules are no longer being
+   * written and must not be able to trap the outstanding rule on the page.
+   */
+  it('keeps the retry available while the form fields are edited into an invalid state', async () => {
+    const setGstRule = jest
+      .fn()
+      .mockReturnValueOnce(throwError(() => new HttpErrorResponse({ status: 500 })))
+      .mockReturnValueOnce(of(undefined));
+    const create = createdProduct();
+    const { component, host, fixture, chooseGstRule, navigate } = await render({
+      routeParams: {},
+      create,
+      setGstRule
+    });
+
+    chooseGstRule('Taxable');
+    named(component).save();
+
+    component.form.lowStockThreshold = 10;
+    component.form.restockTo = 4;
+    component.form.name = '   ';
+    fixture.detectChanges();
+
+    expect((host.querySelector('button[type="submit"]') as HTMLButtonElement).disabled).toBe(false);
+
+    component.save();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(setGstRule).toHaveBeenCalledTimes(2);
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('writes neither the product nor the rule while a support session is active', async () => {
+    const create = createdProduct();
+    const { component, setGstRule } = await render({ routeParams: {}, create, sessionActive: of(true) });
+
+    named(component).save();
+    expect(create).not.toHaveBeenCalled();
+
+    // The same holds for a retry of an outstanding rule: the endpoint refuses it either way.
+    component.createdProductId = 55;
+    component.save();
+    expect(setGstRule).not.toHaveBeenCalled();
+  });
+
+  it('leaves the edit page saving its rule in the panel rather than with the product', async () => {
+    const { component, host, update, setGstRule, navigate } = await render();
+
+    component.save();
+
+    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({ name: 'E2E Chips' }));
+    expect(setGstRule).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+    expect(
+      Array.from(host.querySelectorAll('app-product-gst-rule button')).map((button) => button.textContent?.trim())
+    ).toContain('Save GST rule');
   });
 });
 

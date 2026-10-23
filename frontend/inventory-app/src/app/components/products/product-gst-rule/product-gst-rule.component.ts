@@ -1,4 +1,4 @@
-import { Component, Input, OnChanges, OnDestroy, SimpleChanges } from '@angular/core';
+import { Component, EventEmitter, Input, OnChanges, OnDestroy, Output, SimpleChanges } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Observable, of, Subject, Subscription } from 'rxjs';
@@ -18,6 +18,12 @@ type ProductGstRuleRead = { id: number; configured: ProductGstRule | null };
  * its own API resource, not a catalogue field: saving it changes no name, price, cost or stock, and
  * it never reclassifies a purchase that is already recorded. Historical classification is the
  * Admin Preview/Apply maintenance workflow (issue #433), not this page.
+ *
+ * On New Product it runs **deferred** (issue #829): there is no product to read a rule from or write
+ * one to yet, so the panel only chooses the rule and reports it, and the page writes it to
+ * `PUT api/products/{id}/gst-rule` once the create has answered an id. Everything else - the
+ * vocabulary, the labels, the help and the rule's meaning - is the same in both modes, because the
+ * same configuration is being made.
  */
 @Component({
   selector: 'app-product-gst-rule',
@@ -27,6 +33,19 @@ type ProductGstRuleRead = { id: number; configured: ProductGstRule | null };
 })
 export class ProductGstRuleComponent implements OnChanges, OnDestroy {
   @Input() productId: number | null = null;
+
+  /**
+   * Whether the product does not exist yet (issue #829), which is New Product and nothing else.
+   *
+   * Deferred, the panel reads no rule and saves none: a product that has not been created has no
+   * stored rule to read, and `Unknown` - the picker's own starting value - is exactly the rule a
+   * created product carries, so the placeholder states the truth here instead of threatening to
+   * erase a configured rule. The page owns the write, because only it knows when there is an id.
+   */
+  @Input() deferred = false;
+
+  /** The chosen rule, for the page that persists it after the product has been created (issue #829). */
+  @Output() readonly ruleChange = new EventEmitter<GstClassification>();
 
   /** `Unknown` is "no rule", a state of its own; it is never the same as an explicit GST-free rule. */
   readonly options: { value: GstClassification; label: string }[] = [
@@ -111,11 +130,21 @@ export class ProductGstRuleComponent implements OnChanges, OnDestroy {
     this.requestedProductId.complete();
   }
 
+  /**
+   * The picker's change handler, which also reports the selection (issue #829). One code path for
+   * both modes: the edit page binds no output, so nothing there changes.
+   */
+  selectRule(rule: GstClassification): void {
+    this.rule = rule;
+    this.ruleChange.emit(rule);
+  }
+
   save(): void {
     const id = this.productId;
     // The session check is here as well as in the template, so the write is actually unavailable
-    // rather than merely inert - the endpoint refuses it either way.
-    if (id === null || !this.loaded || this.saving || this.sessionActive) {
+    // rather than merely inert - the endpoint refuses it either way. Deferred, this panel writes
+    // nothing at all: the page saves the rule with the product it is creating.
+    if (this.deferred || id === null || !this.loaded || this.saving || this.sessionActive) {
       return;
     }
 

@@ -97,7 +97,7 @@
         </div>
 
         <div class="flex flex-wrap gap-3 pt-2">
-          <button type="submit" class="btn btn-primary" [disabled]="saving || form.restockTo < form.lowStockThreshold || sessionActive">{{ productId ? 'Update Product' : 'Create Product' }}</button>
+          <button type="submit" class="btn btn-primary" [disabled]="submitDisabled">{{ submitLabel }}</button>
           <a routerLink="/products" class="btn btn-secondary">Cancel</a>
         </div>
       </form>
@@ -105,6 +105,11 @@
       @if (productId) {
         <app-product-gst-rule [productId]="productId"></app-product-gst-rule>
         <app-product-price-history [productId]="productId"></app-product-price-history>
+      } @else {
+        <!-- New Product (issue #829): the same panel, choosing the rule for a product that does not
+             exist yet. It reads and writes nothing; this page saves the choice on the product's own
+             GST resource once the create has answered an id. There is no price history to show. -->
+        <app-product-gst-rule [deferred]="true" (ruleChange)="gstRule = $event"></app-product-gst-rule>
       }
     </div>
   </div>
