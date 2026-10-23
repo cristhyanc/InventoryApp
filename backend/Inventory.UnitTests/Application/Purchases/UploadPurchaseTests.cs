@@ -109,15 +109,34 @@ public class UploadPurchaseTests
     public async Task A_purchase_date_at_or_before_a_cost_transition_cutoff_throws_before_any_file_save()
     {
         var cutoff = new DateTime(2026, 1, 1);
-        var store = new FakePurchaseStore { ConflictingBaseline = (1, cutoff) };
+        var store = new FakePurchaseStore { ConflictingBaseline = (1, "Coke", cutoff) };
         var documents = new FakeDocumentStorage();
         var useCase = new UploadPurchase(store, documents, Clock);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             useCase.Handle(FileInput(), Fields(purchaseDate: cutoff), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));
 
-        Assert.Equal(PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(cutoff, 1), exception.Message);
+        // Issue #833: the refusal names the product the operator has to fix, not only its ID.
+        Assert.Equal(PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(cutoff, 1, "Coke"), exception.Message);
+        Assert.Equal(
+            $"Purchase date must be after the inventory-cost transition cutoff {cutoff:O} for product Coke (1).",
+            exception.Message);
         Assert.Empty(documents.SavedFileNames);
+    }
+
+    [Fact]
+    public async Task A_cutoff_refusal_for_a_product_with_no_loaded_name_keeps_the_bare_id_wording()
+    {
+        var cutoff = new DateTime(2026, 1, 1);
+        var store = new FakePurchaseStore { ConflictingBaseline = (1, null, cutoff) };
+        var useCase = new UploadPurchase(store, new FakeDocumentStorage(), Clock);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            useCase.Handle(FileInput(), Fields(purchaseDate: cutoff), [new PurchaseItemInput(1, 1, 1)], CancellationToken.None));
+
+        Assert.Equal(
+            $"Purchase date must be after the inventory-cost transition cutoff {cutoff:O} for product 1.",
+            exception.Message);
     }
 
     [Fact]

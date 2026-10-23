@@ -15,7 +15,7 @@ public sealed class FakePurchaseStore : IPurchaseStore
 
     public bool SupplierExists { get; set; } = true;
     public bool AllProductsExist { get; set; } = true;
-    public (long ProductId, DateTime CutoffAt)? ConflictingBaseline { get; set; }
+    public (long ProductId, string? ProductName, DateTime CutoffAt)? ConflictingBaseline { get; set; }
     public bool ThrowOnCreate { get; set; }
     public PurchaseRecord? LastCreated { get; private set; }
 
@@ -45,7 +45,7 @@ public sealed class FakePurchaseStore : IPurchaseStore
     public Task<bool> AllProductsExistAsync(IReadOnlyCollection<long> productIds, CancellationToken cancellationToken) =>
         Task.FromResult(AllProductsExist);
 
-    public Task<(long ProductId, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
+    public Task<(long ProductId, string? ProductName, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
         IReadOnlyCollection<long> productIds, DateTime purchaseDate, CancellationToken cancellationToken)
     {
         LastConflictCheckedPurchaseDate = purchaseDate;

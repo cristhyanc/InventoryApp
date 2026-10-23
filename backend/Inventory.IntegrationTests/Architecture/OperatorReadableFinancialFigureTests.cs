@@ -207,10 +207,11 @@ public class OperatorReadableFinancialFigureTests
     /// declared return type is an <see cref="IActionResult"/> rather than a payload type.
     ///
     /// <para>The list exists so the guard's blind spots are reviewed rather than invisible. Every
-    /// entry here is an endpoint that answers a status code, a stored document stream or a
-    /// <c>ProblemDetails</c>, and none of them constructs a financial figure. An endpoint that
-    /// starts returning a payload through <see cref="IActionResult"/> fails this test until
-    /// somebody decides which of the two lists it belongs on.</para>
+    /// entry here is an endpoint that answers a status code, a stored document stream, a
+    /// <c>ProblemDetails</c> or - in the one case noted below - a payload carrying no figure of any
+    /// kind, and none of them constructs a financial figure. An endpoint that starts returning a
+    /// payload through <see cref="IActionResult"/> fails this test until somebody decides which of
+    /// the two lists it belongs on.</para>
     /// </summary>
     private static readonly string[] UninspectableOperatorEndpoints =
     [
@@ -227,6 +228,11 @@ public class OperatorReadableFinancialFigureTests
         "DELETE api/Suppliers/{id:int}",
         "DELETE api/purchases/{id:int}",
         "POST api/SupplierOrders/{id:int}/cancel",
+        // Status codes and a ProblemDetails, plus - since issue #843 - the recent-sync answer
+        // `NayaxSalesRecentlySyncedResponse`, which carries one flag and the instant the sales last
+        // finished synchronizing. Neither is a sales, revenue, profit, margin or valuation figure:
+        // it says *when* the figures the Dashboard already shows this Operator were read, which is
+        // the same freshness statement the page itself renders.
         "POST api/nayax-sales-sync",
         "PUT api/Categories/{id:long}",
         "PUT api/Products/{id:long}",

@@ -397,6 +397,12 @@ public class PublishedResponseSchemaContractTests
     /// <summary>
     /// The published <c>Supplier</c> component, the legacy entity schema a purchase's and a
     /// supplier order's <c>supplier</c> has always referenced.
+    ///
+    /// <para>Issue #847 appended one nullable string, <c>url</c>, under the 23 October 2026
+    /// decision that a supplier's optional website belongs to this shared component rather than to
+    /// the supplier endpoints alone. Nothing else about it moved: no rename, no requiredness, no
+    /// <c>maxLength</c> keyword (the column length is configured in <c>AppDbContext</c> for exactly
+    /// that reason) and no repointed reference.</para>
     /// </summary>
     private const string BaseSupplierComponent = """
     {
@@ -407,7 +413,8 @@ public class PublishedResponseSchemaContractTests
         "contactName": { "type": "string", "nullable": true },
         "phone": { "type": "string", "nullable": true },
         "email": { "type": "string", "nullable": true },
-        "address": { "type": "string", "nullable": true }
+        "address": { "type": "string", "nullable": true },
+        "url": { "type": "string", "nullable": true }
       },
       "additionalProperties": false
     }

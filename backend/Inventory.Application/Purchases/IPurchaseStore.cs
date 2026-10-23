@@ -16,8 +16,10 @@ public interface IPurchaseStore
     /// <summary>
     /// The first product among <paramref name="productIds"/> whose inventory-cost transition
     /// cutoff <paramref name="purchaseDate"/> does not come after, or <c>null</c> when none conflicts.
+    /// The product's name comes back with it so the refusal can name the product (issue #833); it
+    /// is <c>null</c> when the product has no stored name.
     /// </summary>
-    Task<(long ProductId, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
+    Task<(long ProductId, string? ProductName, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
         IReadOnlyCollection<long> productIds, DateTime purchaseDate, CancellationToken cancellationToken);
 
     /// <summary>

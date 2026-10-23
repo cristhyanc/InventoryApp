@@ -43,10 +43,10 @@ public class InventoryCostTransitionPolicyTests
     public void A_slot_missing_par_or_missing_stock_is_rejected(int? par, int? missing)
     {
         var exception = Assert.Throws<DomainValidationException>(() =>
-            InventoryCostTransitionPolicy.MachineQuantity(10, "Machine A", [new(par, missing)]));
+            InventoryCostTransitionPolicy.MachineQuantity(10, "Machine A", [new(par, missing)], "Snack"));
 
         Assert.Equal(
-            "Nayax stock is incomplete for product 10 in machine Machine A: PAR and MissingStockByMDB are required.",
+            "Nayax stock is incomplete for product Snack (10) in machine Machine A: PAR and MissingStockByMDB are required.",
             exception.Message);
     }
 
@@ -56,9 +56,23 @@ public class InventoryCostTransitionPolicyTests
     public void A_slot_outside_zero_to_par_is_rejected(int par, int missing)
     {
         var exception = Assert.Throws<DomainValidationException>(() =>
-            InventoryCostTransitionPolicy.MachineQuantity(10, "7", [new(par, missing)]));
+            InventoryCostTransitionPolicy.MachineQuantity(10, "7", [new(par, missing)], "Snack"));
 
-        Assert.Equal("Nayax stock is invalid for product 10 in machine 7.", exception.Message);
+        Assert.Equal("Nayax stock is invalid for product Snack (10) in machine 7.", exception.Message);
+    }
+
+    /// <summary>Issue #833: a product whose name is unknown keeps the bare-ID wording.</summary>
+    [Fact]
+    public void A_rejected_slot_without_a_product_name_keeps_the_bare_id_wording()
+    {
+        Assert.Equal(
+            "Nayax stock is incomplete for product 10 in machine Machine A: PAR and MissingStockByMDB are required.",
+            Assert.Throws<DomainValidationException>(() =>
+                InventoryCostTransitionPolicy.MachineQuantity(10, "Machine A", [new(null, 1)])).Message);
+        Assert.Equal(
+            "Nayax stock is invalid for product 10 in machine 7.",
+            Assert.Throws<DomainValidationException>(() =>
+                InventoryCostTransitionPolicy.MachineQuantity(10, "7", [new(5, 6)], "  ")).Message);
     }
 
     [Fact]

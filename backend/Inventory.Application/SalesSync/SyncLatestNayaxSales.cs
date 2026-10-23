@@ -7,31 +7,45 @@ using Inventory.Domain.Providers;
 namespace Inventory.Application.SalesSync;
 
 /// <summary>
-/// The outcome of asking for a latest-sales synchronization (issue #681): it ran, or this business
-/// has run too many too recently.
+/// The outcome of asking for a latest-sales synchronization: it ran, this business's sales were
+/// synchronized moments ago so there was nothing to read (issue #843), or it has run too many too
+/// recently (issue #681).
 ///
-/// The rate limit is reported as a result rather than thrown as an exception, exactly as
-/// <c>NayaxConnectionTestOutcome</c> reports the connection test's: it is an expected answer the HTTP
-/// boundary turns into a specific status and <c>Retry-After</c> header, not a failure any other
-/// caller would want to catch.
+/// Neither bound is thrown as an exception, exactly as <c>NayaxConnectionTestOutcome</c> reports the
+/// connection test's rate limit: both are expected answers the HTTP boundary turns into a specific
+/// status, not failures any other caller would want to catch. A <em>refusal</em> - no usable Nayax
+/// connection, or a support session - is still an exception, because it is not an answer about this
+/// synchronization at all.
 /// </summary>
 public sealed record NayaxSalesSyncOutcome
 {
-    private NayaxSalesSyncOutcome(TimeSpan? retryAfter)
+    private NayaxSalesSyncOutcome(TimeSpan? retryAfter, DateTime? recentlySyncedAtUtc)
     {
         RetryAfter = retryAfter;
+        RecentlySyncedAtUtc = recentlySyncedAtUtc;
     }
 
     /// <summary>
     /// How long until this business may synchronize again, or <see langword="null"/> when the
-    /// synchronization ran.
+    /// synchronization ran or was skipped as recent.
     /// </summary>
     public TimeSpan? RetryAfter { get; }
 
-    // Cast because a record's own copy constructor makes a bare `new(null)` ambiguous.
-    public static NayaxSalesSyncOutcome Completed { get; } = new((TimeSpan?)null);
+    /// <summary>
+    /// When this business's last fully successful synchronization finished, when that was recent
+    /// enough that this one was skipped (issue #843); otherwise <see langword="null"/>. A skip reads
+    /// nothing from Nayax, writes nothing, and claims no rate-limit allowance.
+    /// </summary>
+    public DateTime? RecentlySyncedAtUtc { get; }
 
-    public static NayaxSalesSyncOutcome RateLimited(TimeSpan retryAfter) => new(retryAfter);
+    // Cast because a record's own copy constructor makes a bare `new(null, null)` ambiguous.
+    public static NayaxSalesSyncOutcome Completed { get; } = new((TimeSpan?)null, null);
+
+    public static NayaxSalesSyncOutcome RateLimited(TimeSpan retryAfter) => new(retryAfter, null);
+
+    /// <summary>The sales were synchronized at <paramref name="lastSyncedAtUtc"/>, so this run was skipped.</summary>
+    public static NayaxSalesSyncOutcome RecentlySynced(DateTime lastSyncedAtUtc) =>
+        new(null, lastSyncedAtUtc);
 }
 
 /// <summary>
@@ -58,12 +72,26 @@ public sealed record NayaxSalesSyncOutcome
 /// that lets a report tell "no sales" apart from "no sales data", so it is written last and only
 /// once everything above succeeded: a failed, cancelled or partly read run leaves no coverage, and
 /// the gap it leaves is reported as unverified rather than as a measured zero.</para>
+///
+/// <para><strong>A run that happened moments ago is skipped, not repeated</strong> (issue #843, part
+/// of parent #839). The Dashboard calls this on every load, so a visit, a back-navigation or a
+/// refresh seconds after the last one used to repeat the whole run for sales nobody could have made
+/// yet. <see cref="NayaxSalesSyncFreshness"/> remembers when the business's last fully successful
+/// run finished, per credential revision; inside its window an unforced call answers
+/// <see cref="NayaxSalesSyncOutcome.RecentlySynced"/> having read nothing, written nothing and
+/// claimed no rate-limit allowance. The order matters and is asserted: the connection, the status
+/// gate and the support-session refusal are resolved <em>first</em>, so a business whose connection
+/// is unusable gets exactly the refusal it got before and is never told its sales are current. The
+/// Refresh control on the Dashboard forces a run past the skip, and a forced run is still rationed
+/// by the limiter.</para>
 /// </summary>
 public sealed class SyncLatestNayaxSales
 {
     private readonly INayaxLynxClient _nayax;
     private readonly ILatestNayaxSalesStore _store;
     private readonly NayaxSalesSyncRateLimiter _rateLimiter;
+    private readonly NayaxSalesSyncFreshness _freshness;
+    private readonly INayaxRequestCredentialProvider _credentials;
     private readonly ICurrentBusinessProvider _currentBusiness;
     private readonly IProviderDataCoverageStore _coverage;
     private readonly IClock _clock;
@@ -72,6 +100,8 @@ public sealed class SyncLatestNayaxSales
         INayaxLynxClient nayax,
         ILatestNayaxSalesStore store,
         NayaxSalesSyncRateLimiter rateLimiter,
+        NayaxSalesSyncFreshness freshness,
+        INayaxRequestCredentialProvider credentials,
         ICurrentBusinessProvider currentBusiness,
         IProviderDataCoverageStore coverage,
         IClock clock)
@@ -79,15 +109,52 @@ public sealed class SyncLatestNayaxSales
         _nayax = nayax;
         _store = store;
         _rateLimiter = rateLimiter;
+        _freshness = freshness;
+        _credentials = credentials;
         _currentBusiness = currentBusiness;
         _coverage = coverage;
         _clock = clock;
     }
 
-    public async Task<NayaxSalesSyncOutcome> Handle(CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Synchronizes this business's latest Nayax sales, skipping the run when it finished moments
+    /// ago. This is the Dashboard's ordinary on-load call.
+    /// </summary>
+    public Task<NayaxSalesSyncOutcome> Handle(CancellationToken cancellationToken = default) =>
+        Handle(force: false, cancellationToken: cancellationToken);
+
+    /// <summary>
+    /// Synchronizes this business's latest Nayax sales.
+    /// </summary>
+    /// <param name="force">
+    /// <see langword="true"/> for the Dashboard's Refresh control: the recent-sync skip is bypassed
+    /// and the run happens, still subject to <see cref="NayaxSalesSyncRateLimiter"/>. A forced call
+    /// is not a way past the connection refusals or the run limit, only past the freshness window.
+    /// </param>
+    /// <param name="cancellationToken">Cancels the reads, the persistence and the cost rebuild.</param>
+    public async Task<NayaxSalesSyncOutcome> Handle(bool force, CancellationToken cancellationToken = default)
     {
-        // Resolved before anything else, and never from the request: the allowance is the business's.
+        // Resolved before anything else, and never from the request: the allowance, the freshness
+        // and the credentials all belong to the business whose Nayax account and rows a run spends.
         var businessId = await _currentBusiness.RequireBusinessIdAsync(cancellationToken);
+
+        // Before the skip decision, on purpose. This is the one place the connection, the status
+        // gate and the support-session refusal are applied for this use case, and a business whose
+        // connection is missing, disconnected or NeedsAttention - or a request inside a support
+        // session, which resolves no Nayax credentials at all (issue #551) - must get that refusal
+        // rather than a reassuring "synchronized moments ago" about sales nobody can read. The Nayax
+        // client resolves its own credentials per call as it always has; this read is what makes the
+        // refusal, and the credential revision the skip is keyed by, precede the decision.
+        var credential = await _credentials.GetForOperationAsync(cancellationToken);
+
+        if (!force
+            && _freshness.FindRecentSync(businessId, credential.CredentialRevision) is { } lastSyncedAtUtc)
+        {
+            // Before the allowance is claimed, because a skip reads nothing: rationing a run that
+            // never leaves the API would let a browser in a reload loop spend the business's own
+            // Refresh button on nothing.
+            return NayaxSalesSyncOutcome.RecentlySynced(lastSyncedAtUtc);
+        }
 
         if (!_rateLimiter.TryClaim(businessId, out var retryAfter))
         {
@@ -136,6 +203,11 @@ public sealed class SyncLatestNayaxSales
                 persisted.EarliestCompletedSaleByProductId, cancellationToken);
 
         await RecordCoverageAsync(windowStarts, everyReadSaleHasAnInstant, readStartedAtUtc, cancellationToken);
+
+        // Last, and only here: everything above has succeeded, so this is the one point at which the
+        // sales in front of the operator really are current. A run that threw, was cancelled or was
+        // refused never reaches this line and therefore never makes the next visit skip.
+        _freshness.RecordSuccessfulSync(businessId, credential.CredentialRevision);
 
         return NayaxSalesSyncOutcome.Completed;
     }

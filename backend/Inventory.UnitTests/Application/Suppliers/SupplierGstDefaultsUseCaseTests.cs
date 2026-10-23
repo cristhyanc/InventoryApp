@@ -20,7 +20,7 @@ public class SupplierGstDefaultsUseCaseTests
     public async Task A_new_supplier_has_no_configured_defaults()
     {
         var store = new FakeSupplierStore();
-        var supplier = await new CreateSupplier(store).Handle("Acme", null, null, null, null, CancellationToken.None);
+        var supplier = await CreateAsync(store, "Acme", null, null, null, null);
 
         var defaults = await new GetSupplierGstDefaults(store).Handle(supplier.Id, CancellationToken.None);
 
@@ -46,7 +46,7 @@ public class SupplierGstDefaultsUseCaseTests
     public async Task The_product_line_delivery_and_package_defaults_are_configured_independently()
     {
         var store = new FakeSupplierStore();
-        var supplier = await new CreateSupplier(store).Handle("Acme", null, null, null, null, CancellationToken.None);
+        var supplier = await CreateAsync(store, "Acme", null, null, null, null);
 
         var result = await new SetSupplierGstDefaults(store).Handle(
             supplier.Id,
@@ -70,7 +70,7 @@ public class SupplierGstDefaultsUseCaseTests
     public async Task An_undefined_default_is_refused_and_stores_nothing(int productLines, int delivery, int package)
     {
         var store = new FakeSupplierStore();
-        var supplier = await new CreateSupplier(store).Handle("Acme", null, null, null, null, CancellationToken.None);
+        var supplier = await CreateAsync(store, "Acme", null, null, null, null);
         var configured = new SupplierGstDefaults(
             GstClassification.Taxable, GstClassification.Taxable, GstClassification.GstFree);
         await new SetSupplierGstDefaults(store).Handle(supplier.Id, configured, CancellationToken.None);
@@ -96,15 +96,25 @@ public class SupplierGstDefaultsUseCaseTests
     public async Task Configuring_defaults_and_editing_the_supplier_do_not_overwrite_each_other()
     {
         var store = new FakeSupplierStore();
-        var supplier = await new CreateSupplier(store).Handle("Acme", "Pat", "555", "a@b.c", "1 Road", CancellationToken.None);
+        var supplier = await CreateAsync(store, "Acme", "Pat", "555", "a@b.c", "1 Road");
         var configured = new SupplierGstDefaults(
             GstClassification.Taxable, GstClassification.GstFree, GstClassification.Taxable);
 
         await new SetSupplierGstDefaults(store).Handle(supplier.Id, configured, CancellationToken.None);
-        await new UpdateSupplier(store).Handle(supplier.Id, "Acme Renamed", "Pat", "555", "a@b.c", "1 Road", CancellationToken.None);
+        await new UpdateSupplier(store).Handle(
+            supplier.Id, new SupplierFields("Acme Renamed", "Pat", "555", "a@b.c", "1 Road", null), CancellationToken.None);
 
         var fetched = await new GetSupplier(store).Handle(supplier.Id, CancellationToken.None);
         Assert.Equal("Acme Renamed", fetched!.Name);
         Assert.Equal(configured, await new GetSupplierGstDefaults(store).Handle(supplier.Id, CancellationToken.None));
+    }
+
+    private static async Task<SupplierRecord> CreateAsync(
+        FakeSupplierStore store, string name, string? contactName, string? phone, string? email, string? address)
+    {
+        var result = await new CreateSupplier(store).Handle(
+            new SupplierFields(name, contactName, phone, email, address, null), CancellationToken.None);
+
+        return result.Supplier!;
     }
 }

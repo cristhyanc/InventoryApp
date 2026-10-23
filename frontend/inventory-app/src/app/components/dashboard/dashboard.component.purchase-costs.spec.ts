@@ -156,7 +156,11 @@ async function render(doubles: Doubles = {}): Promise<Rendered> {
       { provide: ProductService, useValue: { getLowStock } },
       { provide: MachineService, useValue: { getAll: () => of([]) } },
       { provide: SiteService, useValue: { getAll: () => of([]) } },
-      { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } },
+      {
+        provide: NayaxSalesSyncService,
+        // The `204` answer the service maps (issue #843); the skip is its own spec's subject.
+        useValue: { syncLatest: () => of({ wasRecentlySynced: false, lastSyncedAtUtc: null }) }
+      },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => of(SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummaries } },

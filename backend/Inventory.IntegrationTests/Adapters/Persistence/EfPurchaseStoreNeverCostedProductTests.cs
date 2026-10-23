@@ -146,7 +146,7 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
         var refusal = await Assert.ThrowsAsync<InventoryCostDataQualityException>(() => UpdateAsync(purchaseId,
             new PurchaseItemInput(CostedProduct, 4m, 1.50m, null, existingLineId),
             new PurchaseItemInput(FreshProduct, 10m, 2.50m)));
-        Assert.Contains($"Product {FreshProduct} stored physical quantity 13 does not reconcile to its movement history (10).", refusal.Message);
+        Assert.Contains($"Product New product ({FreshProduct}) stored physical quantity 13 does not reconcile to its movement history (10).", refusal.Message);
 
         await using var verify = TestAppDbContext.For(_options, BusinessA);
         Assert.Empty(await verify.ReceiptItems.Where(item => item.ProductId == FreshProduct).ToListAsync());
@@ -223,7 +223,7 @@ public sealed class EfPurchaseStoreNeverCostedProductTests : IDisposable
                     [new PurchaseItemInput(FreshProduct, 10m, 2.50m)],
                     new PurchaseFileMetadata("stored.jpg", "image/jpeg", "receipt.jpg", 3),
                     CancellationToken.None));
-            Assert.Contains($"Product {FreshProduct} stored physical quantity 20 does not reconcile to its movement history (10).", refusal.Message);
+            Assert.Contains($"Product New product ({FreshProduct}) stored physical quantity 20 does not reconcile to its movement history (10).", refusal.Message);
         }
 
         await using var verify = TestAppDbContext.For(_options, BusinessA);

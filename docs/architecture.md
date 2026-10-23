@@ -1663,6 +1663,8 @@ The other is `NayaxConnectionController` since issue #537: its test, save and re
 
   It is also **rate-limited per business** since issue #681: `Inventory.Application.SalesSync.NayaxSalesSyncRateLimiter` allows ten runs per business per two minutes, claimed before the first Nayax call, and a refused run answers `429` with `Retry-After` and reaches neither Nayax nor the database. One run is one Nayax request per machine plus one, and the Dashboard triggers one per load — which a browser repeats on every visit, back-navigation and refresh — so this was the most expensive call in the application and the easiest to repeat, with nothing bounding either the requests against someone else's API or the write amplification in this one. The limit is per business rather than per actor for the reason the connection test's is: what it protects is the business's own Nayax account and its own rows. The window is kept in memory, like every other limiter here (docs § SQLite operating assumptions). Because the allowance is the business's, members opening the Dashboard together share it: ten simultaneous loads all synchronize (`NayaxSalesSyncControllerTests`), and a load past that is refused. A refusal proves the business started runs inside the last two minutes, so the Dashboard loads its persisted figures and says they were refreshed in the last couple of minutes, not that synchronization failed (`isSalesSyncRecentlyRefreshed`); any other error still shows the not-synchronized warning. The `429` body names no wait and points at `Retry-After`, because the wait can be up to the whole window.
 
+  Since issue #843 a **second**, different bound sits beside it: a run that finished less than three minutes ago is **skipped** rather than rationed, with no Nayax request, no write and **no rate-limit allowance claimed at all**, keyed by the business *and* its credential revision; the connection and support-session refusals are resolved before that decision, and the Dashboard's Refresh control forces a run past it while still spending an allowance. The two bounds answer different questions and neither replaces the other — see [Skipping a sync that just happened](#skipping-a-sync-that-just-happened-issue-843).
+
 - `GET api/products/inventory-value-summary` → **`Inventory.Operate` and `Dashboard.ViewFinancials`** (issue #681). It is an action on `ProductsController`, so it carries the catalogue's own capability; the second one is declared on the action. The endpoint reports the exact value of the business's inventory at cost, broken down — the figure [issue #527](#dashboard-financial-redaction-issue-527) omits from the dashboard response entirely for a role without `Dashboard.ViewFinancials`, today an Operator. On the catalogue's capability alone, that redaction was a presentation detail rather than a boundary: an Operator could read the number directly. No page calls this endpoint (`ProductService.getInventoryValuationSummary` has no caller since the dashboard stopped using it), so it was gated rather than removed — gating preserves the API contract, which AGENTS.md § Architecture rules asks for, while removing it would be a breaking change for a caller nobody has surveyed. A Manager and an Owner hold both capabilities and are unaffected; an Operator gets the ordinary bare `403`. Gating this one action left the figure reachable by summing the catalogue's own `inventoryValue`, which is what [issue #698](#machine-and-product-financial-redaction-issue-698) closed, along with the machine endpoints' revenue, profit and profitability-status figures: those endpoints stay on `Inventory.Operate` for every role, because an Operator restocks from them, and only the figures inside the response are withheld. [Issue #700](#operator-readable-financial-disclosure-issue-700) closed the last two routes to the same figure — a stock movement's `inventoryValueAfter` and the catalogue snapshot nested in a purchase or supplier-order line — and audited every other Operator-readable endpoint for one.
 - `GET api/products/purchase-cost-summary` → **`Dashboard.ViewFinancials`**, so a Manager and an Owner (issue #788, B of parent #786). It reports what every product was last bought for and what it was cheapest at, with the supplier of each — supplier purchasing facts over the whole catalogue, which is the same kind of figure `GET api/products/{id}/price-history` shows one product at a time. **It is its own controller, `ProductPurchaseCostsController`, for exactly that reason**: a controller declares one capability for every action it holds, so adding this action to `ProductsController` would either have inherited the catalogue's `Inventory.Operate` — handing those figures to every role that may operate inventory — or, declared per action, left the catalogue and this read looking alike when they are not. The first page that calls it is the home Dashboard's Reorder Alerts table (issue #789, see [Provider-optional dashboard and Needs Ordering screens](#provider-optional-dashboard-and-needs-ordering-screens-issue-727)); Products → Needs Ordering (issue #790, D of #786) is the second, and All Products (issue #791, E of #786) the third, requesting it once for its listed product ids and showing the Last/Cheapest purchase columns only with `Dashboard.ViewFinancials`. The Angular client is `ProductPurchaseCostService`. It is read-only and `GET`, so a support session may call it under the central `GET`/`HEAD` rule of issue #551, which grants `Dashboard.ViewFinancials`. See [Supplier product price history and comparison](#supplier-product-price-history-and-comparison-issue-63).
 - `GET api/data-quality/nayax-catalog-reconciliation` → **`Integration.Manage`**, so an Owner alone. **No page calls it**: nothing in `frontend/inventory-app/src` requests this route. "Follow the page" therefore has no answer, and leaving it unclassified would have kept it open to every member, so the capability follows what the endpoint *is* — a live, read-only report of how this business's Nayax catalogue has drifted from its local records (issue #55), read before deciding whether a mapping needs fixing. `Data.Repair` grants exactly the same roles today, so no role's access differs between the two readings; `Integration.Manage` was chosen because the endpoint reports on the integration and repairs nothing. A future Owner-facing integration page can show it with no change here.
@@ -1755,7 +1757,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | --- | --- | --- | --- |
 | `Dashboard.View` | `GET api/dashboard/summary` | `salesThisWeek` (and its `sales`/`comparisonSales`), `inventory.inventoryValueAtCost` | Withheld by [#527](#dashboard-financial-redaction-issue-527) — the property is **absent** from the redacted shape, and the week's sales are not read |
 | `Dashboard.View` | `GET api/business/current`, `GET api/settings/nayax-connection/status` | none | Already safe |
-| `Dashboard.View` + `Inventory.Operate` | `POST api/nayax-sales-sync` | none — `204`, or `429` with `Retry-After` | Already safe |
+| `Dashboard.View` + `Inventory.Operate` | `POST api/nayax-sales-sync` | none — `204`, `200` with the last-synced instant (issue #843), or `429` with `Retry-After` | Already safe |
 | `PickList.View` | `GET api/pick-list` | none — storage quantity, target, quantity to pick and MDB codes | Already safe |
 | `PickList.View` + `Inventory.Operate` | `POST api/pick-list/refills` (issue #743) | none — the submitted quantities, the recorded movement ids and the per-row refusal sentences | Already safe |
 | `Inventory.Operate` | `GET api/products`, `GET api/products/{id}`, `GET api/products/alerts/low-stock`, `GET api/machines/{id}/products`, `POST api/products` (issue #736, which answers the created product in the same shape) | `inventoryValue`; and, nested in `stockAdjustments`, each movement's `inventoryValueAfter` | `inventoryValue` withheld by [#698](#machine-and-product-financial-redaction-issue-698); `inventoryValueAfter` **redacted here** |
@@ -3786,8 +3788,33 @@ Issue #165 made that log entry explicit at the HTTP boundary: an unreachable or 
 It composes three bounded Polly v8 strategies, built once per handler instance (`NayaxResilienceOptions` holds the tunables - fixed engineering constants, not environment configuration, so there is nothing here for `appsettings.json`/README to document):
 
 - **Timeout** (innermost): each individual HTTP attempt is bounded (10 seconds by default). Polly's timeout strategy distinguishes an attempt that ran out of time from the caller cancelling: if the request's own `CancellationToken` (not the internal per-attempt one) is what fired, the original `OperationCanceledException` propagates unchanged and is never retried, never counted as a circuit-breaker failure, and never becomes a `502` - preserving the caller-cancellation rule above. An attempt that genuinely times out surfaces as `Polly.Timeout.TimeoutRejectedException`, which the retry/circuit-breaker layers above treat as transient.
-- **Retry** (outermost, so each retried attempt is individually timed and circuit-broken): up to 3 retries with exponential, jittered backoff (250ms base), applied **only to idempotent requests** (`GET`/`HEAD`) - a request's `HttpMethod` decides this once, at the top of the handler. `CreateMachineProductsAsync`'s `POST` is never retried, because retrying an unsafe write without proven idempotency is exactly the failure mode this issue was written to avoid. A retryable outcome is a network failure (`HttpRequestException`), an attempt timeout (`TimeoutRejectedException`), or an upstream status of `408`, `429`, or any `5xx`; every other 4xx status (authentication, authorization, validation, not-found, conflict) is a terminal failure on the first attempt, and the caller's cancellation is excluded from all of this, per the timeout bullet above. A response that is abandoned in favour of a retry is disposed immediately so its connection is not leaked.
-- **Circuit breaker** (middle): once at least 8 sampled outcomes in a rolling 30-second window are transient failures at a 50%+ ratio, the circuit opens for 15 seconds and every call in that window fails fast with `Polly.CircuitBreaker.BrokenCircuitException` without an upstream HTTP attempt at all - so a sustained Nayax outage is not retried into indefinitely. The breaker shares the same transient-failure definition as retry and observes both `GET` and `POST` traffic (it does not retry, so it carries no idempotency risk of its own).
+- **Retry** (outermost, so each retried attempt is individually timed and circuit-broken): up to 3 retries with exponential, jittered backoff (250ms base), applied **only to idempotent requests** (`GET`/`HEAD`) - a request's `HttpMethod` decides this once, at the top of the handler. `CreateMachineProductsAsync`'s `POST` is never retried, because retrying an unsafe write without proven idempotency is exactly the failure mode this issue was written to avoid. A retryable outcome is a network failure (`HttpRequestException`), an attempt timeout (`TimeoutRejectedException`), or an upstream status of `408`, `429`, or any `5xx`; every other 4xx status (authentication, authorization, validation, not-found, conflict) is a terminal failure on the first attempt, and the caller's cancellation is excluded from all of this, per the timeout bullet above. A response that is abandoned in favour of a retry is disposed immediately so its connection is not leaked. A `429` is retried under the narrower budget below.
+- **Circuit breaker** (middle): once at least 8 sampled outcomes in a rolling 30-second window are transient failures at a 50%+ ratio, the circuit opens for 15 seconds and every call in that window fails fast with `Polly.CircuitBreaker.BrokenCircuitException` without an upstream HTTP attempt at all - so a sustained Nayax outage is not retried into indefinitely. The breaker shares the same transient-failure definition as retry and observes both `GET` and `POST` traffic (it does not retry, so it carries no idempotency risk of its own), so a `429` still counts as a failure towards opening it.
+
+##### The rate-limited case: one retry, and the wait Nayax asked for (issue #844)
+
+A `429 Too Many Requests` is the one transient status that says the remedy is *fewer* requests, so it is not retried like a `5xx`. The retry budget of one Nayax `GET` is therefore two rules at once, and no mix of failures can exceed either:
+
+- **At most 3 retries in total** - 4 attempts - whatever combination of `408`, `429`, `5xx` and attempt timeouts the request meets.
+- **At most 1 of those retries may follow a `429`.** A second `429` on the same request stops retrying at once, even when retries are still budgeted, because the upstream has now said twice that we are sending too many requests. A `429` never buys an extra attempt either: it spends one of the three already budgeted.
+
+The per-request `429` count lives in the Polly resilience context's properties, so it is per request rather than per handler, and `SendAsync` resets it (and the honoured delay below) on every call, because the context is pooled.
+
+`Inventory.Infrastructure.Nayax.NayaxRetryAfterPolicy` is the one place a `Retry-After` header becomes a decision, and the ceiling it honours is **10 seconds** (decided 23 October 2026): a page request must not hang while an upstream's own cool-off period is waited out, so a longer requested wait ends the request instead of being silently shortened - retrying sooner than Nayax asked is the one thing the policy must never do. The header is parsed strictly by RFC 9110 § 10.2.3, against the current instant from `Inventory.Application.Time.IClock` (injected into the handler, so an HTTP date is deterministic and testable rather than read from the host's clock):
+
+| `Retry-After` value | Treated as |
+| --- | --- |
+| Whole number of seconds, 1 to 10 | Wait that long, then retry once |
+| Whole number of seconds above 10 | Do not retry |
+| HTTP date 1 to 10 seconds in the future | Wait until then, then retry once |
+| HTTP date more than 10 seconds in the future | Do not retry |
+| `0`, or an HTTP date now or in the past | Retry once after the existing base backoff (never with no delay) |
+| Missing | Retry once after the existing base backoff |
+| Malformed (negative, decimal, non-numeric text, unparseable date, several values) | Same as missing |
+
+Three things about that table are deliberate. A value this application cannot read is the *same* as no value, never a wait invented from it and never an immediate retry. `0` and an elapsed instant still wait the ordinary jittered backoff, because a rate-limited upstream is the last place to send a request with no delay at all. And Nayax documents the `429` for Lynx but publishes neither a numeric rate limit nor a `Retry-After` contract ([Lynx app tokens § 429 Too Many Requests](https://devzone.nayax.com/docs/manage-data-operations/lynx-api/app-tokens#429-too-many-requests)), so the missing-header row is the expected case rather than an error, and nothing here assumes a header shape the provider has not published.
+
+Every wait is a Polly retry delay, so caller cancellation during one is observed as cancellation, exactly as the timeout bullet above requires - never as a `502`. A `429` that is *not* retried (its single retry already used, a second `429`, or a `Retry-After` beyond the ceiling) is returned to `NayaxLynxClient` as it stands and becomes today's `NayaxUpstreamException`/`502`: this work changed when a request stops, never what the caller is told. The retry log line adds the delay actually waited to the attempt number, path and status it already carried, and still carries no token, header or response body.
 
 None of these three strategies changes what a *successful* retry-exhausted or breaker-open call ultimately looks like to a caller: a final non-success `HttpResponseMessage` still reaches `NayaxLynxClient.EnsureNayaxSuccessAsync` unchanged and becomes `NayaxUpstreamException`/`502` exactly as before — except for the two statuses that describe the business's own connection rather than the remote service, which that method classifies instead (issue #520, [Per-business Nayax credentials](#per-business-nayax-credentials-issue-520)) and which were never retryable anyway; an unwrapped exception (`HttpRequestException`, `TimeoutRejectedException`, `BrokenCircuitException`) that survives retries still reaches `GlobalExceptionHandler` as a generic `500` with no Nayax-specific handling, the same place an untranslated provider SDK exception already lands per the exception-ownership table below. The retry-attempt and circuit-open/close log lines carry only the attempt number, the request's relative path, and the HTTP status/break duration - never a token, an authorization header, or a response body.
 
@@ -8029,6 +8056,72 @@ component still loads Sites and Machines from whatever `NayaxSales` data is alre
 (never fabricating zero sales) and sets `isSalesSyncFailed`, which the template surfaces as a
 banner so the UI never silently presents both sections as freshly synchronized.
 
+##### Skipping a sync that just happened (issue #843)
+
+The Dashboard calls this endpoint on **every** load, and a browser repeats that on every visit, every
+back-navigation and every refresh. One run is a Nayax request per machine plus one, then persisting,
+costing and rebuilding inventory costs, so a visit seconds after the last one used to repeat the
+whole thing for sales nobody could have made yet. The run limit of issue #681 does not bound that,
+and is not meant to: ten runs per two minutes is deliberately invisible to people.
+
+**The rule.** `Inventory.Application.SalesSync.NayaxSalesSyncFreshness` remembers, in memory, when
+each business's last **fully successful** run finished. When that was less than
+`NayaxSalesSyncFreshness.RecentWindow` - **three minutes**, decided by the repository owner on 23
+October 2026 - an unforced call answers `NayaxSalesSyncOutcome.RecentlySynced` immediately: no Nayax
+request is made, nothing is persisted, costed or rebuilt, and no coverage row is written, because
+nothing was read to account for. The window is "less than three minutes", strictly: exactly at the
+window the run happens.
+
+**The key is the business *and* its credential revision**, which is the half that is easy to get
+wrong. A sync is only already done for the credentials it was done with, and saving or replacing the
+business's Nayax connection is exactly the moment an operator needs to see whether sales now arrive -
+so the new `CredentialRevision` is a key nothing has recorded and the next visit runs in full, inside
+the window or not. Keyed by business alone, a credential change would have had to wait the window
+out. One business's run never lets another skip, which matters because the memory is a process-wide
+singleton.
+
+**The three decisions are ordered, and the order is the security-relevant part.** The use case
+resolves `INayaxRequestCredentialProvider.GetForOperationAsync` **first**, before it considers
+skipping: a business with no stored connection, one in `NotConfigured` or `NeedsAttention`, and a
+request inside a support session (which resolves no Nayax credentials at all, issue #551) each get
+exactly the refusal they got before - never a reassuring "synchronized moments ago" about sales
+nobody can read. Only then is the skip considered, and only then - if the run is going ahead - is the
+rate-limit allowance claimed. **A skip therefore spends no allowance**: it makes no request, so
+rationing it would let a tab stuck in a reload loop spend the business's own Refresh on nothing.
+Resolving the credential before the claim is a change from #681's order, and it means a refused
+connection no longer costs an allowance either.
+
+**Only a run that finished everything records freshness**, which is the same boundary issue #730
+gives the coverage record, and for the same reason: a skip claims the figures in front of the
+operator are current. A run that threw, was cancelled, or was refused by the limiter records nothing,
+so the next visit runs. The rate-limited case is the one that would otherwise be self-sustaining -
+a refusal recording freshness would let the skip take over from the limit and stretch one stale
+snapshot indefinitely.
+
+**After a restart there is nothing remembered**, so the first Dashboard visit syncs. That is the
+deliberate trade the two rate limiters already make (docs § SQLite operating assumptions): when the
+Dashboard was last opened is not part of the business's record, and a second instance would mean one
+extra full run per instance per window.
+
+**The HTTP contract gains one answer and changes neither of the existing two.** `POST
+api/nayax-sales-sync` still answers `204` when the run happened and `429` with `Retry-After` when the
+run limit refused it. A skip is `200` with `NayaxSalesRecentlySyncedResponse`
+(`wasRecentlySynced: true`, `lastSyncedAtUtc`), and the optional query parameter `force=true` is the
+Dashboard's Refresh control: it bypasses the freshness window and nothing else - the run limit and
+the connection refusals still apply. The response carries no business id, operator id or credential
+revision; the freshness key is the server's own.
+
+**On the Dashboard**, `salesSyncedAtUtc` is set from the server's instant on a skip and from the
+browser's own clock on a run that just finished, and the header renders `salesSyncedLabel` - "Sales
+synced just now" / "Sales synced N min ago" - with the exact wall-clock instant on the element's
+`title`, in the business's own timezone through `BusinessDateTimePipe` (issue #499), which for this
+business is Sydney. A skip shows **no** notice: it is neither `isSalesSyncFailed` nor the run limit's
+`isSalesSyncRecentlyRefreshed`, both of which keep exactly the wording and the meaning they had. The
+`Refresh` control calls `refreshSales()`, which forces the run and then reloads Sites and Machines
+from it; it is not offered for a business with no usable provider or inside a support session, where
+the call could only be refused. Nothing is remembered about freshness for a failure, a `429` or a
+support session - the label is absent rather than claiming an age it does not know.
+
 ### Profit levels
 
 - Gross profit requires complete COGS and equals sales minus COGS.
@@ -9761,8 +9854,10 @@ shape of the `Supplier` and `Product` components they point at, that every publi
 reference resolves, that `ProductResponse`/`SupplierResponse` are untouched by the boundary, that
 the internal DTO names and a requiredness declaration are absent, and that no Receipt-named schema
 or tag exists. The `Product` property list it compares against lost `supplierId`/`supplier` in issue
-#787, the one approved break in that component; the `Supplier` component it is compared to is
-byte-identical, because the purchase and the supplier order still reference it.
+#787, the one approved break in that component; the `Supplier` component it is compared to gained
+one nullable string, `url`, in issue #847 and is otherwise unchanged, because the purchase and the
+supplier order still reference it (see
+[A supplier's optional website](#a-suppliers-optional-website-issue-847)).
 
 | Layer | Canonical Purchase language | Left as a legacy/compatibility surface | Why |
 | --- | --- | --- | --- |
@@ -11597,6 +11692,13 @@ availability projection this issue only displays.
   only renames the control that sets it.
 - **The Price column stays gone** (issue #792, A2 of #786): this issue adds no selling-price
   column or sort back.
+- **The Status column is hidden while "Only active" is selected** (issue #828): since every row is
+  active under that filter, its header and cells render nothing (`@if (statusFilter === 'all')` in
+  the template, so the header and row cell counts stay equal in both states), including on first
+  load and after Reset. Switching to "All" shows the column and its toggle again, unchanged from
+  #825. Switching back to "Only active" while sorted by Status clears the sort back to the default
+  order (`ProductListComponent.clearStatusSortWhenHidden`), rather than leaving it pointed at a
+  column no longer on screen.
 - **Three cost columns are added**, none of them computed in Angular: "Average cost" is
   `ProductResponse.averageUnitCostForDisplay` (issue #788) formatted to two decimals, `—` when it
   is absent and `$0.00` for a genuine recorded zero — the legacy `averageUnitCost` default is never
@@ -11663,6 +11765,70 @@ name, or creates one. See
 and [The catalogue review screen](#the-catalogue-review-screen-issue-739) below. Nothing else about
 this section changed: the provider still owns a linked row's name and category, the price is still
 local and still editable, and a row with no external id is still the business's own in full.
+
+### A supplier's optional website (issue #847)
+
+A supplier record carries an optional website, `Supplier.Url`, so a buyer can open the supplier's
+own ordering page from the Suppliers list. It is child A of #835 and independent of that issue's
+other children.
+
+**The schema.** `AddSupplierUrl` adds one nullable `Url` column of at most 2048 characters to
+`Suppliers`. It is purely additive: no backfill, no table rebuild, no index and no other table.
+Every supplier recorded before it keeps every value and gets `NULL`, which is the real state "no
+website recorded" and is never an empty string. `Down` drops only that column.
+`AddSupplierUrlMigrationTests` proves both directions, including that the upgrade adds exactly one
+column and leaves the index list and the table list alone. The length is configured in
+`AppDbContext` rather than with a `[MaxLength]` attribute on the entity, deliberately: an attribute
+would have published a `maxLength` keyword on the legacy `Supplier` component below.
+
+**One rule, written in the Application layer.** `Inventory.Application.Suppliers.SupplierUrlPolicy`
+is the only place the rule lives on the server, and `CreateSupplier`/`UpdateSupplier` run it before
+anything is stored, so a refused value creates nothing and leaves an existing supplier exactly as it
+was. It is not a DTO attribute, because an attribute guards only the one contract it is written on,
+and a stored URL is rendered as a link — which makes the accepted scheme a security boundary rather
+than a formatting preference. The rule: the value is optional; blank or whitespace-only becomes
+`null`; otherwise it is trimmed, must be at most 2048 characters, and must be an absolute URI with
+scheme `http` or `https` (compared case-insensitively) and a non-empty host. `javascript:`, `data:`,
+`file:`, `ftp:`, `mailto:`, a relative path and a scheme-less host name such as `coles.com.au` are
+all refused with `400` and a field-level message on `url`
+(`ValidationProblemDetails`, the same error contract model binding already produces). An accepted
+value is stored as the operator typed it, trimmed and nothing else: re-serialising through `Uri`
+would re-encode a path or append a trailing slash, storing a value nobody typed. An over-long value
+is reported against the length rather than the scheme, so the message names the limit the caller
+can act on.
+
+**The server never fetches the URL.** Nothing resolves, follows, previews, scrapes or checks the
+reachability of a supplier's website, and nothing infers GST status, an ABN or anything else from
+it. The server stores text.
+
+**It is in the nested `Supplier` component.** The `Supplier` entity's serialisable surface *is* the
+published legacy `Supplier` component that a purchase's, a supplier order's and an operating
+expense's nested `supplier` object references (see
+[Purchase rename plan](#purchase-rename-plan)), so under the
+owner's decision of 23 October 2026 `url` appears in all of them as an additive nullable string,
+not hidden with `[JsonIgnore]` the way the GST defaults are. `SupplierResponse` gains it too and
+stays schema-identical to that component. Nothing else about either schema moved: no rename, no
+requiredness, no `maxLength` keyword and no repointed reference, which
+`PublishedResponseSchemaContractTests` compares literally. `SupplierDto` accepts `url` on create and
+update; `GET /api/suppliers`, `GET /api/suppliers/{id}` and every nested `supplier` return it, and
+`null` when the supplier has none.
+
+**The frontend mirrors the rule and links carefully.**
+`components/suppliers/supplier-url.ts` is the browser-side copy — same limit, same schemes, same two
+messages — used both by the create/edit form, which refuses before the request, and by the list,
+which renders a website as
+`<a href=… target="_blank" rel="noopener noreferrer">` only when that same check still accepts the
+stored value. Anything else renders as plain text, so a value that somehow reached the database
+without passing the server rule is never clickable. Angular's own URL sanitisation stays in place
+behind that; no `bypassSecurityTrust*` call belongs anywhere near a supplier's website. The server
+remains the authority: the form check is for the operator's benefit and for defence in depth, never
+instead of the server's.
+
+Everything else about a supplier is unchanged: its contacts, its
+[GST defaults](#product-and-supplier-gst-rules-issue-430) on their own resource, the purchases,
+supplier orders and operating expenses that name it, the `Purchasing.Operate` capability the
+controller requires, the tenant query filters and the `BusinessId` stamp — which is still never read
+from input.
 
 ### A product carries no supplier (issue #787)
 
@@ -13090,7 +13256,7 @@ files" as the historical record of that slice, not as a test to look for today.
 
 9. **Sites and Machines dashboard slice done** (issue #241, a child of the #147 umbrella; #240 migrates Products separately). `SiteService.GetAll`/`GetProducts` and `MachineService.GetById`/`GetAll` are the migrated endpoints; `MachineService.GetMachineProducts` was left to the sibling Products migration because it returned the EF `Product` entity directly, and issue #240 has since migrated it in full to `Inventory.Application.Machines.ListMachineProducts` - see item 6 above.
    - `Inventory.Domain.Sites.SiteStockPolicy` computes a site's overall stock percentage and its low/empty product alert counts from already-fetched machine-product facts; `Inventory.Domain.Sites.SiteProductPricingPolicy` computes the site product preview's average retail price and estimated card-sale profit, given an already-resolved per-item commission amount and fee rate. `Inventory.Domain.Machines.MachineDashboardPeriods` is the pure today/week-to-date/previous-comparable-week/last-week/month-to-date/two-weeks-ago range arithmetic, moved out of the former `MachineService` statics unchanged; `Inventory.Domain.Machines.MachineDashboardDirectProfitPolicy` and `MachineProfitabilityStatusPolicy` are the machine dashboard's period direct-profit and status-message rules, given already-resolved facts. Both direct-profit policies are deliberately kept separate from `Inventory.Domain.Reporting.Profitability.MachineDirectProfitPolicy`, which answers the same question at report-row (aggregate period) granularity rather than the dashboard's fixed rolling periods, matching the precedent the reporting slice already documented for row-level versus aggregate rules.
-   - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same bounded per-site/per-machine fan-out (`Task.WhenAll` over each site's/machine's `GetMachineProductsAsync` calls) the former services used. `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Issue #150 moved commission/fee resolution and payment/status classification to Domain-owned rules and Application use cases/ports; these consumers use those authorities rather than API service wrappers. The ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (the exact per-price Domain commission calculation computes each entry, not a re-derived multiplier), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact. `ResolveMachineProductPricing` uses the same Sites financial port, while `EfLatestNayaxSalesStore` uses the Domain transaction-status classifier.
+   - `Inventory.Application.Sites.GetSiteSummaries`/`GetSiteProducts` and `Inventory.Application.Machines.ListMachineDashboard`/`GetMachineDashboard` are the use cases, calling `INayaxLynxClient` with the same per-site/per-machine fan-out over `GetMachineProductsAsync` the former services used (a `Task.WhenAll` over every machine at once at the time; issue #845 has since capped the two Sites use cases at `CalculateReorderNeeds.MaxConcurrentMachineRequests` requests in flight, the limit the reorder-alert and Pick List fan-outs already used, leaving their results, their per-machine attribution and their failure/cancellation propagation unchanged). `Inventory.Application.Sites.ISiteFactsStore`/`ISiteNameResolver` and `Inventory.Application.Machines.IMachineDashboardFactsStore` are their narrow ports. Issue #150 moved commission/fee resolution and payment/status classification to Domain-owned rules and Application use cases/ports; these consumers use those authorities rather than API service wrappers. The ports return already-resolved decimal/boolean facts rather than raw agreements: `ISiteFactsStore.ResolveCardCommissionAsync` takes the distinct candidate retail prices appearing in a site's machine products and returns the commission amount already resolved for each (the exact per-price Domain commission calculation computes each entry, not a re-derived multiplier), and `IMachineDashboardFactsStore.GetFactsAsync` returns each rolling period's already-resolved gross revenue and direct-profit inputs plus the profitability-status inputs, mirroring the former per-sale commission-resolution loop and its exact short-circuiting (an ambiguous or gap-covered agreement, or a missing site mapping with sales present, skips the Nayax fee lookup entirely, exactly as before) fact for fact. `ResolveMachineProductPricing` uses the same Sites financial port, while `EfLatestNayaxSalesStore` uses the Domain transaction-status classifier.
    - **Scoped EF reads serialized (issue #313).** The Nayax fan-out above is unchanged and still concurrent, but no two `ISiteFactsStore` calls are ever in flight together, because the store is scoped and its EF adapter shares one `AppDbContext` (see [Concurrency inside one request: the scoped EF context](#concurrency-inside-one-request-the-scoped-ef-context-issue-313)). `GetSiteProducts` awaits its cost-basis, commission and fee reads one at a time instead of starting all three and joining them with `Task.WhenAll`. `GetSiteSummaries` no longer builds its per-site summaries concurrently: it reads the catalogue activity facts, then loads every site's recent completed sales through one scoped read over the whole fleet's machine ids with the same 16-day lookback each per-site read used, and distributes them per machine in memory, so the per-site aggregation itself is pure. Site-name ordering, machine counts, stock percentages, alert counts, per-site revenue attribution, financial-configuration handling, the API routes and response JSON, and exception behaviour are unchanged; tenancy is unchanged too, since the batched read is still scoped only by the central `AppDbContext` query filters. The focused regression tests live in `backend/Inventory.IntegrationTests/Application/Sites/` (call-sequence recorders plus the behavioural assertions) and in `EfSiteFactsStoreTenancyTests` (the batched completed-sales read loads no other business's sales). Issue #667 later moved that one batched read to after the machine-product fan-out completes, because a Nayax call resolves its credentials through the same context since issue #520; the fan-out itself is still concurrent.
    - `EfSiteFactsStore`/`EfMachineDashboardFactsStore`, `EfSiteCommissionStore`, `EfNayaxProcessingFeeFactsProvider`, and `EfNayaxSalesQueries` were temporary API-owned adapters because they depend on `AppDbContext` and persistence models. `SiteNameResolverAdapter` was one of them until issue #306, which found it had no `AppDbContext` dependency at all and merged it into `Inventory.Infrastructure.Sites.SiteNameResolver`; `EfNayaxProcessingFeeFactsProvider` and `EfNayaxSalesQueries` left with the reporting adapters in issue #308 (Persistence 7/8) for `Inventory.Infrastructure.Reporting.Persistence` and `Inventory.Infrastructure.Data`; the first three followed in issue #309 (Persistence 8/8) for `Inventory.Infrastructure.Persistence`, beside the `AppDbContext`, the entities and the migrations issue #307 had already moved. Entity-specific EF query expressions stay in those persistence adapters; they implement Application-owned ports and apply the authoritative Domain rules. The existing report facts adapters likewise compose the migrated commission and fee use cases and Domain rules. Issue #154 closed this item's remaining architectural debt rather than relocating anything further: the commission, fee, payment-method and transaction-status rules issue #150 moved into `Inventory.Domain` are now asserted to be declared there and nowhere else, no file under `InventoryApi` names one, `Inventory.Domain`/`Inventory.Application` are asserted to declare no `IQueryable` or expression tree at all, and `EfNayaxSalesQueries` is `internal` so the completed-sale predicate cannot be called from outside `Inventory.Infrastructure` - see [InventoryApi](#inventoryapi).
    - `InventoryApi.Services.SiteService`/`MachineService` were not deleted by this slice: it left them as thin delegators that only mapped the migrated use cases' results to the unchanged `SiteSummaryDto`/`SiteProductDto`/`Machine`/`Product` API contracts — the same transitional "legacy service delegates to the new use case" shape the reporting slices used before issue #92's final removal — and physically deleting them was left as explicit follow-up work, tracked the same way issue #92 was a separate, later step after every report family had migrated.

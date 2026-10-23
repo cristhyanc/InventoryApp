@@ -96,7 +96,10 @@ public class SyncLatestNayaxSalesTests
         var useCase = UseCase(db, nayax.Object);
 
         await useCase.Handle();
-        await useCase.Handle();
+        // Forced, because this is about the dedup rule and so it has to be two real runs: an
+        // unforced second call inside three minutes is skipped before anything is read (issue #843,
+        // covered by SyncLatestNayaxSalesFreshnessTests) and would prove nothing about dedup.
+        await useCase.Handle(force: true);
 
         Assert.Single(await db.NayaxSales.ToListAsync());
     }

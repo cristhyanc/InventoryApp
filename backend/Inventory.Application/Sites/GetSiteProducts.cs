@@ -1,5 +1,6 @@
 using Inventory.Application.Access;
 using Inventory.Application.Nayax;
+using Inventory.Application.Reorder;
 using Inventory.Application.Tenancy;
 using Inventory.Application.Time;
 using Inventory.Domain.Sites;
@@ -9,7 +10,9 @@ namespace Inventory.Application.Sites;
 /// <summary>
 /// The site product preview use case: for every machine at a site, aggregates its Nayax product
 /// mappings into one row per catalogue product with an estimated card-sale profit. Mirrors the former
-/// <c>InventoryApi.Services.SiteService.GetProducts</c> exactly (issue #241).
+/// <c>InventoryApi.Services.SiteService.GetProducts</c> exactly (issue #241). The per-machine
+/// requests run at most <see cref="CalculateReorderNeeds.MaxConcurrentMachineRequests"/> at a time
+/// (issue #845) rather than one per machine at once.
 ///
 /// <para>Each mapping's <c>NayaxProductID</c> is resolved to a local product through
 /// <see cref="INayaxProductLinkStore"/> (issue #733) before any row is built, so the rows, the MDB
@@ -76,15 +79,36 @@ public sealed class GetSiteProducts
             .ToList();
         if (machines.Count == 0) return [];
 
-        // Paired with the machine the request was actually made for, not re-derived from the
-        // response's own MachineID field: GET .../machineProducts documents MachineID as nullable,
-        // and CalculateReorderNeeds/GetPickList already avoid trusting it for the same reason.
-        var machineProductsByMachine = await Task.WhenAll(
-            machines.Select(async machine => (
-                Machine: machine,
-                Products: (await _nayax.GetMachineProductsAsync(machine.MachineID, cancellationToken))
+        // A bounded fan-out (issue #845): at most
+        // CalculateReorderNeeds.MaxConcurrentMachineRequests machine requests are in flight at once,
+        // the same limit CalculateReorderNeeds and GetPickList already fan this exact call out under,
+        // rather than one request per machine at once. Parallel.ForEachAsync observes every request,
+        // so a failing one propagates and none is left unobserved when another fails first.
+        //
+        // Each request writes to its own machine's slot, so the mappings stay paired with the machine
+        // the request was actually made for - never re-derived from the response's own MachineID
+        // field, which GET .../machineProducts documents as nullable, the reason
+        // CalculateReorderNeeds/GetPickList do not trust it either - and in machine order, whatever
+        // order the bounded requests completed in.
+        var productsByMachine = new List<NayaxMachineProduct>[machines.Count];
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, machines.Count),
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = CalculateReorderNeeds.MaxConcurrentMachineRequests,
+                CancellationToken = cancellationToken,
+            },
+            async (index, machineCancellationToken) =>
+            {
+                productsByMachine[index] =
+                    (await _nayax.GetMachineProductsAsync(machines[index].MachineID, machineCancellationToken))
                     .Where(mp => mp.NayaxProductID.HasValue)
-                    .ToList())));
+                    .ToList();
+            });
+
+        var machineProductsByMachine = machines
+            .Select((machine, index) => (Machine: machine, Products: productsByMachine[index]))
+            .ToList();
 
         var machineProducts = machineProductsByMachine.SelectMany(entry => entry.Products).ToList();
 

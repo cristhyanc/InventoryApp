@@ -58,7 +58,8 @@ public sealed class UploadPurchase
         var conflict = await _store.FindConflictingCostTransitionBaselineAsync(productIds, effectivePurchaseDate, cancellationToken);
         if (conflict is { } conflictingBaseline)
             throw new InvalidOperationException(
-                PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(conflictingBaseline.CutoffAt, conflictingBaseline.ProductId));
+                PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(
+                    conflictingBaseline.CutoffAt, conflictingBaseline.ProductId, conflictingBaseline.ProductName));
 
         var storedFileName = $"{Guid.NewGuid()}{extension}";
         await using (var source = file.OpenReadStream())

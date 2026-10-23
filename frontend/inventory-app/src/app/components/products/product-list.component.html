@@ -16,7 +16,7 @@
 
     <label class="flex items-center gap-2 self-center">
       <span>Status</span>
-      <select class="max-w-[180px]" [(ngModel)]="statusFilter" (ngModelChange)="applyFilters()" name="statusFilter">
+      <select class="max-w-[180px]" [ngModel]="statusFilter" (ngModelChange)="onStatusFilterChange($event)" name="statusFilter">
         <option value="active">Only active</option>
         <option value="all">All</option>
       </select>
@@ -73,9 +73,11 @@
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('stock')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('stock')">{{ sortLabel('Stock', 'stock') }}</button>
               </th>
-              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('status')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('status')">{{ sortLabel('Status', 'status') }}</button>
-              </th>
+              @if (statusFilter === 'all') {
+                <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('status')">
+                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('status')">{{ sortLabel('Status', 'status') }}</button>
+                </th>
+              }
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('averageCost')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('averageCost')">{{ sortLabel('Average cost', 'averageCost') }}</button>
               </th>
@@ -105,17 +107,19 @@
                     {{ p.quantityInStock }} {{ p.unit }}
                   </span>
                 </td>
-                <td class="table-cell">
-                  <button
-                    type="button"
-                    class="badge"
-                    [ngClass]="p.isActive ? 'badge-success' : 'badge-neutral'"
-                    [disabled]="sessionActive"
-                    (click)="toggleActive(p)"
-                  >
-                    {{ p.isActive ? 'Active' : 'Inactive' }}
-                  </button>
-                </td>
+                @if (statusFilter === 'all') {
+                  <td class="table-cell">
+                    <button
+                      type="button"
+                      class="badge"
+                      [ngClass]="p.isActive ? 'badge-success' : 'badge-neutral'"
+                      [disabled]="sessionActive"
+                      (click)="toggleActive(p)"
+                    >
+                      {{ p.isActive ? 'Active' : 'Inactive' }}
+                    </button>
+                  </td>
+                }
                 <td class="table-cell">{{ averageCostDisplay(p) }}</td>
                 @if (canViewFinancials) {
                   <td class="table-cell">

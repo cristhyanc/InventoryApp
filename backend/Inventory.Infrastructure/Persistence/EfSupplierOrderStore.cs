@@ -116,7 +116,8 @@ public sealed class EfSupplierOrderStore : ISupplierOrderStore
         order.Lines.Select(ToLineRecord).ToList());
 
     private static SupplierOrderSupplierRecord ToSupplierRecord(Supplier supplier) => new(
-        supplier.Id, supplier.Name, supplier.ContactName, supplier.Phone, supplier.Email, supplier.Address);
+        supplier.Id, supplier.Name, supplier.ContactName, supplier.Phone, supplier.Email, supplier.Address,
+        supplier.Url);
 
     private static SupplierOrderLineRecord ToLineRecord(SupplierOrderLine line) => new(
         line.Id,
