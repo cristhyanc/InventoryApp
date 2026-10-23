@@ -160,7 +160,7 @@ public sealed class EfInventoryCostLedgerStore : IInventoryCostLedgerStore
             List<CostReplayRepair> repairInputs,
             InventoryCostTransitionBaseline? baseline)
             : base(
-                new CostReplayProduct(product.Id, product.QuantityInStock, product.CostingQuantity, product.InventoryValue),
+                new CostReplayProduct(product.Id, product.QuantityInStock, product.CostingQuantity, product.InventoryValue, product.Name),
                 adjustmentInputs,
                 saleInputs,
                 repairInputs,
