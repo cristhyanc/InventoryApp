@@ -3165,8 +3165,9 @@ without being read), `InventoryCostTransitionPreviewBuilder` (its
 opening machine stock becomes a costing baseline) and `NayaxSaleTimestampRepairProjection` (its
 evidence is the live rolling window of every machine) all call `GetMachinesFreshAsync` and replace the
 entry for their business and credential revision. Every other caller — the dashboard summary and low
-stock, the sites read and site products, reorder, the pick list, the machine list, the site commission
-report, the transaction report's live site names and the catalogue snapshot — reads through the cache.
+stock, the sites read and site products, reorder, the pick list, the machine list, the machine
+products listing's site lookup (issue #846, below), the site commission report, the transaction
+report's live site names and the catalogue snapshot — reads through the cache.
 `NayaxConnectionCheckRunner` neither reads from nor writes to it, structurally: it builds its own
 `NayaxLynxClient` over the candidate credentials an Owner pasted and is constructed from an
 `HttpClient` and a logger and nothing else, so it never resolves the decorated port. That matters
@@ -3174,6 +3175,47 @@ because the pasted pair may belong to a different Nayax operator account, whose 
 business's fleet. Nothing else is cached by this change: machine products, machine stock, last sales,
 alerts, one machine, the product catalogue, the product groups, the devices and the machine-product
 write all reach the client every time.
+
+**The machine products listing takes the machine's site from that list** (issue #846, step 2 of
+#839). Opening a machine loads `GET api/machines/{id}` and `GET api/machines/{id}/products` together,
+and both used to read the machine from Nayax — the listing only ever wanted one field of it, the
+`CustomerID` that `Inventory.Application.Products.ResolveMachineProductPricing` prices each slot's
+site commission by. So `Inventory.Application.Machines.ListMachineProducts` reads that `CustomerID`
+from the machine list instead, which the same page has just read through this cache, and **opening a
+machine makes one Nayax machine read across both requests** rather than two. A machine the list does
+not hold — one
+added in Nayax within the last ten minutes, or one Nayax does not know — falls back to the single
+machine read exactly as before, and still before the machine products are read, so an unknown
+machine still answers with today's controlled `502`. A listed machine with no `CustomerID` is at no
+site and is priced with none: that is the list's answer, not a reason to ask again.
+
+**The saving did not buy a new permission.** A Nayax account may grant `GET machines/{id}` and
+`GET machines/{id}/machineProducts` while refusing `GET machines`, and that is precisely the account
+whose connection the test of issue #536 concludes `PendingPermissions` for — which is what makes its
+`403` the classified per-feature `NayaxPermissionNotGrantedException` rather than an upstream
+failure. So a `NayaxPermissionNotGrantedException` on the fleet read falls back to the single-machine
+read, and the listing answers exactly as it did before issue #846 instead of refusing an endpoint
+that worked. That one classified refusal is the **only** thing the fallback catches. A
+`NayaxNotConnectedException` (nothing stored, `NotConfigured`, or the `NeedsAttention` the status
+gate refuses) refuses the single-machine read in the same breath; a support session resolves no Nayax
+credentials at all (issue #551); a cancellation is the caller's own; and a transport or `5xx` failure
+is an outage. All four propagate untouched, because retrying them against another endpoint would
+either spend a request to reach the same answer slower or report a working site where there is an
+outage. A `403` on a connection that is already `Ready` stays what it is everywhere else in this
+application — an upstream failure, and so a `502` — because `NayaxUpstreamException` is an
+Infrastructure type and `Inventory.Application` classifies availability by the two exceptions of
+issue #726 and nothing else; a `Ready` connection is in any case one whose own `Machines` check
+passed.
+
+**Which means site pricing can be up to ten minutes stale after a site move**, the cost the
+repository owner accepted with the lifetime on 23 October 2026. When a machine moves from site A to
+site B in Nayax, its products page keeps suggesting site A's commission until the cached list
+expires, and prices with site B's on the first load after that. Nothing else about the listing goes
+stale: the slots, their machine prices, their MDB codes and their stock all still come from that
+machine's own live `GET .../machineProducts` read, and the machine dashboard beside it still reads
+the machine itself. `GetMachineDashboard` is deliberately not changed to read the list — it is the
+read that remains, it needs the whole machine record rather than one field, and a machine page whose
+header came from a ten-minute-old list would be a second, staler answer to what the page is about.
 
 **What proves it.** `Inventory.IntegrationTests/Infrastructure/Nayax/NayaxMachineListCacheTests`
 covers the mechanism over a scripted read whose every call is counted and can be held open: a hit
@@ -3194,7 +3236,21 @@ business caching nothing.
 `NayaxConnectionCheckRunnerTests` pins the connection test's structural isolation, and
 `NayaxLynxClientDependencyInjectionTests` pins that the port resolves to the decorator over the one
 HTTP client with one process-wide cache behind it. Each fresh caller's own suite refuses the cached
-read outright, so a use case that stopped reading fresh fails loudly.
+read outright, so a use case that stopped reading fresh fails loudly. Issue #846's own staleness is
+proved through this whole composition rather than a stand-in for it:
+`Inventory.IntegrationTests/Application/Machines/MachineProductsSitePricingStalenessTests` runs
+`ListMachineProducts` over the real decorator, the real cache and a fake clock while the fake Nayax
+moves the machine from site A to site B — site A's suggestions, site A's again a second before the
+lifetime, site B's on the first load after it, two list reads for three loads and no machine read at
+all — plus the fallback machine read happening on every load for a machine the list does not hold,
+the unchanged upstream failure for a machine Nayax does not know, and nothing but the site-based
+suggestions differing across the expiry. It covers the permission answers through the same
+composition: an account refused the fleet list is priced by the machine's own read on every load
+(the cache holds no refusal), and an unusable connection still refuses the listing without the
+machine being read at all. `ListMachineProductsTests` pins the same choices against a mocked port —
+the listing being identical whichever read the site came from, including after a fleet-permission
+refusal; both reads refused still refusing; and the not-connected, support-session, cancellation and
+upstream fleet failures reaching the caller with neither the machine nor its products read.
 
 ### Nayax connection checks and the Test endpoint (issue #536)
 
@@ -12870,9 +12926,12 @@ files" as the historical record of that slice, not as a test to look for today.
        catalogue with the live machine replenishment need and outstanding supplier-order quantity from
        `CalculateReorderNeeds` (issue #47), clamps a negative outstanding quantity at zero, filters to
        the alerting products and ranks them by `NeedToOrder` descending then name - the same steps the
-       legacy service performed. `ListMachineProducts` makes the same two `INayaxLynxClient` calls in
-       the same order with the same arguments, drops a Nayax mapping with no matching local product,
-       overlays the machine slot's price/commission/MDB/PAR facts, and orders by MDB code.
+       legacy service performed. `ListMachineProducts` drops a Nayax mapping with no matching local
+       product, overlays the machine slot's price/commission/MDB/PAR facts, and orders by MDB code.
+       It made the legacy service's same two `INayaxLynxClient` calls in the same order with the same
+       arguments until issue #846 took the machine's site from the cached machine list, with the
+       single-machine read kept as the fallback for a machine that list does not hold (see
+       [The machine-list cache](#the-machine-list-cache-issue-840)).
      - **Ports and adapters.** `IProductStore` (create/update/delete) and `IProductCatalogStore`
        (reads: filtered by-name listing, unordered listing, single lookup) are the narrow persistence
        ports; `Inventory.Infrastructure.Persistence.EfProductStore`/`EfProductCatalogStore` are their
