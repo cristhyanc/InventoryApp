@@ -11465,6 +11465,13 @@ availability projection this issue only displays.
   only renames the control that sets it.
 - **The Price column stays gone** (issue #792, A2 of #786): this issue adds no selling-price
   column or sort back.
+- **The Status column is hidden while "Only active" is selected** (issue #828): since every row is
+  active under that filter, its header and cells render nothing (`@if (statusFilter === 'all')` in
+  the template, so the header and row cell counts stay equal in both states), including on first
+  load and after Reset. Switching to "All" shows the column and its toggle again, unchanged from
+  #825. Switching back to "Only active" while sorted by Status clears the sort back to the default
+  order (`ProductListComponent.clearStatusSortWhenHidden`), rather than leaving it pointed at a
+  column no longer on screen.
 - **Three cost columns are added**, none of them computed in Angular: "Average cost" is
   `ProductResponse.averageUnitCostForDisplay` (issue #788) formatted to two decimals, `—` when it
   is absent and `$0.00` for a genuine recorded zero — the legacy `averageUnitCost` default is never
