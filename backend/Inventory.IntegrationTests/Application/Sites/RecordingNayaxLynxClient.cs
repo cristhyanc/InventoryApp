@@ -35,7 +35,6 @@ public sealed class RecordingNayaxLynxClient : INayaxLynxClient
     private int _inFlight;
     private int _maxInFlight;
     private int _machineListCalls;
-    private int _machineProductCalls;
 
     public RecordingNayaxLynxClient(
         IEnumerable<NayaxMachine> machines,
@@ -64,12 +63,9 @@ public sealed class RecordingNayaxLynxClient : INayaxLynxClient
 
     /// <summary>
     /// How many fleet reads were made, which is what issue #841's light site list is measured by:
-    /// exactly one, with <see cref="MachineProductCalls"/> at zero.
+    /// exactly one, with <see cref="MachineProductCallCount"/> at zero.
     /// </summary>
     public int MachineListCalls => _machineListCalls;
-
-    /// <summary>How many per-machine reads were made (issue #841).</summary>
-    public int MachineProductCalls => _machineProductCalls;
 
     public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default)
     {
@@ -81,7 +77,6 @@ public sealed class RecordingNayaxLynxClient : INayaxLynxClient
 
     public async Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default)
     {
-        Interlocked.Increment(ref _machineProductCalls);
         var started = Interlocked.Increment(ref _started);
         var inFlight = Interlocked.Increment(ref _inFlight);
         InterlockedMax(ref _maxInFlight, inFlight);

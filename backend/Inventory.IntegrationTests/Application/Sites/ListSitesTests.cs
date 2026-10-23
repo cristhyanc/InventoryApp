@@ -43,7 +43,7 @@ public class ListSitesTests
 
         Assert.Equal(2, sites.Count);
         Assert.Equal(1, nayax.MachineListCalls);
-        Assert.Equal(0, nayax.MachineProductCalls);
+        Assert.Equal(0, nayax.MachineProductCallCount);
     }
 
     /// <summary>
@@ -100,7 +100,7 @@ public class ListSitesTests
         var site = Assert.Single(await UseCase(nayax).Handle(CancellationToken.None));
 
         Assert.Equal(2, site.MachineCount);
-        Assert.Equal(0, nayax.MachineProductCalls);
+        Assert.Equal(0, nayax.MachineProductCallCount);
         Assert.Equal(1, nayax.MachineListCalls);
     }
 
