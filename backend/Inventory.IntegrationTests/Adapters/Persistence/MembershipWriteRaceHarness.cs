@@ -165,6 +165,26 @@ internal sealed class MembershipWriteRaceHarness : IAsyncDisposable
         return db.BusinessMemberships.AsNoTracking().OrderBy(membership => membership.Id).ToList();
     }
 
+    /// <summary>
+    /// Every supplier row, of every business, in key order - which is what "at most one set of
+    /// copies" is counted over when two approvals race (issue #849).
+    /// </summary>
+    public List<Supplier> Suppliers()
+    {
+        using var db = TestAppDbContext.Unrestricted(Options);
+        return db.Suppliers.AsNoTracking().OrderBy(supplier => supplier.Id).ToList();
+    }
+
+    /// <summary>
+    /// The platform supplier presets the migrated database shipped with, enabled and disabled alike
+    /// (issue #848), so a race can state how many copies one approval is supposed to make.
+    /// </summary>
+    public List<SupplierPreset> SupplierPresets()
+    {
+        using var db = TestAppDbContext.Unrestricted(Options);
+        return db.SupplierPresets.AsNoTracking().OrderBy(preset => preset.Id).ToList();
+    }
+
     /// <summary>Every invite row, of every business, in key order.</summary>
     public List<MemberInviteRow> Invites()
     {

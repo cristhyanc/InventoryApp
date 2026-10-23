@@ -33,7 +33,8 @@ namespace InventoryApi.Tests.Controllers;
 /// <see cref="AppDbContext"/>: it is registered scoped, takes nothing but the request's own
 /// context, and no registration anywhere offers a request path an unscoped one. Issue #550's
 /// support-session store is held to the same three things for the same reason: it is the second
-/// adapter a platform administrator's denied-scope request reaches.</para>
+/// adapter a platform administrator's denied-scope request reaches, and issue #849's provisioning
+/// store is the third - the only one of them that writes a tenant-owned row.</para>
 /// </summary>
 public sealed class BusinessScopeCompositionTests : IClassFixture<BusinessScopeCompositionTests.ApiFactory>
 {
@@ -172,6 +173,39 @@ public sealed class BusinessScopeCompositionTests : IClassFixture<BusinessScopeC
         Assert.True(db.TenantFilteringEnabled);
         Assert.Null(db.CurrentBusinessId);
         Assert.Empty(db.Products.ToList());
+    }
+
+    /// <summary>
+    /// The provisioning store of issue #849 is held to the same three things, and for the sharpest
+    /// version of the reason: it is the one adapter a denied-scope request may write a
+    /// <em>tenant-owned</em> row through, so where it gets its context from is the whole of what
+    /// bounds it. The port is satisfied by the Infrastructure adapter as a <em>scoped</em>
+    /// registration, its only constructor dependency is <see cref="AppDbContext"/> - so nothing can
+    /// hand it a scope, a context factory or options of its own, and in particular nothing can hand
+    /// it an unscoped context - and the context it therefore receives is the request's own, which
+    /// starts denied and filters every tenant-owned read.
+    /// </summary>
+    [Fact]
+    public void The_business_provisioning_store_gets_the_request_scoped_context_and_nothing_else()
+    {
+        using var scope = _factory.Services.CreateScope();
+
+        var store = scope.ServiceProvider.GetRequiredService<IBusinessSupplierProvisioningStore>();
+
+        Assert.IsType<EfBusinessSupplierProvisioningStore>(store);
+
+        var dependencies = typeof(EfBusinessSupplierProvisioningStore)
+            .GetConstructors()
+            .SelectMany(constructor => constructor.GetParameters())
+            .Select(parameter => parameter.ParameterType)
+            .ToArray();
+
+        Assert.Equal([typeof(AppDbContext)], dependencies);
+
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        Assert.True(db.TenantFilteringEnabled);
+        Assert.Null(db.CurrentBusinessId);
+        Assert.Empty(db.Suppliers.ToList());
     }
 
     /// <summary>
