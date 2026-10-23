@@ -43,6 +43,12 @@ public sealed class E2ETestNayaxLynxClient : INayaxLynxClient
     public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default) =>
         Empty<NayaxMachineProduct>();
 
+    // Nor are the machine's selections cached here, so the fresh read is the same empty list
+    // (issue #842).
+    public Task<List<NayaxMachineProduct>> GetMachineProductsFreshAsync(
+        long machineId, CancellationToken ct = default) =>
+        Empty<NayaxMachineProduct>();
+
     public Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(
         long machineId, List<NayaxMachineProduct> products, CancellationToken ct = default) =>
         throw new NotSupportedException(NoFleetMessage);

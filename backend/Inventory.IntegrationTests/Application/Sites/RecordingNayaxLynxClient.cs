@@ -84,6 +84,16 @@ public sealed class RecordingNayaxLynxClient : INayaxLynxClient
         return _productsByMachine.TryGetValue(machineId, out var products) ? products : [];
     }
 
+    /// <summary>
+    /// The fresh selections read of issue #842, which the Sites use cases must not make: both are
+    /// declared cached callers, so a test that reached this member would be proving the opposite of
+    /// what they promise.
+    /// </summary>
+    public Task<List<NayaxMachineProduct>> GetMachineProductsFreshAsync(
+        long machineId, CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This fake serves the cached machine products only: the Sites reads must not read fresh.");
+
     private static void InterlockedMax(ref int location, int value)
     {
         int initial;

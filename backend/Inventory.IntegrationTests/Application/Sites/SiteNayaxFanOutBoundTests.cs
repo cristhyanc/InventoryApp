@@ -400,6 +400,14 @@ public class SiteNayaxFanOutBoundTests
         public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
             Task.FromResult(_machines);
 
+        // The Sites reads are declared cached callers (issue #842), so the fresh selections read must
+        // not be reached from here: a test that proved the bound over it would be proving it for a
+        // call these use cases do not make.
+        public Task<List<NayaxMachineProduct>> GetMachineProductsFreshAsync(
+            long machineId, CancellationToken ct = default) =>
+            throw new NotSupportedException(
+                "This fake serves the cached machine products only: the Sites reads must not read fresh.");
+
         public async Task<List<NayaxMachineProduct>> GetMachineProductsAsync(
             long machineId, CancellationToken ct = default)
         {

@@ -11,7 +11,7 @@ namespace Inventory.Infrastructure.Nayax;
 // Docs: https://devzone.nayax.com/docs/manage-data-operations/lynx-api
 // Auth: a Bearer token, resolved per call from the current business's own stored connection
 // (issue #520) through INayaxRequestCredentialProvider. Only the base URL is global.
-public class NayaxLynxClient : INayaxLynxMachineListClient
+public class NayaxLynxClient : INayaxLynxCachedReadClient
 {
     private readonly HttpClient _http;
     private readonly INayaxRequestCredentialProvider _credentials;
@@ -33,10 +33,10 @@ public class NayaxLynxClient : INayaxLynxMachineListClient
     public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) =>
         SendAsync<List<NayaxMachine>>(nameof(GetMachinesAsync), HttpMethod.Get, _ => "machines", ct);
 
-    // This client caches nothing, so "fresh" and "cached" are the same request here: the machine-list
-    // cache of issue #840 lives in MachineListCachingNayaxLynxClient, which is what the composition
-    // root registers the port as. Keeping the two identical here is the point - the connection test
-    // runner builds this class directly and must never read or write that cache.
+    // This client caches nothing, so "fresh" and "cached" are the same request here: the caches of
+    // issues #840 and #842 live in CachingNayaxLynxClient, which is what the composition root
+    // registers the port as. Keeping the two identical here is the point - the connection test
+    // runner builds this class directly and must never read or write a cache.
     public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
         GetMachinesAsync(ct);
 
@@ -76,6 +76,31 @@ public class NayaxLynxClient : INayaxLynxMachineListClient
             _ => $"machines/{machineId}/machineProducts",
             ct);
 
+    // Identical to GetMachineProductsAsync, for the same reason the two machine-list members are
+    // identical here: the 60-second selections cache of issue #842 lives in CachingNayaxLynxClient,
+    // and this class is what the connection test builds over pasted candidate credentials.
+    public Task<List<NayaxMachineProduct>> GetMachineProductsFreshAsync(
+        long machineId, CancellationToken ct = default) =>
+        GetMachineProductsAsync(machineId, ct);
+
+    /// <inheritdoc />
+    public Task<List<NayaxMachineProduct>> ReadMachineProductsAsync(
+        long machineId, NayaxRequestCredential credential, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+
+        // The same request as GetMachineProductsAsync in every respect - same endpoint, same
+        // operation name in logs and exceptions, same classification of a 401 or a 403 - except that
+        // the credential was resolved and gated by the caller instead of here, so the revision this
+        // request carries is the revision the selections cache keys its answer under (issue #842).
+        return SendWithCredentialAsync<List<NayaxMachineProduct>>(
+            nameof(GetMachineProductsAsync),
+            HttpMethod.Get,
+            _ => $"machines/{machineId}/machineProducts",
+            credential,
+            ct);
+    }
+
     public Task<NayaxMachine> GetMachineAsync(long machineId, CancellationToken ct = default) =>
         SendAsync<NayaxMachine>(
             nameof(GetMachineAsync),
@@ -107,6 +132,28 @@ public class NayaxLynxClient : INayaxLynxMachineListClient
             _ => $"machines/{machineId}/machineProducts",
             ct,
             () => JsonContent.Create(products));
+
+    /// <inheritdoc />
+    public Task<List<NayaxMachineProduct>> WriteMachineProductsAsync(
+        long machineId,
+        List<NayaxMachineProduct> products,
+        NayaxRequestCredential credential,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+
+        // The same request as CreateMachineProductsAsync, with the caller's already-gated credential:
+        // the entry the caller then forgets has to belong to the credentials this write really
+        // carried, and resolving a second one here would cost the business a second connection read
+        // per write (issue #842).
+        return SendWithCredentialAsync<List<NayaxMachineProduct>>(
+            nameof(CreateMachineProductsAsync),
+            HttpMethod.Post,
+            _ => $"machines/{machineId}/machineProducts",
+            credential,
+            ct,
+            () => JsonContent.Create(products));
+    }
 
     // One Nayax operation: resolve this call's credential, then send, accept or reject.
     //

@@ -408,12 +408,14 @@ public static class InfrastructureServiceCollectionExtensions
     /// Validation and the base address happen here, eagerly, so a missing or non-https base URL
     /// fails registration at startup rather than the first Nayax call.
     ///
-    /// <strong>The port is the caching decorator, not the HTTP client (issue #840.)</strong>
-    /// <see cref="MachineListCachingNayaxLynxClient"/> is what every consumer resolves, and it wraps
-    /// the typed <see cref="NayaxLynxClient"/> registered under its own type; the machine list it
-    /// keeps lives in the one singleton <see cref="NayaxMachineListCache"/>, because a cache that was
-    /// per request would cache nothing a second page load could use. The <c>HttpClient</c> itself is
-    /// still named after the port, so its resilience pipeline and base address are unchanged.
+    /// <strong>The port is the caching decorator, not the HTTP client (issues #840 and #842.)</strong>
+    /// <see cref="CachingNayaxLynxClient"/> is what every consumer resolves, and it wraps the typed
+    /// <see cref="NayaxLynxClient"/> registered under its own type; the machine lists it keeps live in
+    /// the one singleton <see cref="NayaxMachineListCache"/> and each machine's selections in the one
+    /// singleton <see cref="NayaxMachineProductsCache"/>, because a cache that was per request would
+    /// cache nothing a second page load - or a simultaneous one - could use. The <c>HttpClient</c>
+    /// itself is still named after the port, so its resilience pipeline and base address are
+    /// unchanged.
     /// </summary>
     /// <exception cref="InvalidOperationException">The configured base URL is missing or invalid.</exception>
     public static IServiceCollection AddNayaxLynxClient(this IServiceCollection services, NayaxLynxOptions options)
@@ -431,21 +433,25 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddHttpClient<NayaxLynxClient>(nameof(INayaxLynxClient), http => http.BaseAddress = baseAddress)
             .AddHttpMessageHandler<NayaxResilienceHandler>();
 
-        // Singleton: the whole point of issue #840 is that a list read on one request is still good
-        // on the next one. It holds no credential, no token and no connection status - only machine
-        // ids, names and site ids, under a key that names the business they belong to.
+        // Singletons: the whole point of issues #840 and #842 is that a list read on one request is
+        // still good on the next one, and on the two that started beside it. Neither holds a
+        // credential, a token or a connection status - only machine ids, names and site ids, and the
+        // machines' own selections - under keys that name the business they belong to.
         services.AddSingleton<NayaxMachineListCache>();
+        services.AddSingleton<NayaxMachineProductsCache>();
 
-        // The decorator takes the HTTP client as INayaxLynxMachineListClient - the port plus the
-        // machine-list read that is sent with a credential the decorator has already resolved and
-        // gated, so the cache key names the credentials the request really carried - and resolves the
-        // credential provider and the business scope per request like every other consumer. A test can
-        // still put its own double behind it. Transient, as the typed client it wraps is.
-        services.AddTransient<INayaxLynxClient>(serviceProvider => new MachineListCachingNayaxLynxClient(
+        // The decorator takes the HTTP client as INayaxLynxCachedReadClient - the port plus the reads
+        // and the machine-product write that are sent with a credential the decorator has already
+        // resolved and gated, so each cache key names the credentials the request really carried - and
+        // resolves the credential provider and the business scope per request like every other
+        // consumer. A test can still put its own double behind it. Transient, as the typed client it
+        // wraps is.
+        services.AddTransient<INayaxLynxClient>(serviceProvider => new CachingNayaxLynxClient(
             serviceProvider.GetRequiredService<NayaxLynxClient>(),
             serviceProvider.GetRequiredService<INayaxRequestCredentialProvider>(),
             serviceProvider.GetRequiredService<IBusinessScope>(),
-            serviceProvider.GetRequiredService<NayaxMachineListCache>()));
+            serviceProvider.GetRequiredService<NayaxMachineListCache>(),
+            serviceProvider.GetRequiredService<NayaxMachineProductsCache>()));
 
         // The connection-test check runner (issue #536) gets its own HttpClient from the same base
         // address and the same resilience handler, and registers no credential here either: it

@@ -13,8 +13,8 @@ namespace InventoryApi.Tests.Infrastructure.Nayax;
 /// reports a 401 for the revision the call started with.
 ///
 /// <para><see cref="Refusal"/> is settable so a test can let a call succeed and then make the very
-/// next one refuse, which is how issue #840's machine-list cache is proved to check the connection
-/// before every hit rather than only before the read that filled it.</para>
+/// next one refuse, which is how the caches of issues #840 and #842 are proved to check the
+/// connection before every hit rather than only before the read that filled the entry.</para>
 /// </summary>
 internal sealed class FakeNayaxRequestCredentialProvider : INayaxRequestCredentialProvider
 {

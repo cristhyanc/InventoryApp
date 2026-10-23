@@ -44,6 +44,7 @@ public sealed class LastSalesNayaxLynxClient : INayaxLynxClient
 
     public Task<List<NayaxDevice>> GetDevicesAsync(CancellationToken ct = default) => throw new NotSupportedException();
     public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default) => throw new NotSupportedException();
+    public Task<List<NayaxMachineProduct>> GetMachineProductsFreshAsync(long machineId, CancellationToken ct = default) => throw new NotSupportedException();
     public Task<List<NayaxMachineProduct>> CreateMachineProductsAsync(long machineId, List<NayaxMachineProduct> products, CancellationToken ct = default) => throw new NotSupportedException();
     public Task<List<NayaxProduct>> GetProductsAsync(CancellationToken ct = default) => throw new NotSupportedException();
     public Task<List<NayaxProductGroup>> GetProductGroupssAsync(CancellationToken ct = default) => throw new NotSupportedException();

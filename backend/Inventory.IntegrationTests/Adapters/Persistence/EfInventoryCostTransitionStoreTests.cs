@@ -186,7 +186,7 @@ public class EfInventoryCostTransitionStoreTests
         var nayax = new Mock<INayaxLynxClient>();
         nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = ProductA, PAR = 5, MissingStockByMDB = 2 },

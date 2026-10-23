@@ -196,7 +196,7 @@ public class MachineStockSyncTests
         var mock = new Mock<INayaxLynxClient>();
         mock.Setup(x => x.GetMachineLastAlertsAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(alerts);
-        mock.Setup(x => x.GetMachineProductsAsync(MachineId, It.IsAny<CancellationToken>()))
+        mock.Setup(x => x.GetMachineProductsFreshAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(machineProducts ?? new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = ProductId, MDBCode = 13, ProductName = "25g Nobby's Beef Jerky Hot" }

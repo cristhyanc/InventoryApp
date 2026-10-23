@@ -85,7 +85,7 @@ public class MachineStockSyncNayaxLinkTests
                     EventDateTimeVmc = DateTime.SpecifyKind(EventTime.AddHours(10), DateTimeKind.Unspecified),
                 },
             ]);
-        nayax.Setup(x => x.GetMachineProductsAsync(MachineId, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([
                 new NayaxMachineProduct { NayaxProductID = NayaxProductId, MDBCode = Mdb, ProductName = ProductName },
             ]);
