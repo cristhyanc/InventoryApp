@@ -220,6 +220,17 @@ public record SiteSummaryDto(
     decimal? PreviousComparableWeekRevenue
 );
 
+// One row of GET /api/sites/list, the light site list a site picker fills from (issue #841): the id
+// a filter submits, the name it shows, and the number of machines the fleet has at that site. It is
+// deliberately not a reduced SiteSummaryDto - a stock percentage, alert count or revenue figure
+// would each need the per-machine Nayax read this endpoint exists to avoid. The machine count does
+// not: the fleet read behind this list already groups every machine by its site, so the count is the
+// size of that group and costs no second request of any kind, which is why the owner's 23 October
+// 2026 decision put it on this row rather than removing the Site Products subtitle that states it.
+// A consumer that only fills a dropdown ignores it. GET /api/sites keeps serving the full row to the
+// Dashboard and the Sites page.
+public record SiteListItemDto(long SiteId, string Name, int MachineCount);
+
 public record SiteProductMachineMdbCodeDto(long MachineId, string MachineLabel, int? MdbCode);
 
 // One row of GET /api/sites/{id}/products. EstimatedCardProfit was already nullable for an estimate

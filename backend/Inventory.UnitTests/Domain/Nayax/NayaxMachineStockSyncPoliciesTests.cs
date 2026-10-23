@@ -73,7 +73,23 @@ public class NayaxMachineStockSyncPoliciesTests
 
         Assert.Equal(NayaxStockEventMatchStatus.NeedsReview, resolution.MatchStatus);
         Assert.Null(resolution.MatchedProductId);
-        Assert.Contains("999", resolution.NeedsReviewReason);
+        Assert.Equal(
+            "No local product is mapped to Nayax product Coke 375mL (999) (MDB 7).",
+            resolution.NeedsReviewReason);
+    }
+
+    [Fact]
+    public void An_unmapped_nayax_product_with_no_reported_name_keeps_the_bare_id_wording()
+    {
+        var resolution = NayaxMachineStockMatchPolicy.Resolve(
+            MachineId,
+            new ParsedNayaxStockAdjustment(7, "", 1),
+            Mdb((7, 999)),
+            Catalogue(new NayaxStockSyncProduct(200, "Coke 375mL", 10)));
+
+        Assert.Equal(
+            "No local product is mapped to Nayax product 999 (MDB 7).",
+            resolution.NeedsReviewReason);
     }
 
     [Fact]
