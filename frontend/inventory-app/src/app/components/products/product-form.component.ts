@@ -9,6 +9,7 @@ import { Category } from '../../models/models';
 import { ProductPriceHistoryComponent } from './product-price-history/product-price-history.component';
 import { ProductGstRuleComponent } from './product-gst-rule/product-gst-rule.component';
 import { ProductCreateGstRuleComponent } from './product-create-gst-rule/product-create-gst-rule.component';
+import { ProductCategoryPickerComponent } from './product-category-picker/product-category-picker.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 
@@ -21,7 +22,8 @@ import { apiErrorMessage } from '../shared/api-error-message';
     RouterLink,
     ProductPriceHistoryComponent,
     ProductGstRuleComponent,
-    ProductCreateGstRuleComponent
+    ProductCreateGstRuleComponent,
+    ProductCategoryPickerComponent
   ],
   templateUrl: './product-form.component.html'
 })
@@ -102,12 +104,14 @@ export class ProductFormComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    // No supplier list is loaded (issue #787, A1 of #786): nothing on this page needs one now that
-    // a product carries no supplier.
-    this.categoryService.getAll().subscribe((c) => (this.categories = c));
-
     const idParam = this.route.snapshot.paramMap.get('id');
     if (idParam) {
+      // The category list feeds the edit page's dropdown only: on New Product the searchable picker
+      // reads the options itself (issue #830), so the page makes no second read of the same list.
+      // No supplier list is loaded either (issue #787, A1 of #786): nothing on this page needs one
+      // now that a product carries no supplier.
+      this.categoryService.getAll().subscribe((c) => (this.categories = c));
+
       this.productId = Number(idParam);
       this.productService.get(this.productId).subscribe((p) => {
         this.providerManagedFields = p.providerManagedFields ?? [];
@@ -133,6 +137,24 @@ export class ProductFormComponent implements OnInit, OnDestroy {
         };
       });
     }
+  }
+
+  /**
+   * The selected category id for the New Product picker, which reports `null` rather than the
+   * form's empty-string "no category" (issue #830). The submitted payload is unchanged.
+   */
+  get selectedCategoryId(): number | null {
+    return this.form.categoryId === '' ? null : this.form.categoryId;
+  }
+
+  /**
+   * The category the picker reports - always an existing category's id, or `null` for no category.
+   * It is the only thing that control changes on this form: every other field, and the GST rule
+   * chosen beside it (issue #829), is left exactly as it is, whether a category was selected or
+   * created.
+   */
+  onCategorySelected(categoryId: number | null): void {
+    this.form.categoryId = categoryId ?? '';
   }
 
   /** Whether the provider names this product, so its name may not be edited here (issue #737). */

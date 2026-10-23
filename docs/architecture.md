@@ -11790,6 +11790,76 @@ reactivate; the Admin costing-repair and AVCO-transition tools and the stock-his
 still call the endpoint without it and show active products only - picking those three up is
 unrelated follow-up work, not part of #737. Nothing on the server depends on any of them.
 
+#### Searchable category with inline category creation on New Product (issue #830)
+
+Creating a product whose category does not exist yet meant leaving the form for **Categories**,
+creating it there and starting the product again. Issue #830 removes that detour, and **no API, DTO,
+schema, Domain rule, capability or duplicate-name policy changed with it**: this is one Angular
+control sequencing the two endpoints #736 already shipped, `GET api/categories` and
+`POST api/categories`.
+
+**It is a dedicated feature component, not markup on the page.** Searching the options, filtering
+them, offering the create, making that write and owning its pending, refusal and retry states is a
+workflow with its own state and lifecycle, so `ProductCategoryPickerComponent`
+(`components/products/product-category-picker`) owns all of it and the routed `ProductFormComponent`
+keeps only the answer — the category id to submit, reported through `(categoryIdChange)`, with the
+current selection passed down through `[categoryId]`. That is the
+[page composition boundary](#page-composition-boundary-issue-191) applied the same way issue #829's
+`ProductCreateGstRuleComponent` applies it, and it is what makes a pending or refused *category*
+write unable to touch a *product* field: the picker holds no product state and the page holds no
+category state.
+
+**What is submitted is an id, never text.** The box is a combobox (`role="combobox"`,
+`aria-autocomplete="list"`, `aria-expanded`, `aria-activedescendant`) over a labelled
+`role="listbox"` of `role="option"` rows: "No category" first — the optional-category semantics the
+replaced `<select>` carried as its `None` option — then the matching categories, then the create
+action. Matching is a case-insensitive substring of the typed text, and whenever the list closes the
+box's text is set back to the selected category's name (or empty). So text that matched nothing can
+never be read as a selection, and leaving the field creates and selects nothing. Keyboard focus never
+leaves the box: the rows carry `tabindex="-1"` and the active one is published through
+`aria-activedescendant`, with Arrow keys moving (wrapping at both ends), Enter acting on the active
+row, Escape dismissing, and Enter *while the list is open* kept off the product form's submit.
+
+**Creating is explicit, and it is the existing create.** The create row appears only while the
+options are known — read, and read successfully — the typed name is non-blank and no existing
+category's name equals it ignoring case and surrounding whitespace — the same comparison
+`CategoryCataloguePolicy` makes — and is labelled with the proposed name
+("Create category “Choc Bars”"). Typing offers it; only activating it writes. `CategoryService.create`
+posts the trimmed name to `POST api/categories`, so that endpoint's validation, its per-business
+duplicate-name refusal and its `Inventory.Operate` capability decide the outcome, and the picker
+words none of them: a refusal is shown verbatim through `apiErrorMessage`. On success the returned
+category is added to the options in the server's own by-name order and selected, with every other
+field on the product form untouched and no navigation.
+
+**A pending create is the only thing that prevents a second one**, and it is checked in the component
+as well as disabling the row, so the write is unavailable rather than merely inert. A refusal keeps
+the typed name and the open list and **re-reads the options**, because the usual reason for one is
+that the category now exists — created in another tab or by somebody else — and the answer to that is
+that the existing category becomes selectable while the create row withdraws. The picker invents no
+duplicate policy of its own. A failed option read says so and offers **Retry**, and still lets the
+product be saved without a category, because a product's category is optional.
+
+**While the options are unknown the list says nothing about them.** The create row is the answer to
+"no category of yours is called this", and a read that is still in flight or has failed is not a
+business with no such category — so neither it nor the "No category matches …" line is shown until
+a read has succeeded, and the load error's own wording ("none can be searched or created here")
+is what the panel then offers. A successful **Retry** keeps the typed name and the open list, so the
+create it now knows is missing appears without the name being typed again. The alternative — offering
+the create over options nobody read — would contradict both that message and the server's
+duplicate-name refusal, which is the only authority on the name either way.
+
+**A read-only support session is offered no create** (issue #551): a session grants
+`Inventory.Operate`, so the row would otherwise render, and the backend refuses the write only by its
+central `GET`/`HEAD` rule — the same reason the Categories page hides its own create. Searching and
+selecting stay available, as every other field on the form does; Save is already disabled in a
+session.
+
+**The edit page is deliberately untouched.** `ProductFormComponent` renders the picker only on New
+Product and keeps its `<select>` whenever there is a product id, because a provider-managed category
+is locked there (`providerManagedFields`, above) and preserving that restriction exactly is worth
+more than one shared control. The page also no longer reads the category list itself on New Product —
+the picker reads it — so the options are fetched once either way.
+
 #### Average cost and purchase cost columns, and the retired-product filter, on All Products (issue #791)
 
 Issue #791 — E of parent #786 — is one of the three product screens (issues #789-#791) to
