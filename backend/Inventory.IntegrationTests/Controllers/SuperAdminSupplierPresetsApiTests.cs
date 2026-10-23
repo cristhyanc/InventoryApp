@@ -154,6 +154,91 @@ public class SuperAdminSupplierPresetsApiTests
     }
 
     /// <summary>
+    /// The other half of the support-session criterion, stated rather than implied: the configured
+    /// administrator who holds a <em>live</em> session of their own still reaches this surface, writes
+    /// included.
+    ///
+    /// <para>That is the existing design of this endpoint class rather than a choice made here. The
+    /// controller carries <c>PlatformDiagnosticsEndpointAttribute</c>, so
+    /// <c>BusinessScopeMiddleware</c> decides the request on the platform-admin policy before it
+    /// resolves a session at all (docs/architecture.md § Super Admin supplier presets and § Support
+    /// sessions in the request pipeline): the control surfaces are reached <em>as</em> the
+    /// administrator, which is also why they neither need nor accept the header. The request still
+    /// carries a <strong>denied</strong> <c>BusinessScope</c>, so nothing tenant-owned is reachable
+    /// through it: the session changes nothing about what this surface reads or writes. On an
+    /// <em>ordinary</em> business endpoint the same header still does what issue #551 gives it -
+    /// resolves that one business, read-only - and the presets are not that business's suppliers,
+    /// which the tail of this test checks in the same request sequence.</para>
+    ///
+    /// <para>Issue #848's criterion says "support sessions ... get <c>403</c>" without distinguishing
+    /// the caller, so this test pins the answer the application actually gives instead of leaving it
+    /// to prose. Refusing this surface <em>because</em> its caller holds a session would be a
+    /// per-surface refusal rule contradicting that design, which is a decision for a human and is
+    /// recorded as such on PR #859.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_administrator_holding_a_live_support_session_still_reaches_this_surface()
+    {
+        const string SessionId = "a-live-support-session-id";
+        await _factory.SeedSupportSessionAsync(
+            _factory.TradingBusinessId,
+            SuperAdminBusinessesApiFactory.AdministratorObjectId,
+            SessionId);
+
+        var client = _factory.AsAdministrator();
+        client.DefaultRequestHeaders.Add("X-Support-Session", SessionId);
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(PresetsUrl)).StatusCode);
+
+        var create = await client.PostAsJsonAsync(PresetsUrl, new { name = "Aldi" });
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        var created = (await ReadJsonAsync(create)).RootElement.GetProperty("id").GetInt32();
+
+        var edit = await client.PutAsJsonAsync(
+            PresetUrl(created),
+            new { name = "Aldi", url = (string?)null, isEnabled = false });
+        Assert.Equal(HttpStatusCode.OK, edit.StatusCode);
+
+        var stored = (await _factory.SupplierPresetsAsync()).Single(preset => preset.Id == created);
+        Assert.False(stored.IsEnabled);
+
+        // The session is still a session: on an ordinary business endpoint the same header resolves
+        // that business read-only (issue #551), and what it reads there is the business's own
+        // suppliers - of which it has none. A preset is not a supplier, in a support session either.
+        var suppliers = await ReadJsonAsync(await client.GetAsync("/api/suppliers"));
+        Assert.Empty(suppliers.RootElement.EnumerateArray());
+    }
+
+    /// <summary>
+    /// The read half of the role-preview criterion, pinned for each previewable role: a previewed
+    /// <c>GET</c> on this surface is unaffected and reports the same list, exactly as a previewed
+    /// <c>GET</c> of <c>/api/super-admin/businesses</c> is unaffected
+    /// (<c>RolePreviewApiTests.A_previewed_read_of_the_super_admin_surface_is_unaffected</c>). A
+    /// preview narrows what a caller may do, and this controller declares no capability for it to
+    /// narrow; what the preview does reach here is the read-only rule above, which refuses the two
+    /// writes. Refusing the read only on this surface would be a rule confined to one controller,
+    /// which issue #720 deliberately does not have - see the test above for the same open question.
+    /// </summary>
+    [Theory]
+    [InlineData("Owner")]
+    [InlineData("Manager")]
+    [InlineData("Operator")]
+    public async Task A_role_preview_read_is_unaffected(string role)
+    {
+        var client = _factory.AsAdministrator();
+        client.DefaultRequestHeaders.Add("X-Role-Preview", role);
+
+        var body = await ReadJsonAsync(await client.GetAsync(PresetsUrl));
+
+        Assert.Equal(
+            ["Big W", "Coles", "Costco", "Woolworths"],
+            body.RootElement
+                .EnumerateArray()
+                .Select(preset => preset.GetProperty("name").GetString())
+                .ToArray());
+    }
+
+    /// <summary>
     /// Reaching this surface grants nothing else: the administrator is a member of no business, so
     /// every business endpoint still refuses them - the suppliers endpoint included, which is the one
     /// a preset could be confused with.
