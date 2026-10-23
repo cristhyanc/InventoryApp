@@ -23,7 +23,7 @@
           type="button"
           class="btn btn-sm btn-secondary"
           data-testid="refresh-sales"
-          aria-label="Refresh the latest Nayax sales"
+          [attr.aria-label]="(isRefreshingSales ? 'Refreshing…' : 'Refresh') + ' the latest Nayax sales'"
           [disabled]="isRefreshingSales"
           (click)="refreshSales()"
         >
