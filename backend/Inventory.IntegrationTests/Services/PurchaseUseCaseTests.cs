@@ -462,7 +462,9 @@ public class PurchaseUseCaseTests
         int purchaseId;
         await using (var seed = TestAppDbContext.Unrestricted(options))
         {
-            seed.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 2 });
+            // No stock on the shelf: the product has no movement, baseline or costing state, so any
+            // stored quantity would be unrecorded stock its first purchase must refuse (issue #831).
+            seed.Products.Add(new Product { Id = 1, Name = "Coke", QuantityInStock = 0 });
             await seed.SaveChangesAsync();
         }
         await using (var uploadDb = TestAppDbContext.Unrestricted(options))
