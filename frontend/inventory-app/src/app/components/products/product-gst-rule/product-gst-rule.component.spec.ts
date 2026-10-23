@@ -42,7 +42,8 @@ async function render(
 
 /**
  * The same panel on New Product, where the product does not exist yet (issue #829): it chooses the
- * rule and reports it, and the page writes it once the product has an id.
+ * rule and reports it, and `ProductCreateGstRuleComponent` - which composes it there - writes it
+ * once the product has an id.
  */
 async function renderDeferred(
   getGstRule: jest.Mock = jest.fn(),
@@ -256,8 +257,8 @@ describe('ProductGstRuleComponent', () => {
    * Choosing the rule for a product that does not exist yet (issue #829). The panel reads nothing -
    * there is no stored rule, and a new product is created with none - so the picker is usable
    * immediately, it offers exactly the choices the edit page offers, and it writes nothing itself:
-   * the page persists the choice after the product has been created, which is the only moment there
-   * is a product to write it to.
+   * the component composing it persists the choice after the product has been created, which is the
+   * only moment there is a product to write it to.
    */
   describe('choosing the rule for a product that does not exist yet (issue #829)', () => {
     it('reads no stored rule and offers the same three choices, ready to use', async () => {
@@ -274,7 +275,7 @@ describe('ProductGstRuleComponent', () => {
       expect(host.textContent).not.toContain('Failed to load the GST rule.');
     });
 
-    it('reports each choice to the page it is composed into', async () => {
+    it('reports each choice to the component it is composed into', async () => {
       const { fixture, choose, reported } = await renderDeferred();
 
       choose('Taxable');
@@ -285,7 +286,7 @@ describe('ProductGstRuleComponent', () => {
       expect(reported).toEqual([GstClassification.Taxable, GstClassification.GstFree]);
     });
 
-    it('offers no Save button of its own, because the page saves the rule with the product', async () => {
+    it('offers no Save button of its own, because the rule is saved with the product', async () => {
       const { host } = await renderDeferred();
 
       expect(

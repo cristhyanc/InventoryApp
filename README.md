@@ -1057,9 +1057,11 @@ does not manage.
   one is two writes: `POST /api/products`, then `PUT /api/products/{id}/gst-rule` on the id the
   create answered. **No rule** needs no second write, because a new product already carries no rule.
   If the rule write fails the page says exactly that — "The product was created, but its GST rule
-  was not saved." — keeps the product that now exists, and relabels its button **Save GST Rule**,
-  which retries the rule alone and never creates a second product; a create whose rule was not
-  stored is never reported as finished, and you can also set the rule later by editing the product.
+  was not saved." — keeps the product that now exists along with the rule you chose, and offers
+  **Save GST rule** beside the picker, which retries the rule alone with the choice on screen now.
+  **Create Product** is gone at that point, so there is no way to create a second product; a create
+  whose rule was not stored is never reported as finished, and you can also leave the page and set
+  the rule later by editing the product.
   Choosing the rule here classifies no purchase and is not retroactive — see
   [Product and supplier GST rules](#product-and-supplier-gst-rules).
 - **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name and
@@ -1255,7 +1257,8 @@ classified:
 - **Products → New Product → GST rule** (issue #829). The same picker, for a product that does not
   exist yet: there is no stored rule to read, so it is ready to use immediately and has no Save of
   its own — **Create Product** saves it with the product, as described under
-  [Products and categories](#products-and-categories).
+  [Products and categories](#products-and-categories). A **Save GST rule** button appears there only
+  if the product was created and its rule was not, to retry that one write.
 - **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
   lines** and separate defaults for its **delivery charge** and **package charge**, then **Save GST
   defaults**. The three are independent: a charge never inherits the product-line default.

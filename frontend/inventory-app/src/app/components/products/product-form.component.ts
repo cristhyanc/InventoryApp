@@ -5,16 +5,24 @@ import { Router, ActivatedRoute, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
-import { Category, GstClassification } from '../../models/models';
+import { Category } from '../../models/models';
 import { ProductPriceHistoryComponent } from './product-price-history/product-price-history.component';
 import { ProductGstRuleComponent } from './product-gst-rule/product-gst-rule.component';
+import { ProductCreateGstRuleComponent } from './product-create-gst-rule/product-create-gst-rule.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 
 @Component({
   selector: 'app-product-form',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, ProductPriceHistoryComponent, ProductGstRuleComponent],
+  imports: [
+    CommonModule,
+    FormsModule,
+    RouterLink,
+    ProductPriceHistoryComponent,
+    ProductGstRuleComponent,
+    ProductCreateGstRuleComponent
+  ],
   templateUrl: './product-form.component.html'
 })
 export class ProductFormComponent implements OnInit, OnDestroy {
@@ -51,24 +59,16 @@ export class ProductFormComponent implements OnInit, OnDestroy {
   deletionNotice: string | null = null;
 
   /**
-   * The GST rule chosen for a product being created (issue #829), reported by the deferred
-   * `app-product-gst-rule` panel. `Unknown` is `GstRules.None` - no rule - which is also what a
-   * created product carries, so it is the honest starting value here.
-   *
-   * It is unused on the edit page: there the panel reads and saves the stored rule on its own
-   * resource, as it has since issue #430.
-   */
-  gstRule: GstClassification = GstClassification.Unknown;
-
-  /**
-   * The id of the product this page created while its GST rule is still outstanding (issue #829).
+   * The id of the product this page created, while the rule chosen for it is still being stored
+   * (issue #829), or `null` while no product has been created on this page.
    *
    * Creating a product with a GST rule is two writes - `POST api/products`, then
    * `PUT api/products/{id}/gst-rule` on the id it answered - because the rule is its own resource
    * and the product payload is a pinned API contract (docs/architecture.md § Product and supplier
-   * GST rules). When the second one fails the product exists, so this page reports exactly that,
-   * keeps the id, and retries the rule alone: a retry must never create a second product, and a
-   * create whose rule was not stored must never be reported as finished.
+   * GST rules). This page makes the first one and hands the id to
+   * `app-product-create-gst-rule`, which owns the second one, its failure and its retry. The id
+   * stays here because this page created the product: once it is set, the page offers no create
+   * control at all, which is what makes a duplicate product impossible.
    */
   createdProductId: number | null = null;
 
@@ -161,10 +161,6 @@ export class ProductFormComponent implements OnInit, OnDestroy {
 
   /** The label of the page's one submit control, which names the write it would actually make. */
   get submitLabel(): string {
-    if (this.createdProductId !== null) {
-      return 'Save GST Rule';
-    }
-
     return this.productId ? 'Update Product' : 'Create Product';
   }
 
@@ -172,12 +168,6 @@ export class ProductFormComponent implements OnInit, OnDestroy {
   get submitDisabled(): boolean {
     if (this.saving || this.sessionActive) {
       return true;
-    }
-
-    // Only the outstanding GST rule is left to write (issue #829). The product is already stored
-    // and these fields are no longer being sent, so their validity must not trap the rule here.
-    if (this.createdProductId !== null) {
-      return false;
     }
 
     return this.form.restockTo < this.form.lowStockThreshold;
@@ -189,11 +179,10 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     if (this.sessionActive) {
       return;
     }
-    // The product exists and only its GST rule is outstanding (issue #829): retry that one write,
-    // with whatever rule is on screen now. Creating the product again is exactly the duplicate
-    // this branch exists to prevent, so no create validation runs and no create is issued.
+    // This page has already created its product (issue #829), so it has no write left to make:
+    // what is outstanding is the GST rule, which `app-product-create-gst-rule` owns and retries.
+    // Creating the product a second time is exactly the duplicate this guard prevents.
     if (this.createdProductId !== null) {
-      this.saveGstRuleOfCreatedProduct(this.createdProductId);
       return;
     }
     if (!this.form.name.trim()) {
@@ -245,15 +234,10 @@ export class ProductFormComponent implements OnInit, OnDestroy {
         initialUnitCost: this.form.initialUnitCost
       }).subscribe({
         next: (created) => {
-          // A created product already carries `GstRules.None`, so "no rule" is stored by the
-          // create itself and needs no second write - and must not be sent as anything else.
-          if (this.gstRule === GstClassification.Unknown) {
-            this.router.navigate(['/products']);
-            return;
-          }
-
+          // The product exists from here on. Its GST rule is `app-product-create-gst-rule`'s to
+          // store (issue #829), so the page stays in its saving state and finishes on that
+          // component's report rather than treating the create alone as the whole outcome.
           this.createdProductId = created.id;
-          this.saveGstRuleOfCreatedProduct(created.id);
         },
         error: (error: unknown) => {
           this.error = apiErrorMessage(error, 'Failed to create product.');
@@ -264,25 +248,20 @@ export class ProductFormComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Writes the chosen GST rule to the product that has just been created (issue #829). The product
-   * is already stored, so a failure here is a partial outcome and is reported as one: the page stays
-   * open, says the product exists with its rule unsaved, and offers the retry of this write alone.
+   * The created product's GST rule is stored, or needed no write because "no rule" is what a new
+   * product already carries (issue #829). Only now is the create finished.
    */
-  private saveGstRuleOfCreatedProduct(id: number): void {
-    this.saving = true;
-    this.error = '';
-    this.productService.setGstRule(id, this.gstRule).subscribe({
-      next: () => {
-        this.createdProductId = null;
-        this.router.navigate(['/products']);
-      },
-      error: () => {
-        this.saving = false;
-        this.error =
-          'The product was created, but its GST rule was not saved. Press Save GST Rule to retry; ' +
-          'it saves the rule only and never creates a second product. Other changes on this form ' +
-          'are not saved again - edit the product from the Products list instead.';
-      }
-    });
+  onGstRulePersisted(): void {
+    this.saving = false;
+    this.router.navigate(['/products']);
+  }
+
+  /**
+   * The product was created and its GST rule was not stored (issue #829). The page stays open and
+   * does not navigate - a create whose rule was not stored is not a finished create - and says
+   * nothing further itself: the component that owns that write reports it and offers the retry.
+   */
+  onGstRuleFailed(): void {
+    this.saving = false;
   }
 }

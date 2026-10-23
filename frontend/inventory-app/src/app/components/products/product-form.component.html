@@ -97,7 +97,12 @@
         </div>
 
         <div class="flex flex-wrap gap-3 pt-2">
-          <button type="submit" class="btn btn-primary" [disabled]="submitDisabled">{{ submitLabel }}</button>
+          <!-- Gone once this page has created its product (issue #829): the product exists, these
+               fields are no longer being sent, and the only outstanding write is the GST rule,
+               which the panel below owns and retries. No create control, no second product. -->
+          @if (createdProductId === null) {
+            <button type="submit" class="btn btn-primary" [disabled]="submitDisabled">{{ submitLabel }}</button>
+          }
           <a routerLink="/products" class="btn btn-secondary">Cancel</a>
         </div>
       </form>
@@ -106,10 +111,16 @@
         <app-product-gst-rule [productId]="productId"></app-product-gst-rule>
         <app-product-price-history [productId]="productId"></app-product-price-history>
       } @else {
-        <!-- New Product (issue #829): the same panel, choosing the rule for a product that does not
-             exist yet. It reads and writes nothing; this page saves the choice on the product's own
-             GST resource once the create has answered an id. There is no price history to show. -->
-        <app-product-gst-rule [deferred]="true" (ruleChange)="gstRule = $event"></app-product-gst-rule>
+        <!-- New Product (issue #829): a dedicated feature component owns the rule of the product
+             being created - the choice, the write to the product's own GST resource once the create
+             has answered an id, its failure and its retry (the page composition boundary). This page
+             only says which product now exists and finishes on what that component reports. There
+             is no price history to show for a product that does not exist yet. -->
+        <app-product-create-gst-rule
+          [createdProductId]="createdProductId"
+          (persisted)="onGstRulePersisted()"
+          (failed)="onGstRuleFailed()"
+        ></app-product-create-gst-rule>
       }
     </div>
   </div>
