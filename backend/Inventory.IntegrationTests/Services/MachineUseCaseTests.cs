@@ -91,8 +91,14 @@ public class MachineUseCaseTests
 
         await using var db = TestAppDbContext.Unrestricted(options);
         var nayaxMock = new Mock<INayaxLynxClient>();
-        nayaxMock.Setup(m => m.GetMachineAsync(1, default))
-            .ReturnsAsync(new NayaxMachine { MachineID = 1, MachineName = "M1" });
+
+        // The slot listing takes the machine's site from the machine list since issue #846, and reads
+        // the machine itself only for one the list does not hold.
+        nayaxMock.Setup(m => m.GetMachinesAsync(default))
+            .ReturnsAsync(new List<NayaxMachine>
+            {
+                new NayaxMachine { MachineID = 1, MachineName = "M1" }
+            });
         nayaxMock.Setup(m => m.GetMachineProductsAsync(1, default))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {

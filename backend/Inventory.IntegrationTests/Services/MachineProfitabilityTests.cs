@@ -57,8 +57,8 @@ public class MachineProfitabilityTests
         await db.SaveChangesAsync();
 
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineAsync(1, default))
-            .ReturnsAsync(new NayaxMachine { MachineID = 1, CustomerID = 91 });
+        nayax.Setup(x => x.GetMachinesAsync(default))
+            .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, CustomerID = 91 } });
         nayax.Setup(x => x.GetMachineProductsAsync(1, default))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
@@ -146,10 +146,16 @@ public class MachineProfitabilityTests
             .UseInMemoryDatabase(Guid.NewGuid().ToString())
             .Options);
 
+    /// <summary>
+    /// A client whose machine list places machine 1 at site 91, which is where the slot listing reads
+    /// the machine's site from since issue #846; the machine itself is read only for a machine the
+    /// list does not hold.
+    /// </summary>
     private static Mock<INayaxLynxClient> PreviewClient()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineAsync(1, default)).ReturnsAsync(new NayaxMachine { MachineID = 1, CustomerID = 91 });
+        nayax.Setup(x => x.GetMachinesAsync(default))
+            .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, CustomerID = 91 } });
         nayax.Setup(x => x.GetMachineProductsAsync(1, default)).ReturnsAsync(new List<NayaxMachineProduct>
         {
             new() { NayaxProductID = 200, RetailPrice = 5m }
