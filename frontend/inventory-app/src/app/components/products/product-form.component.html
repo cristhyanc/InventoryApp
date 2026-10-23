@@ -46,15 +46,31 @@
             <textarea [(ngModel)]="form.description" name="description" rows="2"></textarea>
           </label>
 
-          <label class="field">
-            <span class="field-label">Category</span>
-            <select [(ngModel)]="form.categoryId" name="categoryId" [disabled]="categoryLocked">
-              <option value="">None</option>
-              @for (c of categories; track c.id) {
-                <option [ngValue]="c.id">{{ c.name }}</option>
-              }
-            </select>
-          </label>
+          @if (productId) {
+            <!-- The edit page keeps its dropdown unchanged (issue #830): a provider-managed category
+                 is locked here, and that restriction is exactly what this enhancement must not
+                 touch. -->
+            <label class="field">
+              <span class="field-label">Category</span>
+              <select [(ngModel)]="form.categoryId" name="categoryId" [disabled]="categoryLocked">
+                <option value="">None</option>
+                @for (c of categories; track c.id) {
+                  <option [ngValue]="c.id">{{ c.name }}</option>
+                }
+              </select>
+            </label>
+          } @else {
+            <!-- New Product (issue #830): searching the existing categories and creating a missing
+                 one is a workflow of its own - its own option read, its own `POST api/categories`
+                 and that write's pending, refusal and retry states - so a dedicated feature
+                 component owns it (the page composition boundary). The page keeps only the id to
+                 submit, which is why neither a pending nor a refused category create can touch a
+                 field on this form. -->
+            <app-product-category-picker
+              [categoryId]="selectedCategoryId"
+              (categoryIdChange)="onCategorySelected($event)"
+            ></app-product-category-picker>
+          }
 
           <!-- `self-end` keeps this label-less control's box on the same baseline as the inputs beside it. -->
           <label class="flex items-center gap-2 self-end rounded-md-control border border-md-gray-200 bg-md-gray-100 px-3 py-2">

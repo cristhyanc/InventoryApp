@@ -1083,6 +1083,24 @@ does not manage.
   the rule later by editing the product.
   Choosing the rule here classifies no purchase and is not retroactive — see
   [Product and supplier GST rules](#product-and-supplier-gst-rules).
+- **Find a category, or create a missing one, without leaving New Product** (issue #830). The
+  **Category** field on **Products → New Product** is a search box over this business's existing
+  categories instead of a dropdown: type and the list narrows, ignoring case ("dri" and "DRI" both
+  find "Drinks"), and **No category** is still there, because a product's category is optional. What
+  is saved is always the category you picked, never the text you typed — dismiss the list with
+  Escape and the box goes back to the current selection. Arrow keys move through the list, Enter
+  takes the highlighted entry.
+  If the name you typed is not one of your categories, the list offers one extra entry,
+  **Create category “…”**, labelled with that exact name. Nothing is created by typing it or by
+  leaving the field: you have to choose that entry. It creates the category through the same
+  `POST /api/categories` the **Categories** page uses, with the same name rules and the same
+  permission, and then selects it and adds it to the list — you stay on the form with every other
+  field, and the GST rule you chose, exactly as you left them. Pressing it twice while it is working
+  creates one category, not two. If it is refused — most often because the name already exists, which
+  is what happens when somebody created it in the meantime — the message from the server is shown as
+  it worded it, your typed name stays, the list is re-read so you can simply pick the category that
+  now exists, and nothing else on the form is changed. **Editing** a product keeps its existing
+  category dropdown, because a category the provider manages is locked there.
 - **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name and
   category** as well as the SKU, description, unit, low-stock threshold, restock target
   and active flag. There is no supplier among them — see
