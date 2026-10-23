@@ -11,7 +11,7 @@ namespace Inventory.Infrastructure.Nayax;
 // Docs: https://devzone.nayax.com/docs/manage-data-operations/lynx-api
 // Auth: a Bearer token, resolved per call from the current business's own stored connection
 // (issue #520) through INayaxRequestCredentialProvider. Only the base URL is global.
-public class NayaxLynxClient : INayaxLynxClient
+public class NayaxLynxClient : INayaxLynxMachineListClient
 {
     private readonly HttpClient _http;
     private readonly INayaxRequestCredentialProvider _credentials;
@@ -39,6 +39,20 @@ public class NayaxLynxClient : INayaxLynxClient
     // runner builds this class directly and must never read or write that cache.
     public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
         GetMachinesAsync(ct);
+
+    /// <inheritdoc />
+    public Task<List<NayaxMachine>> ReadMachinesAsync(
+        NayaxRequestCredential credential, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(credential);
+
+        // The same request as GetMachinesAsync in every respect - same endpoint, same operation name
+        // in logs and exceptions, same classification of a 401 or a 403 - except that the credential
+        // was resolved and gated by the caller instead of here, so the revision this request carries
+        // is the revision the machine-list cache keys its answer under (issue #840).
+        return SendWithCredentialAsync<List<NayaxMachine>>(
+            nameof(GetMachinesAsync), HttpMethod.Get, _ => "machines", credential, ct);
+    }
 
     public Task<List<NayaxProductGroup>> GetProductGroupssAsync(CancellationToken ct = default) =>
         SendAsync<List<NayaxProductGroup>>(
@@ -94,7 +108,7 @@ public class NayaxLynxClient : INayaxLynxClient
             ct,
             () => JsonContent.Create(products));
 
-    // The single place a Nayax request is authenticated, sent and accepted or rejected.
+    // One Nayax operation: resolve this call's credential, then send, accept or reject.
     //
     // The credential is resolved first, per call, and is applied to this request only: nothing is
     // baked into the shared HttpClient, so a token can never outlive the business whose request
@@ -111,6 +125,28 @@ public class NayaxLynxClient : INayaxLynxClient
     {
         var credential = await _credentials.GetForOperationAsync(ct).ConfigureAwait(false);
 
+        return await SendWithCredentialAsync<TResponse>(operation, method, endpoint, credential, ct, content)
+            .ConfigureAwait(false);
+    }
+
+    // The single place a Nayax request is authenticated, sent and accepted or rejected, for every
+    // operation and whoever resolved its credential.
+    //
+    // It is separate from the resolution above so the one caller that has already resolved and gated a
+    // credential of its own - the machine-list cache's decorator, through ReadMachinesAsync - sends
+    // the request with exactly that credential rather than with a second snapshot read a moment later,
+    // which is what lets the cache key name the credentials the request really carried (issue #840).
+    // Every other operation resolves one credential per call and arrives here immediately, which is
+    // what it has always done.
+    private async Task<TResponse> SendWithCredentialAsync<TResponse>(
+        string operation,
+        HttpMethod method,
+        Func<string, string> endpoint,
+        NayaxRequestCredential credential,
+        CancellationToken ct,
+        Func<HttpContent>? content = null)
+        where TResponse : new()
+    {
         // The operator id is escaped before it becomes part of a path (issue #681). The value is
         // validated as digits where it enters the application (Inventory.Domain.Nayax.NayaxOperatorId,
         // matching Nayax's own int64 contract for the operator path parameter), so escaping changes

@@ -237,6 +237,64 @@ public class NayaxMachineListCacheTests
         Assert.Equal(2, reader.Calls);
     }
 
+    /// <summary>
+    /// The same rule when the older read is the one that finishes first. It was answered with, and it
+    /// is still not what the next caller sees: the fresh read started after it, so the fresh read's
+    /// list is the newer news whichever order the two arrive in.
+    /// </summary>
+    [Fact]
+    public async Task An_older_read_that_finishes_first_is_still_not_the_answer_after_a_fresh_read()
+    {
+        var cache = new NayaxMachineListCache(new FakeClock(Now));
+        var reader = new Reader(blockedCalls: [1, 2]);
+
+        var older = Task.Run(() => cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None));
+        await WaitUntil(() => reader.Waiting(1), "the older read to start");
+
+        var fresh = Task.Run(() => cache.ReadFreshAsync(Key, reader.ReadAsync, CancellationToken.None));
+        await WaitUntil(() => reader.Waiting(2), "the fresh read to start");
+
+        reader.Complete(1);
+        AssertFromRead(1, await older);
+        reader.Complete(2);
+        AssertFromRead(2, await fresh);
+
+        AssertFromRead(2, await cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None));
+        Assert.Equal(2, reader.Calls);
+    }
+
+    /// <summary>
+    /// And the rule holds when the fresh read brings back nothing at all. A fresh read that fails or
+    /// is cancelled has no result to store, but it has already happened for this key - so the older
+    /// read it started beside must not become the answer by default, which is what issue #840 means
+    /// by an older in-flight result not being stored once a fresh read happens. The fence is taken
+    /// when the fresh read begins, not when it succeeds.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_fresh_read_still_bars_the_older_read_it_started_beside()
+    {
+        var cache = new NayaxMachineListCache(new FakeClock(Now));
+        var reader = new Reader(blockedCalls: [1, 2]);
+        var failure = new NayaxUpstreamException(
+            "GetMachinesAsync", HttpMethod.Get, "machines", HttpStatusCode.BadGateway);
+
+        var older = Task.Run(() => cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None));
+        await WaitUntil(() => reader.Waiting(1), "the older read to start");
+
+        var fresh = Task.Run(() => cache.ReadFreshAsync(Key, reader.ReadAsync, CancellationToken.None));
+        await WaitUntil(() => reader.Waiting(2), "the fresh read to start");
+        reader.Fail(2, failure);
+        Assert.Same(failure, await Assert.ThrowsAnyAsync<Exception>(() => fresh));
+
+        reader.Complete(1);
+        AssertFromRead(1, await older);
+
+        // Nothing is held: the next caller reads Nayax rather than being handed the list of a read
+        // the fresh read had already superseded.
+        AssertFromRead(3, await cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None));
+        Assert.Equal(3, reader.Calls);
+    }
+
     [Fact]
     public async Task An_older_read_still_running_never_overwrites_an_invalidation()
     {
@@ -253,6 +311,38 @@ public class NayaxMachineListCacheTests
         // Nothing is held, so the next caller reads again rather than being handed a list the
         // invalidation already decided was not to be kept.
         AssertFromRead(2, await cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// An invalidation has to reach the read that is still running, not only the list already held.
+    /// A caller that arrives while that read is open would otherwise join it and be answered with
+    /// exactly the pre-invalidation list - the one case the invalidation exists to prevent - and
+    /// nothing would have been stored for a later test to notice.
+    /// </summary>
+    [Fact]
+    public async Task A_caller_after_an_invalidation_does_not_join_the_read_that_was_already_running()
+    {
+        var cache = new NayaxMachineListCache(new FakeClock(Now));
+        var reader = new Reader(blockedCalls: [1]);
+
+        var before = Task.Run(() => cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None));
+        await WaitUntil(() => reader.Waiting(1), "the read before the invalidation to start");
+
+        cache.Invalidate(Key);
+        var after = Task.Run(() => cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None));
+
+        // Its own read, and its own answer, while the first read is still open. Awaited with a limit
+        // on purpose: a caller that joined the barred read would sit here until that read is
+        // released, and this has to fail as a statement about joining rather than as a hung test.
+        AssertFromRead(2, await after.WaitAsync(WaitLimit));
+        Assert.Equal(2, reader.Calls);
+
+        reader.Complete(1);
+        AssertFromRead(1, await before);
+
+        // And what the later read brought back is what is held: the barred one cannot replace it.
+        AssertFromRead(2, await cache.GetOrReadAsync(Key, reader.ReadAsync, CancellationToken.None));
+        Assert.Equal(2, reader.Calls);
     }
 
     /// <summary>

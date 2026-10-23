@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using Inventory.Application.Nayax;
 using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
@@ -5,6 +7,7 @@ using Inventory.Domain.Nayax;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Nayax;
 using InventoryApi.Tests.Application.Time;
+using InventoryApi.Tests.Http;
 using Xunit;
 
 namespace InventoryApi.Tests.Infrastructure.Nayax;
@@ -14,11 +17,13 @@ namespace InventoryApi.Tests.Infrastructure.Nayax;
 /// of the Lynx HTTP client. What is pinned here is everything the cache must not change - who may
 /// have an answer, whose answer it is, and which calls are cached at all.
 ///
-/// <para>Four properties, each one a thing the cache could otherwise quietly break. The connection,
+/// <para>Five properties, each one a thing the cache could otherwise quietly break. The connection,
 /// the status gate and the support-session refusal run before <em>every</em> answer, not only before
 /// the read that filled the entry. One business never receives another's list. Replacing a
-/// business's credentials makes the next read go to Nayax. And the machine list is the only call
-/// that is cached - everything else reaches the client untouched.</para>
+/// business's credentials makes the next read go to Nayax, and the key names the credentials the
+/// request actually carried rather than ones resolved a moment earlier - proved through the real
+/// <see cref="NayaxLynxClient"/>. And the machine list is the only call that is cached - everything
+/// else reaches the client untouched.</para>
 /// </summary>
 public class MachineListCachingNayaxLynxClientTests
 {
@@ -173,6 +178,76 @@ public class MachineListCachingNayaxLynxClientTests
     }
 
     /// <summary>
+    /// One credential is resolved per machine-list call - including a call answered from memory,
+    /// because that resolution is the refusal - and the read is made with that very credential, so
+    /// the revision in the key is the revision the request carried rather than one it was assumed to
+    /// have carried.
+    /// </summary>
+    [Fact]
+    public async Task One_credential_is_resolved_per_call_and_the_read_carries_it()
+    {
+        var client = new CountingNayaxLynxClient();
+        var credentials = Credentials(credentialRevision: 7);
+        var decorated = Decorate(client, credentials, Resolved(1), Cache());
+
+        await decorated.GetMachinesAsync(CancellationToken.None);
+        await decorated.GetMachinesAsync(CancellationToken.None);
+        await decorated.GetMachinesFreshAsync(CancellationToken.None);
+
+        Assert.Equal(3, credentials.Resolutions);
+        Assert.Equal(new[] { 7, 7 }, client.ReadRevisions);
+    }
+
+    /// <summary>
+    /// The window a two-step resolution left open, through the real <see cref="NayaxLynxClient"/>:
+    /// the decorator read the revision for the key and the client then resolved its own credential
+    /// for the request - the provider caches nothing, deliberately - so a connection saved between
+    /// the two stored the new credentials' fleet under the old revision's key.
+    ///
+    /// <para>The provider here answers the first resolution with revision 1 and every later one with
+    /// revision 2, which is that save at an exact, repeatable moment. What must hold is that each
+    /// answer was fetched with the credentials its key names: revision 1's list came from the request
+    /// that carried revision 1's token, and the list served from memory afterwards is revision 2's
+    /// own.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_key_names_the_credentials_the_request_actually_carried()
+    {
+        var credentials = new RevisionAdvancingCredentialProvider(
+            new NayaxConnectionCredential(OperatorId, $"{FakeToken}-1", 1),
+            new NayaxConnectionCredential(OperatorId, $"{FakeToken}-2", 2));
+        var handler = new FleetPerRequestHandler();
+
+        // A deliberately unroutable host: this test must never reach a real Nayax endpoint.
+        using var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://nayax.invalid/operational/v1/"),
+        };
+        var decorated = Decorate(
+            new NayaxLynxClient(http, credentials, new CapturingLogger<NayaxLynxClient>()),
+            credentials,
+            Resolved(1),
+            Cache());
+
+        var underRevisionOne = await decorated.GetMachinesAsync(CancellationToken.None);
+        var underRevisionTwo = await decorated.GetMachinesAsync(CancellationToken.None);
+        var fromMemory = await decorated.GetMachinesAsync(CancellationToken.None);
+
+        // One resolution per call, and each request carried the token of the revision that call
+        // resolved - never a second snapshot read after the key had been decided.
+        Assert.Equal(3, credentials.Resolutions);
+        Assert.Equal(
+            new[] { $"Bearer {FakeToken}-1", $"Bearer {FakeToken}-2" },
+            handler.Authorizations);
+
+        // So revision 1's answer is the fleet revision 1's token fetched, revision 2 read Nayax
+        // again rather than being handed it, and the third call is revision 2's own list from memory.
+        Assert.Equal("fleet 1", Assert.Single(underRevisionOne).MachineName);
+        Assert.Equal("fleet 2", Assert.Single(underRevisionTwo).MachineName);
+        Assert.Equal("fleet 2", Assert.Single(fromMemory).MachineName);
+    }
+
+    /// <summary>
     /// A scope with no resolved business caches nothing at all rather than sharing a key: "no
     /// business" must never become one more tenant.
     /// </summary>
@@ -191,7 +266,7 @@ public class MachineListCachingNayaxLynxClientTests
     }
 
     private static MachineListCachingNayaxLynxClient Decorate(
-        INayaxLynxClient inner,
+        INayaxLynxMachineListClient inner,
         INayaxRequestCredentialProvider credentials,
         IBusinessScope scope,
         NayaxMachineListCache cache) =>
@@ -214,11 +289,15 @@ public class MachineListCachingNayaxLynxClientTests
     /// <summary>
     /// A stand-in for <see cref="NayaxLynxClient"/> that counts what reached it and answers the
     /// machine list with one machine numbered after the read, so a test can say which read an answer
-    /// came from. Its own fresh method throws: the decorator must reach the upstream through the one
-    /// plain read, since a client that caches nothing answers both identically and a second path
-    /// would be a second place for the behaviour to drift.
+    /// came from. It also records the credential revision each read was made with.
+    ///
+    /// <para>Both port machine-list members throw. The decorator must read the upstream list through
+    /// <see cref="INayaxLynxMachineListClient.ReadMachinesAsync"/> and nothing else: that is the read
+    /// that carries the credential the decorator itself resolved and gated, and a decorator that
+    /// reached a member resolving its own credential would be keying an answer by a revision it only
+    /// assumed the request had used.</para>
     /// </summary>
-    private sealed class CountingNayaxLynxClient : INayaxLynxClient
+    private sealed class CountingNayaxLynxClient : INayaxLynxMachineListClient
     {
         private int _machineListCalls;
         private int _machineProductCalls;
@@ -233,16 +312,31 @@ public class MachineListCachingNayaxLynxClientTests
 
         public int MachineCalls => Volatile.Read(ref _machineCalls);
 
-        public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default)
+        /// <summary>The credential revisions the reads were made with, in order.</summary>
+        public List<int> ReadRevisions { get; } = new();
+
+        public Task<List<NayaxMachine>> ReadMachinesAsync(
+            NayaxRequestCredential credential, CancellationToken ct = default)
         {
             var call = Interlocked.Increment(ref _machineListCalls);
+            lock (ReadRevisions)
+            {
+                ReadRevisions.Add(credential.CredentialRevision);
+            }
+
             return Task.FromResult<List<NayaxMachine>>(
                 [new NayaxMachine { MachineID = call, MachineName = $"read {call}" }]);
         }
 
+        public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) =>
+            throw new NotSupportedException(
+                "The decorator reads the upstream machine list through ReadMachinesAsync, with the "
+                + "credential it resolved and gated itself.");
+
         public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
             throw new NotSupportedException(
-                "The decorator reads the upstream machine list through GetMachinesAsync only.");
+                "The decorator reads the upstream machine list through ReadMachinesAsync, with the "
+                + "credential it resolved and gated itself.");
 
         public Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default)
         {
@@ -279,5 +373,59 @@ public class MachineListCachingNayaxLynxClientTests
         public Task<List<NayaxMachineAlert>> GetMachineLastAlertsAsync(
             long machineId, CancellationToken ct = default) =>
             Task.FromResult(new List<NayaxMachineAlert>());
+    }
+
+    /// <summary>
+    /// A credential provider that answers each resolution with the next credential it was given and
+    /// repeats the last one from then on. That is a connection save landing between two calls at a
+    /// moment a test can state: the real provider caches nothing, so each resolution is its own read
+    /// of the stored row and may legitimately see a newer revision than the one before it.
+    /// </summary>
+    private sealed class RevisionAdvancingCredentialProvider : INayaxRequestCredentialProvider
+    {
+        private readonly NayaxConnectionCredential[] _credentials;
+        private int _resolutions;
+
+        public RevisionAdvancingCredentialProvider(params NayaxConnectionCredential[] credentials) =>
+            _credentials = credentials;
+
+        public int Resolutions => Volatile.Read(ref _resolutions);
+
+        public Task<NayaxRequestCredential> GetForOperationAsync(CancellationToken cancellationToken)
+        {
+            var resolution = Interlocked.Increment(ref _resolutions);
+            var credential = _credentials[Math.Min(resolution, _credentials.Length) - 1];
+
+            return Task.FromResult(new NayaxRequestCredential(credential, NayaxConnectionStatus.Ready));
+        }
+
+        public Task ReportUnauthorizedAsync(int credentialRevision, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Answers every machine-list request with a fleet named after the request number, and records
+    /// the <c>Authorization</c> header each one carried, so a test can say which credentials fetched
+    /// the list it was handed.
+    /// </summary>
+    private sealed class FleetPerRequestHandler : HttpMessageHandler
+    {
+        public List<string?> Authorizations { get; } = new();
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Authorizations.Add(request.Headers.Authorization?.ToString());
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $$"""[{ "MachineID": {{Authorizations.Count}}, "MachineName": "fleet {{Authorizations.Count}}" }]""",
+                    Encoding.UTF8,
+                    "application/json"),
+                RequestMessage = request,
+            });
+        }
     }
 }

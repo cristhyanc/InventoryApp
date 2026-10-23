@@ -426,9 +426,11 @@ public static class InfrastructureServiceCollectionExtensions
         // ids, names and site ids, under a key that names the business they belong to.
         services.AddSingleton<NayaxMachineListCache>();
 
-        // The decorator takes the HTTP client as the port, so a test can put its own double behind
-        // it, and resolves the credential provider and the business scope per request like every
-        // other consumer. Transient, as the typed client it wraps is.
+        // The decorator takes the HTTP client as INayaxLynxMachineListClient - the port plus the
+        // machine-list read that is sent with a credential the decorator has already resolved and
+        // gated, so the cache key names the credentials the request really carried - and resolves the
+        // credential provider and the business scope per request like every other consumer. A test can
+        // still put its own double behind it. Transient, as the typed client it wraps is.
         services.AddTransient<INayaxLynxClient>(serviceProvider => new MachineListCachingNayaxLynxClient(
             serviceProvider.GetRequiredService<NayaxLynxClient>(),
             serviceProvider.GetRequiredService<INayaxRequestCredentialProvider>(),

@@ -41,8 +41,10 @@ public readonly record struct NayaxMachineListCacheKey(int BusinessId, int Crede
 ///
 /// <para><strong>Ordering is explicit, because results arrive out of order.</strong> Every read
 /// takes a sequence number before it starts, and a result is stored only while no later read has
-/// stored one and no invalidation has happened since. That is what stops a slow read that started
-/// before a fresh read from overwriting the fresher list it finished after.</para>
+/// stored one, no fresh read has begun and no invalidation has happened since. That is what stops a
+/// slow read that started before a fresh read from overwriting the fresher list it finished after -
+/// and it holds whichever of the two finishes first, and whether the fresh read succeeds, fails or is
+/// cancelled.</para>
 /// </summary>
 public sealed class NayaxMachineListCache
 {
@@ -133,6 +135,14 @@ public sealed class NayaxMachineListCache
     /// <para>A failed read stores nothing and leaves the held list alone: the exception is the
     /// caller's answer, and an entry that was valid a moment ago is not evidence of anything
     /// new.</para>
+    ///
+    /// <para>A read that was already in flight stays joinable, unlike after an
+    /// <see cref="Invalidate"/>. It can no longer become what the next caller is <em>held</em> an
+    /// answer from - the watermark below bars it - but it is a live read of this same key that
+    /// started seconds ago, and refusing to share it would make a cached page load that overlaps a
+    /// fresh caller cost the extra Nayax request this cache exists to remove. An invalidation is the
+    /// opposite case: there, what that read is about to answer with is exactly what must not be
+    /// handed out.</para>
     /// </summary>
     public async Task<List<NayaxMachine>> ReadFreshAsync(
         NayaxMachineListCacheKey key,
@@ -146,6 +156,16 @@ public sealed class NayaxMachineListCache
         lock (entry.Gate)
         {
             sequence = ++entry.NextSequence;
+
+            // Every read that started before this one is barred from storing from the moment this
+            // fresh read *begins*, not from the moment it finishes. That is what issue #840 asks for -
+            // an older in-flight result is not stored once a fresh read has happened for the key - and
+            // it has to hold however the two end: a fresh read that fails or is cancelled must not
+            // leave an older read's list as the answer simply because it had nothing to store itself.
+            //
+            // What is held is deliberately left alone: a failed fresh read changes nothing, and the
+            // list from before it is still the most recent answer anybody got.
+            entry.StoredSequence = Math.Max(entry.StoredSequence, sequence - 1);
         }
 
         var machines = await read(cancellationToken).ConfigureAwait(false);
@@ -155,8 +175,14 @@ public sealed class NayaxMachineListCache
     }
 
     /// <summary>
-    /// Forgets whatever is held for <paramref name="key"/> and bars every read that started before
-    /// now from storing its result.
+    /// Forgets whatever is held for <paramref name="key"/>, bars every read that started before now
+    /// from storing its result, and stops any such read that is still running from being joined by a
+    /// caller that arrives afterwards.
+    ///
+    /// <para>All three matter together: a caller after an invalidation must not be handed the
+    /// pre-invalidation list, whether it is sitting in the entry or about to arrive from a read that
+    /// began before the invalidation. The callers that read already keep the answer they were
+    /// given.</para>
     /// </summary>
     public void Invalidate(NayaxMachineListCacheKey key)
     {
@@ -238,6 +264,15 @@ public sealed class NayaxMachineListCache
     {
         entry.Machines = null;
         entry.StoredSequence = entry.NextSequence;
+
+        // The read still running is unpublished as well as barred. Barring it stops it from being
+        // stored; unpublishing it stops a caller that arrives after this moment from joining it and
+        // being answered with the very list the invalidation decided was not to be kept - which, for
+        // the expiry path above, is a list that is already too old to hand out, and for a credential
+        // change would be the previous connection's fleet. The callers it already has still receive
+        // what they asked for, and the read that published it is the only one that may clear a
+        // newer one (ReadAndStoreAsync compares InFlightSequence), so the next caller starts its own.
+        entry.InFlight = null;
     }
 
     private static List<NayaxMachine> Copy(NayaxMachine[] machines) => new(machines);
@@ -288,7 +323,8 @@ public sealed class NayaxMachineListCache
 
         /// <summary>
         /// The highest sequence number that has had the last word - the read whose result is held,
-        /// or the moment of the last invalidation. A result may be stored only above it.
+        /// the moment of the last invalidation, or the read that started just before a fresh read
+        /// began. A result may be stored only above it.
         /// </summary>
         public long StoredSequence { get; set; }
 

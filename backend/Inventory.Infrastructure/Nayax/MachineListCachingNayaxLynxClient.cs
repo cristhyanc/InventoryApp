@@ -31,6 +31,13 @@ namespace Inventory.Infrastructure.Nayax;
 /// anything a caller passed in. A scope with no business id at all caches nothing and reads through,
 /// which is the fail-closed answer rather than a shared key.</para>
 ///
+/// <para><strong>The key names the credentials the request actually carried.</strong> One credential
+/// is resolved per machine-list call and that same credential is what the upstream request is sent
+/// with (<see cref="INayaxLynxMachineListClient.ReadMachinesAsync"/>). Resolving once for the key and
+/// letting the client resolve again for the request would leave a window - the provider caches
+/// nothing, on purpose - in which a connection saved in between put the new credentials' fleet under
+/// the old revision's key.</para>
+///
 /// <para><strong>The connection test is not here, by construction.</strong>
 /// <see cref="NayaxConnectionCheckRunner"/> builds a <see cref="NayaxLynxClient"/> itself over the
 /// candidate credentials an Owner pasted, so it never resolves this decorator and can neither read
@@ -39,13 +46,13 @@ namespace Inventory.Infrastructure.Nayax;
 /// </summary>
 public sealed class MachineListCachingNayaxLynxClient : INayaxLynxClient
 {
-    private readonly INayaxLynxClient _inner;
+    private readonly INayaxLynxMachineListClient _inner;
     private readonly INayaxRequestCredentialProvider _credentials;
     private readonly IBusinessScope _businessScope;
     private readonly NayaxMachineListCache _cache;
 
     public MachineListCachingNayaxLynxClient(
-        INayaxLynxClient inner,
+        INayaxLynxMachineListClient inner,
         INayaxRequestCredentialProvider credentials,
         IBusinessScope businessScope,
         NayaxMachineListCache cache)
@@ -59,21 +66,25 @@ public sealed class MachineListCachingNayaxLynxClient : INayaxLynxClient
     /// <inheritdoc />
     public async Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default)
     {
-        var key = await ResolveKeyAsync(ct).ConfigureAwait(false);
+        var (key, credential) = await ResolveAsync(ct).ConfigureAwait(false);
 
         return key is { } cacheKey
-            ? await _cache.GetOrReadAsync(cacheKey, _inner.GetMachinesAsync, ct).ConfigureAwait(false)
-            : await _inner.GetMachinesAsync(ct).ConfigureAwait(false);
+            ? await _cache
+                .GetOrReadAsync(cacheKey, readCt => _inner.ReadMachinesAsync(credential, readCt), ct)
+                .ConfigureAwait(false)
+            : await _inner.ReadMachinesAsync(credential, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
     public async Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default)
     {
-        var key = await ResolveKeyAsync(ct).ConfigureAwait(false);
+        var (key, credential) = await ResolveAsync(ct).ConfigureAwait(false);
 
         return key is { } cacheKey
-            ? await _cache.ReadFreshAsync(cacheKey, _inner.GetMachinesAsync, ct).ConfigureAwait(false)
-            : await _inner.GetMachinesAsync(ct).ConfigureAwait(false);
+            ? await _cache
+                .ReadFreshAsync(cacheKey, readCt => _inner.ReadMachinesAsync(credential, readCt), ct)
+                .ConfigureAwait(false)
+            : await _inner.ReadMachinesAsync(credential, ct).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -112,12 +123,21 @@ public sealed class MachineListCachingNayaxLynxClient : INayaxLynxClient
     // The gate first, the key second, and in that order on every machine-list call: the refusal is
     // what decides whether this caller may have an answer at all, and the credential revision it
     // returns is what decides which answer belongs to it.
-    private async Task<NayaxMachineListCacheKey?> ResolveKeyAsync(CancellationToken ct)
+    //
+    // The credential is returned with the key because it is also what the upstream request is sent
+    // with when this call turns out to need one. One resolution, one gate, one revision - for the
+    // key, for the request and for the 401 that request may report. A caller that joins a read
+    // somebody else started shares that caller's credential, which carries the same revision by
+    // construction: the key it joined on names it.
+    private async Task<(NayaxMachineListCacheKey? Key, NayaxRequestCredential Credential)> ResolveAsync(
+        CancellationToken ct)
     {
         var credential = await _credentials.GetForOperationAsync(ct).ConfigureAwait(false);
 
-        return _businessScope.BusinessId is { } businessId
-            ? new NayaxMachineListCacheKey(businessId, credential.CredentialRevision)
-            : null;
+        return (
+            _businessScope.BusinessId is { } businessId
+                ? new NayaxMachineListCacheKey(businessId, credential.CredentialRevision)
+                : null,
+            credential);
     }
 }
