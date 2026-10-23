@@ -32,11 +32,14 @@ public class SitesController : ControllerBase
 {
     private readonly GetSiteSummaries _getSiteSummaries;
     private readonly GetSiteProducts _getSiteProducts;
+    private readonly ListSites _listSites;
 
-    public SitesController(GetSiteSummaries getSiteSummaries, GetSiteProducts getSiteProducts)
+    public SitesController(
+        GetSiteSummaries getSiteSummaries, GetSiteProducts getSiteProducts, ListSites listSites)
     {
         _getSiteSummaries = getSiteSummaries;
         _getSiteProducts = getSiteProducts;
+        _listSites = listSites;
     }
 
     [HttpGet]
@@ -44,6 +47,29 @@ public class SitesController : ControllerBase
     {
         var summaries = await _getSiteSummaries.Handle(CancellationToken.None);
         return Ok(summaries.Select(SiteResponseMapper.ToDto).ToList());
+    }
+
+    /// <summary>
+    /// The light site list a site picker fills from (issue #841): one site id, name and machine
+    /// count per site, from one machine-list read and no per-machine read - the count is the size of
+    /// the site's group in that same read, so it adds no request. It requires the same
+    /// <c>Inventory.Operate</c> capability as <c>GET api/sites</c>, which it inherits from this
+    /// controller, and it answers the same Nayax unavailability states, because it fails on the
+    /// same fleet read. <c>GET api/sites</c> is unchanged and still serves the Dashboard and the
+    /// Sites page.
+    ///
+    /// <para>It invokes the use case with the <b>request's own</b> cancellation token, so a caller
+    /// that navigates away abandons the Nayax fleet read instead of leaving it to finish
+    /// unobserved. The two actions beside it still pass <c>CancellationToken.None</c>: that is the
+    /// signature issue #302 deliberately left alone when it moved them off the legacy delegator,
+    /// and threading a real token through them changes their cancellation behaviour, which is not
+    /// this endpoint's to decide.</para>
+    /// </summary>
+    [HttpGet("list")]
+    public async Task<ActionResult<List<SiteListItemDto>>> GetList(CancellationToken ct)
+    {
+        var sites = await _listSites.Handle(ct);
+        return Ok(sites.Select(SiteResponseMapper.ToDto).ToList());
     }
 
     [HttpGet("{id:long}/products")]

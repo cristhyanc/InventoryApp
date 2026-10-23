@@ -228,6 +228,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetNayaxCatalogReconciliation>();
         services.AddScoped<GetSiteSummaries>();
         services.AddScoped<GetSiteProducts>();
+        // The light site list the site pickers fill from (issue #841): one machine-list read, no
+        // per-machine read at all.
+        services.AddScoped<ListSites>();
         // The business's own machine records (issue #740), which work with no provider at all. They
         // are deliberately separate from the live-fleet use cases below.
         services.AddScoped<ListLocalMachines>();
