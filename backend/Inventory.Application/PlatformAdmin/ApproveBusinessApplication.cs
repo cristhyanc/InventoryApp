@@ -9,10 +9,13 @@ namespace Inventory.Application.PlatformAdmin;
 /// is the one status that resolves, so its Owner's very next request stops being refused and starts
 /// being served.
 ///
-/// <para>It is the first platform-admin operation that writes. Everything it may change is one
-/// business's lifecycle status and decision instant: no tenant-owned row is reachable from it, no
-/// membership is created, no role is granted and nothing is stamped with the business id it was
-/// given.</para>
+/// <para>It is the first platform-admin operation that writes. What it may change is one business's
+/// lifecycle status and decision instant, and - since issue #849 - that same business's own copies of
+/// the enabled platform supplier presets, written through
+/// <see cref="IBusinessSupplierProvisioningStore"/> in the same transaction. No membership is
+/// created, no role is granted, no other business is reachable, and nothing is stamped with the
+/// business id the <em>request</em> carried: the provisioning write is stamped with the key of the
+/// business row the approval's own transaction read.</para>
 ///
 /// <para>The rules, the transaction, the eligibility re-check and the audit event are
 /// <see cref="BusinessApplicationDecisionWriter"/>'s, shared with the rejection beside it.</para>

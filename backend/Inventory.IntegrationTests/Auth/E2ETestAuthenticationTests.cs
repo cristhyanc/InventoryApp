@@ -205,6 +205,29 @@ public sealed class E2ETestAuthenticationTests : IClassFixture<E2ETestAuthentica
         Assert.Equal(1, await db.NayaxSales.CountAsync());
     }
 
+    /// <summary>
+    /// The fixture copies no platform supplier preset (issue #849). Its two businesses are created
+    /// directly rather than approved through an application, so each holds exactly the one supplier
+    /// the fixture states and records no copy - which is what keeps the browser suite's seeded world
+    /// the world it declares, even though the migrated database it runs against ships the presets.
+    /// </summary>
+    [Fact]
+    public async Task The_fixture_copies_no_platform_supplier_preset()
+    {
+        _ = _factory.Services;
+        await using var db = _factory.UnrestrictedDatabase();
+
+        Assert.NotEmpty(await db.SupplierPresets.AsNoTracking().Where(preset => preset.IsEnabled).ToListAsync());
+        Assert.Equal(
+            [E2ETestFixture.SupplierAName, E2ETestFixture.SupplierBName],
+            await db.Suppliers.AsNoTracking().OrderBy(supplier => supplier.Id)
+                .Select(supplier => supplier.Name)
+                .ToListAsync());
+        Assert.All(
+            await db.Businesses.AsNoTracking().ToListAsync(),
+            business => Assert.Null(business.SupplierPresetsCopiedAtUtc));
+    }
+
     private async Task<string[]> ProductNamesAsync(string actorKey)
     {
         var response = await _factory.As(actorKey).GetAsync("/api/products");

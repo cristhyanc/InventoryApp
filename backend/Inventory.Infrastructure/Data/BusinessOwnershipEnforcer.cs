@@ -59,6 +59,12 @@ public sealed class CrossBusinessAccessException : Exception
 /// a session, and this is what catches a <c>GET</c> that turns out to have a side effect. It covers
 /// every entity rather than only the tenant-owned ones, because in this state there is no write
 /// this application wants: not a tenant-owned row, not a membership, not an invite, not a business.
+///
+/// Since issue #849 the denied-scope rule has one reviewed exception, and it is narrower than the
+/// rule rather than a way around it: while <c>AppDbContext.BeginSupplierProvisioning</c> holds a
+/// lease, a denied scope may create <em>new <see cref="Supplier"/> rows of that one business</em> -
+/// the copies a newly approved business gets of the enabled platform supplier presets - and nothing
+/// else. See <see cref="EnforceSupplierProvisioning"/>.
 /// </summary>
 internal static class BusinessOwnershipEnforcer
 {
@@ -91,7 +97,15 @@ internal static class BusinessOwnershipEnforcer
 
         if (scope.BusinessId is not { } businessId)
         {
-            // Denied scope. Reads already return nothing; writes must not be the way around it.
+            // Denied scope. Reads already return nothing; writes must not be the way around it -
+            // with one reviewed exception, below, which is narrower than this branch rather than a
+            // way out of it.
+            if (context.SupplierProvisioningBusinessId is { } provisionedBusinessId)
+            {
+                EnforceSupplierProvisioning(context, provisionedBusinessId);
+                return;
+            }
+
             if (context.ChangeTracker.Entries<IBusinessOwned>().Any(entry => entry.State is EntityState.Added or EntityState.Modified or EntityState.Deleted))
             {
                 throw new CrossBusinessAccessException(
@@ -117,6 +131,47 @@ internal static class BusinessOwnershipEnforcer
                 case EntityState.Deleted:
                     VerifyOwnership(entry, businessId, "deleted");
                     break;
+
+                default:
+                    break;
+            }
+        }
+
+        EnforceRelationships(context, businessId);
+    }
+
+    /// <summary>
+    /// The provisioning window of <c>AppDbContext.BeginSupplierProvisioning</c> (issue #849): on a
+    /// denied scope, <em>new <see cref="Supplier"/> rows of <paramref name="businessId"/></em> are
+    /// stamped and accepted, and every other tenant-owned write is refused exactly as it is without
+    /// a lease.
+    ///
+    /// <para>It is the only exception to "a denied scope writes nothing tenant-owned", and it is
+    /// deliberately smaller than that rule in three directions at once: one entity type, one state
+    /// (an insert - never an update and never a delete), and one business, whose id the approval's
+    /// own write transaction read rather than a request supplying it. Stamping goes through the same
+    /// <see cref="StampOrVerifyNewRow"/> every ordinary insert uses, so a row that arrives already
+    /// carrying some <em>other</em> business's key is refused here too rather than silently
+    /// re-owned, and <see cref="EnforceRelationships"/> still runs, so a copied supplier could not
+    /// be related to another business's row.</para>
+    /// </summary>
+    private static void EnforceSupplierProvisioning(AppDbContext context, int businessId)
+    {
+        foreach (var entry in context.ChangeTracker.Entries<IBusinessOwned>().ToList())
+        {
+            switch (entry.State)
+            {
+                case EntityState.Added when entry.Entity is Supplier:
+                    StampOrVerifyNewRow(entry, businessId);
+                    break;
+
+                case EntityState.Added:
+                case EntityState.Modified:
+                case EntityState.Deleted:
+                    throw new CrossBusinessAccessException(
+                        $"{entry.Metadata.ClrType.Name} cannot be written while provisioning a "
+                            + "business: the provisioning path may only create that business's own "
+                            + "Supplier rows.");
 
                 default:
                     break;

@@ -165,6 +165,10 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         await using var db = Database();
         db.BusinessNayaxConnections.RemoveRange(await db.BusinessNayaxConnections.ToListAsync());
         db.Products.RemoveRange(await db.Products.ToListAsync());
+        // The suppliers an approval copied from the platform presets (issue #849) go with the rest:
+        // they belong to the business the previous test approved, and the businesses themselves are
+        // deleted below.
+        db.Suppliers.RemoveRange(await db.Suppliers.ToListAsync());
         // Support sessions (issue #550) go with the rest: a session left behind by one test would
         // make the next one's "one active session per administrator" check refuse a start it should
         // have allowed.
@@ -397,6 +401,57 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
     {
         await using var db = Database();
         return await db.SupplierPresets.AsNoTracking().OrderBy(preset => preset.Id).ToListAsync();
+    }
+
+    /// <summary>
+    /// Disables or re-enables one shipped preset by name, so a test can prove that only the enabled
+    /// ones are copied into a business being approved (issue #849).
+    /// </summary>
+    public async Task SetSupplierPresetEnabledAsync(string name, bool isEnabled)
+    {
+        await using var db = Database();
+        var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+        preset.IsEnabled = isEnabled;
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Records a website on one preset, or clears it, so a test can prove the website travels with
+    /// the name into the copy (issue #849).
+    /// </summary>
+    public async Task SetSupplierPresetUrlAsync(string name, string? url)
+    {
+        await using var db = Database();
+        var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+        preset.Url = url;
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Renames one preset, so a test can prove that editing a preset afterwards leaves an already
+    /// approved business's copy of it exactly as it was (issue #849).
+    /// </summary>
+    public async Task RenameSupplierPresetAsync(string name, string newName)
+    {
+        await using var db = Database();
+        var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+        preset.Name = newName;
+        preset.NormalisedName = SupplierPresetPolicy.NormalisedName(newName);
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Every supplier one business owns, oldest first (issue #849) - read outside the boundary, so a
+    /// test can see what landed in a business it is not a member of.
+    /// </summary>
+    public async Task<IReadOnlyList<Supplier>> SuppliersOfAsync(int businessId)
+    {
+        await using var db = Database();
+        return await db.Suppliers
+            .AsNoTracking()
+            .Where(supplier => supplier.BusinessId == businessId)
+            .OrderBy(supplier => supplier.Id)
+            .ToListAsync();
     }
 
     /// <summary>One more preset in whichever state a test needs (issue #848).</summary>

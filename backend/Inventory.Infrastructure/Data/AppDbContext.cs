@@ -55,6 +55,96 @@ public class AppDbContext : DbContext
     /// </summary>
     internal IBusinessScope BusinessScope => _businessScope;
 
+    /// <summary>
+    /// The business a <see cref="BeginSupplierProvisioning"/> lease is currently open for, and
+    /// <c>null</c> - which is every other moment of this context's life - when none is (issue #849).
+    ///
+    /// <para>Read by <see cref="BusinessOwnershipEnforcer"/>, and only in the branch it takes for a
+    /// <em>denied</em> scope, where its answer today is "no tenant-owned write at all". It is not
+    /// read by <see cref="CurrentBusinessId"/> or <see cref="TenantFilteringEnabled"/> on purpose: a
+    /// lease grants the ownership stamp for new rows of one business and grants no <em>read</em>,
+    /// so while one is open every tenant-owned query still matches nothing, exactly as it does for
+    /// the rest of the request.</para>
+    /// </summary>
+    internal int? SupplierProvisioningBusinessId { get; private set; }
+
+    /// <summary>
+    /// Opens the one provisioning window in this application: until the returned lease is disposed,
+    /// <see cref="BusinessOwnershipEnforcer"/> accepts <em>new <see cref="Supplier"/> rows of
+    /// <paramref name="businessId"/> and nothing else</em> on an otherwise denied scope (issue #849,
+    /// child C of #835).
+    ///
+    /// <para><strong>Why a window exists at all.</strong> Approving a business application runs as
+    /// the platform administrator, who is a member of no business, so the request carries a denied
+    /// <see cref="BusinessScope"/> and the enforcer refuses every tenant-owned write - which is what
+    /// makes the platform-admin surface unable to touch a business's own data. The new business's own
+    /// copies of the enabled supplier presets are nevertheless tenant-owned rows that have to be
+    /// written in that same transaction, because a business that was approved but did not get them
+    /// would be a half-finished tenant. This is the narrow, reviewed exception rather than a
+    /// relaxation of the rule: see docs/architecture.md § Supplier presets copied into an approved
+    /// business.</para>
+    ///
+    /// <para><strong>What keeps it narrow.</strong> It is <c>internal</c>, so only this assembly can
+    /// take one, and the only caller is <c>EfBusinessSupplierProvisioningStore</c>, which takes it
+    /// around one <c>SaveChanges</c>; the business id is the key of the row the approval's own write
+    /// transaction read, never a value a request supplied; a lease may be taken only while this
+    /// context's own scope is <see cref="BusinessScopeState.Denied"/>, so neither an ordinary
+    /// member's request nor a support session can open one; only one may be open at a time; and the
+    /// enforcer still refuses every update, every delete and every other entity type while it is
+    /// open.</para>
+    /// </summary>
+    /// <param name="businessId">The business whose new supplier rows may be stamped.</param>
+    /// <returns>The lease. Disposing it closes the window; it is never left open across a request.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This context has a resolved, support-session or unscoped scope, or a lease is already open.
+    /// </exception>
+    internal IDisposable BeginSupplierProvisioning(int businessId)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(businessId, 0);
+
+        if (_businessScope.State != BusinessScopeState.Denied)
+        {
+            throw new InvalidOperationException(
+                "Supplier provisioning is only available to a request that resolved no business of "
+                    + "its own - the platform administrator approving an application. A scope that "
+                    + "already names a business must write through the ordinary tenant path.");
+        }
+
+        if (SupplierProvisioningBusinessId is not null)
+        {
+            throw new InvalidOperationException(
+                "A supplier provisioning lease is already open on this context.");
+        }
+
+        SupplierProvisioningBusinessId = businessId;
+        return new SupplierProvisioningLease(this);
+    }
+
+    /// <summary>
+    /// Closes the provisioning window of <see cref="BeginSupplierProvisioning"/>. A struct would be
+    /// copied by the <c>using</c> statement, so this is a sealed class with one field.
+    /// </summary>
+    private sealed class SupplierProvisioningLease : IDisposable
+    {
+        private AppDbContext? _context;
+
+        public SupplierProvisioningLease(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        public void Dispose()
+        {
+            if (_context is null)
+            {
+                return;
+            }
+
+            _context.SupplierProvisioningBusinessId = null;
+            _context = null;
+        }
+    }
+
     public DbSet<Business> Businesses => Set<Business>();
 
     /// <summary>
