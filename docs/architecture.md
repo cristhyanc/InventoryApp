@@ -9525,9 +9525,11 @@ rather than growing it inline in the page template. The panel's row layout also 
 component, not to the Products/Machines call sites: "Select all" and every option render the same
 `.msd-row`/`.msd-checkbox`/`.msd-label` structure, so their checkboxes share one fixed-width column
 and all label text starts at the same x-position, with long labels truncating inside the scrollable
-option list. Those three rules are component-scoped styles rather than utility classes because the
-global `input, select, textarea` rule in `src/styles.scss` gives every input full width and
-form-field padding, which would otherwise size each checkbox differently per row.
+option list. Those three rules are component-scoped styles rather than utility classes so every row
+shares one fixed-width checkbox column regardless of label length; the global `input, select,
+textarea` rule in `src/styles.scss` excludes `input[type=checkbox]` and `input[type=radio]` (issue
+#874), so it no longer sizes these checkboxes at all, and `.msd-checkbox`'s own `width`/`height` is
+now a belt-and-suspenders restatement of their native size rather than a fix for the global rule.
 
 `PickListComponent` keeps two selections per filter: `stagedProductIds`/`stagedMachineIds` (what the
 dropdowns currently show checked) and `appliedProductIds`/`appliedMachineIds` (what the matrix, chips,
