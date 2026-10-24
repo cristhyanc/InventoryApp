@@ -1479,6 +1479,13 @@ it was until a Super Admin switches it again. Every installation starts with the
   business role, a Super Admin is shown what that role would see and is not offered the switch.
 - **If a save fails**, nothing changes: the switch says the change was not saved, and the setting,
   the pill and the menus stay exactly as the server still has them. Try again.
+- **What the switch shows is always an answer the server gave.** A successful save is shown
+  immediately — the pill, the card and the switch's own label change to what was stored — and the
+  application then re-reads the setting so the sidebar and every other screen follow. If that
+  re-read does not get through, what you saved still reads correctly here and you are told that the
+  menus may still show the previous state, with **Read this setting again** to try the read once
+  more. While the setting is still being read, or when it could not be read at all, the switch says
+  so and offers no On/Off action: it never shows an unread setting as shown or hidden.
 
 ## Costing repair (Admin page)
 
