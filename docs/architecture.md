@@ -9530,6 +9530,16 @@ shares one fixed-width checkbox column regardless of label length; the global `i
 textarea` rule in `src/styles.scss` excludes `input[type=checkbox]` and `input[type=radio]` (issue
 #874), so it no longer sizes these checkboxes at all, and `.msd-checkbox`'s own `width`/`height` is
 now a belt-and-suspenders restatement of their native size rather than a fix for the global rule.
+That exclusion is written `input:where(:not([type='checkbox']):not([type='radio']))`, and the
+`:where()` is load-bearing rather than decorative: it contributes zero specificity, so the rule
+still weighs exactly as much as the bare `input` selector it replaced and every single-class
+utility that has always overridden it on an ordinary input keeps winning - `w-24` on Take
+Inventory's counted-stock input, `w-auto` on the report filters' dates, `border-md-danger` on an
+invalid purchase price. Qualifying `input` with weight-bearing exclusions instead would restore
+full width, text-input padding and the default border to all three. Keep any future narrowing of
+this rule inside `:where()` for the same reason;
+`src/app/design-system/checkbox-radio-global-sizing.spec.ts` compares the compiled selectors'
+specificity against their pre-#874 values and fails if it changes.
 
 `PickListComponent` keeps two selections per filter: `stagedProductIds`/`stagedMachineIds` (what the
 dropdowns currently show checked) and `appliedProductIds`/`appliedMachineIds` (what the matrix, chips,

@@ -406,10 +406,11 @@ describe('styles.scss', () => {
    * guards the parts that must not move.
    */
   it('keeps the global form control width and padding, and tokenises its border and radius', () => {
-    // `input` carries `:not([type='checkbox']):not([type='radio'])` since issue #874, which
+    // `input` carries `:where(:not([type='checkbox']):not([type='radio']))` since issue #874, which
     // excludes checkboxes and radios from this rule entirely; the pattern tolerates that qualifier
     // without caring about its exact text, since this test is about the applied classes, not the
-    // selector.
+    // selector. The selector itself - including the `:where()` that keeps its specificity at the
+    // bare `input` it replaced - is guarded by `checkbox-radio-global-sizing.spec.ts`.
     const rule = /input[^,{]*,\s*select,\s*textarea\s*\{\s*@apply([^;]*);/.exec(stylesScss);
     expect(rule).not.toBeNull();
 
