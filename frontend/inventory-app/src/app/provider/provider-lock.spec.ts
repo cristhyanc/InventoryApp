@@ -1,4 +1,5 @@
 import { ProviderConnection, ProviderFeatureAvailability } from './provider-availability.service';
+import { PROVIDER_FEATURES } from './provider-feature-permissions';
 import {
   PROVIDER_LOCKED_PATH,
   ProviderLock,
@@ -139,6 +140,35 @@ describe('providerLockSummary and providerLockSentence (issue #729)', () => {
 
     expect(sentence).not.toContain('GET machines');
     expect(sentence).toContain('Machines');
+  });
+
+  /** A live provider destination's connect sentence is unchanged by issue #868. */
+  it('still says a live provider destination reads live data from Nayax', () => {
+    const sentence = providerLockSentence('connect', 'Sites', 'machineFleet');
+
+    expect(sentence).toContain('Sites is unavailable because Nayax is not connected.');
+    expect(sentence).toContain('It reads live data from Nayax');
+  });
+
+  /**
+   * Issue #868: the five reports locked on `providerRecords` read **stored** sales, so the sentence
+   * must not claim they read live data - and must not leave an operator thinking the history they
+   * already have went with the connection. It still asks for the one thing that unlocks the page, a
+   * Nayax connection, so the page's heading and Connect action are the same.
+   */
+  it('words a stored-records destination without claiming it reads live data', () => {
+    const sentence = providerLockSentence('connect', 'Daily', 'providerRecords');
+
+    expect(sentence).toContain('Daily is unavailable because Nayax is not connected.');
+    expect(sentence).not.toContain('reads live data');
+    expect(sentence).toContain('Nothing stored has been removed');
+    expect(sentence).toContain('a Nayax connection this application can use');
+  });
+
+  it('words a connect lock for every feature, so none of them renders as an empty sentence', () => {
+    for (const feature of PROVIDER_FEATURES) {
+      expect(providerLockSentence('connect', 'Daily', feature).length).toBeGreaterThan(0);
+    }
   });
 
   it('claims no refused read when the feature declares none', () => {

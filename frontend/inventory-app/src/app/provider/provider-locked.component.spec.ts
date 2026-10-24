@@ -100,13 +100,17 @@ describe('ProviderLockedComponent with no usable connection (issue #729)', () =>
   });
 
   /**
-   * Decision P5 in one sentence on the page: nothing has been lost, and the reports over sales
-   * already imported are still open.
+   * What is left in one sentence on the page. Issue #868 locked five of the reports, so the page no
+   * longer claims every report over imported sales stays open: it names the two that do, and says
+   * the stored sales are still there.
    */
   it('says what still works without a provider, and is never a dead end', async () => {
     const { host } = await render({ from: '/sites', status: 'NotConfigured' });
 
     expect(host.textContent).toContain('Inventory, purchases and expenses work without a provider');
+    expect(host.textContent).toContain('the Bookkeeping and');
+    expect(host.textContent).toContain('GST reports stay open');
+    expect(host.textContent).toContain('the sales already imported are still stored');
     expect(host.querySelector('a[href="/"]')?.textContent).toContain('Dashboard');
   });
 
@@ -142,6 +146,62 @@ describe('ProviderLockedComponent with no usable connection (issue #729)', () =>
 
     expect(host.querySelector('h1')?.textContent).toContain('needs Nayax');
     expect(host.textContent).toContain('no Nayax connection was named');
+  });
+});
+
+/**
+ * The same page for one of the five reports issue #868 locks. It is reached in exactly one state -
+ * a business with no Nayax connection at all - and keeps the layout, heading and Connect action a
+ * live provider destination gets, because the one thing that unlocks it is the same. What differs
+ * is the sentence: these reports read stored sales, so claiming they read live data from Nayax
+ * would be untrue and would suggest the history went with the connection.
+ */
+describe('ProviderLockedComponent for a report over stored provider records (issue #868)', () => {
+  it('names the report and says Nayax is not connected, in the same heading and layout', async () => {
+    const { host } = await render({ from: '/reports/daily', status: 'NotConfigured' });
+
+    expect(host.querySelector('h1')?.textContent).toContain('Daily needs Nayax');
+    expect(host.textContent).toContain('Daily is unavailable because Nayax is not connected.');
+    expect(connectLink(host)?.textContent).toContain('Connect Nayax');
+  });
+
+  it('never claims the report reads live data from Nayax', async () => {
+    const { host } = await render({ from: '/reports/products', status: 'NotConfigured' });
+
+    expect(host.textContent).toContain('Products is unavailable because Nayax is not connected.');
+    expect(host.textContent).not.toContain('reads live data');
+    expect(host.textContent).toContain('Nothing stored has been removed');
+  });
+
+  /** A machine-fleet destination's sentence is unchanged beside it. */
+  it('leaves a live provider destination still saying it reads live data', async () => {
+    const { host } = await render({ from: '/reports/site-commissions', status: 'NotConfigured' });
+
+    expect(host.querySelector('h1')?.textContent).toContain('Site Commissions');
+    expect(host.textContent).toContain('It reads live data from Nayax');
+  });
+
+  /**
+   * The page re-reads the availability answer, so the states that leave these reports **open** say
+   * so rather than insisting on a lock the route no longer applies - credentials that stopped
+   * working are the case that matters, because they lock a live destination and not this one.
+   */
+  it('says the report is available again for credentials that are stored but not usable', async () => {
+    const { host } = await render({ from: '/reports/machines', status: 'NeedsAttention' });
+
+    expect(host.textContent).toContain('Nayax can serve this page now');
+    expect(host.querySelector('a[href="/reports/machines"]')?.textContent).toContain('Open Machines');
+  });
+
+  it('offers no Connect button to a member who may not manage integrations', async () => {
+    const { host } = await render({
+      from: '/reports/transactions',
+      status: 'NotConfigured',
+      capability: () => of(false)
+    });
+
+    expect(connectLink(host)).toBeNull();
+    expect(host.textContent).toContain('Ask the business Owner to connect Nayax');
   });
 });
 
