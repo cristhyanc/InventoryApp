@@ -1496,6 +1496,22 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("PickListRefillLines");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PlatformOptionVisibility", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("HistoricalGstClassificationVisible")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("PlatformOptionVisibility");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.Product", b =>
                 {
                     b.Property<long>("Id")

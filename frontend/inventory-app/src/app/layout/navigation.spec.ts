@@ -1,4 +1,5 @@
 import { capabilitySet } from '../access/capabilities';
+import { OptionVisibility } from '../access/option-visibility';
 import { routes } from '../app.routes';
 import { ProviderAvailability, providerFeatureAvailabilities, providerConnectionOf } from '../provider/provider-availability.service';
 import {
@@ -17,10 +18,12 @@ import {
   navLinks,
   navLockOf,
   navigationFor,
+  optionSwitchedOff,
   platformDiagnosticsNavLink,
   primaryNavigation,
   superAdminNavGroup,
-  supplierPresetsNavLink
+  supplierPresetsNavLink,
+  switchableOptionRoute
 } from './navigation';
 
 /**
@@ -1010,5 +1013,92 @@ describe('activeNavLink (issue #729)', () => {
   it('is undefined for a URL outside the navigation', () => {
     expect(activeNavLink(primaryNavigation, '/needs-provider')).toBeUndefined();
     expect(activeNavLink(primaryNavigation, '/auth')).toBeUndefined();
+  });
+});
+
+/**
+ * The one switchable Admin option (issue #873): a Super Admin may stop Historical GST Classification
+ * being offered to everybody else, and the menu is where that takes effect.
+ *
+ * What these tests have to hold apart is "offered" from "permitted". The switch decides whether a
+ * destination is rendered; the capability set still decides whether it could be, and the API behind
+ * the page authorizes every request itself either way - so switching the option on never adds an
+ * entry to a member whose role never had it, and switching it off never takes a capability away.
+ */
+describe('switchable Admin option visibility (issue #873)', () => {
+  const OFF: OptionVisibility = { historicalGstClassificationVisible: false };
+  const ON: OptionVisibility = { historicalGstClassificationVisible: true };
+
+  const entry = { label: 'Historical GST Classification', route: '/admin/historical-gst-classification' };
+
+  function adminEntries(
+    capabilities = OWNER,
+    hasPlatformDiagnosticsAccess = false,
+    options?: OptionVisibility
+  ): { label: string; route: string }[] {
+    return childRoutes(
+      'Admin',
+      navigationFor(capabilities, hasPlatformDiagnosticsAccess, 'offered', undefined, options)
+    );
+  }
+
+  it('offers the entry to an eligible member while the option is on', () => {
+    expect(adminEntries(OWNER, false, ON)).toContainEqual(entry);
+  });
+
+  it('hides it from an eligible member who is not a super admin while the option is off', () => {
+    expect(adminEntries(OWNER, false, OFF)).not.toContainEqual(entry);
+  });
+
+  it('keeps it for a super admin while the option is off', () => {
+    expect(adminEntries(OWNER, true, OFF)).toContainEqual(entry);
+  });
+
+  /**
+   * An unread setting offers it, the same fail-open rule an unreadable capability set follows: the
+   * answer arrives with the capabilities, so "not known" means the read that would have said
+   * otherwise has not answered, and an entry whose own page authorizes itself is the safer default.
+   */
+  it('offers it while the setting is not known yet', () => {
+    expect(adminEntries(OWNER, false, undefined)).toContainEqual(entry);
+  });
+
+  /**
+   * The criterion "On restores it only to users already eligible under existing permissions": a
+   * Manager holds no `Data.Repair`, so neither state of the switch puts this entry in their menu -
+   * and neither does being the Super Admin, because the switch is not a capability.
+   */
+  it('never offers it to a member whose capabilities do not allow it', () => {
+    expect(adminEntries(MANAGER, false, ON)).not.toContainEqual(entry);
+    expect(adminEntries(MANAGER, false, OFF)).not.toContainEqual(entry);
+    expect(adminEntries(MANAGER, true, OFF)).not.toContainEqual(entry);
+  });
+
+  it('changes no other destination, in either state', () => {
+    const on = navigationFor(OWNER, true, 'offered', undefined, ON);
+    const off = navigationFor(OWNER, true, 'offered', undefined, OFF);
+
+    expect(navLinks(off).map((link) => link.route)).toEqual(navLinks(on).map((link) => link.route));
+    expect(adminEntries(OWNER, false, OFF)).toEqual(
+      adminEntries(OWNER, false, ON).filter((child) => child.route !== entry.route)
+    );
+  });
+
+  /**
+   * What the sidebar renders the `Off` pill from, and nothing else: the one switchable entry, while
+   * the setting says it is switched off.
+   */
+  it('reports the switched-off state for that entry alone', () => {
+    expect(optionSwitchedOff(entry.route, OFF)).toBe(true);
+    expect(optionSwitchedOff(entry.route, ON)).toBe(false);
+    expect(optionSwitchedOff(entry.route, undefined)).toBe(false);
+    expect(optionSwitchedOff('/admin/costing-repair', OFF)).toBe(false);
+    expect(optionSwitchedOff('/admin/business-settings', OFF)).toBe(false);
+  });
+
+  /** The route the switch is about is the Admin destination it names, and only that one. */
+  it('names the one switchable destination', () => {
+    expect(switchableOptionRoute).toBe(entry.route);
+    expect(childRoutes('Admin')).toContainEqual(entry);
   });
 });

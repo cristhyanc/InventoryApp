@@ -33,12 +33,27 @@ namespace Inventory.Application.Access;
 /// which is every request today's UI makes. It is what lets a client show, unmistakably, that the
 /// data on screen belongs to somebody else and that nothing on it can be changed.
 /// </param>
+/// <param name="HistoricalGstClassificationVisible">
+/// Whether the application currently <em>offers</em> Historical GST Classification to anybody but a
+/// Super Admin (issue #873), from
+/// <see cref="Inventory.Application.PlatformOptions.GetOptionVisibility"/>. It is a shared
+/// application-wide setting rather than anything about this caller, and it is reported here because
+/// this is the one answer the shell builds its menu from - an option the application has switched
+/// off has to stop being offered in the same read that says what the member may do.
+///
+/// <para><strong>It is not a capability and never implies one.</strong>
+/// <see cref="Capabilities"/> is unchanged by it in both states: <see langword="false"/> hides an
+/// entry from the people it was switched off for and revokes nothing, and <see langword="true"/>
+/// restores it only to a member whose capabilities already allowed it. The classification
+/// endpoints keep authorizing every request by <c>Data.Repair</c> whatever this says.</para>
+/// </param>
 public sealed record CurrentAccess(
     BusinessRole? Role,
     IReadOnlyList<Capability> Capabilities,
     string BusinessName,
     string TimeZoneId,
-    CurrentSupportSession? SupportSession);
+    CurrentSupportSession? SupportSession,
+    bool HistoricalGstClassificationVisible);
 
 /// <summary>
 /// The support session a request is inside, as the caller's own access report describes it

@@ -396,6 +396,33 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
     public static readonly string[] ShippedSupplierPresetNames =
         ["Coles", "Woolworths", "Big W", "Costco"];
 
+    /// <summary>
+    /// Puts the switchable option visibility of issue #873 back to the shipped state - <em>no row at
+    /// all</em>, which is what makes every option offered - so a test about the default starts from
+    /// the default however a predecessor left it.
+    ///
+    /// <para>Like <see cref="ResetSupplierPresetsAsync"/> it is deliberately not part of
+    /// <see cref="ResetAsync"/>: the setting is about no business, so a test about businesses has no
+    /// reason to touch it.</para>
+    /// </summary>
+    public async Task ResetOptionVisibilityAsync()
+    {
+        await using var db = Database();
+        db.PlatformOptionVisibility.RemoveRange(await db.PlatformOptionVisibility.ToListAsync());
+        await db.SaveChangesAsync();
+        ClearLog();
+    }
+
+    /// <summary>
+    /// Every stored option-visibility row (issue #873). There is at most one, and the point of
+    /// reading them as a list is that a test can prove a second write did not add a second row.
+    /// </summary>
+    public async Task<IReadOnlyList<PlatformOptionVisibility>> OptionVisibilityRowsAsync()
+    {
+        await using var db = Database();
+        return await db.PlatformOptionVisibility.AsNoTracking().OrderBy(row => row.Id).ToListAsync();
+    }
+
     /// <summary>Every stored supplier preset, oldest first (issue #848).</summary>
     public async Task<IReadOnlyList<SupplierPreset>> SupplierPresetsAsync()
     {

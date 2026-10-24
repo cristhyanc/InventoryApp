@@ -63,7 +63,8 @@ public sealed class MeController : ControllerBase
                     session.BusinessName,
                     session.ExpiresAtUtc,
                     session.ReadOnly)
-                : null));
+                : null,
+            access.HistoricalGstClassificationVisible));
     }
 
     /// <summary>
