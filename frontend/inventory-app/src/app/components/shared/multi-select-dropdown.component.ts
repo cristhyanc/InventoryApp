@@ -21,10 +21,10 @@ export interface MultiSelectOption {
     `
       /*
        * One row structure for "Select all" and every option, so their checkboxes share a
-       * fixed-width column and all label text starts at the same x-position. These rules are
-       * component-scoped on purpose: the global "input, select, textarea" rule in styles.scss
-       * gives every input full width and form-field padding, which otherwise stretched each
-       * checkbox differently depending on how long its label was.
+       * fixed-width column and all label text starts at the same x-position regardless of how
+       * long its label is. The global "input, select, textarea" rule in styles.scss excludes
+       * checkboxes (issue #874), so .msd-checkbox's own size is a restatement of their native
+       * size for this fixed-width column, not a fix for the global rule stretching them.
        */
       .msd-row {
         display: flex;

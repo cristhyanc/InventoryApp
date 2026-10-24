@@ -428,7 +428,13 @@ a {
   text-decoration: none;
 }
 
-input, select, textarea {
+/*
+ * Checkboxes and radios (issue #874) keep their native size instead of the full-width,
+ * text-input padding and border every other `input` gets: a flex label would otherwise stretch
+ * the box across the row and draw the tick far from the label text (issue #872). The focus and
+ * disabled rules below still target bare `input`, so checkboxes and radios keep those.
+ */
+input:not([type='checkbox']):not([type='radio']), select, textarea {
   @apply w-full rounded-md-control border border-md-input-border px-3 py-2 text-sm text-slate-700 placeholder:text-slate-400 focus:border-md-info;
 }
 
