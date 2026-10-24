@@ -1366,6 +1366,10 @@ video {
   z-index: 50;
 }
 
+.col-span-2 {
+  grid-column: span 2 / span 2;
+}
+
 .float-right {
   float: right;
 }
@@ -2688,8 +2692,8 @@ img {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
-  .md\:grid-cols-\[minmax\(0\2c 3fr\)_minmax\(6rem\2c 1fr\)_minmax\(10rem\2c 1fr\)_minmax\(9rem\2c 1fr\)_minmax\(9rem\2c 1fr\)_auto\] {
-    grid-template-columns: minmax(0,3fr) minmax(6rem,1fr) minmax(10rem,1fr) minmax(9rem,1fr) minmax(9rem,1fr) auto;
+  .md\:grid-cols-\[minmax\(0\2c 3fr\)_minmax\(6rem\2c 1fr\)_minmax\(14rem\2c 2fr\)_minmax\(9rem\2c 1fr\)_auto\] {
+    grid-template-columns: minmax(0,3fr) minmax(6rem,1fr) minmax(14rem,2fr) minmax(9rem,1fr) auto;
   }
 }
 

@@ -1048,17 +1048,20 @@ returns to the Purchases list, and **Cancel** returns without saving. Leaving th
 browser's Back button or by any other link discards unsaved edits without asking first, which is how every
 other form page in the application behaves.
 
-**Entering a line's price.** Stock often arrives in boxes priced per box, so each purchased item line lets you
-choose how you enter its price: **Total purchase price** — the amount paid for that whole line — or **Unit
-price**. The figure you do not type is calculated from that line's purchased unit quantity and shown beside
-it (the unit cost to four decimals, or the line total), so you can check both before saving. A line is still
-saved as its quantity and unit cost: $32.50 entered for 20 units saves 20 units at $1.6250 each, and a total
+**Entering a line's price.** Stock often arrives in boxes priced per box, so each purchased item line shows
+both of its prices side by side — **Unit price ($)** and **Total price ($)** — and you can type into either
+one. The other is calculated from that line's purchased unit quantity, so you can check both before saving:
+type $32.50 into Total price for 20 units and the Unit price fills in as $1.6250; type $1.50 into Unit price
+for 28 units and the Total price fills in as $42.00. The figure you typed **last** is the one the other
+follows, so if you change the quantity afterwards, a total you typed is spread over the new quantity while a
+unit price you typed is multiplied by it. A line is still saved as its quantity and unit cost, and a total
 that does not divide evenly — $100.00 over 300 units, for example — is saved so the line still comes to
-exactly the $100.00 you entered. Add Purchase starts each line on the total paid; a line already on a
-purchase you are editing starts on its recorded unit price, and neither receiving a supplier order nor
-opening the edit page changes a line's unit cost until you change a quantity or a price yourself. The
-purchase's own **Total Amount**, **Delivery Cost** and **Package Cost** are unaffected and are still entered
-as plain amounts.
+exactly the $100.00 you entered, even though the Unit price field shows the rounded $0.3333. Add Purchase
+starts each line on the total paid; a line already on a purchase you are editing starts on its recorded unit
+price, so correcting only its quantity keeps the cost it was recorded at, and neither receiving a supplier
+order nor opening the edit page changes a line's unit cost until you type a price yourself. The purchase's own
+**Total Amount**, **Delivery Cost** and **Package Cost** are unaffected and are still entered as plain
+amounts.
 
 - Everything starts as **Not classified**, including lines prefilled while receiving a supplier order.
   Nothing is guessed from the product, the supplier or the amount, so a line is classified only when a

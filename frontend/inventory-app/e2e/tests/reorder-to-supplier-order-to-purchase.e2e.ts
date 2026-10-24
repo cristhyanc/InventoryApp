@@ -65,11 +65,10 @@ test('a reorder alert becomes a supplier order and then a costed purchase', asyn
     'the outstanding quantity is prefilled from the order'
   ).toHaveValue('28');
   // The supplier order carried no unit price, so the operator supplies the purchase cost - this is
-  // the value the received stock is costed at. Entering it as a unit price rather than as the total
-  // paid for the line is the per-line choice of issue #707.
-  await page.getByTestId('purchase-item-price-mode').selectOption({ label: 'Unit price' });
+  // the value the received stock is costed at. Typing it into the line's Unit price field makes that
+  // the entered figure and fills the Total price beside it (issues #707 and #878).
   await page.getByTestId('purchase-item-cost').fill('1.5');
-  await expect(page.getByTestId('purchase-item-derived-line-total')).toContainText('$42.00');
+  await expect(page.getByTestId('purchase-item-line-total')).toHaveValue('42.00');
   await page.getByRole('button', { name: 'Add Purchase' }).click();
 
   // 5. The order is fully received, so it leaves the open list.

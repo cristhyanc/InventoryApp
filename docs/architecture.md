@@ -9207,8 +9207,9 @@ client-side filter/paging.
 4. Supplier-order allocations are reconciled without fabricating purchase quantities.
 
 A purchase line is recorded as a quantity and a unit cost, and that contract is unchanged. How the
-operator *arrives* at that unit cost is a choice the Add and Edit purchase forms offer per line: the
-amount paid for the whole line divided over its units, or the unit price itself. See [Per-line price
+operator *arrives* at that unit cost is theirs to decide per line on the Add and Edit purchase forms,
+which offer both of the line's prices as linked inputs: type the amount paid for the whole line and
+it is divided over its units, or type the unit price itself. See [Per-line price
 entry](#per-line-price-entry-total-paid-or-unit-price-issue-707).
 
 Manual stock adjustments (`EfStockAdjustmentStore`), Take Inventory
@@ -9976,10 +9977,11 @@ boundary](#page-composition-boundary-issue-191):
   lines (product for a new line, quantity, unit cost, per-line GST classification, add and remove),
   delivery cost with its GST picker, package cost with its GST picker, and notes are exactly the
   fields and operations the inline editor offered, with the same `name`s, the same `data-testid`s and
-  the same validation. Issue #707 then added one control per line, the price-entry selector described
-  in [Per-line price entry](#per-line-price-entry-total-paid-or-unit-price-issue-707), and with it
-  the line-price validation this form now performs before it emits a payload; every other field is
-  still the one listed here. Every issue #431 rule still holds and its tests moved with the code: only a
+  the same validation. Issue #707 then added per-line price entry and the line-price validation this
+  form now performs before it emits a payload, and issue #878 made it the two linked Unit price and
+  Total price inputs described in
+  [Per-line price entry](#per-line-price-entry-total-paid-or-unit-price-issue-707); every other field
+  is still the one listed here. Every issue #431 rule still holds and its tests moved with the code: only a
   changed classification is submitted, a stored line travels with its own `id` and keeps its product,
   an absent charge submits no classification, and an unchanged purchase date is resubmitted as the
   stored instant. The GST figures are still the API's alone and are still displayed on the list; this
@@ -9998,52 +10000,67 @@ boundary](#page-composition-boundary-issue-191):
 
 Stock usually arrives in boxes priced per box, so each purchase line on **both** purchase forms -
 `components/purchases/purchase-upload.component.{ts,html}` (Add) and
-`components/purchases/purchase-edit/purchase-edit-form.component.{ts,html}` (Edit) - carries a
-price-entry selector beside its quantity. The operator types one of the line's two prices and the
-form calculates the other from that line's purchased **unit** quantity:
+`components/purchases/purchase-edit/purchase-edit-form.component.{ts,html}` (Edit) - shows **both**
+of its prices beside its quantity, as two editable inputs next to each other: **Unit price ($)** and
+**Total price ($)**. Issue #878 replaced issue #707's price-entry selector and its read-only hint
+text with them; there is no mode to choose and no `Line total:`/`Unit cost:` figure under a field.
 
-| Mode | Editable input | Calculated, read-only figure |
+| Field | What the operator types | What it calculates, into the other field |
 | --- | --- | --- |
-| `Total purchase price` | the GST-inclusive amount paid for the whole line (a box price) | the unit cost, displayed to four decimals |
-| `Unit price` | the price of one unit | the line total, `round(quantity x unitCost, 2)` |
+| `Total price ($)` | the GST-inclusive amount paid for the whole line (a box price) | the unit cost, `lineTotal / quantity`, displayed to four decimals |
+| `Unit price ($)` | the price of one unit | the line total, `round(quantity x unitCost, 2)` |
 
-- **One shared calculation.** `components/purchases/purchase-line-price.ts` holds the entry-mode
-  vocabulary, both directions of the arithmetic, the cent rounding and the per-line validation, and
-  both forms delegate to it, so Add and Edit cannot drift apart (AGENTS.md § Architecture rules).
-  It is an entry convenience over the existing contract: no pack size, units-per-box or carton is
-  modelled, the chosen mode is not part of any request or any stored row, and a line is still
-  persisted and submitted as the quantity and unit cost `PurchaseItemDto` already carried. Purchase
-  GST remains the API's alone - these forms still perform no GST arithmetic.
-- **The unit cost is submitted as the unrounded quotient.** In `Total purchase price` mode the
+- **The field typed into last is the entered figure.** `PriceEntryMode` survives as exactly that -
+  which of the two prices won - and is set by typing rather than by a selector: typing in Total
+  price makes the total the entered figure and the unit cost the calculated one, typing in Unit price
+  does the reverse, and typing in the other field afterwards hands the win over again. A change of
+  quantity recalculates from whichever field won last: an entered total is spread over the new unit
+  count, an entered unit price is multiplied by it.
+- **One shared calculation.** `components/purchases/purchase-line-price.ts` holds which field wins
+  (`enterLineTotal`/`enterUnitCost`), both directions of the arithmetic, the cent rounding, what each
+  field displays (`unitPriceFieldValue`/`totalPriceFieldValue`) and the per-line validation, and both
+  forms delegate to it, so Add and Edit cannot drift apart (AGENTS.md § Architecture rules). It is an
+  entry convenience over the existing contract: no pack size, units-per-box or carton is modelled,
+  which field was typed is not part of any request or any stored row, and a line is still persisted
+  and submitted as the quantity and unit cost `PurchaseItemDto` already carried. Purchase GST remains
+  the API's alone - these forms still perform no GST arithmetic.
+- **The unit cost is submitted as the unrounded quotient.** While the total is the entered figure the
   request carries `lineTotal / quantity` exactly as computed, never rounded to the four decimals the
-  form displays, because that is what makes the saved line's amount reproduce the amount entered:
-  $100.00 over 300 units is $0.3333... per unit and `round(300 x 0.3333..., 2)` is $100.00, while a
-  unit cost stored as `0.3333` would save $99.99. `PurchaseGstPolicy.LineAmount` is unchanged and
-  stays the authority on that figure; `PurchaseGstPolicyTests` pins both halves of the comparison,
-  and `EfPurchaseStoreTests` pins that the stored `decimal(18,4)` column keeps enough precision for
-  the round trip on a real SQLite database.
-- **Which mode a line opens in.** Every Add Purchase line defaults to `Total purchase price`,
-  including a line prefilled from a supplier order, which opens on the line total its recorded unit
-  price implies. A line **already stored** on a purchase opens in `Unit price` on the edit form,
-  because the unit cost is the figure the purchase actually holds: entering the quantity over a
-  rounded total would make a quantity correction re-cost the line, and a stored cost no cent amount
-  divides evenly into could not be reproduced from that total at all. A line added during an edit has
-  no stored cost and starts like an Add Purchase line.
-- **Nothing is derived until the operator changes something.** Opening a form, or switching the
-  selector, never changes the unit cost a line would submit: a prefilled or stored line keeps the
-  unit cost it was read with, and a mode change only fills in the figures the new mode shows. A
-  change of quantity or of the entered amount then recalculates the complementary figure
-  immediately, so neither figure is ever shown stale.
+  Unit price field displays, because that is what makes the saved line's amount reproduce the amount
+  entered: $100.00 over 300 units is $0.3333... per unit and `round(300 x 0.3333..., 2)` is $100.00,
+  while a unit cost stored as `0.3333` would save $99.99. That is why a calculated figure has a
+  **display value separate from the submitted one**: the Unit price field shows `0.3333` while
+  `unitCost` stays the quotient, and the Total price field shows a calculated total to the cent
+  (`42.00`, not `42`). An entered figure is displayed exactly as it was typed, and only an actual
+  edit of a field - never focusing or blurring it - replaces the value behind it, so the rounded
+  figure on screen can never become the submitted one. `PurchaseGstPolicy.LineAmount` is unchanged
+  and stays the authority on that figure; `PurchaseGstPolicyTests` pins both halves of the
+  comparison, and `EfPurchaseStoreTests` pins that the stored `decimal(18,4)` column keeps enough
+  precision for the round trip on a real SQLite database.
+- **Which field wins when a form opens.** Every new Add Purchase line starts with `Total price`
+  winning, including a line prefilled from a supplier order, which opens on the line total its
+  recorded unit price implies. A line **already stored** on a purchase opens with `Unit price`
+  winning on the edit form, because the unit cost is the figure the purchase actually holds:
+  calculating it from a rounded total would make a quantity correction re-cost the line, and a stored
+  cost no cent amount divides evenly into could not be reproduced from that total at all. A line
+  added during an edit has no stored cost and starts like an Add Purchase line.
+- **Nothing is derived until the operator types something.** Opening a form never changes the unit
+  cost a line would submit: a prefilled or stored line keeps the unit cost it was read with, and
+  opening and saving a purchase with no edit submits the unit costs it was read with. A change of
+  quantity or of either amount then recalculates the complementary figure immediately, so neither
+  figure is ever shown stale.
 - **Validation happens before anything is submitted.** A line needs a whole number of units above
-  zero and a finite, non-negative amount in the field its mode asks for, and its unit cost must
-  itself be finite and non-negative. An unusable quantity clears the derived unit cost rather than
-  dividing by zero, each line shows what it is missing, and both forms refuse to send the purchase
-  at all - so `NaN`, an infinity and a blank price never reach `POST`/`PUT /api/purchases`. The
-  server's own `PurchaseItemFormatPolicy` check is unchanged and still has the final say.
+  zero and a finite, non-negative amount in the field that won, and its unit cost must itself be
+  finite and non-negative. Clearing the entered field, or an unusable quantity, clears the calculated
+  field rather than dividing by zero or leaving a stale figure; each line shows what it is missing,
+  and both forms refuse to send the purchase at all - so `NaN`, an infinity and a blank price never
+  reach `POST`/`PUT /api/purchases`. The server's own `PurchaseItemFormatPolicy` check is unchanged
+  and still has the final say.
 - **Out of scope by design.** The purchase-level Total Amount (the invoice total, which also covers
   delivery and package charges), the delivery cost and the package cost are untouched and are still
-  entered as plain amounts; the purchases list's own unit-cost display is unchanged; and no existing
-  purchase is repriced, backfilled or recosted by this change.
+  entered as plain amounts; the extracted-receipt lines table and the purchases list's own unit-cost
+  display are unchanged; and no existing purchase is repriced, backfilled or recosted by either this
+  change or issue #878's two linked fields.
 
 #### Supplier product price history and comparison (issue #63)
 

@@ -120,36 +120,25 @@
                 </button>
               </div>
               <p class="field-hint mb-2">
-                For each line, enter either the <strong>Total purchase price</strong> paid for it (a box price, for
-                example) or the <strong>Unit price</strong>; the other figure is calculated from that line's purchased
-                unit quantity and shown beneath the amount before you save.
+                For each line, type either the <strong>Unit price</strong> or the <strong>Total price</strong> paid for
+                the whole line (a box price, for example); the other figure is calculated from that line's purchased
+                unit quantity, and the figure you typed last is the one the other follows.
               </p>
               @for (item of items; track $index) {
-                <div data-testid="purchase-item" class="mb-2 grid gap-2 md:grid-cols-[minmax(0,3fr)_minmax(6rem,1fr)_minmax(10rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_auto]">
+                <div data-testid="purchase-item" class="mb-2 grid gap-2 md:grid-cols-[minmax(0,3fr)_minmax(6rem,1fr)_minmax(14rem,2fr)_minmax(9rem,1fr)_auto]">
                   <select data-testid="purchase-item-product" [(ngModel)]="item.productId" [name]="'product' + $index"><option [ngValue]="0">Select product</option>@for (p of products; track p.id) {<option [ngValue]="p.id">{{ p.name }}</option>}</select>
                   <input data-testid="purchase-item-quantity" type="number" min="1" step="1" [ngModel]="item.quantity" (ngModelChange)="onLineQuantityChange(item, $event)" [name]="'quantity' + $index" placeholder="Quantity" [attr.aria-label]="'Quantity for item ' + ($index + 1)" />
-                  <div>
-                    <select data-testid="purchase-item-price-mode" [ngModel]="item.priceEntryMode" (ngModelChange)="onLinePriceEntryModeChange(item, $event)" [name]="'priceEntryMode' + $index" [attr.aria-label]="'Price entry for item ' + ($index + 1)">
-                      @for (option of priceEntryModeOptions; track option.value) {
-                        <option [ngValue]="option.value">{{ option.label }}</option>
-                      }
-                    </select>
-                    <div class="field-hint">Price entry</div>
-                  </div>
-                  <div>
-                    @if (item.priceEntryMode === 'total') {
-                      <input data-testid="purchase-item-line-total" type="number" min="0" step="0.01" [ngModel]="item.lineTotal" (ngModelChange)="onLineAmountChange(item, $event)" [name]="'lineTotal' + $index" placeholder="Total price ($)" [class.border-md-danger]="lineProblem(item) !== null" [attr.aria-label]="'Total purchase price for item ' + ($index + 1)" />
-                      <div class="field-hint" data-testid="purchase-item-derived-unit-cost">
-                        Unit cost: {{ derivedUnitCost(item) !== null ? (derivedUnitCost(item) | currency:'USD':'symbol':'1.4-4') : '—' }}
-                      </div>
-                    } @else {
-                      <input data-testid="purchase-item-cost" type="number" min="0" step="0.0001" [ngModel]="item.unitCost" (ngModelChange)="onLineAmountChange(item, $event)" [name]="'unitCost' + $index" placeholder="Unit price ($)" [class.border-md-danger]="lineProblem(item) !== null" [attr.aria-label]="'Unit price for item ' + ($index + 1)" />
-                      <div class="field-hint" data-testid="purchase-item-derived-line-total">
-                        Line total: {{ derivedLineTotal(item) !== null ? (derivedLineTotal(item) | currency) : '—' }}
-                      </div>
-                    }
+                  <div class="grid grid-cols-2 gap-2">
+                    <div>
+                      <input data-testid="purchase-item-cost" type="number" min="0" step="0.0001" [ngModel]="unitPriceValue(item)" (ngModelChange)="onLineUnitCostChange(item, $event)" [name]="'unitCost' + $index" placeholder="Unit price ($)" [class.border-md-danger]="lineProblem(item) !== null" [attr.aria-label]="'Unit price for item ' + ($index + 1)" />
+                      <div class="field-hint">Unit price ($)</div>
+                    </div>
+                    <div>
+                      <input data-testid="purchase-item-line-total" type="number" min="0" step="0.01" [ngModel]="totalPriceValue(item)" (ngModelChange)="onLineTotalChange(item, $event)" [name]="'lineTotal' + $index" placeholder="Total price ($)" [class.border-md-danger]="lineProblem(item) !== null" [attr.aria-label]="'Total price for item ' + ($index + 1)" />
+                      <div class="field-hint">Total price ($)</div>
+                    </div>
                     @if (lineProblem(item)) {
-                      <div class="field-error">{{ lineProblem(item) }}</div>
+                      <div class="field-error col-span-2">{{ lineProblem(item) }}</div>
                     }
                   </div>
                   <div>

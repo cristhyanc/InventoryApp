@@ -1,8 +1,9 @@
 import {
   DEFAULT_PRICE_ENTRY_MODE,
-  PRICE_ENTRY_MODE_OPTIONS,
   PurchaseLinePrice,
-  applyPriceEntryMode,
+  STORED_LINE_PRICE_ENTRY_MODE,
+  enterLineTotal,
+  enterUnitCost,
   isPurchaseLinePriceComplete,
   isValidLineAmount,
   isValidLineQuantity,
@@ -11,7 +12,9 @@ import {
   roundToCents,
   savedLineAmount,
   syncPurchaseLinePrice,
-  unitCostFromLineTotal
+  totalPriceFieldValue,
+  unitCostFromLineTotal,
+  unitPriceFieldValue
 } from './purchase-line-price';
 
 /** A purchase line as either form holds it while it is being filled in. */
@@ -25,12 +28,139 @@ function line(overrides: Partial<PurchaseLinePrice> = {}): PurchaseLinePrice {
   };
 }
 
-describe('purchase line price entry modes (issue #707)', () => {
-  it('offers both entry modes and defaults to the total paid for the line', () => {
+describe('purchase line price entry defaults (issues #707, #878)', () => {
+  it('starts a new line on the total paid for it and a stored line on its unit price', () => {
     expect(DEFAULT_PRICE_ENTRY_MODE).toBe('total');
-    expect(PRICE_ENTRY_MODE_OPTIONS.map((option) => option.value)).toEqual(['total', 'unit']);
-    expect(PRICE_ENTRY_MODE_OPTIONS.map((option) => option.label))
-      .toEqual(['Total purchase price', 'Unit price']);
+    expect(STORED_LINE_PRICE_ENTRY_MODE).toBe('unit');
+  });
+});
+
+describe('purchase line last-typed-wins price entry (issue #878)', () => {
+  it('makes the total the entered figure and derives the unit cost from it', () => {
+    const subject = line({ quantity: 300, priceEntryMode: 'unit', unitCost: 7, lineTotal: 2100 });
+
+    enterLineTotal(subject, 100);
+
+    expect(subject.priceEntryMode).toBe('total');
+    expect(subject.lineTotal).toBe(100);
+    expect(subject.unitCost).toBe(100 / 300);
+  });
+
+  it('makes the unit price the entered figure and derives the total from it', () => {
+    const subject = line({ quantity: 28, lineTotal: 100, unitCost: 100 / 28 });
+
+    enterUnitCost(subject, 1.5);
+
+    expect(subject.priceEntryMode).toBe('unit');
+    expect(subject.unitCost).toBe(1.5);
+    expect(subject.lineTotal).toBe(42);
+  });
+
+  it('hands the win to whichever field was typed into last, in either direction', () => {
+    const subject = line({ quantity: 10 });
+
+    enterLineTotal(subject, 20);
+    expect([subject.priceEntryMode, subject.unitCost, subject.lineTotal]).toEqual(['total', 2, 20]);
+
+    enterUnitCost(subject, 3);
+    expect([subject.priceEntryMode, subject.unitCost, subject.lineTotal]).toEqual(['unit', 3, 30]);
+
+    enterLineTotal(subject, 50);
+    expect([subject.priceEntryMode, subject.unitCost, subject.lineTotal]).toEqual(['total', 5, 50]);
+  });
+
+  it('clears the calculated figure when the entered one is cleared, in either direction', () => {
+    const typedTotal = line({ quantity: 20, lineTotal: 32.5, unitCost: 1.625 });
+
+    enterLineTotal(typedTotal, null);
+
+    expect(typedTotal.lineTotal).toBeNull();
+    expect(typedTotal.unitCost).toBeNull();
+
+    const typedUnit = line({ quantity: 20, priceEntryMode: 'unit', lineTotal: 32.5, unitCost: 1.625 });
+
+    enterUnitCost(typedUnit, null);
+
+    expect(typedUnit.unitCost).toBeNull();
+    expect(typedUnit.lineTotal).toBeNull();
+  });
+
+  it('clears the calculated figure rather than dividing by or multiplying an unusable quantity', () => {
+    const typedTotal = line({ quantity: 0 });
+
+    enterLineTotal(typedTotal, 32.5);
+
+    expect(typedTotal.unitCost).toBeNull();
+
+    const typedUnit = line({ quantity: 2.5 });
+
+    enterUnitCost(typedUnit, 1.625);
+
+    expect(typedUnit.lineTotal).toBeNull();
+  });
+});
+
+describe('purchase line price field values (issue #878)', () => {
+  it('shows a calculated unit cost rounded to four decimals while the total is the entered figure', () => {
+    const subject = line({ quantity: 300 });
+
+    enterLineTotal(subject, 100);
+
+    expect(unitPriceFieldValue(subject)).toBe('0.3333');
+    // The displayed figure is a display value only: the submitted unit cost stays unrounded, so the
+    // line still saves at the $100.00 that was entered.
+    expect(subject.unitCost).toBe(100 / 300);
+    expect(roundToCents(300 * subject.unitCost!)).toBe(100);
+  });
+
+  it('shows an entered unit price exactly as it was typed, unrounded and unpadded', () => {
+    const subject = line({ quantity: 28 });
+
+    enterUnitCost(subject, 1.5);
+
+    expect(unitPriceFieldValue(subject)).toBe(1.5);
+  });
+
+  it('shows a calculated line total to the cent it will save at', () => {
+    const subject = line({ quantity: 28 });
+
+    enterUnitCost(subject, 1.5);
+
+    expect(totalPriceFieldValue(subject)).toBe('42.00');
+  });
+
+  it('shows an entered line total exactly as it was typed', () => {
+    const subject = line({ quantity: 300 });
+
+    enterLineTotal(subject, 100);
+
+    expect(totalPriceFieldValue(subject)).toBe(100);
+  });
+
+  it('shows a stored line its recorded unit cost and the total that cost implies', () => {
+    const subject = line({
+      quantity: 300, priceEntryMode: STORED_LINE_PRICE_ENTRY_MODE, unitCost: 100 / 300,
+      lineTotal: lineTotalFromUnitCost(100 / 300, 300)
+    });
+
+    expect(unitPriceFieldValue(subject)).toBe(100 / 300);
+    expect(totalPriceFieldValue(subject)).toBe('100.00');
+  });
+
+  it('shows nothing for a figure that could not be calculated', () => {
+    const noTotal = line({ quantity: 0, priceEntryMode: 'unit', unitCost: 1.5, lineTotal: null });
+    const noUnitCost = line({ quantity: 0, lineTotal: 32.5, unitCost: null });
+
+    expect(totalPriceFieldValue(noTotal)).toBeNull();
+    expect(unitPriceFieldValue(noUnitCost)).toBeNull();
+  });
+
+  it('leaves an entered figure on screen even when it is not a usable amount', () => {
+    const blank = line({ quantity: 20, lineTotal: null, unitCost: null });
+
+    expect(totalPriceFieldValue(blank)).toBeNull();
+    expect(unitPriceFieldValue(line({ quantity: 20, priceEntryMode: 'unit', unitCost: Number.NaN })))
+      .toBe(Number.NaN);
   });
 });
 
@@ -137,29 +267,24 @@ describe('purchase line price staleness (issue #707)', () => {
     expect(subject.unitCost).toBeNull();
   });
 
-  it('keeps the unit cost it would submit when the entry mode changes, and shows the matching total', () => {
+  it('spreads an entered total over a new quantity and keeps the total itself', () => {
     const subject = line({ quantity: 300, lineTotal: 100, unitCost: 100 / 300 });
 
-    applyPriceEntryMode(subject, 'unit');
+    subject.quantity = 200;
+    syncPurchaseLinePrice(subject);
 
-    expect(subject.priceEntryMode).toBe('unit');
-    expect(subject.unitCost).toBe(100 / 300);
     expect(subject.lineTotal).toBe(100);
-
-    applyPriceEntryMode(subject, 'total');
-
-    expect(subject.priceEntryMode).toBe('total');
-    expect(subject.unitCost).toBe(100 / 300);
-    expect(subject.lineTotal).toBe(100);
+    expect(subject.unitCost).toBe(0.5);
   });
 
-  it('fills the line total from the unit price when a unit-priced line switches to total entry', () => {
-    const subject = line({ quantity: 24, priceEntryMode: 'unit', unitCost: 1.6625, lineTotal: null });
+  it('multiplies an entered unit price by a new quantity and keeps the unit price itself', () => {
+    const subject = line({ quantity: 28, priceEntryMode: 'unit', unitCost: 1.5, lineTotal: 42 });
 
-    applyPriceEntryMode(subject, 'total');
+    subject.quantity = 30;
+    syncPurchaseLinePrice(subject);
 
-    expect(subject.lineTotal).toBe(39.9);
-    expect(subject.unitCost).toBe(1.6625);
+    expect(subject.unitCost).toBe(1.5);
+    expect(subject.lineTotal).toBe(45);
   });
 });
 
@@ -193,7 +318,7 @@ describe('purchase line price validation (issue #707)', () => {
       .toBe('Enter a whole number of units above zero.');
   });
 
-  it('names the amount the chosen entry mode actually asks for', () => {
+  it('names the amount the entered figure actually asks for', () => {
     expect(purchaseLinePriceProblem(line({ quantity: 20, lineTotal: null })))
       .toBe('Enter the total price paid for this line.');
     expect(purchaseLinePriceProblem(line({ quantity: 20, priceEntryMode: 'unit', unitCost: null })))

@@ -7,17 +7,18 @@ import { IconComponent } from '../../shared/icon.component';
 import { GST_CLASSIFICATION_OPTIONS, isChargePresent } from '../gst-classification-options';
 import {
   DEFAULT_PRICE_ENTRY_MODE,
-  PRICE_ENTRY_MODE_OPTIONS,
   PriceEntryMode,
   STORED_LINE_PRICE_ENTRY_MODE,
-  applyPriceEntryMode,
+  enterLineTotal,
+  enterUnitCost,
   isPurchaseLinePriceComplete,
-  isValidLineAmount,
   lineTotalFromUnitCost,
   purchaseLinePriceErrorMessage,
   purchaseLinePriceProblem,
   savedLineAmount,
-  syncPurchaseLinePrice
+  syncPurchaseLinePrice,
+  totalPriceFieldValue,
+  unitPriceFieldValue
 } from '../purchase-line-price';
 
 /**
@@ -29,11 +30,11 @@ import {
  * which is how the form knows whether the person actually changed it: an unchanged classification is
  * left out of the request so the server keeps it and its provenance.
  *
- * `priceEntryMode` and `lineTotal` are the per-line price entry of issue #707: the mode decides
- * which of the two amounts the operator types, and neither is submitted - the request still carries
- * the quantity and the unit cost alone. The quantity and both amounts are nullable because a number
- * input binds `null` for a blank field, and because a figure that cannot be derived is cleared
- * rather than left stale.
+ * `priceEntryMode` and `lineTotal` are the per-line price entry of issues #707 and #878: both
+ * amounts are editable fields, `priceEntryMode` records which of them the operator typed into last,
+ * and neither it nor the line total is submitted - the request still carries the quantity and the
+ * unit cost alone. The quantity and both amounts are nullable because a number input binds `null`
+ * for a blank field, and because a figure that cannot be derived is cleared rather than left stale.
  */
 export interface EditPurchaseItem {
   id?: number;
@@ -98,9 +99,6 @@ export class PurchaseEditFormComponent {
 
   /** The GST picker's options, shared with the purchase entry form. */
   readonly gstOptions = GST_CLASSIFICATION_OPTIONS;
-
-  /** The price-entry options, shared with the purchase entry form (issue #707). */
-  readonly priceEntryModeOptions = PRICE_ENTRY_MODE_OPTIONS;
 
   /**
    * Why this form refused to submit its own lines (issue #707), as opposed to {@link error}, which
@@ -206,41 +204,40 @@ export class PurchaseEditFormComponent {
   removeEditItem(index: number): void { this.editItems.splice(index, 1); }
 
   /**
-   * The line's purchased unit quantity changed, so its calculated price follows (issue #707): the
-   * entered total divided over the new unit count, or the entered unit price multiplied by it.
+   * The line's purchased unit quantity changed, so the calculated price follows the field that won
+   * last (issue #707): the entered total divided over the new unit count, or the entered unit price
+   * multiplied by it. A stored line opens with its unit price winning, which is what keeps a
+   * quantity correction from re-costing it.
    */
   onLineQuantityChange(item: EditPurchaseItem, quantity: number | null): void {
     item.quantity = quantity;
     syncPurchaseLinePrice(item);
   }
 
-  /** The amount the chosen entry mode asks for changed, so the complementary figure follows. */
-  onLineAmountChange(item: EditPurchaseItem, amount: number | null): void {
-    if (item.priceEntryMode === 'total') {
-      item.lineTotal = amount;
-    } else {
-      item.unitCost = amount;
-    }
-    syncPurchaseLinePrice(item);
+  /**
+   * The operator typed in this line's Total price field, so that amount wins from now on and the
+   * unit cost follows from it (issue #878).
+   */
+  onLineTotalChange(item: EditPurchaseItem, amount: number | null): void {
+    enterLineTotal(item, amount);
   }
 
   /**
-   * The operator chose which price to type. Switching never changes the unit cost the line would
-   * submit, so toggling it on a stored line cannot quietly re-cost the purchase; it only fills in
-   * the figures the new mode shows.
+   * The operator typed in this line's Unit price field, so that price wins from now on and the line
+   * total follows from it (issue #878).
    */
-  onLinePriceEntryModeChange(item: EditPurchaseItem, mode: PriceEntryMode): void {
-    applyPriceEntryMode(item, mode);
+  onLineUnitCostChange(item: EditPurchaseItem, amount: number | null): void {
+    enterUnitCost(item, amount);
   }
 
-  /** The calculated unit cost to show beside an entered line total, or null while there is none. */
-  derivedUnitCost(item: EditPurchaseItem): number | null {
-    return isValidLineAmount(item.unitCost) ? item.unitCost : null;
+  /** What this line's Unit price field shows: the entered price, or the calculated one to 4 dp. */
+  unitPriceValue(item: EditPurchaseItem): number | string | null {
+    return unitPriceFieldValue(item);
   }
 
-  /** The calculated line total to show beside an entered unit price, or null while there is none. */
-  derivedLineTotal(item: EditPurchaseItem): number | null {
-    return isValidLineAmount(item.lineTotal) ? item.lineTotal : null;
+  /** What this line's Total price field shows: the entered total, or the calculated one to the cent. */
+  totalPriceValue(item: EditPurchaseItem): number | string | null {
+    return totalPriceFieldValue(item);
   }
 
   /** What still has to be entered on this line, or null when it is ready to save. */
@@ -269,9 +266,10 @@ export class PurchaseEditFormComponent {
       supplierId: purchase.supplierId ?? ''
     };
     this.storedChargeGst = { delivery, package: packageCharge };
-    // A stored line opens on the figure the purchase actually holds - its unit cost - with the
-    // line amount round(quantity * unitCost, 2) shown beside it as the calculated figure, and the
-    // operator may switch it to Total purchase price to re-enter a box price (issue #707).
+    // A stored line opens with the figure the purchase actually holds - its unit cost - as the
+    // winning field, and its line amount round(quantity * unitCost, 2) calculated into the Total
+    // price field beside it. Typing a box price into that Total price field hands the win over
+    // (issues #707 and #878).
     //
     // Unit price rather than the Add form's default is deliberate: it is what keeps an edit of
     // something else from re-costing the line. Opening a stored line on its total would mean a
