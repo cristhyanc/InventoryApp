@@ -55,8 +55,8 @@
     } @else if (loadState.loaded) {
       <!--
         The Actions column is pinned to the right edge of this scroll area (rather than the whole
-        table) so Edit/Stock/Delete stay visible and usable without scrolling to discover them when
-        long product names or a populated Category/Stock/Status set of columns push
+        table) so Stock/Deactivate/Delete stay visible and usable without scrolling to discover them
+        when long product names or a populated Category/Stock/Status set of columns push
         the table wider than the viewport. Each sticky cell carries its own opaque #410 token
         background, because a transparent cell would let scrolled columns show through underneath it.
       -->
@@ -136,23 +136,37 @@
                   </td>
                 }
                 <td class="table-cell sticky right-0 z-10 bg-white">
-                  <div class="flex flex-wrap gap-2 max-w-[140px] sm:max-w-none">
-                    <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
+                  <!--
+                    Three fixed-width slots, always in the order Stock, Deactivate, Delete (issue
+                    #876), so each action lines up under itself down the table instead of shifting
+                    with how many buttons a given row has. A slot whose action does not apply to
+                    this row stays empty (keeping its width) rather than disappearing.
+                  -->
+                  <div class="flex flex-nowrap items-center gap-2">
+                    <div class="w-20 shrink-0">
+                      <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary w-full">Stock</a>
+                    </div>
                     <!-- Hidden rather than disabled while a support session is active (issue #554): a
-                         session grants InventoryOperate, so these writes would otherwise still render. -->
+                         session grants InventoryOperate, so these writes would otherwise still render.
+                         Both slots are skipped entirely during a session, not left empty, because the
+                         column must not reserve width for actions a session can never show. -->
                     @if (!sessionActive) {
-                      <!-- Delete is offered only where the API says it is allowed (issue #737); for
-                           every other product the row simply does not offer an action that must
-                           fail, and the reason is on the product's Edit page (issue #825). -->
-                      @if (canDelete(p)) {
-                        <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(p)">Delete</button>
-                      }
-                      <!-- Deactivate is the action that is always available for an active product,
-                           whether or not it may be deleted (issue #825). An inactive product has
-                           nothing to deactivate; the Status toggle reactivates it in one click. -->
-                      @if (p.isActive) {
-                        <button type="button" class="btn btn-sm btn-secondary" (click)="confirmDeactivate(p)">Deactivate</button>
-                      }
+                      <div class="w-32 shrink-0">
+                        <!-- Deactivate is the action that is always available for an active product,
+                             whether or not it may be deleted (issue #825). An inactive product has
+                             nothing to deactivate; the Status toggle reactivates it in one click. -->
+                        @if (p.isActive) {
+                          <button type="button" class="btn btn-sm btn-secondary w-full" (click)="confirmDeactivate(p)">Deactivate</button>
+                        }
+                      </div>
+                      <div class="w-24 shrink-0">
+                        <!-- Delete is offered only where the API says it is allowed (issue #737); for
+                             every other product the row simply does not offer an action that must
+                             fail, and the reason is on the product's Edit page (issue #825). -->
+                        @if (canDelete(p)) {
+                          <button type="button" class="btn btn-sm btn-danger w-full" (click)="confirmDelete(p)">Delete</button>
+                        }
+                      </div>
                     }
                   </div>
                 </td>

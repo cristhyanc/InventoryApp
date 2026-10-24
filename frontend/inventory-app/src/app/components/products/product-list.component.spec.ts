@@ -101,7 +101,7 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
     expect(Array.from(actionsHeader.classList).filter((cssClass) => cssClass.startsWith('shadow'))).toEqual([]);
   });
 
-  it('keeps each row\'s Actions cell pinned to the right, opaque, and bounded on narrow viewports, without changing the action controls', async () => {
+  it("keeps each row's Actions cell pinned to the right, opaque, and laid out on one line, without changing the action controls", async () => {
     const { host } = await render([product({ id: 42, name: 'Widget' })]);
 
     const row = host.querySelector('tbody tr') as HTMLTableRowElement;
@@ -111,11 +111,10 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
     expect(Array.from(actionsCell.classList)).toEqual(expect.arrayContaining(['sticky', 'right-0', 'z-10', 'bg-white']));
     expect(Array.from(actionsCell.classList).filter((cssClass) => cssClass.startsWith('shadow'))).toEqual([]);
 
-    // The 390px acceptance criterion: the pinned column stays bounded on narrow viewports instead
-    // of growing wide enough to obscure the rest of the readable row, but is unconstrained on desktop.
+    // Issue #876: fixed slots on one line at every width, rather than wrapping onto a second line.
     const actionsWrapper = actionsCell.querySelector('div');
     expect(actionsWrapper).not.toBeNull();
-    expect(Array.from(actionsWrapper!.classList)).toEqual(expect.arrayContaining(['max-w-[140px]', 'sm:max-w-none']));
+    expect(Array.from(actionsWrapper!.classList)).toEqual(expect.arrayContaining(['flex-nowrap']));
 
     // Stock and Delete remain; Edit is gone from the Actions column (issue #497 moves it to the row).
     const stockLink = actionsCell.querySelector('a[href="/products/42/stock"]');
@@ -156,6 +155,83 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
     const { host } = await render([product({ id: 7, name: 'Widget', category: { id: 1, name: 'Snacks' } })]);
 
     expect(host.querySelector('tbody')?.textContent).not.toContain('$');
+  });
+});
+
+/**
+ * Three fixed slots, always in the order Stock, Deactivate, Delete (issue #876), so an action lines
+ * up under itself down the table regardless of which actions a given row offers. A slot whose
+ * action does not apply keeps its width empty rather than disappearing - except during a support
+ * session (issue #554), where the Deactivate/Delete slots are skipped entirely because no row can
+ * ever show them.
+ */
+describe('ProductListComponent Actions fixed slots (issue #876)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(products: Product[], sessionActive: Observable<boolean> = of(false)) {
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll: () => of(products) } },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: sessionActive } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    const host = fixture.nativeElement as HTMLElement;
+    return { fixture, host };
+  }
+
+  /** The Actions cell's slot `<div>`s, in DOM order, for the one rendered row. */
+  function slotsOf(host: HTMLElement): HTMLElement[] {
+    const row = host.querySelector('tbody tr') as HTMLTableRowElement;
+    const cells = Array.from(row.querySelectorAll<HTMLTableCellElement>('td'));
+    const actionsCell = cells[cells.length - 1];
+    const wrapper = actionsCell.querySelector('div') as HTMLElement;
+    return Array.from(wrapper.children) as HTMLElement[];
+  }
+
+  it('orders Stock, Deactivate and Delete for a row that offers all three', async () => {
+    const { host } = await render([product({ id: 1, name: 'Widget', isActive: true, canDelete: true })]);
+
+    const slots = slotsOf(host);
+    expect(slots).toHaveLength(3);
+    expect(slots[0].querySelector('a')?.textContent?.trim()).toBe('Stock');
+    expect(slots[1].querySelector('button')?.textContent?.trim()).toBe('Deactivate');
+    expect(slots[2].querySelector('button')?.textContent?.trim()).toBe('Delete');
+  });
+
+  it('keeps the Delete slot present but empty for a row that may not be deleted, with Deactivate still in its own slot', async () => {
+    const { host } = await render([product({ id: 1, name: 'Widget', isActive: true, canDelete: false })]);
+
+    const slots = slotsOf(host);
+    expect(slots).toHaveLength(3);
+    expect(slots[1].querySelector('button')?.textContent?.trim()).toBe('Deactivate');
+    expect(slots[2].querySelector('button')).toBeNull();
+  });
+
+  it('keeps the Deactivate slot present but empty for an inactive product, with Delete still in its own slot', async () => {
+    const { host } = await render([product({ id: 1, name: 'Widget', isActive: false, canDelete: true })]);
+
+    const slots = slotsOf(host);
+    expect(slots).toHaveLength(3);
+    expect(slots[1].querySelector('button')).toBeNull();
+    expect(slots[2].querySelector('button')?.textContent?.trim()).toBe('Delete');
+  });
+
+  it('renders only the Stock slot during a support session, reserving no width for actions the session can never show', async () => {
+    const { host } = await render([product({ id: 1, name: 'Widget', isActive: true, canDelete: true })], of(true));
+
+    const slots = slotsOf(host);
+    expect(slots).toHaveLength(1);
+    expect(slots[0].querySelector('a')?.textContent?.trim()).toBe('Stock');
+    expect(host.querySelector('tbody')?.querySelector('button')).toBeNull();
   });
 });
 
