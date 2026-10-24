@@ -34,7 +34,8 @@ public sealed class ListLowStockProducts
     public async Task<ProductListing> Handle(
         ProductCatalogFilter filter, CancellationToken cancellationToken)
     {
-        var products = await _catalog.ListUnorderedAsync(filter, cancellationToken);
+        var products = await _catalog.ListUnorderedAsync(
+            filter, resolveInventoryHistory: false, cancellationToken);
 
         var reorderNeeds = await _calculateReorderNeeds.Handle(cancellationToken);
 

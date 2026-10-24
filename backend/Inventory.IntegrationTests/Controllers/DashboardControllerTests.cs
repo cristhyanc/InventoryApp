@@ -36,7 +36,8 @@ public class DashboardControllerTests
                 currentPeriodSales, 3, priorPeriodSales, 2, NowUtc.AddYears(-1)));
 
         var catalog = new Mock<IProductCatalogStore>();
-        catalog.Setup(x => x.ListUnorderedAsync(It.IsAny<ProductCatalogFilter>(), It.IsAny<CancellationToken>()))
+        catalog.Setup(x => x.ListUnorderedAsync(
+                It.IsAny<ProductCatalogFilter>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(products);
 
         var nayax = new Mock<INayaxLynxClient>();

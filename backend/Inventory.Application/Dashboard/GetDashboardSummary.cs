@@ -129,7 +129,8 @@ public sealed class GetDashboardSummary
             ? await _salesFacts.GetSalesFactsAsync(
                 window.CurrentWeek, window.PreviousComparableWeek, cancellationToken)
             : null;
-        var products = await _catalog.ListUnorderedAsync(ProductCatalogFilter.None, cancellationToken);
+        var products = await _catalog.ListUnorderedAsync(
+            ProductCatalogFilter.None, resolveInventoryHistory: true, cancellationToken);
 
         // Everything above is a read of the business's own database, so a support request makes it
         // exactly as a member's does. The fleet read below is the one Nayax-backed read behind this

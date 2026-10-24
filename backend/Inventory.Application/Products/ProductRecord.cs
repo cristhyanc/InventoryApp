@@ -74,12 +74,14 @@ public sealed record ProductRecord
     /// whose inventory is genuinely unknown.
     ///
     /// <para><see langword="null"/> means <em>not resolved on this read path</em> - never "no
-    /// history". Only <see cref="IProductCatalogStore.ListUnorderedAsync"/> resolves it, because the
-    /// home Dashboard summary is the only caller that aggregates a valuation from these records; the
+    /// history". Only <see cref="IProductCatalogStore.ListUnorderedAsync"/> can resolve it, and only
+    /// when its caller asks for it (its <c>resolveInventoryHistory</c> parameter): the home Dashboard
+    /// summary is the only caller that aggregates a valuation from these records and asks for it; the
     /// catalogue listing and the single-product read answer the deletion question instead
-    /// (<see cref="DeletionEligibility"/>) and do not pay for rows nothing on those screens reads. A
-    /// caller handed <see langword="null"/> must treat the product as having history, which keeps an
-    /// unknown value unavailable rather than silently dropping it from a total.</para>
+    /// (<see cref="DeletionEligibility"/>), and the other <c>ListUnorderedAsync</c> callers ask
+    /// <see langword="false"/> and do not pay for rows nothing on those screens reads. A caller handed
+    /// <see langword="null"/> must treat the product as having history, which keeps an unknown value
+    /// unavailable rather than silently dropping it from a total.</para>
     /// </summary>
     public bool? HasInventoryHistory { get; init; }
 

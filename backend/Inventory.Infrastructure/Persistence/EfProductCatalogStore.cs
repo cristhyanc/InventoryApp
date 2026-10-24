@@ -46,10 +46,13 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
             cancellationToken);
 
     public async Task<IReadOnlyList<ProductRecord>> ListUnorderedAsync(
-        ProductCatalogFilter filter, CancellationToken cancellationToken) =>
-        await WithInventoryHistoryAsync(
-            await Filtered(_db.Products.AsNoTracking(), filter).ToListAsync(cancellationToken),
-            cancellationToken);
+        ProductCatalogFilter filter, bool resolveInventoryHistory, CancellationToken cancellationToken)
+    {
+        var products = await Filtered(_db.Products.AsNoTracking(), filter).ToListAsync(cancellationToken);
+        return resolveInventoryHistory
+            ? await WithInventoryHistoryAsync(products, cancellationToken)
+            : [.. products.Select(ToRecord)];
+    }
 
     public async Task<ProductRecord?> FindAsync(long id, CancellationToken cancellationToken)
     {
@@ -125,7 +128,10 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
     /// <summary>
     /// The same records, each carrying whether anything records inventory ever having been in it
     /// (issue #861): the evidence the home Dashboard's valuation needs to tell a product that has
-    /// never held inventory from one whose inventory is genuinely unknown.
+    /// never held inventory from one whose inventory is genuinely unknown. Called only when
+    /// <see cref="ListUnorderedAsync"/>'s caller asked for it - the other callers get
+    /// <see cref="ProductRecord.HasInventoryHistory"/> left <see langword="null"/> and pay nothing for
+    /// this.
     ///
     /// <para><strong>Only the products that could still be empty are asked about.</strong> A product
     /// whose own stored columns already establish a position - an inventory value, a costing quantity

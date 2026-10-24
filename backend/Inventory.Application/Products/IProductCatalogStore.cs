@@ -46,21 +46,25 @@ public interface IProductCatalogStore
 
     /// <summary>
     /// The filtered catalogue in no particular order, for a caller that ranks or enriches the rows
-    /// itself (<see cref="ListLowStockProducts"/>, <c>Inventory.Application.Machines.ListMachineProducts</c>).
+    /// itself (<see cref="ListLowStockProducts"/>, <c>Inventory.Application.Machines.ListMachineProducts</c>,
+    /// the home Dashboard summary).
     ///
     /// <para><see cref="ProductRecord.DeletionEligibility"/> is deliberately <strong>not</strong>
     /// resolved here: none of those callers deletes a product, and the answer costs a count of every
     /// kind of row that refers to one. A caller that needs it asks one of the other two reads.</para>
     ///
-    /// <para><see cref="ProductRecord.HasInventoryHistory"/> <strong>is</strong> resolved here, and
-    /// only here (issue #861): the home Dashboard summary aggregates its inventory valuation from
-    /// this one snapshot, and without that evidence a product that has never held inventory cannot be
-    /// told from one whose inventory is unknown. It costs nothing for a catalogue whose products all
-    /// carry a costing position or storage stock - the adapter asks about history only for the
-    /// products that could still be empty.</para>
+    /// <para><paramref name="resolveInventoryHistory"/> states, the same way, whether the caller needs
+    /// <see cref="ProductRecord.HasInventoryHistory"/> (issue #861): only the home Dashboard summary
+    /// aggregates an inventory valuation from this read and needs that evidence to tell a product that
+    /// has never held inventory from one whose inventory is unknown, so only it asks for it. Resolving
+    /// it costs a query against six other tables for every product that could still be empty, and
+    /// <see cref="ListLowStockProducts"/> and the machine product listing never read the result, so
+    /// they ask <see langword="false"/> and pay nothing for it - the same reason this is a parameter
+    /// stated by every call rather than a default, as <see cref="ProductCatalogFilter.IncludeRetired"/>
+    /// already is.</para>
     /// </summary>
     Task<IReadOnlyList<ProductRecord>> ListUnorderedAsync(
-        ProductCatalogFilter filter, CancellationToken cancellationToken);
+        ProductCatalogFilter filter, bool resolveInventoryHistory, CancellationToken cancellationToken);
 
     /// <summary>
     /// The single product, or <c>null</c> when the caller's business owns no such product.
