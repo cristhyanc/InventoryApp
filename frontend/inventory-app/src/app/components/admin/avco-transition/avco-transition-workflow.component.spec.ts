@@ -127,6 +127,38 @@ describe('AvcoTransitionWorkflowComponent product selection (issue #390)', () =>
   });
 });
 
+/**
+ * The checkbox and its label text are visually separated on desktop without this (issue #872):
+ * the global `input` rule in styles.scss stretches every checkbox to the full input width. jsdom
+ * computes no layout, so the fix itself is verified by the geometry e2e test; this spec only
+ * guards the structure the fix depends on - the checkbox staying the label's one and only form
+ * control - which is what keeps clicking the label text and pressing Space toggling it.
+ */
+describe('AvcoTransitionWorkflowComponent all-products checkbox (issue #872)', () => {
+  it('keeps the checkbox inside its label, immediately before the label text, and unchecked by default', async () => {
+    const { host } = await render();
+
+    const label = Array.from(host.querySelectorAll('label')).find(candidate =>
+      candidate.textContent?.includes('Create baselines for all products that do not already have one')
+    );
+    expect(label).toBeTruthy();
+
+    const checkbox = label!.querySelector('input[type="checkbox"]') as HTMLInputElement;
+    expect(checkbox).toBeTruthy();
+    expect(checkbox.checked).toBe(false);
+
+    // Every one of the label's child nodes that is not the checkbox itself and carries visible
+    // text follows the checkbox in document order, so the label text never appears before it.
+    const siblings = Array.from(label!.childNodes).filter(node => node !== checkbox);
+    const textBeforeCheckbox = siblings
+      .filter(node => (checkbox.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_PRECEDING) !== 0)
+      .map(node => node.textContent?.trim())
+      .join('');
+    expect(textBeforeCheckbox).toBe('');
+    expect(label!.textContent?.trim()).toBe('Create baselines for all products that do not already have one');
+  });
+});
+
 describe('AvcoTransitionWorkflowComponent single-product preview (issue #390)', () => {
   it('previews through InventoryCostTransitionService with the selected product, verified cost and cost source', async () => {
     const { component, transition } = await render({}, [product(1, 'Coke', 1.25)]);
