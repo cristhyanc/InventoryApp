@@ -1,6 +1,6 @@
-import { Component, OnDestroy } from '@angular/core';
+import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ImportService } from '../../../services/import.service';
 import { ToastService } from '../../../services/toast.service';
@@ -75,7 +75,7 @@ import { CatalogueReviewComponent } from './catalogue-review/catalogue-review.co
     </div>
   `
 })
-export class AdminImportsComponent implements OnDestroy {
+export class AdminImportsComponent implements OnInit, OnDestroy {
   loading = false;
 
   /** Whether the catalogue review is on screen (issue #739). It owns its own loading lifecycle. */
@@ -94,9 +94,22 @@ export class AdminImportsComponent implements OnDestroy {
   constructor(
     private readonly importService: ImportService,
     private readonly toast: ToastService,
+    private readonly route: ActivatedRoute,
     supportSession: SupportSessionService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
+  }
+
+  /**
+   * Opens the catalogue review when Products' own Import products button (issue #875) sent the
+   * operator here with `?review=catalogue`: read once, on load, through the exact same
+   * `importProducts()` path and support-session guard its own button uses, so the two cannot mean
+   * different things. Without the parameter this page behaves exactly as it did before.
+   */
+  ngOnInit(): void {
+    if (this.route.snapshot.queryParamMap.get('review') === 'catalogue') {
+      this.importProducts();
+    }
   }
 
   ngOnDestroy(): void {
