@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 using Inventory.Application.PlatformOptions;
 
 namespace InventoryApi.DTOs;
@@ -12,9 +14,12 @@ namespace InventoryApi.DTOs;
 /// </summary>
 /// <param name="HistoricalGstClassificationVisible">
 /// Whether Historical GST Classification is offered to members who are not the platform
-/// administrator.
+/// administrator. Marked <see cref="JsonRequiredAttribute"/> so a body that omits it is refused
+/// with <c>400</c> rather than silently switching the option off - the field is a <c>bool</c>, so a
+/// missing value and an explicit <c>false</c> are otherwise indistinguishable.
 /// </param>
-public sealed record SuperAdminOptionVisibilityRequest(bool HistoricalGstClassificationVisible);
+public sealed record SuperAdminOptionVisibilityRequest(
+    [property: JsonRequired] bool HistoricalGstClassificationVisible);
 
 /// <summary>
 /// The shared option visibility as the API reports it (issue #873), by the Super Admin surface that

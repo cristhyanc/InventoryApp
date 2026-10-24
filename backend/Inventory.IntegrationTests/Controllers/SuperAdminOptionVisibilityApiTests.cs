@@ -126,6 +126,22 @@ public class SuperAdminOptionVisibilityApiTests
     }
 
     /// <summary>
+    /// <c>HistoricalGstClassificationVisible</c> is a <c>bool</c>, so a body that omits it would
+    /// otherwise bind to <c>false</c> indistinguishably from an explicit
+    /// <c>historicalGstClassificationVisible: false</c> and silently switch the option off.
+    /// <c>JsonRequiredAttribute</c> refuses the under-posted body instead.
+    /// </summary>
+    [Fact]
+    public async Task A_request_without_the_visible_field_is_refused_and_writes_nothing()
+    {
+        var response = await _factory.AsAdministrator().PutAsJsonAsync(VisibilityUrl, new { });
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Empty(await _factory.OptionVisibilityRowsAsync());
+        Assert.True(await VisibleToTheOwnerAsync());
+    }
+
+    /// <summary>
     /// An anonymous request is refused by authentication with <c>401</c>, not turned into a
     /// <c>403</c>: "you are not signed in" and "you are signed in and not the administrator" stay
     /// different answers.
