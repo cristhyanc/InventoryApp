@@ -63,7 +63,7 @@ export const routes: Routes = [
     // The "needs a provider" page (issue #729). Like `/access-not-allowed` above it is where a
     // guard *sends* an operator, so it carries no capability of its own: the destinations that
     // redirect here need different ones (`Inventory.Operate`, `Reports.View`,
-    // `SiteCommissions.Manage`), each
+    // `SiteCommissions.Manage` and, since issue #869, `Data.Repair`), each
     // already checked by the capability guard that ran before `requireProvider`, and sending
     // somebody away from their own explanation is the one thing this page must not do.
     path: PROVIDER_LOCKED_PATH,
@@ -360,6 +360,11 @@ export const routes: Routes = [
     loadComponent: () => import('./components/admin/imports/admin-imports.component').then((m) => m.AdminImportsComponent)
   },
   {
+    // Deliberately **not** provider-locked (issue #869, the user's decision of 24 October 2026):
+    // this page makes no Nayax call at all - `BackfillNayaxHistoricalSaleCosts` reads the Nayax cost
+    // already stored on imported sales - so a disconnected business with imported history can still
+    // recover those costs. It is the one Admin maintenance page over provider data that keeps no
+    // provider guard, and that is a decision rather than an omission.
     path: 'admin/historical-cost-recovery',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Data.Repair')],
     loadComponent: () =>
@@ -368,8 +373,19 @@ export const routes: Routes = [
       )
   },
   {
+    // Provider-locked since issue #869: the transition preview reads the machines and then their
+    // products from Nayax (`InventoryCostTransitionPreviewBuilder`), so with no usable connection
+    // the page has no baseline to offer and shows the connection-required page instead. The feature
+    // is the live fleet read, which is why credentials that stopped working lock it too - unlike the
+    // five stored-record reports of issue #868. Declared **after** `requireCapability`, as every
+    // provider guard is.
     path: 'admin/avco-transition',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Data.Repair')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Data.Repair'),
+      requireProvider('machineFleet')
+    ],
     loadComponent: () =>
       import('./components/admin/avco-transition/avco-transition.component').then((m) => m.AvcoTransitionComponent)
   },
@@ -443,8 +459,18 @@ export const routes: Routes = [
       import('./components/admin/nayax-settings/nayax-settings.component').then((m) => m.NayaxSettingsComponent)
   },
   {
+    // Provider-locked since issue #869, on the same live fleet read as the site commission report:
+    // this page's site picker is that read (`GET /api/sites`), and a site is known only from it, so
+    // with no usable connection there is no site to write an agreement against. Declared **after**
+    // `requireCapability`, so a role without `SiteCommissions.Manage` still reaches its own
+    // explanation rather than an invitation to connect a provider it could not use.
     path: 'admin/site-commission-agreements',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('SiteCommissions.Manage')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('SiteCommissions.Manage'),
+      requireProvider('machineFleet')
+    ],
     loadComponent: () =>
       import('./components/admin/site-commission-agreements/site-commission-agreements.component').then(
         (m) => m.SiteCommissionAgreementsComponent

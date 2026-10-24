@@ -166,7 +166,9 @@ describe('primary navigation (issue #391)', () => {
       '/reports/reconciliation:providerRecords',
       '/reports/machines:providerRecords',
       '/reports/products:providerRecords',
-      '/reports/site-commissions:machineFleet'
+      '/reports/site-commissions:machineFleet',
+      '/admin/site-commission-agreements:machineFleet',
+      '/admin/avco-transition:machineFleet'
     ]);
   });
 
@@ -274,6 +276,45 @@ describe('primary navigation (issue #391)', () => {
 
   it('groups the dedicated Admin pages', () => {
     expect(childRoutes('Admin')).toEqual(adminChildRoutes);
+  });
+
+  /**
+   * The two Admin destinations issue #869 locks, and the live fleet read each one depends on: the
+   * agreements page's site picker is that read (`GET /api/sites`), and the AVCO transition preview
+   * reads the machines and their products. Both are locked rather than hidden, exactly as Site
+   * Commissions is - a page an operator could use again by connecting Nayax has to stay visible.
+   */
+  it('declares the live fleet read on Site Commission Agreements and AVCO Transition', () => {
+    const children = navLinks([group('Admin')]);
+
+    expect(children.find((child) => child.route === '/admin/site-commission-agreements')?.lockedWithout).toBe(
+      'machineFleet'
+    );
+    expect(children.find((child) => child.route === '/admin/avco-transition')?.lockedWithout).toBe('machineFleet');
+  });
+
+  /**
+   * Nayax Historical Cost Recovery stays unlocked by the user's decision of 24 October 2026: it
+   * makes no Nayax call at all, reading the Nayax cost already stored on imported sales, so a
+   * disconnected business with imported history can still recover those costs. Every other Admin
+   * child keeps declaring nothing too - the two provider tools are hidden rather than locked.
+   */
+  it('leaves every other Admin child declaring no provider read, Historical Cost Recovery included', () => {
+    const declaring = navLinks([group('Admin')])
+      .filter((child) => child.lockedWithout !== undefined)
+      .map((child) => child.route);
+
+    expect(declaring).toEqual(['/admin/site-commission-agreements', '/admin/avco-transition']);
+    expect(
+      navLinks([group('Admin')]).find((child) => child.route === '/admin/historical-cost-recovery')?.lockedWithout
+    ).toBeUndefined();
+  });
+
+  /** A locked Admin destination is locked, never hidden: only the two provider tools are hidden. */
+  it('hides neither of the two locked Admin destinations', () => {
+    for (const route of ['/admin/site-commission-agreements', '/admin/avco-transition']) {
+      expect(navLinks([group('Admin')]).find((child) => child.route === route)?.hiddenWithoutProvider).toBeUndefined();
+    }
   });
 
   /**
@@ -793,6 +834,57 @@ describe('navigationFor with the provider answer (issue #729)', () => {
   it('locks nothing while the provider answer is not known, and nothing on an unreadable status', () => {
     expect(lockOf('/sites', undefined)).toBe('open');
     expect(lockOf('/sites', availability(null))).toBe('open');
+  });
+
+  /**
+   * The two Admin destinations of issue #869. They declare the live fleet read, so they behave
+   * exactly as `/sites` and `/reports/site-commissions` do rather than as the five stored-record
+   * reports: credentials that stopped working lock them too, because the reads behind them need
+   * credentials the status gate will use.
+   */
+  describe('the two locked Admin destinations (issue #869)', () => {
+    const LOCKED_ADMIN = ['/admin/site-commission-agreements', '/admin/avco-transition'];
+
+    it.each(LOCKED_ADMIN)('locks %s for a business with no connection at all', (route) => {
+      expect(lockOf(route, availability('NotConfigured'))).toBe('connect');
+    });
+
+    it.each(LOCKED_ADMIN)('locks %s for credentials that are stored and known not to work', (route) => {
+      expect(lockOf(route, availability('NeedsAttention'))).toBe('connect');
+    });
+
+    it.each(LOCKED_ADMIN)('locks %s as a permission when Nayax refused the fleet read', (route) => {
+      expect(lockOf(route, FLEET_REFUSED)).toBe('permission');
+    });
+
+    it.each(LOCKED_ADMIN)('leaves %s open on a usable connection and on an unread status', (route) => {
+      expect(lockOf(route, availability('Ready'))).toBe('open');
+      expect(lockOf(route, availability(null))).toBe('open');
+      expect(lockOf(route, undefined)).toBe('open');
+    });
+
+    /**
+     * Nayax Historical Cost Recovery is the destination beside them that must stay open: it reads
+     * the Nayax cost already stored on imported sales and makes no Nayax call, so a disconnected
+     * business with imported history can still recover those costs (the user's decision of 24
+     * October 2026).
+     */
+    it('never locks Nayax Historical Cost Recovery, in any provider state', () => {
+      for (const provider of [availability('NotConfigured'), availability('NeedsAttention'), FLEET_REFUSED]) {
+        expect(lockOf('/admin/historical-cost-recovery', provider)).toBe('open');
+      }
+    });
+
+    /** Both stay in the Admin group with no provider at all, locked rather than withheld. */
+    it('keeps both in the Admin group with no provider, beside the unlocked repairs', () => {
+      const offered = childRoutes('Admin', navigationFor(OWNER, false, 'offered', availability('NotConfigured'))).map(
+        (child) => child.route
+      );
+
+      expect(offered).toContain('/admin/site-commission-agreements');
+      expect(offered).toContain('/admin/avco-transition');
+      expect(offered).toContain('/admin/historical-cost-recovery');
+    });
   });
 
   it('never locks a destination that declares no live provider read', () => {
