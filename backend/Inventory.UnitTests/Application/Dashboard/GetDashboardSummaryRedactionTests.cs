@@ -228,6 +228,40 @@ public class GetDashboardSummaryRedactionTests
     }
 
     /// <summary>
+    /// And the same evidence rule decides the redacted card (issue #861): the withheld figure is the
+    /// amount, never the completeness, so a never-stocked product must not be reported to an Operator
+    /// as missing cost data when an Owner is not told that either.
+    /// </summary>
+    [Fact]
+    public async Task An_operator_is_not_told_a_never_stocked_product_is_missing_cost_data()
+    {
+        var catalog = new FakeProductCatalogStore(
+            FakeProductCatalogStore.Product(100, "Coke", quantityInStock: 12) with
+            {
+                InventoryValue = 777.77m,
+                CostingQuantity = 12,
+                HasInventoryHistory = true,
+            },
+            FakeProductCatalogStore.Product(200, "Brand new") with
+            {
+                InventoryValue = null,
+                CostingQuantity = null,
+                HasInventoryHistory = false,
+            });
+
+        var summary = await UseCase(
+                new FakeCurrentBusinessProvider(businessId: 1, BusinessRole.Operator),
+                SalesFacts(),
+                catalog)
+            .Handle(CancellationToken.None);
+
+        var inventory = Assert.IsType<RedactedDashboardSummaryDto>(summary).Inventory;
+        Assert.True(inventory.IsInventoryValueComplete);
+        Assert.Equal(0, inventory.ProductsWithUnknownCost);
+        Assert.Equal(2, inventory.ProductCount);
+    }
+
+    /// <summary>
     /// The other direction, which is what makes the tests above a redaction claim rather than an
     /// endpoint that shows nobody anything: a Manager and an Owner hold
     /// <c>Dashboard.ViewFinancials</c> and are given the whole summary with its real figures, read

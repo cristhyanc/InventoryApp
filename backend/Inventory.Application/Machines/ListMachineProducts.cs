@@ -47,7 +47,8 @@ public sealed class ListMachineProducts
     {
         var siteId = await ResolveSiteAsync(machineId, cancellationToken);
         var nayaxMachineProducts = await _nayax.GetMachineProductsAsync(machineId, cancellationToken);
-        var catalogue = await _catalog.ListUnorderedAsync(ProductCatalogFilter.None, cancellationToken);
+        var catalogue = await _catalog.ListUnorderedAsync(
+            ProductCatalogFilter.None, resolveInventoryHistory: false, cancellationToken);
         var localProductIdByNayaxId = await _productLinks.GetLocalProductIdsAsync(
             nayaxMachineProducts
                 .Where(machineProduct => machineProduct.NayaxProductID.HasValue)

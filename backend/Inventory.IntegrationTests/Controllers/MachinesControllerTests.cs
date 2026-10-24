@@ -434,7 +434,8 @@ public class MachinesControllerTests
                 },
             ]);
         var catalog = new Mock<IProductCatalogStore>();
-        catalog.Setup(x => x.ListUnorderedAsync(It.IsAny<ProductCatalogFilter>(), It.IsAny<CancellationToken>()))
+        catalog.Setup(x => x.ListUnorderedAsync(
+                It.IsAny<ProductCatalogFilter>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([
                 new ProductRecord
                 {
