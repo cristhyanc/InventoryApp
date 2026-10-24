@@ -1,12 +1,12 @@
 /**
- * Per-line price entry for the Add and Edit purchase forms (issue #707).
+ * Per-line price entry for the Add and Edit purchase forms (issues #707 and #878).
  *
- * Stock usually arrives in boxes priced per box, so each purchase line lets the operator enter
- * either the amount paid for the whole line or the price of one unit, and the form derives the
- * other from that line's purchased **unit** quantity. The selector is an entry convenience and
- * nothing else: no pack size, units-per-box or carton is modelled, the chosen mode is never sent to
- * or stored by the server, and a line is still persisted as the quantity and unit cost the purchase
- * contract already carried.
+ * Stock usually arrives in boxes priced per box, so each purchase line shows both of its prices as
+ * editable fields - Unit price and Total price - and the one the operator typed into last decides
+ * the other, which the form derives from that line's purchased **unit** quantity. Linked entry
+ * fields are a convenience and nothing else: no pack size, units-per-box or carton is modelled,
+ * which field was typed is never sent to or stored by the server, and a line is still persisted as
+ * the quantity and unit cost the purchase contract already carried.
  *
  * Both forms share this one module so Add and Edit cannot drift apart on the arithmetic (AGENTS.md
  * § Architecture rules: one authoritative calculation feeds all presentations). The authoritative
@@ -16,35 +16,43 @@
  * existing request already carried.
  */
 
-/** Which of a line's two prices the operator types; the other one is calculated. */
+/**
+ * Which of a line's two prices is the entered figure - the one the operator typed into last - and
+ * so which one the other is calculated from. Both are editable fields; this is the winner, not a
+ * mode the operator chooses (issue #878).
+ */
 export type PriceEntryMode = 'total' | 'unit';
 
 /**
- * The mode a line starts in. Roughly 80% of purchases arrive priced per box, so the amount paid for
- * the whole line is what an operator usually has in front of them.
+ * Which field wins on a line nobody has typed into yet. Roughly 80% of purchases arrive priced per
+ * box, so the amount paid for the whole line is what an operator usually has in front of them.
  */
 export const DEFAULT_PRICE_ENTRY_MODE: PriceEntryMode = 'total';
 
 /**
- * The mode a line already stored on a purchase opens in on the edit form: the unit cost is the
- * figure the purchase actually holds, and entering the quantity over it is what keeps an edit of
- * something else - a quantity correction, a date, a classification - from re-costing the line.
+ * Which field wins on a line already stored on a purchase, when the edit form opens it: the unit
+ * cost is the figure the purchase actually holds, and calculating the total from it is what keeps an
+ * edit of something else - a quantity correction, a date, a classification - from re-costing the
+ * line.
  */
 export const STORED_LINE_PRICE_ENTRY_MODE: PriceEntryMode = 'unit';
 
-/** The one price-entry vocabulary both purchase forms offer, so they cannot name a mode differently. */
-export const PRICE_ENTRY_MODE_OPTIONS: ReadonlyArray<{ value: PriceEntryMode; label: string }> = [
-  { value: 'total', label: 'Total purchase price' },
-  { value: 'unit', label: 'Unit price' }
-];
+/**
+ * Decimals the Unit price field shows for a unit cost the form calculated. It is a display figure
+ * only: what the line submits is the unrounded quotient (see {@link unitCostFromLineTotal}).
+ */
+const CALCULATED_UNIT_PRICE_DECIMALS = 4;
+
+/** Decimals the Total price field shows for a total the form calculated, which saves to the cent. */
+const CALCULATED_TOTAL_PRICE_DECIMALS = 2;
 
 /**
  * One purchase line's quantity and the two prices that describe it. Both amounts are nullable
  * because a number input binds `null` for a blank field (and `NaN` for text that is not a number),
  * and because a figure that cannot be derived must be cleared rather than left stale.
  *
- * `unitCost` is the value the request carries, in either mode. `lineTotal` is the entered amount in
- * `total` mode and the calculated one in `unit` mode.
+ * `unitCost` is the value the request carries, whichever field was typed into. `lineTotal` is the
+ * entered amount while `priceEntryMode` is `total` and the calculated one while it is `unit`.
  */
 export interface PurchaseLinePrice {
   quantity: number | null;
@@ -118,8 +126,8 @@ export function savedLineAmount(line: PurchaseLinePrice): number {
 
 /**
  * Brings the calculated figure back in step with the entered one, so neither can be shown stale.
- * Call it whenever the quantity or the entered amount changes: in `total` mode the entered total
- * decides the unit cost, and in `unit` mode the entered unit price decides the total.
+ * Call it whenever the quantity or the entered amount changes: an entered total is spread over the
+ * line's units, and an entered unit price is multiplied by them.
  */
 export function syncPurchaseLinePrice(line: PurchaseLinePrice): void {
   if (line.priceEntryMode === 'total') {
@@ -130,20 +138,58 @@ export function syncPurchaseLinePrice(line: PurchaseLinePrice): void {
 }
 
 /**
- * Switches which price the operator types. Changing the entry method never changes the unit cost
- * the line would submit - it only fills the figures the new mode shows - so toggling the selector
- * on a purchase being edited cannot quietly re-cost its stored line. The operator's next amount or
- * quantity change derives from there, through `syncPurchaseLinePrice`.
+ * The operator typed in the Total price field, so that amount is now the entered figure and the
+ * unit cost is calculated from it. Both purchase forms route that field's changes through here, so
+ * which field wins is decided in one place rather than once per form (issue #878).
  */
-export function applyPriceEntryMode(line: PurchaseLinePrice, mode: PriceEntryMode): void {
-  line.priceEntryMode = mode;
-  line.lineTotal = lineTotalFromUnitCost(line.unitCost, line.quantity);
+export function enterLineTotal(line: PurchaseLinePrice, lineTotal: number | null): void {
+  line.priceEntryMode = 'total';
+  line.lineTotal = lineTotal;
+  syncPurchaseLinePrice(line);
+}
+
+/**
+ * The operator typed in the Unit price field, so that price is now the entered figure and the line
+ * total is calculated from it. It is called only on an actual edit of the field - never on focus or
+ * blur - which is what keeps an unrounded calculated unit cost from being replaced by the rounded
+ * figure the field was displaying.
+ */
+export function enterUnitCost(line: PurchaseLinePrice, unitCost: number | null): void {
+  line.priceEntryMode = 'unit';
+  line.unitCost = unitCost;
+  syncPurchaseLinePrice(line);
+}
+
+/**
+ * What the Unit price field shows. The entered figure is shown exactly as it was typed; a
+ * calculated one is shown rounded to four decimals, as a string so the trailing decimals survive -
+ * $100.00 over 300 units displays `0.3333` while `line.unitCost`, the value the request carries,
+ * stays the unrounded quotient. `null` - an empty field - while there is no unit cost to show.
+ */
+export function unitPriceFieldValue(line: PurchaseLinePrice): number | string | null {
+  if (line.priceEntryMode === 'unit') return line.unitCost;
+  return calculatedFieldValue(line.unitCost, CALCULATED_UNIT_PRICE_DECIMALS);
+}
+
+/**
+ * What the Total price field shows: the entered amount exactly as it was typed, or the calculated
+ * `round(quantity x unitCost, 2)` to the cent it will save at - `42.00` rather than `42` - and
+ * `null` while there is no total to show.
+ */
+export function totalPriceFieldValue(line: PurchaseLinePrice): number | string | null {
+  if (line.priceEntryMode === 'total') return line.lineTotal;
+  return calculatedFieldValue(line.lineTotal, CALCULATED_TOTAL_PRICE_DECIMALS);
+}
+
+/** A calculated amount as its field displays it, or `null` when there is none to display. */
+function calculatedFieldValue(amount: number | null, decimals: number): string | null {
+  return isValidLineAmount(amount) ? amount.toFixed(decimals) : null;
 }
 
 /**
  * The one thing to tell the operator about this line's quantity and price, or `null` when it is
- * ready to save. The quantity comes first: in `total` mode an unusable quantity is also the reason
- * no unit cost can be derived from the amount paid.
+ * ready to save. The quantity comes first: under an entered total, an unusable quantity is also the
+ * reason no unit cost can be derived from the amount paid.
  */
 export function purchaseLinePriceProblem(line: PurchaseLinePrice): string | null {
   if (!isValidLineQuantity(line.quantity)) return 'Enter a whole number of units above zero.';

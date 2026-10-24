@@ -15,16 +15,17 @@ import { IconComponent } from '../shared/icon.component';
 import { GST_CLASSIFICATION_OPTIONS, isChargePresent } from './gst-classification-options';
 import {
   DEFAULT_PRICE_ENTRY_MODE,
-  PRICE_ENTRY_MODE_OPTIONS,
   PriceEntryMode,
-  applyPriceEntryMode,
+  enterLineTotal,
+  enterUnitCost,
   isPurchaseLinePriceComplete,
-  isValidLineAmount,
   lineTotalFromUnitCost,
   purchaseLinePriceErrorMessage,
   purchaseLinePriceProblem,
   savedLineAmount,
-  syncPurchaseLinePrice
+  syncPurchaseLinePrice,
+  totalPriceFieldValue,
+  unitPriceFieldValue
 } from './purchase-line-price';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
@@ -33,13 +34,14 @@ interface DraftPurchaseItem {
   productId: number;
   quantity: number | null;
   /**
-   * Which of this line's two prices the operator types; the other is calculated from the line's
-   * purchased unit quantity (issue #707). It is an entry convenience only and is never submitted.
+   * Which of this line's two prices the operator typed into last; the other is calculated from the
+   * line's purchased unit quantity (issues #707 and #878). It is an entry convenience only and is
+   * never submitted.
    */
   priceEntryMode: PriceEntryMode;
-  /** The amount paid for the whole line: entered in `total` mode, calculated in `unit` mode. */
+  /** The amount paid for the whole line: entered while `total` wins, calculated while `unit` does. */
   lineTotal: number | null;
-  /** The per-unit cost the request carries: calculated in `total` mode, entered in `unit` mode. */
+  /** The per-unit cost the request carries: entered while `unit` wins, calculated while `total` does. */
   unitCost: number | null;
   /**
    * This line's GST classification (issue #431). A new line starts as `Unknown`/Not classified and
@@ -82,9 +84,6 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
 
   /** The GST picker's options, shared with the purchase edit form. */
   readonly gstOptions = GST_CLASSIFICATION_OPTIONS;
-
-  /** The price-entry options, shared with the purchase edit form (issue #707). */
-  readonly priceEntryModeOptions = PRICE_ENTRY_MODE_OPTIONS;
 
   form = {
     title: '',
@@ -211,9 +210,9 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
     // Use draft items with nullable unitCost - do NOT convert null to 0. The GST classification
     // stays Not classified: a supplier order says nothing about a line's GST status.
     //
-    // The line opens in the default Total purchase price mode on the total that prefilled unit
-    // price already implies, and the unit cost itself is left exactly as the order recorded it:
-    // receiving an order without changing a price submits the same unit cost as before issue #707.
+    // The line opens with Total price as the winning field, on the total that prefilled unit price
+    // already implies, and the unit cost itself is left exactly as the order recorded it: receiving
+    // an order without typing a price submits the same unit cost as before issue #707.
     this.items = outstandingLines.map((line) => ({
       productId: line.productId,
       quantity: line.outstandingQuantity,
@@ -337,40 +336,39 @@ export class PurchaseUploadComponent implements OnInit, OnDestroy {
   removeItem(index: number): void { this.items.splice(index, 1); }
 
   /**
-   * The line's purchased unit quantity changed, so its calculated price follows (issue #707): the
-   * entered total divided over the new unit count, or the entered unit price multiplied by it.
+   * The line's purchased unit quantity changed, so the calculated price follows the field that won
+   * last (issue #707): the entered total divided over the new unit count, or the entered unit price
+   * multiplied by it.
    */
   onLineQuantityChange(item: DraftPurchaseItem, quantity: number | null): void {
     item.quantity = quantity;
     syncPurchaseLinePrice(item);
   }
 
-  /** The amount the chosen entry mode asks for changed, so the complementary figure follows. */
-  onLineAmountChange(item: DraftPurchaseItem, amount: number | null): void {
-    if (item.priceEntryMode === 'total') {
-      item.lineTotal = amount;
-    } else {
-      item.unitCost = amount;
-    }
-    syncPurchaseLinePrice(item);
+  /**
+   * The operator typed in this line's Total price field, so that amount wins from now on and the
+   * unit cost follows from it (issue #878).
+   */
+  onLineTotalChange(item: DraftPurchaseItem, amount: number | null): void {
+    enterLineTotal(item, amount);
   }
 
   /**
-   * The operator chose which price to type. Switching never changes the unit cost the line would
-   * submit; it only fills in the figures the new mode shows.
+   * The operator typed in this line's Unit price field, so that price wins from now on and the line
+   * total follows from it (issue #878).
    */
-  onLinePriceEntryModeChange(item: DraftPurchaseItem, mode: PriceEntryMode): void {
-    applyPriceEntryMode(item, mode);
+  onLineUnitCostChange(item: DraftPurchaseItem, amount: number | null): void {
+    enterUnitCost(item, amount);
   }
 
-  /** The calculated unit cost to show beside an entered line total, or null while there is none. */
-  derivedUnitCost(item: DraftPurchaseItem): number | null {
-    return isValidLineAmount(item.unitCost) ? item.unitCost : null;
+  /** What this line's Unit price field shows: the entered price, or the calculated one to 4 dp. */
+  unitPriceValue(item: DraftPurchaseItem): number | string | null {
+    return unitPriceFieldValue(item);
   }
 
-  /** The calculated line total to show beside an entered unit price, or null while there is none. */
-  derivedLineTotal(item: DraftPurchaseItem): number | null {
-    return isValidLineAmount(item.lineTotal) ? item.lineTotal : null;
+  /** What this line's Total price field shows: the entered total, or the calculated one to the cent. */
+  totalPriceValue(item: DraftPurchaseItem): number | string | null {
+    return totalPriceFieldValue(item);
   }
 
   /** What still has to be entered on this line, or null when it is ready to save. */
