@@ -9,6 +9,7 @@ import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxj
 import { AccessService, MemberAccess, MemberAccessState } from '../access/access.service';
 import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { CAPABILITIES, Capability, capabilitySet } from '../access/capabilities';
+import { OptionVisibility } from '../access/option-visibility';
 import { FORBIDDEN_INTERCEPTORS } from '../access/forbidden-interceptors';
 import { apiConfig, queuedReads, readingHttp, signedInIdentity } from '../access/identity-cache.spec-helpers';
 import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
@@ -37,12 +38,16 @@ import { NavGroup, navLinks, primaryNavigation } from './navigation';
 @Component({ standalone: true, template: '' })
 class BlankPageComponent {}
 
-function granted(capabilities: readonly Capability[]): MemberAccessState {
+function granted(
+  capabilities: readonly Capability[],
+  optionVisibility?: OptionVisibility
+): MemberAccessState {
   const access: MemberAccess = {
     role: 'Test',
     capabilities: capabilitySet([...capabilities]),
     businessName: 'Vending Co',
-    timeZoneId: 'Australia/Sydney'
+    timeZoneId: 'Australia/Sydney',
+    optionVisibility
   };
   return { status: 'granted', access };
 }
@@ -1800,5 +1805,105 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
     fixture.detectChanges();
     expect(router.url).toBe('/sites');
     expect(lockText(host, '/sites')).not.toContain('Locked');
+  });
+});
+
+/**
+ * The one switchable Admin option in the menu (issue #873): a Super Admin may stop
+ * `Historical GST Classification` being offered to everybody else, and keeps it themselves with an
+ * `Off` pill beside its name.
+ *
+ * The answer comes from the capability read - the sidebar decides nothing here either - and it is
+ * applied after the capability rules, so it can only ever take away an entry the role already had.
+ */
+describe('SidebarNavComponent switchable option visibility (issue #873)', () => {
+  const ROUTE = '/admin/historical-gst-classification';
+  const OFF: OptionVisibility = { historicalGstClassificationVisible: false };
+  const ON: OptionVisibility = { historicalGstClassificationVisible: true };
+
+  async function openAdmin(
+    optionVisibility: OptionVisibility | undefined,
+    options: { diagnosticsAccess?: boolean; rolePreviewActive?: boolean } = {}
+  ) {
+    const rendered = await render({
+      access: of(granted(CAPABILITIES, optionVisibility)),
+      diagnosticsAccess: of(options.diagnosticsAccess ?? false),
+      rolePreviewActive: options.rolePreviewActive
+    });
+    groupToggle(rendered.host, 'Admin').click();
+    rendered.fixture.detectChanges();
+    return rendered;
+  }
+
+  it('leaves the entry out for an eligible member while the option is off', async () => {
+    const { host } = await openAdmin(OFF);
+
+    expect(link(host, ROUTE)).toBeNull();
+    // The rest of the Admin group is untouched: this is one option, not a section.
+    expect(link(host, '/admin/costing-repair')).not.toBeNull();
+    expect(link(host, '/admin/imports')).not.toBeNull();
+  });
+
+  it('offers it, with no pill, while the option is on', async () => {
+    const { host } = await openAdmin(ON);
+
+    expect(link(host, ROUTE)).not.toBeNull();
+    expect(link(host, ROUTE)?.textContent).not.toContain('Off');
+  });
+
+  it('offers it, with no pill, while the setting has not been reported', async () => {
+    const { host } = await openAdmin(undefined);
+
+    expect(link(host, ROUTE)).not.toBeNull();
+    expect(link(host, ROUTE)?.textContent).not.toContain('Off');
+  });
+
+  it('keeps it for a super admin while the option is off, marked Off and still linked', async () => {
+    const { host } = await openAdmin(OFF, { diagnosticsAccess: true });
+
+    const entry = link(host, ROUTE);
+    expect(entry).not.toBeNull();
+    expect(entry?.querySelector('.badge')?.textContent?.trim()).toBe('Off');
+    expect(entry?.textContent).toContain('hidden from everybody but a Super Admin');
+    expect(entry?.hasAttribute('aria-disabled')).toBe(false);
+  });
+
+  it('marks nothing Off for a super admin while the option is on', async () => {
+    const { host } = await openAdmin(ON, { diagnosticsAccess: true });
+
+    expect(link(host, ROUTE)?.textContent).not.toContain('Off');
+  });
+
+  /**
+   * A role preview withholds the administrator's own treatment here exactly as it withholds the
+   * `Super Admin` group (issue #721): what the preview shows is what the previewed role sees.
+   */
+  it('withholds the entry inside a role preview, as it does the Super Admin group', async () => {
+    const { host } = await openAdmin(OFF, { diagnosticsAccess: true, rolePreviewActive: true });
+
+    expect(link(host, ROUTE)).toBeNull();
+  });
+
+  it('never offers it to a role without Data.Repair, whichever state it is in', async () => {
+    const manager = [
+      'Dashboard.View',
+      'Dashboard.ViewFinancials',
+      'PickList.View',
+      'Inventory.Operate',
+      'Purchasing.Operate',
+      'Expenses.Manage',
+      'Reports.View',
+      'Imports.Run',
+      'SiteCommissions.Manage'
+    ] as const;
+
+    const { host, fixture } = await render({
+      access: of(granted(manager, ON)),
+      diagnosticsAccess: of(true)
+    });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, ROUTE)).toBeNull();
   });
 });

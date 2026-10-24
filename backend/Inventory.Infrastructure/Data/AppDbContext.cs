@@ -305,6 +305,16 @@ public class AppDbContext : DbContext
     public DbSet<SupplierPreset> SupplierPresets => Set<SupplierPreset>();
 
     /// <summary>
+    /// The single shared row that says whether the one switchable Admin option is offered to anybody
+    /// but a Super Admin (issue #873). The second <em>platform</em> table, on the same terms as
+    /// <see cref="SupplierPresets"/> above: about no business, so no business key, no index on one
+    /// and no query filter. No row at all means every option is offered; see
+    /// <see cref="PlatformOptionVisibility"/>.
+    /// </summary>
+    public DbSet<Models.PlatformOptionVisibility> PlatformOptionVisibility =>
+        Set<Models.PlatformOptionVisibility>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -355,6 +365,7 @@ public class AppDbContext : DbContext
         ConfigureMemberInvites(modelBuilder);
         ConfigureSupportSessions(modelBuilder);
         ConfigureSupplierPresets(modelBuilder);
+        ConfigurePlatformOptionVisibility(modelBuilder);
         ConfigureProviderLinks(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
         ConfigureMachines(modelBuilder);
@@ -1197,6 +1208,34 @@ public class AppDbContext : DbContext
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
         preset.Property(x => x.UpdatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+    }
+
+    /// <summary>
+    /// Maps the single shared option-visibility row (issue #873).
+    ///
+    /// <para><strong>The key is not generated.</strong> The setting is one answer for the whole
+    /// application, so its row key is the constant
+    /// <see cref="Models.PlatformOptionVisibility.SingletonId"/> and the database assigns nothing:
+    /// two writes that both find no row then collide on the primary key, which the adapter resolves
+    /// into the update it should have been, instead of inserting a second row that a later read
+    /// would have to choose between.</para>
+    ///
+    /// <para>The second <em>platform</em> table, on the terms
+    /// <see cref="ConfigureSupplierPresets"/> states: about no business, so no business key, no index
+    /// on one and no query filter. It is also deliberately not seeded - the absence of the row is the
+    /// shipped "everything is offered" state.</para>
+    /// </summary>
+    private static void ConfigurePlatformOptionVisibility(ModelBuilder modelBuilder)
+    {
+        var visibility = modelBuilder.Entity<Models.PlatformOptionVisibility>();
+
+        visibility.Property(x => x.Id).ValueGeneratedNever();
+
+        // Persisted UTC, and marked UTC on the way out for the reason the preset instants are: the
+        // SQLite provider returns an unspecified kind otherwise.
+        visibility.Property(x => x.UpdatedAtUtc).HasConversion(
             toProvider => toProvider,
             fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }

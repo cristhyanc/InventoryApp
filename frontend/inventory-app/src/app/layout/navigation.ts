@@ -1,5 +1,6 @@
 import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { Capability, CapabilitySet } from '../access/capabilities';
+import { OptionVisibility } from '../access/option-visibility';
 import { ProviderAvailability } from '../provider/provider-availability.service';
 import { ProviderFeature } from '../provider/provider-feature-permissions';
 import { ProviderLock, providerLockOf, providerToolsOffered } from '../provider/provider-lock';
@@ -40,6 +41,15 @@ import { ProviderLock, providerLockOf, providerToolsOffered } from '../provider/
  * connection with a refused read, and credentials that stopped working, keep these reports open,
  * because what they report on is already stored and nothing about it is read live. Bookkeeping and
  * GST declare nothing and are never locked.
+ *
+ * Issue #873 adds the one thing in this file that is not about a capability or a provider: a Super
+ * Admin may stop `Historical GST Classification` being **offered** to everybody else. The shared
+ * setting arrives with the capability set, on `GET /api/me/access`, and is applied here as
+ * {@link OptionVisibility} - it hides that one destination from a member who is not the platform
+ * administrator, leaves it in the Super Admin's own menu marked with an `Off` pill, and changes no
+ * capability and no other entry. Like everything else here it hides a page rather than protecting
+ * one: the classification endpoints keep authorizing every request by `Data.Repair` in both states,
+ * and the route entered directly still resolves.
  *
  * Issue #869 does the same for two Admin destinations, on the **live fleet read** rather than on
  * stored records: `Site Commission Agreements`, whose site picker is that read, and `AVCO
@@ -107,6 +117,30 @@ export interface NavSectionHeading {
 export interface NavPlaceholder {
   readonly kind: 'placeholder';
   readonly label: string;
+}
+
+/**
+ * The route of the one Admin destination whose visibility a Super Admin may switch (issue #873).
+ *
+ * It is named by its route rather than by a flag on the entry because there is exactly one of them
+ * and because the API names it the same way: `GET /api/me/access` reports one boolean about this one
+ * option. A general feature-flag framework is explicitly out of scope of that issue, so a second
+ * switchable option would be a second named constant and a second field, decided by its own issue -
+ * never a map of arbitrary keys this file resolves.
+ */
+export const switchableOptionRoute = '/admin/historical-gst-classification';
+
+/**
+ * Whether `route` is the switchable destination and the application has switched it **off** - which
+ * is what the sidebar and the Admin hub render the `Off` pill from, what this file withholds the
+ * destination from an ordinary member for, and the only thing either of them renders it from.
+ *
+ * It says nothing about who is looking: a destination is only ever *offered* to a Super Admin while
+ * it is off, so a rendered switched-off entry is by construction a Super Admin's. `undefined`
+ * options are "not known" and are never switched off (see {@link OptionVisibility}).
+ */
+export function optionSwitchedOff(route: string, options: OptionVisibility | undefined): boolean {
+  return route === switchableOptionRoute && options?.historicalGstClassificationVisible === false;
 }
 
 /** Anything a group may hold: a real destination or an inert placeholder. */
@@ -359,6 +393,13 @@ export const superAdminNavGroup: NavGroup = {
  * the answer has not settled yet, and then nothing is withheld and nothing is locked: the menu must
  * not flicker items away, and an unread status is not a refusal (issue #728's fail-open rule).
  *
+ * `options` is the shared switchable-option answer (issue #873), applied in the same pass as the
+ * capability set and **after** it in effect: the one switchable destination is left out while the
+ * application has switched it off, unless `hasPlatformDiagnosticsAccess` says this is the platform
+ * administrator, who keeps it in both states. It can only ever remove an entry the capabilities
+ * already allowed - switching the option on adds nothing to a member whose role never had it - and
+ * `undefined` removes nothing at all (see {@link OptionVisibility}).
+ *
  * Everything here copies rather than mutates, so `primaryNavigation` stays the full declared
  * navigation and one member's rendered menu can never leak into another's.
  */
@@ -366,10 +407,15 @@ export function navigationFor(
   capabilities: CapabilitySet | undefined,
   hasPlatformDiagnosticsAccess: boolean,
   businessNavigation: BusinessNavigationVisibility,
-  provider?: ProviderAvailability
+  provider?: ProviderAvailability,
+  options?: OptionVisibility
 ): readonly NavItem[] {
   const business: readonly NavItem[] = businessNavigation === 'offered' ? primaryNavigation : [];
   const offered = hasPlatformDiagnosticsAccess ? [...business, superAdminNavGroup] : business;
+
+  // A Super Admin is exempt from the switch, so nothing is withheld for them; neither is anything
+  // withheld while the capability set itself is unknown, where the whole pass is skipped below.
+  const switchedOff = hasPlatformDiagnosticsAccess ? undefined : options;
 
   const allowed =
     capabilities === undefined
@@ -379,23 +425,35 @@ export function navigationFor(
             return [item];
           }
           if (item.kind === 'link') {
-            return allowsLink(capabilities, item) ? [item] : [];
+            return allowsLink(capabilities, item, switchedOff) ? [item] : [];
           }
 
-          const children = item.children.filter((child) => allowsChild(capabilities, child));
+          const children = item.children.filter((child) => allowsChild(capabilities, child, switchedOff));
           return children.length === 0 ? [] : [{ ...item, children }];
         });
 
   return withOccupiedSections(withProviderTools(allowed, provider));
 }
 
-function allowsLink(capabilities: CapabilitySet, navLink: NavLink): boolean {
+function allowsLink(
+  capabilities: CapabilitySet,
+  navLink: NavLink,
+  switchedOff: OptionVisibility | undefined
+): boolean {
+  if (optionSwitchedOff(navLink.route, switchedOff)) {
+    return false;
+  }
+
   return navLink.capability === undefined || capabilities.has(navLink.capability);
 }
 
 /** A placeholder is always kept; a link is kept only while `allowsLink` allows it. */
-function allowsChild(capabilities: CapabilitySet, child: NavGroupChild): boolean {
-  return child.kind === 'placeholder' || allowsLink(capabilities, child);
+function allowsChild(
+  capabilities: CapabilitySet,
+  child: NavGroupChild,
+  switchedOff: OptionVisibility | undefined
+): boolean {
+  return child.kind === 'placeholder' || allowsLink(capabilities, child, switchedOff);
 }
 
 /**

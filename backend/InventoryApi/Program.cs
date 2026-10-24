@@ -19,6 +19,7 @@ using InventoryApi.Adapters.Onboarding;
 using InventoryApi.Adapters.PlatformAdmin;
 using InventoryApi.Adapters.PlatformDiagnostics;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.PlatformOptions;
 using Inventory.Application.SupportSessions;
 using InventoryApi.Bootstrap;
 using InventoryApi.Auth;
@@ -272,6 +273,11 @@ builder.Services.AddScoped<ISupportSessionAudit, LoggingSupportSessionAudit>();
 // fields - and its entry type has no field for the preset's name or its URL, so neither can reach
 // the trail by a sink's discretion.
 builder.Services.AddScoped<ISupplierPresetAudit, LoggingSupplierPresetAudit>();
+// The option-visibility audit trail (issue #873): one event per committed switch. A separate port
+// again, for the same reason - a different event with different fields, and an entry type that has
+// no field for a business, a member or anything of theirs, because this setting is about none of
+// them.
+builder.Services.AddScoped<IOptionVisibilityAudit, LoggingOptionVisibilityAudit>();
 // What else happens when a business is deactivated (issue #545's hook point): since issue #550, every
 // active support session for that business ends. It is the single registration #545 declared this
 // hook for, replaced here rather than by editing that transition - the hook runs inside the

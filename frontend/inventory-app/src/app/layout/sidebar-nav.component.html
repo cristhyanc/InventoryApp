@@ -120,6 +120,18 @@
                         <span class="badge badge-neutral">Locked</span>
                         <span class="sr-only">{{ lockSummary(child) }}</span>
                       }
+                      <!--
+                        The switchable option a Super Admin has switched off (issue #873). The pill
+                        reads exactly "Off" - the word the issue asks for - immediately after the
+                        entry's own label, and the sentence beside it is what a screen reader is
+                        given, so neither audience is told only that something is "off" without
+                        being told what that means. Only a Super Admin is offered this entry in that
+                        state, so the pill is only ever rendered for them.
+                      -->
+                      @if (isOptionSwitchedOff(child)) {
+                        <span class="badge badge-neutral">Off</span>
+                        <span class="sr-only">{{ optionOffSummary(child) }}</span>
+                      }
                       @if (isBusinessesLink(child) && pendingBusinessCount) {
                         <span class="badge badge-warning">{{ pendingBusinessCount }}</span>
                       }

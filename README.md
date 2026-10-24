@@ -397,6 +397,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
   - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
   - **Owner** — everything a Manager reaches, plus Admin → Integrations (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, all five maintenance repairs (Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery), Admin → Users (below), Admin → Roles and Admin → Business Settings (see [Business settings (Admin page)](#business-settings-admin-page)). Each repair's preview and dry run is as restricted as its apply.
   - **Holding the capability is not the same as the page being usable.** Two Admin pages need the live Nayax fleet read and show the connection-required page without it (issue #869): **Site Commission Agreements**, whose site picker is that read and which a Manager reaches as well as an Owner, and the Owner-only **Inventory AVCO Transition Baseline**, whose preview reads the machines and their products. **Nayax Historical Cost Recovery is deliberately not locked** — it reads the Nayax cost already stored on imported sales and makes no Nayax call — and neither are Costing Repair and Historical GST Classification, which work on the business's own data. See [The menu without a usable provider](#the-menu-without-a-usable-provider).
+  - **One Admin option can also be switched off by a Super Admin**, which is a different thing again: **Historical GST Classification** can be hidden from everybody but a Super Admin, who keeps it with an **Off** pill beside its name. That hides the sidebar entry and the Admin card and changes no permission at all — an Owner still holds `Data.Repair`, and the page and its API still work exactly as before. See [Hiding this option from other users](#hiding-this-option-from-other-users-super-admin).
   - **Admin → Roles** (issue #530) is a read-only page, on `Roles.View`, which only an Owner holds: it explains what Owner, Manager and Operator can each access, from the same table above. It edits nothing — no role, no permission and no member — and is rendered from one frontend definition kept from drifting away from the published capability vocabulary by its own test (see [docs/architecture.md § The Roles page](docs/architecture.md#the-roles-page-issue-530)).
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **`Dashboard.ViewFinancials` covers every sales, revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699) — not only the two headline cards above. The Sites list and the home Dashboard's Sites/Machines tables hide their revenue, direct-profit, margin and trend columns without it; Site Products hides Estimated Card Profit (and drops it from the CSV export); the Machines list hides sales, direct profit and the profitability-status badge; and Machine Detail hides its revenue/direct-profit summary cards and the Estimated Card Profit/50% Card Margin Price product columns. Unit cost, site/machine selling price, stock, restock and navigation stay visible to every role. That page-level hide is read from `GET /api/me/access` rather than from each endpoint's response, so on its own it hides a figure rather than protecting it; the API withholds the figures too, for the site endpoints since #697, for the machine and product endpoints since #698, and for the stock-movement and purchasing endpoints since #700 (the next three bullets).
@@ -591,6 +592,39 @@ one without the other.
   deliberately, never something copied or inferred. Editing, renaming or disabling a preset
   afterwards changes nothing any business already has, and a business editing or deleting its copy
   changes neither the preset nor another business's copy.
+
+## Super Admin option visibility
+
+The Super Admin also decides whether **one** Admin option is offered to anybody else: **Historical
+GST Classification**, the occasional maintenance tool that is only needed until historical purchase
+components have been classified. It is one shared, application-wide setting with one endpoint
+(issue #873):
+
+```text
+PUT /api/super-admin/option-visibility   { "historicalGstClassificationVisible": true|false }
+```
+
+- **Who.** The same Entra `(tid, oid)` pair and the same `PlatformDiagnostics` policy as the surfaces
+  above, checked on every request, plus authentication and the `access_as_user` scope. **With the pair
+  unset — the shipped state — nobody can change it.** An Owner is refused like anybody else, a member
+  who presents a support-session id is still an ordinary member, and a refused request changes
+  nothing. A role preview is refused, as every write is.
+- **Everyone reads it, nobody else writes it.** `GET /api/me/access` reports
+  `historicalGstClassificationVisible` beside the capability set, which is how the menu and the Admin
+  page know what to offer. That is the one thing a member reads from a platform-wide setting, and it
+  is one boolean: it names no business and nobody's data.
+- **It is visibility, not permission.** `POST /api/admin/historical-gst-classification/preview` and
+  `.../apply` keep requiring `Data.Repair` in both states, and the capability set a member is reported
+  is identical in both. Switching the option off hides the entry and the card; switching it on
+  restores them only to members whose role already allowed them.
+- **The default is shown**, and it is the absence of any stored setting, so every existing
+  installation keeps exactly the visibility it has today until a Super Admin switches it. The setting
+  is one row (`PlatformOptionVisibility`) that is created the first time it is switched.
+- **Audit.** Every committed change emits one structured `ILogger` event with the actor `(tid, oid)`,
+  the resulting state, the instant and the correlation id — and nothing about a business or a member,
+  because the setting is about neither. A refused change is not audited, because nothing happened.
+- **The page.** The switch is on the Admin page beside the tool's own card, offered to a Super Admin
+  alone; see [Hiding this option from other users](#hiding-this-option-from-other-users-super-admin).
 
 ## Super Admin support sessions
 
@@ -1424,6 +1458,37 @@ What it will and will not do:
 
 It applies to your own business's purchases only, and only to the purchases of the business you are
 signed in to.
+
+### Hiding this option from other users (Super Admin)
+
+Once historical data has been classified, this is a tool nobody needs again, so a **Super Admin**
+can stop offering it. The switch is on the Admin page beside this tool's own card: **Hide Historical
+GST Classification from other users**, and **Show Historical GST Classification to other users** to
+offer it again. It is one shared, application-wide setting, saved on the server — it is not a
+per-browser preference, so it survives a reload, a new tab and a different computer, and it stays as
+it was until a Super Admin switches it again. Every installation starts with the option **shown**.
+
+- **While it is hidden**, the sidebar's Admin group and the Admin page both leave it out for everybody
+  else. A Super Admin still sees it, in both places, with an **Off** pill beside its name — the mark
+  that says what you can see is hidden from everybody else.
+- **A Super Admin never loses the tool**, and switching it back on restores it only to the people
+  whose role already allowed it: it is a visibility switch, not a permission. Historical GST
+  Classification still needs the same access it always did (an Owner's, see
+  [Who can see and do what](#who-can-see-and-do-what)), the page still works exactly as described
+  above, and its address still opens if you go to it directly. Hiding the option hides the way in; it
+  does not restrict, change or disable the classification itself.
+- **Only a Super Admin can change it.** The server enforces that, so an ordinary member cannot switch
+  it even by calling the API directly, and nothing is changed by the attempt. While previewing a
+  business role, a Super Admin is shown what that role would see and is not offered the switch.
+- **If a save fails**, nothing changes: the switch says the change was not saved, and the setting,
+  the pill and the menus stay exactly as the server still has them. Try again.
+- **What the switch shows is always an answer the server gave.** A successful save is shown
+  immediately — the pill, the card and the switch's own label change to what was stored — and the
+  application then re-reads the setting so the sidebar and every other screen follow. If that
+  re-read does not get through, what you saved still reads correctly here and you are told that the
+  menus may still show the previous state, with **Read this setting again** to try the read once
+  more. While the setting is still being read, or when it could not be read at all, the switch says
+  so and offers no On/Off action: it never shows an unread setting as shown or hidden.
 
 ## Costing repair (Admin page)
 

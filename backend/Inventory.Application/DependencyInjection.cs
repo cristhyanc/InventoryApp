@@ -21,6 +21,7 @@ using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
+using Inventory.Application.PlatformOptions;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
@@ -156,6 +157,14 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ListSupplierPresets>();
         services.AddScoped<CreateSupplierPreset>();
         services.AddScoped<UpdateSupplierPreset>();
+
+        // The shared switchable option visibility (issue #873). The write is the Super Admin's and
+        // runs under a denied business scope like the presets above; the read is every member's,
+        // through GetCurrentAccess, and runs under their ordinary resolved scope. Both are scoped
+        // because both go through the request's own AppDbContext, and the setting is about no
+        // business, so neither one's scope selects anything.
+        services.AddScoped<GetOptionVisibility>();
+        services.AddScoped<SetHistoricalGstClassificationVisibility>();
 
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
