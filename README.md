@@ -1153,7 +1153,10 @@ does not manage.
   it is not in the shared Products header, so Needs Ordering, which orders products that already
   exist, no longer offers it.) **Needs Ordering → Mark as ordered** sits the same way, in that
   page's own search/filter toolbar to the right of search, Category and Reset (issue #832) — it used
-  to sit in its own row below the toolbar.
+  to sit in its own row below the toolbar. **Import products** sits beside New Product on that same
+  toolbar (issue #875) for a member who holds `Imports.Run` while Nayax is usable and no support
+  session is active — it opens the same catalogue review Admin → Imports does, at
+  `/admin/imports?review=catalogue`, rather than being a second entry point with its own behaviour.
   Editing a product the provider manages shows its name and category read-only with a note naming
   the provider ("Name and category are managed by Nayax and cannot be edited here."); its price and
   every other local field stay editable in the same form. A provider-managed category's name is
@@ -1216,7 +1219,9 @@ does not manage.
 - **A category products use is not deleted.** The refusal says how many products use it; move them
   to another category first, otherwise they would be left with no category at all.
 - **Importing the Nayax catalogue is a review you decide, entry by entry** (issue #739). **Admin →
-  Imports → Import products** opens it, for every business. It is no longer refused for a business
+  Imports → Import products** opens it, for every business, and so does **Products (All Products) →
+  Import products** (issue #875) when the signed-in member may run imports and Nayax is usable —
+  both buttons open the identical review. It is no longer refused for a business
   that keeps its own products (it was, until this change, because the old import recognised a product
   only by Nayax's own id and would have created a duplicate of each of yours), and there is no
   longer a direct import that writes Nayax's catalogue straight through: nothing is written until you

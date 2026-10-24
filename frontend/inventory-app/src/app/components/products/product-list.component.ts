@@ -2,7 +2,7 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { EMPTY, Subject, Subscription } from 'rxjs';
+import { EMPTY, Subject, Subscription, combineLatest } from 'rxjs';
 import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
@@ -22,6 +22,8 @@ import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 import { AccessService } from '../../access/access.service';
+import { ProviderAvailability, ProviderAvailabilityService, providerFeatureOffered } from '../../provider/provider-availability.service';
+import { providerToolsOffered } from '../../provider/provider-lock';
 import {
   PURCHASE_COSTS_NOT_READ_YET,
   ProductPurchaseCostColumn,
@@ -101,6 +103,16 @@ export class ProductListComponent implements OnInit, OnDestroy {
   canViewFinancials = true;
 
   /**
+   * Whether Import products is offered beside New Product (issue #875): only while the member
+   * holds `Imports.Run`, the shared provider-availability signal says the provider tools are
+   * offered (`providerToolsOffered`), the `productCatalogue` feature is offered
+   * (`providerFeatureOffered`), and no support session is active. It is recomputed whenever any of
+   * those three answers changes, the same way `canViewFinancials` is, so the button appears and
+   * disappears without a reload.
+   */
+  showImportProducts = false;
+
+  /**
    * The ids of the products currently displayed, handed to `<app-product-purchase-costs>` as the
    * one piece of context that read needs. They change only once a new fetch actually succeeds (a
    * failed refetch leaves the previous rows on screen), which is the one moment the previous
@@ -121,6 +133,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
   private readonly destroy$ = new Subject<void>();
   private readonly sessionActiveSubscription: Subscription;
   private readonly financialsAccessSubscription: Subscription;
+  private readonly importProductsVisibilitySubscription: Subscription;
 
   constructor(
     private productService: ProductService,
@@ -128,12 +141,20 @@ export class ProductListComponent implements OnInit, OnDestroy {
     private toastService: ToastService,
     private router: Router,
     supportSession: SupportSessionService,
-    access: AccessService
+    access: AccessService,
+    provider: ProviderAvailabilityService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
     this.financialsAccessSubscription = access
       .allows('Dashboard.ViewFinancials')
       .subscribe((allowed) => (this.canViewFinancials = allowed));
+    this.importProductsVisibilitySubscription = combineLatest([
+      access.allows('Imports.Run'),
+      provider.watch(),
+      supportSession.active$
+    ]).subscribe(([importsRunAllowed, providerAvailability, sessionActive]) => {
+      this.showImportProducts = ProductListComponent.importProductsOffered(importsRunAllowed, providerAvailability, sessionActive);
+    });
   }
 
   ngOnInit(): void {
@@ -156,6 +177,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.destroy$.complete();
     this.sessionActiveSubscription.unsubscribe();
     this.financialsAccessSubscription.unsubscribe();
+    this.importProductsVisibilitySubscription.unsubscribe();
   }
 
   private fetchProducts() {
@@ -325,6 +347,25 @@ export class ProductListComponent implements OnInit, OnDestroy {
 
   private static sortsMissingValueLast(column: ProductSortColumn): boolean {
     return column === 'averageCost' || column === 'lastPurchase' || column === 'cheapestPurchase';
+  }
+
+  /**
+   * Whether Import products belongs beside New Product right now (issue #875). A provider answer
+   * that has not settled yet (`undefined`) fails open, the same way `navigationFor`'s own
+   * provider-tools check does: an unread status is not a refusal.
+   */
+  private static importProductsOffered(
+    importsRunAllowed: boolean,
+    provider: ProviderAvailability | undefined,
+    sessionActive: boolean
+  ): boolean {
+    if (!importsRunAllowed || sessionActive) {
+      return false;
+    }
+    if (provider === undefined) {
+      return true;
+    }
+    return providerToolsOffered(provider.connection) && providerFeatureOffered(provider.features.productCatalogue);
   }
 
   sortBy(column: ProductSortColumn): void {

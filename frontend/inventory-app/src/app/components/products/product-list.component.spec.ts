@@ -9,13 +9,33 @@ import { ToastService } from '../../services/toast.service';
 import { Product } from '../../models/models';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { AccessService } from '../../access/access.service';
+import { Capability } from '../../access/capabilities';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { ProductPurchaseCostSummary } from '../../models/product-purchase-cost-summary';
+import { ProviderAvailabilityService } from '../../provider/provider-availability.service';
+import { SpecConnectionStatus, provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 
 /** A stub matching `AccessService.allows`'s one method, for every describe block below that does not itself care about capability gating. */
 function accessServiceStub(allowed = true): Pick<AccessService, 'allows'> {
   return { allows: () => of(allowed) };
 }
+
+/**
+ * The same stub, answering a different `allowed` per capability (issue #875), for the Import
+ * products tests below that need `Imports.Run` and `Dashboard.ViewFinancials` to disagree.
+ */
+function accessServiceStubPerCapability(answers: Partial<Record<Capability, boolean>>): Pick<AccessService, 'allows'> {
+  return { allows: (capability: Capability) => of(answers[capability] ?? true) };
+}
+
+/**
+ * Every render() below provides the real `ProviderAvailabilityService` over a stubbed connection
+ * read (issue #875's `provider-availability.spec-helpers`), because the component now asks it
+ * whether Import products belongs in the toolbar. `'NotConfigured'` is the default for every block
+ * that is not itself about that button, so none of them renders it and none of their assertions
+ * changes; the Import products describe block below overrides it per test.
+ */
+const NOT_CONNECTED = provideNayaxConnectionStatus('NotConfigured');
 
 /** A stub matching `ProductPurchaseCostService.getSummaries`, defaulting to no purchase history for anything asked. */
 function purchaseCostServiceStub(getSummaries: jest.Mock = jest.fn(() => of([]))): Pick<ProductPurchaseCostService, 'getSummaries'> {
@@ -75,6 +95,7 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
         { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
@@ -178,6 +199,7 @@ describe('ProductListComponent Actions fixed slots (issue #876)', () => {
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
         { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
@@ -249,6 +271,7 @@ describe('ProductListComponent row navigation and sorting (issue #497)', () => {
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
         { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
@@ -451,6 +474,7 @@ describe('ProductListComponent write controls during a support session (issue #5
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
         { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
@@ -541,6 +565,7 @@ describe('ProductListComponent delete vs deactivate (issue #737)', () => {
         { provide: ToastService, useValue: toastService },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
@@ -758,6 +783,7 @@ describe('ProductListComponent Status filter (issue #791)', () => {
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
@@ -864,6 +890,7 @@ describe('ProductListComponent Status column visibility (issue #828)', () => {
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
@@ -994,6 +1021,7 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: AccessService, useValue: accessServiceStub(options.allowed ?? true) },
+        NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub(getSummaries) }
       ]
     }).compileComponents();
@@ -1147,6 +1175,7 @@ describe('ProductListComponent average and purchase cost columns (issue #791)', 
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub(getSummaries) }
       ]
     }).compileComponents();
@@ -1243,6 +1272,7 @@ describe('ProductListComponent New Product in the toolbar (issue #825)', () => {
         { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
         { provide: SupportSessionService, useValue: { active$: sessionActive } },
         { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
@@ -1318,6 +1348,7 @@ describe('ProductListComponent Deactivate (issue #825)', () => {
         { provide: ToastService, useValue: toastService },
         { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
         { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
         { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
       ]
     }).compileComponents();
@@ -1507,5 +1538,132 @@ describe('ProductListComponent Deactivate (issue #825)', () => {
 
     expect(fixture.componentInstance.confirmingDeactivation).toBeNull();
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Import products beside New Product on All Products (issue #875): reachable only while the
+ * member may run imports, the shared provider-availability signal says the provider tools and the
+ * `productCatalogue` feature are both offered, and no support session is active. New Product's own
+ * visibility (issue #825) is untouched by any of this.
+ */
+describe('ProductListComponent Import products in the toolbar (issue #875)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  function nayaxPermissionNotGranted(): HttpErrorResponse {
+    return new HttpErrorResponse({ status: 409, error: { code: 'nayax_permission_not_granted' } });
+  }
+
+  async function render(
+    options: {
+      status?: SpecConnectionStatus;
+      importsRunAllowed?: boolean;
+      sessionActive?: Observable<boolean>;
+      denyProductCatalogue?: boolean;
+    } = {}
+  ) {
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll: () => of([product({ id: 1, name: 'Widget' })]) } },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
+        {
+          provide: AccessService,
+          useValue: accessServiceStubPerCapability({ 'Imports.Run': options.importsRunAllowed ?? true })
+        },
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() },
+        provideNayaxConnectionStatus(options.status ?? 'Ready')
+      ]
+    }).compileComponents();
+
+    const provider = TestBed.inject(ProviderAvailabilityService);
+    if (options.denyProductCatalogue) {
+      provider.noteRefusal(nayaxPermissionNotGranted(), 'productCatalogue');
+    }
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement, provider };
+  }
+
+  function importLink(host: HTMLElement): HTMLAnchorElement | null {
+    return host.querySelector('[data-testid="import-products-link"]');
+  }
+
+  function newProductLink(host: HTMLElement): HTMLAnchorElement | null {
+    return host.querySelector('a[href="/products/new"]');
+  }
+
+  it('shows Import products beside New Product for Imports.Run with a usable connection and productCatalogue offered', async () => {
+    const { host } = await render({ status: 'Ready' });
+
+    const link = importLink(host);
+    expect(link).not.toBeNull();
+    expect(link!.textContent?.trim()).toBe('Import products');
+    expect(newProductLink(host)).not.toBeNull();
+  });
+
+  it('shows Import products while the connection status and the productCatalogue permission are both still unknown', async () => {
+    const { host } = await render({ status: 'unreadable' });
+
+    expect(importLink(host)).not.toBeNull();
+    expect(newProductLink(host)).not.toBeNull();
+  });
+
+  it('hides Import products, and keeps New Product, when there is no usable connection', async () => {
+    const { host } = await render({ status: 'NotConfigured' });
+
+    expect(importLink(host)).toBeNull();
+    expect(newProductLink(host)).not.toBeNull();
+  });
+
+  it('hides Import products, and keeps New Product, when productCatalogue is permissionNotGranted under PendingPermissions', async () => {
+    const { host } = await render({ status: 'PendingPermissions', denyProductCatalogue: true });
+
+    expect(importLink(host)).toBeNull();
+    expect(newProductLink(host)).not.toBeNull();
+  });
+
+  it('hides Import products, and keeps New Product, for a member without Imports.Run', async () => {
+    const { host } = await render({ status: 'Ready', importsRunAllowed: false });
+
+    expect(importLink(host)).toBeNull();
+    expect(newProductLink(host)).not.toBeNull();
+  });
+
+  it('hides both Import products and New Product during a support session', async () => {
+    const { host } = await render({ status: 'Ready', sessionActive: of(true) });
+
+    expect(importLink(host)).toBeNull();
+    expect(newProductLink(host)).toBeNull();
+  });
+
+  it('appears as the provider state changes to usable, without a reload', async () => {
+    const { host, provider, fixture } = await render({ status: 'NotConfigured' });
+    expect(importLink(host)).toBeNull();
+
+    provider.accept({ status: 'Ready', machineChecksPending: false });
+    fixture.detectChanges();
+
+    expect(importLink(host)).not.toBeNull();
+  });
+
+  it('disappears as the provider state changes away from usable, without a reload', async () => {
+    const { host, provider, fixture } = await render({ status: 'Ready' });
+    expect(importLink(host)).not.toBeNull();
+
+    provider.accept({ status: 'NotConfigured', machineChecksPending: false });
+    fixture.detectChanges();
+
+    expect(importLink(host)).toBeNull();
+  });
+
+  it('navigates to /admin/imports?review=catalogue', async () => {
+    const { host } = await render({ status: 'Ready' });
+
+    expect(importLink(host)!.getAttribute('href')).toBe('/admin/imports?review=catalogue');
   });
 });

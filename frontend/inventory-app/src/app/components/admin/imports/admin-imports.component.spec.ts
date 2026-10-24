@@ -1,5 +1,5 @@
 import { TestBed } from '@angular/core/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { Observable, of, throwError } from 'rxjs';
 import { AdminImportsComponent } from './admin-imports.component';
 import { CatalogueReviewService } from '../../../services/catalogue-review.service';
@@ -29,13 +29,15 @@ const startReview = jest.fn(() =>
 async function render(
   importService: Partial<ImportService>,
   toast?: Partial<ToastService>,
-  sessionActive: Observable<boolean> = of(false)
+  sessionActive: Observable<boolean> = of(false),
+  queryParams: Record<string, string> = {}
 ) {
   startReview.mockClear();
   await TestBed.configureTestingModule({
     imports: [AdminImportsComponent],
     providers: [
       provideRouter([]),
+      { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: convertToParamMap(queryParams) } } },
       { provide: ImportService, useValue: importService },
       { provide: CatalogueReviewService, useValue: { start: startReview, apply: jest.fn() } },
       { provide: ProductService, useValue: { getAll: () => of([]) } },
@@ -225,6 +227,36 @@ describe('AdminImportsComponent product catalogue import (issue #739)', () => {
     expect(host.querySelector('[data-testid="catalogue-review"]')).toBeNull();
     const button = Array.from(host.querySelectorAll('button')).find(x => x.textContent?.includes('Import products'));
     expect(button?.disabled).toBe(false);
+  });
+});
+
+describe('AdminImportsComponent review=catalogue query parameter (issue #875)', () => {
+  it('opens the catalogue review on load through the same importProducts() path its own button uses', async () => {
+    const { fixture } = await render({}, undefined, of(false), { review: 'catalogue' });
+
+    expect(fixture.componentInstance.reviewing).toBe(true);
+    expect(startReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not open the review from the parameter while a support session is active', async () => {
+    const { fixture } = await render({}, undefined, of(true), { review: 'catalogue' });
+
+    expect(fixture.componentInstance.reviewing).toBe(false);
+    expect(startReview).not.toHaveBeenCalled();
+  });
+
+  it('behaves exactly as today without the parameter', async () => {
+    const { fixture } = await render({}, undefined, of(false), {});
+
+    expect(fixture.componentInstance.reviewing).toBe(false);
+    expect(startReview).not.toHaveBeenCalled();
+  });
+
+  it('ignores any other value of the parameter', async () => {
+    const { fixture } = await render({}, undefined, of(false), { review: 'sales' });
+
+    expect(fixture.componentInstance.reviewing).toBe(false);
+    expect(startReview).not.toHaveBeenCalled();
   });
 });
 
