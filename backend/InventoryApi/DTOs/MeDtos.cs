@@ -31,12 +31,22 @@ namespace InventoryApi.DTOs;
 /// which is every request today's UI makes. Its presence is how a client knows the data on screen
 /// belongs to somebody else and that nothing on it can be changed.
 /// </param>
+/// <param name="HistoricalGstClassificationVisible">
+/// Whether the application currently <em>offers</em> Historical GST Classification to anybody but a
+/// Super Admin (issue #873) - one shared application-wide setting, reported here because this is the
+/// read the application shell builds its menu from. It is deliberately not a capability and implies
+/// none: <paramref name="Capabilities"/> is identical in both states, <see langword="false"/> hides
+/// the entry from the members it was switched off for, <see langword="true"/> restores it only to
+/// members whose capabilities already allowed it, and the classification endpoints keep authorizing
+/// every request by <c>Data.Repair</c> either way.
+/// </param>
 public sealed record MeAccessResponse(
     string? Role,
     IReadOnlyList<string> Capabilities,
     string BusinessName,
     string TimeZoneId,
-    MeSupportSessionResponse? SupportSession);
+    MeSupportSessionResponse? SupportSession,
+    bool HistoricalGstClassificationVisible);
 
 /// <summary>
 /// The support session a request is inside, as <c>GET /api/me/access</c> reports it (issue #551).

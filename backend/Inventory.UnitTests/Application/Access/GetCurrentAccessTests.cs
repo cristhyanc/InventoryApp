@@ -1,10 +1,12 @@
 using Inventory.Application.Access;
 using Inventory.Application.Businesses;
+using Inventory.Application.PlatformOptions;
 using Inventory.Application.SupportSessions;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.Exceptions;
 using Inventory.Domain.Tenancy;
 using InventoryApi.Tests.Application.Gst;
+using InventoryApi.Tests.Application.PlatformOptions;
 using InventoryApi.Tests.Application.SupportSessions;
 using Xunit;
 
@@ -27,7 +29,8 @@ public class GetCurrentAccessTests
     private static GetCurrentAccess Create(
         ICurrentBusinessProvider currentBusiness,
         IBusinessProfileStore? store = null,
-        ISupportSessionAccessor? supportSession = null)
+        ISupportSessionAccessor? supportSession = null,
+        IOptionVisibilityStore? options = null)
     {
         var session = supportSession ?? new FakeSupportSessionAccessor();
 
@@ -35,7 +38,8 @@ public class GetCurrentAccessTests
             currentBusiness,
             new CurrentCapabilities(session, currentBusiness, new FakeRolePreviewAccessor()),
             session,
-            new GetCurrentBusiness(currentBusiness, store ?? new FakeBusinessProfileStore()));
+            new GetCurrentBusiness(currentBusiness, store ?? new FakeBusinessProfileStore()),
+            new GetOptionVisibility(options ?? new FakeOptionVisibilityStore()));
     }
 
     [Theory]
@@ -122,6 +126,40 @@ public class GetCurrentAccessTests
 
         Assert.Equal(reason, exception.Reason);
         Assert.Null(store.LastRequestedBusinessId);
+    }
+
+    /// <summary>
+    /// The switchable option's state travels with the answer (issue #873), and it changes nothing
+    /// about the capabilities: the same Owner is reported with exactly the Owner capability set
+    /// whether the option is offered or switched off. That is the whole distinction the issue rests
+    /// on - switching it off hides an entry and grants or revokes nothing.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Reports_the_shared_option_visibility_without_changing_any_capability(bool visible)
+    {
+        var access = await Create(
+                new FakeCurrentBusinessProvider(BusinessId, BusinessRole.Owner),
+                options: FakeOptionVisibilityStore.Holding(visible))
+            .Handle(CancellationToken.None);
+
+        Assert.Equal(visible, access.HistoricalGstClassificationVisible);
+        Assert.Equal(RoleCapabilities.For(BusinessRole.Owner), access.Capabilities);
+        Assert.Contains(Capability.DataRepair, access.Capabilities);
+    }
+
+    /// <summary>
+    /// An installation that has never switched anything offers the option, which is what every
+    /// existing deployment gets on the day this arrives.
+    /// </summary>
+    [Fact]
+    public async Task Reports_the_option_as_offered_when_nothing_has_ever_been_switched()
+    {
+        var access = await Create(new FakeCurrentBusinessProvider(BusinessId, BusinessRole.Operator))
+            .Handle(CancellationToken.None);
+
+        Assert.True(access.HistoricalGstClassificationVisible);
     }
 
     /// <summary>

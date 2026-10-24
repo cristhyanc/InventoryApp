@@ -22,6 +22,7 @@ using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.PlatformOptions;
 using Inventory.Application.Products;
 using Inventory.Application.Providers;
 using Inventory.Application.Purchases;
@@ -192,6 +193,12 @@ public static class InfrastructureServiceCollectionExtensions
         // one table in this schema that names no business in any statement because it is about none.
         // Scoped like every adapter here, so it runs on the request's own denied-scope context.
         services.AddScoped<ISupplierPresetStore, EfSupplierPresetStore>();
+        // The shared switchable option visibility (issue #873): the second table in this schema that
+        // names no business, for the same reason - the setting is one answer for the whole
+        // application. Scoped like every adapter here, so the Super Admin's write runs on the
+        // request's own denied-scope context and a member's read on their own resolved one; neither
+        // scope selects anything, because there is no owner to compare.
+        services.AddScoped<IOptionVisibilityStore, EfOptionVisibilityStore>();
         // The one provisioning write of issue #849: the copies of those presets a business receives
         // when its application is approved. A separate one-method adapter rather than a method on
         // the directory store above, because this is the only platform-admin path that writes a

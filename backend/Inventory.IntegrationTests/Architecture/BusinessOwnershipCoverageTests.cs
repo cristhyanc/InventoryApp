@@ -80,13 +80,26 @@ public class BusinessOwnershipCoverageTests
     /// stamp - and keeps the "still carries a business key" rule below exactly as strong for the five
     /// it is about.</para>
     ///
-    /// <para>A platform table is still only writable by the platform-admin surface, which carries a
-    /// <em>denied</em> business scope; that is enforced by the endpoint's authorization, not by the
-    /// ownership mechanism, because there is no ownership here to enforce.</para>
+    /// <para><see cref="PlatformOptionVisibility"/> is the second, and the reviewed ownership decision
+    /// on issue #873. The structural reason is the setting itself: whether the one switchable Admin
+    /// option is offered is a single shared application-wide answer, so there is no business whose
+    /// key the row could carry and no filter a business could match it by. One row, one boolean, and
+    /// nothing about anybody's data.</para>
+    ///
+    /// <para>A platform table is still only <em>writable</em> by the platform-admin surface, which
+    /// carries a <em>denied</em> business scope; that is enforced by the endpoint's authorization, not
+    /// by the ownership mechanism, because there is no ownership here to enforce. Reading is the same
+    /// for <see cref="SupplierPreset"/>, whose list no business endpoint knows exists. Issue #873's
+    /// one boolean is the single documented exception: <c>GET /api/me/access</c> publishes it to every
+    /// member, because an option the application switched off has to stop being offered to the people
+    /// it was switched off for. That read reaches this one column and nothing else - see AGENTS.md
+    /// § Tenant ownership and data isolation and docs/architecture.md § Switchable Admin option
+    /// visibility.</para>
     /// </summary>
     private static readonly HashSet<Type> PlatformEntities =
     [
         typeof(SupplierPreset),
+        typeof(PlatformOptionVisibility),
     ];
 
     /// <summary>
@@ -110,13 +123,15 @@ public class BusinessOwnershipCoverageTests
                 .ToArray());
 
     /// <summary>
-    /// The platform list is closed in the same way and for the same reason: a second table claiming
-    /// to be about no business is a tenancy decision, not an implementation detail.
+    /// The platform list is closed in the same way and for the same reason: a table claiming to be
+    /// about no business is a tenancy decision, not an implementation detail. There are two, each
+    /// added by its own reviewed issue - the supplier presets (#848) and the option-visibility
+    /// setting (#873) - and a third one arriving is the change this assertion exists to make visible.
     /// </summary>
     [Fact]
-    public void Exactly_one_entity_is_declared_a_platform_table() =>
+    public void Exactly_two_entities_are_declared_platform_tables() =>
         Assert.Equal(
-            ["SupplierPreset"],
+            ["PlatformOptionVisibility", "SupplierPreset"],
             PlatformEntities
                 .Select(type => type.Name)
                 .Order(StringComparer.Ordinal)

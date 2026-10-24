@@ -1,10 +1,14 @@
 import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { RouterLink } from '@angular/router';
-import { Subject, takeUntil } from 'rxjs';
+import { Subject, catchError, combineLatest, distinctUntilChanged, of, startWith, takeUntil } from 'rxjs';
 import { AccessService, MemberAccessState } from '../../access/access.service';
 import { Capability } from '../../access/capabilities';
-import { NavLink, adminNavGroup } from '../../layout/navigation';
+import { OptionVisibility } from '../../access/option-visibility';
+import { NavLink, adminNavGroup, optionSwitchedOff, switchableOptionRoute } from '../../layout/navigation';
+import { RolePreviewService } from '../../role-preview/role-preview.service';
+import { PlatformDiagnosticsAccessService } from '../../services/platform-diagnostics-access.service';
+import { HistoricalGstVisibilityToggleComponent } from './historical-gst-classification/historical-gst-visibility-toggle.component';
 
 interface AdminCard {
   readonly route: string;
@@ -107,11 +111,21 @@ const ADMIN_CARD_CAPABILITY = new Map<string, Capability>(
  * the same conditions, its sidebar link does. A hidden card hides a page rather than protects one -
  * the endpoint behind each page checks the same capability itself - and this component fetches no
  * protected data of its own to decide that; it only reads the already-cached capability set.
+ *
+ * **It also applies the one switchable option, and offers the Super Admin the switch** (issue #873).
+ * `Historical GST Classification` is withheld here, exactly as it is withheld from the sidebar, while
+ * the shared setting says it is switched off and the viewer is not the platform administrator; the
+ * administrator keeps the card in both states, marked with an `Off` pill while it is off, and is
+ * offered the switch itself beside it. The three answers that decide it are each somebody else's:
+ * the setting travels with the capability set on `GET /api/me/access`, platform-admin access is the
+ * diagnostics probe's separate answer, and a role preview withholds the administrator's own
+ * treatment the same way it withholds the `Super Admin` menu group (issue #721) - because what a
+ * preview shows is what the previewed role would see.
  */
 @Component({
   selector: 'app-admin',
   standalone: true,
-  imports: [CommonModule, RouterLink],
+  imports: [CommonModule, RouterLink, HistoricalGstVisibilityToggleComponent],
   template: `
     <div class="page">
       <header class="page-header">
@@ -124,9 +138,26 @@ const ADMIN_CARD_CAPABILITY = new Map<string, Capability>(
       <div class="grid gap-5 md:grid-cols-2">
         <section class="card" *ngFor="let card of cards">
           <div class="card-body">
-            <h2 class="card-title">{{ card.title }}</h2>
+            <h2 class="card-title">
+              {{ card.title }}
+              <!--
+                The switched-off option (issue #873): the pill reads exactly "Off", immediately after
+                the option's name, with the sentence a screen reader is given beside it. Only a Super
+                Admin is shown this card in that state, so the pill is only ever rendered for them.
+              -->
+              @if (isSwitchedOff(card.route)) {
+                <span class="badge badge-neutral">Off</span>
+                <span class="sr-only">{{ card.title }} is switched off and hidden from everybody but a Super Admin.</span>
+              }
+            </h2>
             <p class="mt-1 text-sm value-muted">{{ card.description }}</p>
             <a [routerLink]="card.route" class="btn btn-primary mt-4 inline-flex">Open {{ card.title }}</a>
+            @if (isSwitchable(card.route) && isSuperAdmin) {
+              <app-historical-gst-visibility-toggle
+                [visible]="!isSwitchedOff(card.route)"
+                (saved)="onVisibilitySaved()"
+              />
+            }
           </div>
         </section>
       </div>
@@ -137,19 +168,75 @@ export class AdminComponent implements OnInit, OnDestroy {
   /** Starts empty: no card is offered before the member's capabilities are known. */
   cards: readonly AdminCard[] = [];
 
+  /**
+   * Whether the viewer is the platform administrator, acting as themselves. `false` until the
+   * diagnostics probe confirms it, and `false` again while a role preview is running - the switch
+   * belongs to the administrator, and a preview is there to show what a business role sees.
+   */
+  isSuperAdmin = false;
+
+  /** The shared switchable-option answer, or `undefined` while it is not known. */
+  private options?: OptionVisibility;
+
   private readonly destroying$ = new Subject<void>();
 
-  constructor(private readonly access: AccessService) {}
+  constructor(
+    private readonly access: AccessService,
+    private readonly diagnosticsAccess: PlatformDiagnosticsAccessService,
+    private readonly rolePreview: RolePreviewService
+  ) {}
 
   ngOnInit(): void {
-    this.access.access$.pipe(takeUntil(this.destroying$)).subscribe((state) => {
-      this.cards = ADMIN_CARDS.filter((card) => this.isAllowed(state, card.route));
-    });
+    // The probe and the preview answer different questions on their own schedules, and neither holds
+    // the cards back: both start as "no", which is what every ordinary member is, and a failed probe
+    // stays there silently - a link hub is not the place to report that an access check failed.
+    const hasDiagnosticsAccess = this.diagnosticsAccess.granted$.pipe(
+      catchError(() => of(false)),
+      startWith(false)
+    );
+
+    combineLatest([
+      this.access.access$,
+      hasDiagnosticsAccess,
+      this.rolePreview.active$.pipe(startWith(false), distinctUntilChanged())
+    ])
+      .pipe(takeUntil(this.destroying$))
+      .subscribe(([state, diagnosticsGranted, rolePreviewActive]) => {
+        this.isSuperAdmin = diagnosticsGranted && !rolePreviewActive;
+        this.options = state.status === 'granted' ? state.access.optionVisibility : undefined;
+        this.cards = ADMIN_CARDS.filter(
+          (card) => this.isAllowed(state, card.route) && !this.isWithheld(card.route)
+        );
+      });
   }
 
   ngOnDestroy(): void {
     this.destroying$.next();
     this.destroying$.complete();
+  }
+
+  /** Whether this card is the one a Super Admin may switch off (issue #873). */
+  isSwitchable(route: string): boolean {
+    return route === switchableOptionRoute;
+  }
+
+  /** Whether the application has switched this card's option off, whoever is looking. */
+  isSwitchedOff(route: string): boolean {
+    return optionSwitchedOff(route, this.options);
+  }
+
+  /**
+   * A saved switch is the server's new answer, so the shared read is taken again: that re-renders
+   * this hub, the sidebar and everything else built from it from one answer rather than from a value
+   * this page decided to believe.
+   */
+  onVisibilitySaved(): void {
+    this.access.refresh();
+  }
+
+  /** Switched off, and the viewer is not the Super Admin the switch exempts. */
+  private isWithheld(route: string): boolean {
+    return this.isSwitchedOff(route) && !this.isSuperAdmin;
   }
 
   private isAllowed(state: MemberAccessState, route: string): boolean {

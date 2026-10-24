@@ -103,8 +103,21 @@ public sealed class MeAccessApiTests : IClassFixture<MeAccessApiTests.ApiFactory
         var json = await ReadJsonAsync(response);
 
         Assert.Equal(
-            ["businessName", "capabilities", "role", "supportSession", "timeZoneId"],
+            [
+                "businessName",
+                "capabilities",
+                // The shared switchable option visibility (issue #873): what the application offers,
+                // beside what this member may do. It is part of the asserted shape rather than an
+                // extra field a client may or may not find, and it is never a capability - every
+                // capability list above is identical in both of its states.
+                "historicalGstClassificationVisible",
+                "role",
+                "supportSession",
+                "timeZoneId",
+            ],
             json.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        // Nothing has been switched off in this deployment, so the option is offered.
+        Assert.True(json.GetProperty("historicalGstClassificationVisible").GetBoolean());
         Assert.Equal(expectedRole, json.GetProperty("role").GetString());
         // A member is in no support session, and the field is an explicit null rather than omitted
         // so the shape is stable for a client (issue #551).
