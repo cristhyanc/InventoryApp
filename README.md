@@ -396,6 +396,7 @@ Ownership decides *whose* data a member sees; their **role** decides what they m
   - **Operator** — the Dashboard (including its sales refresh) and the Pick List; inventory: products, take inventory, categories, stock and stock history, machines including Sync Restock, and sites; purchasing: purchases, supplier orders and suppliers. They may record a purchase but not change a supplier's GST defaults (`Suppliers.ManageGstDefaults`), and they reach no report, expense, import, site commission, setting or maintenance tool at all.
   - **Manager** — everything an Operator reaches, plus a supplier's GST defaults, operating expenses and their attachments, every report and its CSV/XLSX export, Admin → Imports, and the site commission report, agreements and payments. Not the Nayax settings and not any data repair, so a Manager may read a report whose underlying processing-fee rate only an Owner may change.
   - **Owner** — everything a Manager reaches, plus Admin → Integrations (the Nayax connection wizard and the processing fee rates; see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)), the Nayax catalogue reconciliation, all five maintenance repairs (Costing Repair, Inventory AVCO Transition Baseline, Historical GST Classification, Nayax Sale Timestamp Repair and Nayax Historical Cost Recovery), Admin → Users (below), Admin → Roles and Admin → Business Settings (see [Business settings (Admin page)](#business-settings-admin-page)). Each repair's preview and dry run is as restricted as its apply.
+  - **Holding the capability is not the same as the page being usable.** Two Admin pages need the live Nayax fleet read and show the connection-required page without it (issue #869): **Site Commission Agreements**, whose site picker is that read and which a Manager reaches as well as an Owner, and the Owner-only **Inventory AVCO Transition Baseline**, whose preview reads the machines and their products. **Nayax Historical Cost Recovery is deliberately not locked** — it reads the Nayax cost already stored on imported sales and makes no Nayax call — and neither are Costing Repair and Historical GST Classification, which work on the business's own data. See [The menu without a usable provider](#the-menu-without-a-usable-provider).
   - **Admin → Roles** (issue #530) is a read-only page, on `Roles.View`, which only an Owner holds: it explains what Owner, Manager and Operator can each access, from the same table above. It edits nothing — no role, no permission and no member — and is rendered from one frontend definition kept from drifting away from the published capability vocabulary by its own test (see [docs/architecture.md § The Roles page](docs/architecture.md#the-roles-page-issue-530)).
   - **The dashboard's financial figures are sent only to a role that may see them** (issue #527). Every role reaches `GET /api/dashboard/summary` — it is the landing page — but a role without `Dashboard.ViewFinancials`, today an Operator, receives the response with no `salesThisWeek` object and no `inventory.inventoryValueAtCost`: both are **absent from the JSON**, not `null` and not `0`, and the week's sales are never calculated for that caller. Everything else in the response is unchanged. The Angular dashboard hides those two cards when the figures are absent and shows the two non-financial cards alone (issue #528), so the fix was never to make the API send `null`.
   - **`Dashboard.ViewFinancials` covers every sales, revenue, profit, margin, profitability-status and trend/comparison figure, and inventory value, on the Dashboard, Sites and Machines pages** (issue #699) — not only the two headline cards above. The Sites list and the home Dashboard's Sites/Machines tables hide their revenue, direct-profit, margin and trend columns without it; Site Products hides Estimated Card Profit (and drops it from the CSV export); the Machines list hides sales, direct profit and the profitability-status badge; and Machine Detail hides its revenue/direct-profit summary cards and the Estimated Card Profit/50% Card Margin Price product columns. Unit cost, site/machine selling price, stock, restock and navigation stay visible to every role. That page-level hide is read from `GET /api/me/access` rather than from each endpoint's response, so on its own it hides a figure rather than protecting it; the API withholds the figures too, for the site endpoints since #697, for the machine and product endpoints since #698, and for the stock-movement and purchasing endpoints since #700 (the next three bullets).
@@ -1762,7 +1763,8 @@ that cannot be used.
 Issue #729 puts the same answer in the navigation, so the menu says which features need a provider
 before a page has to, and issue #868 reshaped what that looks like: no "Needs Nayax" section, Sites
 above Machines, Site Commissions back under Reports, and five of the reports showing the same
-connection-required page.
+connection-required page. Issue #869 added two Admin pages to it, and deliberately left a third
+out.
 
 - **There is no "Needs Nayax" section.** Issue #868 removed it: the menu is Dashboard, Pick List,
   **Sites**, **Machines** (since issue #740 — see [Machines](#machines) below), **Inventory** (the
@@ -1791,6 +1793,23 @@ connection-required page.
   them, and every report that is open shows its own availability states — complete, stale,
   unverified or missing (see
   [docs/architecture.md § Report availability model](docs/architecture.md#report-availability-model-issue-730)).
+- **Two Admin pages need a working connection too** (issue #869): **Admin → Site Commission
+  Agreements**, whose site picker *is* the live Nayax fleet read, and **Admin → AVCO Transition**
+  (the Inventory AVCO Transition Baseline), whose preview reads your machines and then their
+  products. Both show the same connection-required page and the same **Connect** action Site
+  Commissions does, and — because what is behind them is read from Nayax as the page opens — either
+  credentials that are missing *or* credentials that have stopped working lock them. Nothing of the
+  page is loaded while it is locked, so no site list, preview, apply or baseline request is sent, and
+  everything each page does once it opens is exactly as it was. A
+  [support session](#super-admin-support-sessions) follows the **supported** business's own
+  connection status and neither adds a lock nor bypasses one: a connected business opens the page in
+  the read-only view it already had, and a business with no usable connection reaches the same
+  connection-required page a member would.
+- **Admin → Nayax Historical Cost Recovery stays available with no Nayax connection.** It makes no
+  Nayax call at all: it reads the Nayax cost already **stored** on the sales you imported, so a
+  business that has imported history and has since lost (or never had) a connection can still
+  recover those costs. Admin → Costing Repair and Admin → Historical GST Classification are the
+  business's own data and stay available too.
 - **Waiting for one Nayax permission reads differently from having no connection.** With a usable
   connection whose Nayax account has not granted one read (`PendingPermissions`), the entries that
   need that read are locked as *waiting for a Nayax permission* and their page names the Nayax read

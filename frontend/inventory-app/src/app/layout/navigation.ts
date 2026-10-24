@@ -40,6 +40,13 @@ import { ProviderLock, providerLockOf, providerToolsOffered } from '../provider/
  * connection with a refused read, and credentials that stopped working, keep these reports open,
  * because what they report on is already stored and nothing about it is read live. Bookkeeping and
  * GST declare nothing and are never locked.
+ *
+ * Issue #869 does the same for two Admin destinations, on the **live fleet read** rather than on
+ * stored records: `Site Commission Agreements`, whose site picker is that read, and `AVCO
+ * Transition`, whose preview reads the machines and then their products. `Historical Cost Recovery`
+ * deliberately declares nothing and is never locked (the user's decision of 24 October 2026): it
+ * makes no Nayax call at all, reading the Nayax cost already stored on imported sales, so a
+ * disconnected business with imported history can still recover those costs.
  */
 
 /**
@@ -147,12 +154,27 @@ export const adminNavGroup: NavGroup = {
     // a sales provider, so it is also the one destination every locked page sends an Owner to, and
     // it stays in the top section whatever the provider's state - it has to be reachable to fix it.
     link('Integrations', '/admin/nayax-settings', 'Integration.Manage'),
-    link('Site Commission Agreements', '/admin/site-commission-agreements', 'SiteCommissions.Manage'),
+    {
+      // Locked on the live fleet read since issue #869, for the same reason the site commission
+      // report is: this page's site picker *is* that read (`GET /api/sites`), and a site is known
+      // only from it, so with no usable connection there is no site to write an agreement against.
+      ...link('Site Commission Agreements', '/admin/site-commission-agreements', 'SiteCommissions.Manage'),
+      lockedWithout: 'machineFleet'
+    },
     // The Nayax sales and settlement imports, and the Nayax sale timestamp repair: hidden until the
     // provider is usable (issue #729).
     providerToolLink('Imports', '/admin/imports', 'Imports.Run'),
+    // Deliberately never locked (issue #869, the user's decision of 24 October 2026): this page
+    // makes no Nayax call at all - it reads the Nayax cost already stored on imported sales - so a
+    // disconnected business with imported history can still recover those costs.
     link('Historical Cost Recovery', '/admin/historical-cost-recovery', 'Data.Repair'),
-    link('AVCO Transition', '/admin/avco-transition', 'Data.Repair'),
+    {
+      // Locked on the live fleet read since issue #869: the transition preview reads the machines
+      // and then their products from Nayax, so without a usable connection it has no baseline to
+      // offer.
+      ...link('AVCO Transition', '/admin/avco-transition', 'Data.Repair'),
+      lockedWithout: 'machineFleet'
+    },
     link('Costing Repair', '/admin/costing-repair', 'Data.Repair'),
     link('Historical GST Classification', '/admin/historical-gst-classification', 'Data.Repair'),
     providerToolLink('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair'),

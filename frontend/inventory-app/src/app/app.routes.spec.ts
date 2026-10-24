@@ -465,6 +465,48 @@ describe('provider-locked routes (issues #729, #868)', () => {
 });
 
 /**
+ * The two Admin destinations issue #869 locks: Site Commission Agreements, whose site picker is the
+ * live fleet read, and the Inventory AVCO Transition Baseline, whose preview reads the machines and
+ * their products. Both declare the live fleet read, so a business with no usable connection sees the
+ * same connection-required page Site Commissions already showed.
+ *
+ * Nayax Historical Cost Recovery deliberately stays unlocked (the user's decision of 24 October
+ * 2026): it makes no Nayax call at all - it reads the Nayax cost already stored on imported sales -
+ * so a disconnected business with imported history can still recover those costs.
+ */
+describe('provider-locked Admin routes (issue #869)', () => {
+  const LOCKED_ADMIN_PATHS = ['admin/site-commission-agreements', 'admin/avco-transition'];
+
+  it.each(LOCKED_ADMIN_PATHS)('guards /%s with a provider guard declared after its capability guard', (path) => {
+    const guards = route(path).canActivate ?? [];
+
+    expect(guards).toHaveLength(4);
+    expect(guards[0]).toBe(MsalGuard);
+    expect(guards[1]).toBe(accountStateGuard);
+    // The capability guard stays third, so a role that does not include the page reaches its own
+    // explanation rather than an invitation to connect a provider it still could not use. That
+    // order is driven, rather than only counted, in `provider/provider-lock.guard.spec.ts`.
+    expect(guards[3]).not.toBe(guards[2]);
+  });
+
+  it('leaves Nayax Historical Cost Recovery with no provider guard at all', () => {
+    expect(route('admin/historical-cost-recovery').canActivate).toHaveLength(3);
+  });
+
+  /**
+   * The other Admin pages are out of issue #869's scope and keep exactly the guards they had: the
+   * two costing/GST repairs over the business's own data, and the two provider tools the menu hides
+   * outright rather than locking (asserted above).
+   */
+  it.each(['admin/costing-repair', 'admin/historical-gst-classification', 'admin/users', 'admin/roles'])(
+    'leaves /%s with no provider guard either',
+    (path) => {
+      expect(route(path).canActivate).toHaveLength(3);
+    }
+  );
+});
+
+/**
  * The sign-in page (issue #711). It is the page `SignInAuthorityGuard` sends a signed-out visitor
  * to instead of starting a redirect, so it has to be reachable without authentication - exactly
  * like the `/auth` callback, and for the same reason.

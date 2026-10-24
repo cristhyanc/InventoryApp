@@ -6420,8 +6420,11 @@ use again by connecting Nayax, has to stay visible and explain itself. Hiding is
 second — Admin → `Imports` (the Nayax sales and settlement imports) and Admin → `Nayax Sale
 Timestamp Repair` — because with no provider there is nothing of the provider's to import or repair,
 so a locked entry would offer a tool for data that does not exist. `Integrations` carries neither: it
-is where a connection is made, so it can never depend on one. The costing and GST repairs carry
-neither either — they are the business's own data.
+is where a connection is made, so it can never depend on one. Costing Repair, Historical GST
+Classification and — by the recorded decision below — Nayax Historical Cost Recovery carry neither
+either: each works entirely from data this business already holds. The one costing page that is
+locked is `AVCO Transition` (issue #869), and it is locked for what it *reads* rather than for what
+it repairs: its preview reads the machines and their products from Nayax before any baseline exists.
 
 **`provider/provider-lock.ts` is the one place that answer becomes a verdict about a destination**,
 and it holds nothing but pure functions, because the menu, the route guard and the page the guard
@@ -6455,6 +6458,46 @@ Transactions, Reconciliation, Machines and Products declare `lockedWithout: 'pro
 carry `requireProvider('providerRecords')` after `requireCapability('Reports.View')`; Bookkeeping and
 GST declare nothing and carry no provider guard at all, so a business without Nayax keeps two reports
 it can open. Decision P5 stands everywhere else.
+
+**And on two Admin destinations, on the live fleet read rather than on stored records** (issue #869).
+`/admin/site-commission-agreements` declares `lockedWithout: 'machineFleet'` and carries
+`requireProvider('machineFleet')` after `requireCapability('SiteCommissions.Manage')`, because that
+page's site picker **is** the fleet read (`GET /api/sites`) and a site is known only from it, so with
+no usable connection there is no site to write an agreement against.
+`/admin/avco-transition` declares the same feature and carries `requireProvider('machineFleet')`
+after `requireCapability('Data.Repair')`, because its preview reads the machines and then their
+products (`InventoryCostTransitionPreviewBuilder`). The live fleet read is deliberately the feature
+for both: unlike the five stored-record reports above, credentials that stopped working
+(`NeedsAttention`) lock them too, because what is behind them is read from Nayax as the page opens
+and there is nothing stored to fall back on. The refused navigation never constructs the page
+component, so no site list, agreement list, preview, apply or baseline request is sent. Each page's
+own validation and action restrictions are unchanged once it opens, and no backend contract,
+financial rule or stored row changes.
+
+**Nayax Historical Cost Recovery is deliberately *not* locked** (the user's decision of 24 October
+2026, recorded with issue #869): `/admin/historical-cost-recovery` keeps no provider guard and no
+`lockedWithout`, because it makes no Nayax call at all — `BackfillNayaxHistoricalSaleCosts` reads the
+Nayax cost already **stored** on imported sales — so a disconnected business with imported history
+can still recover those costs. That is the same reasoning `providerRecords` embodies for the five
+reports, applied to a repair over stored data; it is a decision rather than an omission, and the
+route spec and the navigation spec each assert it. The other Admin pages are untouched: Costing
+Repair and Historical GST Classification are the business's own data, and `Imports` and `Nayax Sale
+Timestamp Repair` are `hiddenWithoutProvider` tools rather than locked destinations.
+
+**A read-only support session is not an input to this decision.** The guard reads one thing,
+`GET /api/settings/nayax-connection/status`, and in a session that is the **supported** business's
+stored status: `GetNayaxConnectionStatus` resolves no credential, and a session resolves none at all
+(see [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551)).
+So an active session neither adds a lock nor bypasses one. A session on a business whose connection
+is `Ready` or `PendingPermissions` opens both pages, and each shows the **existing** read-only
+support-session view it already had (issues #659 and #661) — the guard must not redirect it to
+`/needs-provider`, because that business does have a connection. A session on a business that is
+`NotConfigured` or `NeedsAttention` is redirected exactly as a member is, which matters because a
+session grants `SiteCommissions.Manage` and `Data.Repair` and would otherwise reach a page whose
+every live read fails. The Connect action follows each page's existing `Integration.Manage` check,
+with no rule of its own for a session. And a `403 read_only_support_session` from a page's own
+request is still not a provider answer at all (`noteRefusal` returns `null` for it), so it never
+becomes a retained refusal and never turns a page into the connection-required view.
 
 **The UI lock is not a loss of data, and `providerRecords` is why it is the narrowest lock there is.**
 Nothing about stored sales changes: no backend contract, no report API, no export, no stored row, and
@@ -6569,13 +6612,19 @@ Products, each lock state per status and per role, the five stored-record report
 missing connection while `NeedsAttention`, a refused read and an unread status leave them open,
 Bookkeeping and GST never locked, the per-feature case where one refused read locks its destinations
 and leaves a granted one open, the repair tools hidden and offered, the group dropped when the
-provider's was its only child, and the capability rule applying first.
+provider's was its only child, and the capability rule applying first; its issue #869 block adds the
+two Admin destinations - the live fleet read each declares, every lock state per status, Historical
+Cost Recovery never locked in any of them, and both kept in the `Admin` group rather than hidden.
 `layout/sidebar-nav.component.spec.ts` covers the absence of any section heading, a locked entry
 still being a link with its badge and sentence, the permission lock's own wording, the five reports
 locked and the two unlocked inside the open `Reports` group in each connection state, the menu order
 an Owner, a Manager and a Reports-only role are each shown, the hidden repair
 tools, the one status read however many entries depend on it, and the read never made for a withheld
-business menu; its `provider changes while it stays mounted` block proves the same sidebar - never a
+business menu; its issue #869 block adds the two Admin destinations inside the open `Admin` group -
+locked and still linked with no connection, locked for credentials that stopped working, locked as a
+*permission* when the fleet read was refused, unlocked on a usable or unread status, Historical Cost
+Recovery never locked beside them, and a Manager shown the locked agreements page and no AVCO entry
+at all; its `provider changes while it stays mounted` block proves the same sidebar - never a
 recreated one - unlocks and offers the tools when a connection is accepted, locks them and withdraws
 the tools when the credentials stop working while the five reports stay open, locks those five when
 the connection is removed, locks a destination as a *permission* when a refusal is
@@ -6590,13 +6639,22 @@ unreadable status that opens the page; its issue #868 block drives each of the f
 declared guard, taken from the real route table, through every connection state - refused only when
 nothing is connected, open for `NeedsAttention`, for a refused fleet, sales or catalogue read, for a
 usable connection with nothing refused and for an unread status - and proves the capability refusal
-reaches the access-not-allowed page before the provider lock is consulted.
+reaches the access-not-allowed page before the provider lock is consulted. Its issue #869 blocks do
+the same for the two Admin pages' own declared guards, including the `NeedsAttention` refusal that
+separates them from the stored-record reports and Historical Cost Recovery opening with no
+connection at all; and because a support session's behaviour is about the page and not only the URL,
+a second block drives both **real** page components through a real navigation: a session on a
+connected business opens the page and its read-only control is disabled, a session on a
+not-connected or `NeedsAttention` business is redirected, a refused navigation makes none of the
+page's own requests while a usable connection makes them, a retained `403 read_only_support_session`
+leaves the page open, and the only request the guard path issues is the connection-status read.
 `provider/provider-locked.component.spec.ts` covers both
 messages, the Connect button offered and withheld, the named read, the destination resolved from a
 detail URL, the page opened with no destination, the answer re-read rather than taken from the
 URL, and a stored-record report's page: the same heading, layout and Connect action, worded without
 the live-read claim. `app.routes.spec.ts` covers the guard order on every provider-locked route,
-including the five reports, and its absence from Bookkeeping and GST.
+including the five reports and the two Admin destinations of issue #869, and its absence from
+Bookkeeping and GST, from Nayax Historical Cost Recovery and from the other Admin pages.
 `components/reports/report-provider-optional.spec.ts` covers the in-page filters that are still
 hidden in the states these reports now open in.
 `layout/breadcrumbs/breadcrumb-routes.spec.ts` covers the trails that

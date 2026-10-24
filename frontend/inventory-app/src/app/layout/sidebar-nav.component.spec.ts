@@ -1483,6 +1483,100 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
     expect(link(host, '/admin/nayax-sale-timestamp-repair')).not.toBeNull();
   });
 
+  /**
+   * The two Admin destinations issue #869 locks. They are locked exactly as Site Commissions is -
+   * marked, still linked, with the sentence that says what would unlock them - and never hidden,
+   * which is what keeps them apart from the two provider tools above.
+   */
+  describe('the two locked Admin destinations (issue #869)', () => {
+    const LOCKED_ADMIN = ['/admin/site-commission-agreements', '/admin/avco-transition'];
+
+    async function openAdmin(providerStatus: SpecConnectionStatus, providerChecks?: readonly NayaxConnectionCheckLine[]) {
+      const rendered = await render({ providerStatus, providerChecks });
+      groupToggle(rendered.host, 'Admin').click();
+      rendered.fixture.detectChanges();
+      return rendered;
+    }
+
+    it('shows both locked, and still linked, with no connection at all', async () => {
+      const { host } = await openAdmin('NotConfigured');
+
+      for (const route of LOCKED_ADMIN) {
+        const entry = link(host, route);
+        expect(entry).not.toBeNull();
+        expect(entry?.textContent).toContain('Locked');
+        expect(entry?.hasAttribute('aria-disabled')).toBe(false);
+        expect(entry?.getAttribute('title')).toContain('Nayax is not connected');
+      }
+    });
+
+    it('locks both for credentials that are stored and known not to work', async () => {
+      const { host } = await openAdmin('NeedsAttention');
+
+      for (const route of LOCKED_ADMIN) {
+        expect(link(host, route)?.textContent).toContain('Locked');
+      }
+    });
+
+    /** A refused fleet read is the other lock, and it reads as a Nayax permission, not a connection. */
+    it('locks both as a Nayax permission when that read was refused', async () => {
+      const { host } = await openAdmin('PendingPermissions', PERMISSION_REFUSED);
+
+      for (const route of LOCKED_ADMIN) {
+        expect(link(host, route)?.getAttribute('title')).toContain('waiting for a Nayax permission');
+      }
+    });
+
+    it.each(['Ready', 'PendingPermissions', 'unreadable'] as const)(
+      'leaves both unlocked on a connection that is %s with nothing refused',
+      async (providerStatus) => {
+        const { host } = await openAdmin(providerStatus);
+
+        for (const route of LOCKED_ADMIN) {
+          expect(link(host, route)?.textContent).not.toContain('Locked');
+        }
+      }
+    );
+
+    /**
+     * Nayax Historical Cost Recovery is never locked (the user's decision of 24 October 2026): it
+     * reads the Nayax cost already stored on imported sales and makes no Nayax call, so a
+     * disconnected business with imported history can still recover those costs.
+     */
+    it.each(['NotConfigured', 'NeedsAttention'] as const)(
+      'never locks Nayax Historical Cost Recovery beside them, on a %s connection',
+      async (providerStatus) => {
+        const { host } = await openAdmin(providerStatus);
+        const recovery = link(host, '/admin/historical-cost-recovery');
+
+        expect(recovery).not.toBeNull();
+        expect(recovery?.textContent).not.toContain('Locked');
+        expect(recovery?.getAttribute('title')).toBeNull();
+      }
+    );
+
+    /** Capability rules apply first: a Manager sees the agreements page, locked, and no AVCO entry. */
+    it('offers a Manager the locked agreements page and no AVCO Transition entry at all', async () => {
+      const manager = granted([
+        'Dashboard.View',
+        'Dashboard.ViewFinancials',
+        'PickList.View',
+        'Inventory.Operate',
+        'Purchasing.Operate',
+        'Expenses.Manage',
+        'Reports.View',
+        'Imports.Run',
+        'SiteCommissions.Manage'
+      ]);
+      const { fixture, host } = await render({ access: of(manager), providerStatus: 'NotConfigured' });
+      groupToggle(host, 'Admin').click();
+      fixture.detectChanges();
+
+      expect(link(host, '/admin/site-commission-agreements')?.textContent).toContain('Locked');
+      expect(link(host, '/admin/avco-transition')).toBeNull();
+    });
+  });
+
   /** Capability rules apply first: an entry the role cannot see stays hidden, never locked. */
   it('hides a live provider entry the role may not see rather than locking it', async () => {
     const operator = granted(['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate']);
