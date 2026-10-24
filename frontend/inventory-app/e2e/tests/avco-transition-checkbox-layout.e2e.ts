@@ -36,7 +36,7 @@ const tolerance = 1;
 const labelText = 'Create baselines for all products that do not already have one';
 
 /** The label's own text node, as its own laid-out box - not the label's, which includes the checkbox. */
-async function labelTextBox(label: ReturnType<import('@playwright/test').Page['locator']>) {
+function labelTextBox(label: ReturnType<import('@playwright/test').Page['locator']>) {
   return label.evaluate((element) => {
     const textNode = Array.from(element.childNodes).find(
       (node) => node.nodeType === Node.TEXT_NODE && (node.textContent ?? '').trim().length > 0
