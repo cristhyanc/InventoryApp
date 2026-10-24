@@ -160,7 +160,7 @@ describe('purchase line price field values (issue #878)', () => {
 
     expect(totalPriceFieldValue(blank)).toBeNull();
     expect(unitPriceFieldValue(line({ quantity: 20, priceEntryMode: 'unit', unitCost: Number.NaN })))
-      .toBe(Number.NaN);
+      .toBeNaN();
   });
 });
 
