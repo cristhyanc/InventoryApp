@@ -6379,18 +6379,21 @@ answer in the menu, so the application says which features need a sales provider
 has to. It is frontend only: no endpoint, no contract and no rule of its own, and every answer it
 renders comes from `ProviderAvailabilityService`.
 
-**The order is the statement.** `primaryNavigation` is: `Dashboard`, `Pick List`, `Machines`, the
-`Inventory` group, `Purchases`, `Expenses`, `Reports`, `Admin` — everything that works with no
-provider at all — then one `NavSectionHeading` ("Needs Nayax") and the live provider destinations
-under it: `Sites` and `Site Commissions`. A heading is a heading, not a
-control: it toggles nothing, links nowhere, renders as an `<h2>` over the entries after it, and
-`navigationFor` drops it when every entry under it was left out, because a heading over nothing
-claims a section this member does not have.
+**The order was the statement, and since issue #868 the entry is.** Issue #729 put the live provider
+destinations in their own section at the bottom, under one `NavSectionHeading` ("Needs Nayax"). At
+the user's request issue #868 removed that section: `primaryNavigation` is now `Dashboard`,
+`Pick List`, `Sites`, `Machines`, the `Inventory` group, `Purchases`, `Expenses`, `Reports`,
+`Admin`, with `Sites` immediately above `Machines` and `Site Commissions` back among the reports.
+What a destination needs from the provider is declared on the destination — its `lockedWithout` —
+and nothing in the menu is grouped by it. The `NavSectionHeading` type and the sidebar's rendering
+of it are kept (like `NavPlaceholder`) for the next menu that needs a heading, and `navigationFor`
+still drops a heading when every entry under it was left out, because a heading over nothing claims
+a section this member does not have; nothing declares one today.
 
-**`Machines` left that section in issue #740**, which is the only change to this design since. A
-business keeps [its own machine records](#local-machines-and-external-machine-ids-issue-740) now, so
-the destination always has something to show and its own create/rename/deactivate actions to offer:
-the entry declares no `lockedWithout`, is never locked, and `/machines` carries no `requireProvider`
+**`Machines` came off that signal in issue #740.** A business keeps
+[its own machine records](#local-machines-and-external-machine-ids-issue-740) now, so the
+destination always has something to show and its own create/rename/deactivate actions to offer: the
+entry declares no `lockedWithout`, is never locked, and `/machines` carries no `requireProvider`
 guard. The page withholds its own live stock, revenue and sync parts while the provider cannot serve
 them, which is a decision about one page's content rather than about whether a destination exists.
 The machine **details** route keeps its guard, because every panel on it is a Nayax read.
@@ -6401,8 +6404,9 @@ provider; the Products **page** inside it keeps its own name, its URL and its br
 Settings` is `Integrations`, in the sidebar, on the `/admin` hub card and in the page's own heading
 and breadcrumb — one destination with one name — and its URL (`/admin/nayax-settings`) is unchanged.
 Every other breadcrumb is untouched: a breadcrumb parent is the real page that owns a child route,
-and a sidebar group heading is not a page, so renaming a group and moving the site commission report
-into its own menu section change no trail (`breadcrumb-routes.spec.ts`).
+and a sidebar group heading is not a page, so renaming a group, moving the site commission report
+out of the `Reports` group (issue #729) and moving it back into it (issue #868) change no trail
+(`breadcrumb-routes.spec.ts`).
 
 **Two declarations on a `NavLink`, because the two cases are not the same.**
 
@@ -6445,14 +6449,29 @@ for a page that role never had. On the routes, `requireProvider` is declared **a
 reaches the "access not allowed" page, not an invitation to connect a provider they still could not
 use.
 
-**Historical reports are never locked** (decision P5). Bookkeeping, Daily, Transactions,
-Reconciliation, machine profitability, product profitability and GST read **stored** data, so they
-stay in the `Reports` group, carry no provider guard on their routes at all, and report their own
-availability states instead (issues #730 and #731). Previously imported sales stay readable after a
-disconnect. The site commission report is the one report in the provider section, and it is not an
-exception: a site is known only from the live fleet read's `CustomerID`, so with no usable provider it
-has no sites to report on and the API itself answers `isAvailable: false` (see
-[Site commissions](#site-commissions) in AGENTS.md and issue #731). Its breadcrumb still names
+**A business with no Nayax connection is shown the connection-required page on five of the reports**
+(issue #868, which **supersedes decision P5 for exactly those five** at the user's request). Daily,
+Transactions, Reconciliation, Machines and Products declare `lockedWithout: 'providerRecords'` and
+carry `requireProvider('providerRecords')` after `requireCapability('Reports.View')`; Bookkeeping and
+GST declare nothing and carry no provider guard at all, so a business without Nayax keeps two reports
+it can open. Decision P5 stands everywhere else.
+
+**The UI lock is not a loss of data, and `providerRecords` is why it is the narrowest lock there is.**
+Nothing about stored sales changes: no backend contract, no report API, no export, no stored row, and
+a report's own availability states (issues #730 and #731) still say what each figure rests on.
+`providerRecords` asks one question - is Nayax part of this business at all
+(`providerConnectionAllows`) - so **a usable connection whose read Nayax refused, credentials that
+are stored and no longer work (`NeedsAttention`), and an unread or failed status all leave these five
+reports open**. Only `NotConfigured` locks them, and connecting Nayax again opens them with the same
+history. That is deliberately different from a live fleet destination, which needs credentials the
+status gate will use and therefore locks on `NeedsAttention` too.
+
+The site commission report keeps the live fleet read it has always declared: a site is known only
+from that read's `CustomerID`, so with no usable provider it has no sites to report on and the API
+itself answers `isAvailable: false` (see [Site commissions](#site-commissions) in AGENTS.md and issue
+#731). Issue #868 moved its menu entry back into the `Reports` group, after `Products` and before
+`GST`, and changed neither its capability (`SiteCommissions.Manage`), its feature (`machineFleet`)
+nor its route guards. Its breadcrumb still names
 `Reports` as its parent page, with `/reports` as that parent's path - issue #806 retired the page that
 used to serve `/reports` and made it a compatibility redirect to `/reports/bookkeeping` instead (see
 [Retired Reporting Dashboard redirect](#retired-reporting-dashboard-redirect-issue-806)), but left the
@@ -6480,6 +6499,15 @@ differently, which is the whole reason they are separate states:
   and the refused read named with its endpoint: "Machine list (GET machines)". **No Connect button**,
   because re-entering credentials that already work fixes nothing; the action is to have the
   permission granted and then re-test on Integrations.
+
+A `connect` lock is worded from what the destination actually needs (issue #868): `providerLockSentence`
+branches on `providerFeatureNeedsLiveRead`, so one of the five reports is told "It reports on sales
+recorded through Nayax. Nothing stored has been removed: it opens again, with the same history, once
+this business has a Nayax connection this application can use" rather than that it reads live data,
+which would be untrue and would suggest the history went with the connection. The layout, the heading
+and the Connect action are the same for both, because the thing that unlocks them is the same. The
+page's "nothing has been lost" paragraph names Bookkeeping and GST, the two reports that do stay
+open, instead of claiming every report over imported sales does.
 
 **What is named, and what is deliberately not.** Issue #729 asks for the permission message to name
 the missing permission. What exists to name is the **read**: `PROVIDER_FEATURE_CHECKS` (issue #728)
@@ -6532,19 +6560,25 @@ answer costs no extra probe (see
 reset reads a status, for the business the tab now resolves.
 
 **What proves it.** `provider/provider-lock.spec.ts` covers every lock state, the fail-open `unknown`,
-the tools gate over all four connection states, the read labels and both sentences.
-`layout/navigation.spec.ts` covers the declared order and the section, the `Inventory` rename with
-Products keeping its own name, the live provider destinations and the reports that are never locked
-(including the machine profitability report that shares the `Machines` label), each lock state per
-status and per role, the per-feature case where one refused read locks its destinations and leaves a
-granted one open, the repair tools hidden and offered, the group dropped when the provider's was its
-only child, and the capability rule applying first. `layout/sidebar-nav.component.spec.ts` covers the
-rendered section heading, a locked entry still being a link with its badge and sentence, the
-permission lock's own wording, the reports linked and unlocked with no provider, the hidden repair
+the tools gate over all four connection states, the read labels and both sentences, including the
+`providerRecords` connect sentence that must not claim a live read and the live one that still does.
+`layout/navigation.spec.ts` covers the declared order with no section heading and `Sites` immediately
+above `Machines`, the `Inventory` rename with Products keeping its own name, the provider read each
+locked destination declares, the `Reports` group holding every report with Site Commissions after
+Products, each lock state per status and per role, the five stored-record reports locked only by a
+missing connection while `NeedsAttention`, a refused read and an unread status leave them open,
+Bookkeeping and GST never locked, the per-feature case where one refused read locks its destinations
+and leaves a granted one open, the repair tools hidden and offered, the group dropped when the
+provider's was its only child, and the capability rule applying first.
+`layout/sidebar-nav.component.spec.ts` covers the absence of any section heading, a locked entry
+still being a link with its badge and sentence, the permission lock's own wording, the five reports
+locked and the two unlocked inside the open `Reports` group in each connection state, the menu order
+an Owner, a Manager and a Reports-only role are each shown, the hidden repair
 tools, the one status read however many entries depend on it, and the read never made for a withheld
 business menu; its `provider changes while it stays mounted` block proves the same sidebar - never a
 recreated one - unlocks and offers the tools when a connection is accepted, locks them and withdraws
-the tools when the credentials stop working, locks a destination as a *permission* when a refusal is
+the tools when the credentials stop working while the five reports stay open, locks those five when
+the connection is removed, locks a destination as a *permission* when a refusal is
 retained for its read, renders the new business's answer after a context reset, and reaches the same
 verdict as `requireProvider` before and after the change.
 `provider/provider-availability.service.spec.ts` covers `watch()` itself: the settled answer after
@@ -6552,11 +6586,20 @@ the nothing-known one, each kind of change told to a subscriber already listenin
 for an accepted state, nothing said twice for a refusal already retained, the one new read for a
 context reset, and `load()` still completing for a caller that asks once. `provider/provider-lock.guard.spec.ts` covers the URL half: the page opening, each
 refusal redirecting with the exact refused URL, a detail URL, the granted sibling read, and the
-unreadable status that opens the page. `provider/provider-locked.component.spec.ts` covers both
+unreadable status that opens the page; its issue #868 block drives each of the five reports' **own**
+declared guard, taken from the real route table, through every connection state - refused only when
+nothing is connected, open for `NeedsAttention`, for a refused fleet, sales or catalogue read, for a
+usable connection with nothing refused and for an unread status - and proves the capability refusal
+reaches the access-not-allowed page before the provider lock is consulted.
+`provider/provider-locked.component.spec.ts` covers both
 messages, the Connect button offered and withheld, the named read, the destination resolved from a
-detail URL, the page opened with no destination, and the answer re-read rather than taken from the
-URL. `app.routes.spec.ts` covers the guard order on every live provider route and its absence from
-every report over stored data. `layout/breadcrumbs/breadcrumb-routes.spec.ts` covers the trails that
+detail URL, the page opened with no destination, the answer re-read rather than taken from the
+URL, and a stored-record report's page: the same heading, layout and Connect action, worded without
+the live-read claim. `app.routes.spec.ts` covers the guard order on every provider-locked route,
+including the five reports, and its absence from Bookkeeping and GST.
+`components/reports/report-provider-optional.spec.ts` covers the in-page filters that are still
+hidden in the states these reports now open in.
+`layout/breadcrumbs/breadcrumb-routes.spec.ts` covers the trails that
 did not change and the one label that did.
 
 ### Target feature boundaries
@@ -11129,8 +11172,9 @@ catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fi
 nothing synchronises a machine's name, so no import can overwrite the operator's own label and there
 is no second name to defend.
 
-**The page, and why it left the provider-locked section.** The Machines menu entry moved out of
-"Needs Nayax" and into the top section, and `/machines` carries no `requireProvider` guard any more
+**The page, and why it stopped being provider-locked.** The Machines menu entry came off the
+provider signal - out of the "Needs Nayax" section issue #868 has since removed altogether - and
+`/machines` carries no `requireProvider` guard any more
 (see [Provider-locked navigation](#provider-locked-navigation-issue-729)): the page always has
 something to show, so it is never locked. It is two lists. `LocalMachineListComponent` — the
 dedicated feature component the [page composition

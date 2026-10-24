@@ -62,7 +62,8 @@ export const routes: Routes = [
   {
     // The "needs a provider" page (issue #729). Like `/access-not-allowed` above it is where a
     // guard *sends* an operator, so it carries no capability of its own: the destinations that
-    // redirect here need different ones (`Inventory.Operate`, `SiteCommissions.Manage`), each
+    // redirect here need different ones (`Inventory.Operate`, `Reports.View`,
+    // `SiteCommissions.Manage`), each
     // already checked by the capability guard that ran before `requireProvider`, and sending
     // somebody away from their own explanation is the one thing this page must not do.
     path: PROVIDER_LOCKED_PATH,
@@ -273,30 +274,39 @@ export const routes: Routes = [
     loadComponent: () => import('./components/reports/bookkeeping-report.component').then((m) => m.BookkeepingReportComponent)
   },
   {
+    // Daily, Transactions, Reconciliation, Machines and Products carry `requireProvider` since
+    // issue #868, which supersedes decision P5 for exactly these five at the user's request: a
+    // business with no Nayax connection at all sees the connection-required page here, as it
+    // already did on Site Commissions. The feature is `providerRecords`, the narrowest dependency
+    // there is - these reports read **stored** sales, so a connection whose read Nayax refused, and
+    // credentials that stopped working, leave them open, and the history they report on is never
+    // deleted. Bookkeeping and GST carry no provider guard at all. Like every provider guard it is
+    // declared **after** `requireCapability`, so a role without `Reports.View` reaches its own
+    // explanation rather than an invitation to connect a provider it still could not use.
     path: 'reports/daily',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
     loadComponent: () => import('./components/reports/daily-report.component').then((m) => m.DailyReportComponent)
   },
   {
     path: 'reports/transactions',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
     loadComponent: () =>
       import('./components/reports/transaction-sales-report.component').then((m) => m.TransactionSalesReportComponent)
   },
   {
     path: 'reports/reconciliation',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
     loadComponent: () =>
       import('./components/reports/reconciliation-report.component').then((m) => m.ReconciliationReportComponent)
   },
   {
     path: 'reports/machines',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
     loadComponent: () => import('./components/reports/machine-report.component').then((m) => m.MachineReportComponent)
   },
   {
     path: 'reports/products',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
     loadComponent: () => import('./components/reports/product-report.component').then((m) => m.ProductReportComponent)
   },
   {
@@ -310,8 +320,9 @@ export const routes: Routes = [
     //
     // It is also the one report that is not a read of stored data: a site is known only from the
     // live fleet read, so with no usable provider it has no sites to report on and the API answers
-    // `isAvailable: false` (issue #731). Issue #729 therefore locks it with the other live provider
-    // destinations, while every report over stored sales deliberately stays open.
+    // `isAvailable: false` (issue #731). Issue #729 therefore locked it on the live fleet read,
+    // which issue #868 left exactly as it is - it is the five reports over stored records that
+    // joined it, on the narrower `providerRecords`.
     path: 'reports/site-commissions',
     canActivate: [
       MsalGuard,

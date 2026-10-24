@@ -5,7 +5,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 ## Capabilities
 
 - Product, category, supplier, and low-stock management, including a per-product supplier price history/comparison (lowest vs. latest actual purchase cost, by supplier and date). A supplier can record an optional **website**, which the Suppliers list opens in a new tab and the application never visits itself (see [A supplier's website](#a-suppliers-website)). A product itself carries **no supplier**: a supplier is recorded on the purchase you bought in and on the supplier order you placed, and the price comparison shows every supplier a product was actually bought from out of that purchase history (see [A product carries no supplier](#a-product-carries-no-supplier)). It carries **no selling price** either: what it sells for is the machine's own live price (see [A product carries no selling price](#a-product-carries-no-selling-price)). Products and categories can be created, edited and deleted by the business itself, with or without a sales provider, and a product with history is retired rather than deleted — kept out of the product lists, the pickers and the reorder alerts while every record of it stays (see [Products and categories](#products-and-categories)). Reorder alerts and the dashboard's ordering figures work with or without a connected Nayax account (see [Reorder alerts without Nayax](#reorder-alerts-without-nayax)).
-- Nayax is an optional add-on: inventory, purchasing, expenses and the reports over sales already imported work without it, while the features that read live Nayax data are grouped together in the menu and shown locked until a provider is connected (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
+- Nayax is an optional add-on: inventory, purchasing, expenses and the Bookkeeping and GST reports work without it, while the features that depend on it — the live Nayax pages, and the five sales reports that need a Nayax connection to exist at all — are shown locked until a provider is connected, with no stored sales removed (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
 - Nayax product and transaction imports with explicit payment/status handling.
@@ -1760,27 +1760,37 @@ that cannot be used.
 #### The menu without a usable provider
 
 Issue #729 puts the same answer in the navigation, so the menu says which features need a provider
-before a page has to.
+before a page has to, and issue #868 reshaped what that looks like: no "Needs Nayax" section, Sites
+above Machines, Site Commissions back under Reports, and five of the reports showing the same
+connection-required page.
 
-- **What works without a provider comes first.** Dashboard, Pick List, **Machines** (since issue
-  #740 — see [Machines](#machines) below), **Inventory** (the group that
-  used to be called Products — the Products page inside it, its URL and its breadcrumb are
-  unchanged), Purchases, Expenses, Reports and Admin.
-- **The live provider features sit in one section at the bottom, under a "Needs Nayax" heading**:
-  **Sites** and **Site Commissions**. Each of them exists only for what the live Nayax
-  fleet read returns, so without a usable connection it is shown **locked** — still visible, still
-  clickable — and opening it, or typing its URL, reaches a "needs a provider" page with a **Connect**
-  button for a member who may manage integrations. A member whose role may not see one of these
-  entries does not see it locked either: the role rules apply first, so a locked entry is never an
-  advertisement for a page that role never had.
-- **Historical reports are never locked.** Bookkeeping, Daily, Transactions, Reconciliation, machine
-  profitability, product profitability and GST all read **stored** data.
-  They stay in the Reports group, open normally with no provider at all, and show their own
-  availability states instead — complete, stale, unverified or missing (see
+- **There is no "Needs Nayax" section.** Issue #868 removed it: the menu is Dashboard, Pick List,
+  **Sites**, **Machines** (since issue #740 — see [Machines](#machines) below), **Inventory** (the
+  group that used to be called Products — the Products page inside it, its URL and its breadcrumb
+  are unchanged), Purchases, Expenses, Reports and Admin, and what an entry needs from Nayax is
+  shown on the entry itself rather than by where it sits. **Site Commissions is back under
+  Reports**, after Products and before GST.
+- **A locked entry is still visible, still clickable.** Without the Nayax connection it needs, an
+  entry is shown **locked**, and opening it — or typing its URL — reaches a "needs a provider" page
+  with a **Connect** button for a member who may manage integrations. A member whose role may not
+  see an entry does not see it locked either: the role rules apply first, so a locked entry is never
+  an advertisement for a page that role never had, and a member without the Reports permission still
+  reaches the ordinary "access not allowed" page.
+- **Sites and Site Commissions need a working connection.** Each exists only for what the live Nayax
+  fleet read returns, so either credentials that are missing *or* credentials that have stopped
+  working lock them.
+- **Five reports need a Nayax connection to exist at all** (issue #868): **Daily**, **Transactions**,
+  **Reconciliation**, **Machines** and **Products** are locked while the business has no Nayax
+  connection, and show the same connection-required page Site Commissions already showed. Because
+  they read **stored** sales and make no live Nayax read, that is the *only* state that locks them:
+  a connection whose read Nayax has refused, credentials that have stopped working, and a connection
+  status that could not be read all leave these reports open. **Nothing stored is removed** — the
+  sales already imported stay in the database and the reports over them open again, unchanged, as
+  soon as Nayax is connected.
+- **Bookkeeping and GST stay open.** They are never locked, so a business without Nayax still has
+  them, and every report that is open shows its own availability states — complete, stale,
+  unverified or missing (see
   [docs/architecture.md § Report availability model](docs/architecture.md#report-availability-model-issue-730)).
-  Sales imported before a connection was removed stay readable afterwards. The site commission report
-  is the one report in the provider section, because a site is known only from the live fleet read —
-  with no provider it has no sites to report on at all.
 - **Waiting for one Nayax permission reads differently from having no connection.** With a usable
   connection whose Nayax account has not granted one read (`PendingPermissions`), the entries that
   need that read are locked as *waiting for a Nayax permission* and their page names the Nayax read
@@ -1803,10 +1813,12 @@ before a page has to.
   there and then; lose the connection, or have Nayax refuse one read, and they lock again with the
   message that fits. The menu, the page and the URL always agree about the same destination.
 
-**A connected business sees no change in the menu either**, beyond the two renames and the new order.
+**A connected business sees no change at all** beyond the renames and the order: every report,
+filter, export and navigation path is exactly as it was.
 
-Since issue #740 the **Machines** entry is in the top section rather than this one, and is never
-locked: a business keeps its own machine records now (see the next section).
+The **Machines** entry itself is never locked — a business keeps its own machine records now (see
+the next section), which is a different destination from the machine profitability **report** under
+Reports.
 
 ## Machines
 
@@ -1847,9 +1859,9 @@ of the live Nayax fleet — so a business with no provider had no machines.
 - **Nothing else moved onto these records yet.** Sales, refills, counts and reports still refer to a
   machine by the provider's own number, so no figure, report or export changes in this step; issue
   #741 is where those references are repointed at the local machine.
-- **Sites still need Nayax.** A site is known only from the live fleet read, so the Sites page stays
-  in the "Needs Nayax" section with nothing local to fall back on. Manual sites are a separate
-  change.
+- **Sites still need Nayax.** A site is known only from the live fleet read, so the Sites page has
+  nothing local to fall back on and is locked without a usable connection (it sits immediately
+  above Machines in the menu since issue #868). Manual sites are a separate change.
 - **In a read-only support view** the machine list is readable and every one of its write controls is
   hidden, like every other write surface in that view.
 

@@ -110,6 +110,11 @@ afterEach(() => TestBed.resetTestingModule());
  * `MachineReportComponent` stands for every page built on `ReportPageBase`: the filter, the load
  * and the error sentence all live there, so one page proves the shared behaviour and the others
  * differ only in the report they request.
+ *
+ * Since issue #868 the machine report's **route** is locked while the business has no Nayax
+ * connection at all, so a navigation no longer arrives here in that state - but the page's own
+ * rule is unchanged, and it is what a connection that stopped working, or one whose fleet read was
+ * refused, still runs into with the report open.
  */
 describe('Report machine filter without a provider (issue #728)', () => {
   it('offers the machine filter for a connected business', async () => {
@@ -119,13 +124,24 @@ describe('Report machine filter without a provider (issue #728)', () => {
     expect(machineFilterError(host)).toBeNull();
   });
 
-  it('hides the machine filter without a provider, and asks for no machines', async () => {
-    const { host, machineService } = await renderMachineReport({ status: 'NotConfigured' });
+  /**
+   * `NeedsAttention` is the state this now matters most in (issue #868): the report itself
+   * **opens** for credentials that are stored and no longer work - what it reports on is stored -
+   * while the live fleet read behind the machine filter cannot be made, so the filter is hidden
+   * rather than offered as an "All machines" that narrows nothing. `NotConfigured` is asserted
+   * beside it because the shared answer can settle there while the page is already open, even
+   * though `requireProvider` now keeps a navigation to it from arriving in that state.
+   */
+  it.each(['NeedsAttention', 'NotConfigured'] as const)(
+    'hides the machine filter when the connection is %s, and asks for no machines',
+    async (status) => {
+      const { host, machineService } = await renderMachineReport({ status });
 
-    expect(machineService.getAll).not.toHaveBeenCalled();
-    expect(machineSelect(host)).toBeUndefined();
-    expect(machineFilterError(host)).toBeNull();
-  });
+      expect(machineService.getAll).not.toHaveBeenCalled();
+      expect(machineSelect(host)).toBeUndefined();
+      expect(machineFilterError(host)).toBeNull();
+    }
+  );
 
   it('hides it when the machine read itself is refused', async () => {
     const { host, component } = await renderMachineReport({
