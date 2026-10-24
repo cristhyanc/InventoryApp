@@ -1034,7 +1034,7 @@ Contains adapters and technical implementation:
 
 - `AppDbContext` and its entity configurations/tenant query filters (`Inventory.Infrastructure/Data`), the `BusinessOwnershipEnforcer` that guards every `SaveChanges`, the EF entities and enums (`Inventory.Infrastructure/Models`), and the EF Core migrations plus `AppDbContextModelSnapshot` (`Inventory.Infrastructure/Migrations`) — all relocated from `InventoryApi` by issue #307 with no schema change and no migration renamed. This project owns the `Microsoft.EntityFrameworkCore`/`Microsoft.EntityFrameworkCore.Relational` package references; the SQLite provider and the connection string stay in the composition root (see [InventoryApi](#inventoryapi)), so swapping the relational engine does not mean moving the model.
 - The report facts providers behind the Application's reporting ports (`Inventory.Infrastructure/Reporting/Persistence`, namespace `Inventory.Infrastructure.Reporting.Persistence`): the ten `Ef<Feature>…FactsProvider` adapters for bookkeeping, daily, reconciliation, machine/product profitability, GST, dashboard, inventory valuation, transaction sales and Nayax processing fees, plus the `EfReportingSharedQueries` helpers they share — all relocated from `InventoryApi/Adapters/Persistence` by issue #308 with no query, report or schema change, and registered by `AddInfrastructureServices()` instead of in `Program.cs`. The completed-sale predicate they filter on is `Inventory.Infrastructure.Data.EfNayaxSalesQueries`, next to `AppDbContext`, because the costing and commission adapters call it too - they were still API-owned when issue #308 placed it there, and issue #309 brought them into the same assembly.
-- Every other EF adapter behind an Application persistence port (`Inventory.Infrastructure/Persistence`, namespace `Inventory.Infrastructure.Persistence`): the 29 `Ef<Feature>Store`/`Ef<Feature>Provider` adapters for tenancy membership, Nayax fee settings, site commissions, categories, suppliers, operating expenses, products and the product catalogue, purchases and supplier orders, inventory movements/cost ledger/sale costing/cost transitions/costing repairs, stock adjustments, site and machine dashboard facts, purchase-price history and bulk purchase-cost facts, the local catalogue snapshot, machine stock events, outstanding supplier-order quantities, Pick List storage stock, latest Nayax sales, Take Inventory adjustments, and the three imports — plus the `NayaxSaleCosting` entity/contract mapping the two sale-importing adapters share. All relocated from `InventoryApi/Adapters/Persistence` by issue #309 (Persistence 8/8 of #153) with no query, transaction, schema or API change, and registered by `AddInfrastructureServices()` instead of in `Program.cs`. `InventoryApi/Adapters/Persistence` no longer exists, so `InventoryApi` owns no persistence implementation at all; `PersistenceAdapterOwnershipTests` and `ReportingAdapterOwnershipTests` pin that. Adapters written since that move land in the same folder for the same reason — `EfNayaxConnectionStore` (issue #518) is the current one.
+- Every other EF adapter behind an Application persistence port (`Inventory.Infrastructure/Persistence`, namespace `Inventory.Infrastructure.Persistence`): the 29 `Ef<Feature>Store`/`Ef<Feature>Provider` adapters for tenancy membership, Nayax fee settings, site commissions, categories, suppliers, operating expenses, products and the product catalogue, purchases and supplier orders, inventory movements/cost ledger/sale costing/cost transitions/costing repairs, stock adjustments, site and machine dashboard facts, purchase-price history and bulk purchase-cost facts, the local catalogue snapshot, machine stock events, outstanding supplier-order quantities, Pick List storage stock, latest Nayax sales, Take Inventory adjustments, and the three imports — plus the `NayaxSaleCosting` entity/contract mapping the two sale-importing adapters share. All relocated from `InventoryApi/Adapters/Persistence` by issue #309 (Persistence 8/8 of #153) with no query, transaction, schema or API change, and registered by `AddInfrastructureServices()` instead of in `Program.cs`. `InventoryApi/Adapters/Persistence` no longer exists, so `InventoryApi` owns no persistence implementation at all; `PersistenceAdapterOwnershipTests` and `ReportingAdapterOwnershipTests` pin that. Adapters written since that move land in the same folder for the same reason — `EfNayaxConnectionStore` (issue #518) is the current one. One static helper sits beside them for the same reason `EfReportingSharedQueries` does: `EfProductInventoryHistoryQueries` (issue #861) is the single query behind "does anything record inventory ever having been in this product", shared by the catalogue store and the inventory-valuation reporting adapter so the Dashboard summary and the inventory-value endpoint cannot disagree about whether a product is empty (see [A product that has never held inventory](#a-product-that-has-never-held-inventory-issue-861)).
 - Nayax Lynx HTTP client (`Inventory.Infrastructure.Nayax.NayaxLynxClient`) and imported-file parsers, plus the remote half of the Nayax catalog reconciliation (`Inventory.Infrastructure.Nayax.NayaxCatalogSnapshotProvider`, behind the Application's `CatalogReconciliation.INayaxCatalogSnapshotProvider` port; issues #55/#306).
 - Encryption of a business's own stored Nayax access token (`Inventory.Infrastructure.Nayax.AesGcmNayaxTokenProtector` and the fail-closed `UnconfiguredNayaxTokenProtector`, behind the Infrastructure-internal `INayaxTokenProtector`; issue #518). Deliberately *not* an Application port: the cipher, the keys and their configuration are adapter concerns, which is what keeps Key Vault out of the inner layers. See [Per-business Nayax connection](#per-business-nayax-connection-issue-518).
 - Document storage for purchase documents and operating-expense attachments (`Inventory.Infrastructure.Documents.FileSystemDocumentStorage` and `AzureBlobDocumentStorage`, behind the Application's `Documents.IDocumentStorage` port; see [Document storage](#document-storage)).
@@ -7660,7 +7660,8 @@ is the dedicated use case for this figure alone (retrieving it through the narro
 `InventoryValue` is `null` only when it has never had a cost rebuild run for it - a genuinely
 unknown cost, not a zero one - so the policy makes the whole total unavailable
 (`InventoryValuationSummaryDto.IsComplete = false`, `TotalInventoryValue = null`) whenever any
-product's cost is unknown, rather than silently summing only the known ones.
+product that **holds inventory** has an unknown cost, rather than silently summing only the known
+ones. What "holds inventory" means is the evidence rule below.
 
 The same valuation, with the same completeness rule, is also part of the combined Dashboard summary
 contract described in [Home Dashboard summary API](#home-dashboard-summary-api-issue-459) below. That
@@ -7670,6 +7671,89 @@ its valuation, product count and storage units all describe one catalogue read. 
 `inventory` card, so the home Dashboard no longer calls `GET /api/products/inventory-value-summary`
 directly; the endpoint itself is unchanged and stays available for any other caller that needs the
 valuation alone.
+
+##### A product that has never held inventory (issue #861)
+
+A `null InventoryValue` on its own cannot tell *costed at nothing* from *never costed*, and before
+issue #861 it was the only evidence the valuation had. So a product created yesterday and never
+bought, stocked, refilled or sold - value `null`, no costing quantity, no storage units, no history
+anywhere - made the whole Dashboard total read **Unavailable** with "1 of 3 products missing cost
+data", as though the business were holding stock of unknown worth. It is holding nothing, and owning
+none of something is a measured `$0`, not a gap.
+
+`Inventory.Domain.Reporting.Dashboard.ProductInventoryValuationFact` is therefore what the policy now
+aggregates, and it carries the product's whole position rather than its value alone:
+
+| Part of the evidence | What it is |
+| --- | --- |
+| `InventoryValue` | The persisted AVCO valuation, `null` when no rebuild has ever run |
+| `CostingQuantity` | Business-owned costing units **wherever they sit, including inside a machine** |
+| `QuantityInStock` | Storage/home stock only, which **excludes** units in a machine |
+| `HasInventoryHistory` | Whether anything records inventory ever having been in this product |
+
+`ProductInventoryValuationFact.HasNeverHeldInventory` is true only when **all four** say so: no
+established value, no costing units, no storage stock, and no recorded history. Such a product
+contributes `0` to the total and `0` to `ProductsWithUnknownCost`, and is still counted in
+`TotalProducts`, because it is in the catalogue - how many products a business has and how many block
+its valuation are deliberately different figures. A catalogue of nothing but never-stocked products is
+a known `$0.00`.
+
+**Zero storage quantity is deliberately not the test.** Units already loaded into a vending machine
+are business-owned costing inventory that `QuantityInStock` does not count, so an empty shelf says
+nothing about what the business owns. The seven kinds of row that count as history are, exactly:
+
+- a `StockAdjustment` - a restock, correction, write-off or **refill into a machine**, which also
+  covers every purchase that was received;
+- a `PurchaseItem` line;
+- a stored `NayaxSales` row through the sale's own `ProductId` (issue #758), never a provider id or a
+  name - a sale whose product was never resolved belongs to no product and is evidence about none;
+- an operator's `MachineStockCount` (issue #56);
+- an `InventoryCostTransitionBaseline`, whose opening position includes machine-held stock (issue #57);
+- an `InventoryCostRepair` (issue #359);
+- a `NayaxMachineStockEvent` matched to the product - **including one still unprocessed**, because an
+  unresolved machine movement is an unresolved position rather than an absent one.
+
+A `SupplierOrderLine` is deliberately **not** evidence: ordering is an intention, nothing has been
+received, and the purchase that receives it is recorded as both a purchase line and a stock movement.
+That is the one place this question differs from the deletion rule's reference counts (issue #736),
+which exist to stop a row being erased rather than to describe a position.
+
+**Active status decides nothing here.** The same evidence rule applies to an active and an inactive
+product alike: deactivating a product is not what makes its inventory empty, and a retired product
+that still holds stock of unknown value still makes the total unavailable. Blanket active-only
+valuation was explicitly rejected - it would silently drop a discontinued product's real stock out of
+the business's inventory value.
+
+**Nothing is fabricated.** A never-stocked product is *excluded* from the aggregation; its `null`
+inventory value is never turned into a zero, no opening quantity, purchase or costing history is
+invented for it, and **its unit cost stays unknown** - `DisplayUnitCost` still answers `null` for it
+(see [One product's average cost](#one-products-average-cost-and-whether-it-has-been-established-issue-788)
+below). That is not a disagreement between the two rules: the catalogue total asks what the business
+owns, and this asks what a unit costs, which nothing has ever established.
+
+**Where the evidence is resolved.** `Inventory.Infrastructure.Persistence.EfProductInventoryHistoryQueries`
+is the one query behind `HasInventoryHistory`, shared by the two adapters that need it -
+`EfInventoryValuationFactsProvider` for the endpoint above and `EfProductCatalogStore.ListUnorderedAsync`
+for the combined summary below - so the two surfaces cannot come to disagree about whether a product is
+empty. Tenant scoping is the central `AppDbContext` query filters as always: another business's
+movements, sales and counts are invisible and can never become evidence about this business's product.
+Both adapters ask about history **only** for the products whose own stored columns could still be empty
+(`ProductInventoryValuationFact.CouldNeverHaveHeldInventory`, the Domain rule, read rather than
+restated), one grouped read per kind for the whole set and none at all when there are no such products -
+so a fully costed catalogue costs exactly what it did before. No schema change, no migration and no
+backfill: this is a projection of rows that are already stored.
+
+On `ProductRecord`, `HasInventoryHistory` is a `bool?` and `null` means **not resolved on this read
+path**, never "no history" - the same convention `DeletionEligibility` uses. `GetDashboardSummary`
+reads an unresolved value as *has history*, which is the safe direction: a read that did not look for
+the evidence has not proved its absence, so the product keeps blocking the total exactly as it did
+before this rule existed.
+
+**No presentation changed.** The card's own wording is untouched: `isInventoryValueComplete` is simply
+true in the reported case, so the card shows the real total and "Business-owned inventory at cost"
+instead of "Unavailable" and "1 of 3 products missing cost data", and its storage-only footer
+("`productCount` products · `unitsInStorage` units in storage (excludes machines)") is unchanged - the
+never-stocked product is still one of those products. No API property was added, removed or renamed.
 
 ##### One product's average cost, and whether it has been established (issue #788)
 
@@ -7688,6 +7772,12 @@ calculation: a `null` inventory value means no rebuild has run, so the display c
 otherwise it is the **persisted** `AverageUnitCost` exactly as the rebuild left it, **including a
 genuine zero**. The Dashboard's `ProductsWithUnknownCost` count is the same evidence counted, so a
 product cannot be counted as unknown there and shown a cost here.
+
+Issue #861 deliberately does not reach this rule. A product that has never held inventory is excluded
+from the catalogue total and is not counted as missing cost data there, and its displayed unit cost is
+still `null` here. Those are two different questions - what the business owns, and what one unit costs -
+and answering `0` here would invent a cost rather than report an absence, exactly what this rule exists
+to prevent.
 
 On the wire it is `ProductResponse.averageUnitCostForDisplay`, and these properties are the contract:
 
@@ -7798,11 +7888,13 @@ own: every figure comes from an authority that already existed.
   interchangeable. `inventoryValueAtCost` is the business-owned perpetual AVCO valuation from
   `InventoryValuationPolicy` over the same catalogue snapshot - never a selling-price valuation -
   and is `null` with `isInventoryValueComplete: false` and an unknown-cost count whenever any
-  product's cost is unknown, the same rule as the
-  [Inventory Value tile](#dashboard-inventory-value-tile-issue-42) above. `unitsInStorage` is the sum
-  of `Product.QuantityInStock`: physical storage/home stock, which **excludes** units already loaded
-  into a machine, and is never a valuation input. `productCount` is every product in the caller's
-  catalogue, active and inactive, which is the population the other two are taken over.
+  product **that holds inventory** has an unknown cost, the same rule as the
+  [Inventory Value tile](#dashboard-inventory-value-tile-issue-42) above, including its
+  [never-held-inventory evidence](#a-product-that-has-never-held-inventory-issue-861). `unitsInStorage`
+  is the sum of `Product.QuantityInStock`: physical storage/home stock, which **excludes** units
+  already loaded into a machine, and is never a valuation input. `productCount` is every product in the
+  caller's catalogue, active and inactive, including the never-stocked ones that block nothing - which
+  is why the count a card shows and `productsWithUnknownCost` are separate figures and must stay so.
 
 **Aggregation strategy.** The summary makes exactly three reads: one grouped sales read, one
 unnarrowed `IProductCatalogStore.ListUnorderedAsync` catalogue read, and one
@@ -7810,6 +7902,12 @@ unnarrowed `IProductCatalogStore.ListUnorderedAsync` catalogue read, and one
 scoped EF adapters share a single `AppDbContext`, which supports one operation at a time - the same
 constraint `GetSiteSummaries` documents. The ordering count, product count, storage units and
 valuation all come from that one catalogue snapshot, so they cannot disagree with one another.
+Since issue #861 the catalogue read resolves one more thing for the valuation - whether each product
+has any recorded inventory history - and it does so **inside** that one read rather than as a second
+read the cards could disagree across; it asks nothing at all unless some product's stored columns
+leave open that it has never held inventory (see
+[A product that has never held inventory](#a-product-that-has-never-held-inventory-issue-861)), which
+for a stocked catalogue is never.
 
 **No new Nayax fan-out.** The refill and ordering cards are both answered from one
 `CalculateReorderNeeds` call: one `GetMachinesAsync` plus one `GetMachineProductsAsync` per machine,

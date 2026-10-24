@@ -67,6 +67,23 @@ public sealed record ProductRecord
     public ProductDeletionEligibility? DeletionEligibility { get; init; }
 
     /// <summary>
+    /// Whether anything recorded ever put inventory into this product, took it out, or valued it
+    /// (issue #861) - the history half of the evidence
+    /// <see cref="Inventory.Domain.Reporting.Dashboard.ProductInventoryValuationFact"/> defines, which
+    /// is what lets the Dashboard's valuation tell a product that has never held inventory from one
+    /// whose inventory is genuinely unknown.
+    ///
+    /// <para><see langword="null"/> means <em>not resolved on this read path</em> - never "no
+    /// history". Only <see cref="IProductCatalogStore.ListUnorderedAsync"/> resolves it, because the
+    /// home Dashboard summary is the only caller that aggregates a valuation from these records; the
+    /// catalogue listing and the single-product read answer the deletion question instead
+    /// (<see cref="DeletionEligibility"/>) and do not pay for rows nothing on those screens reads. A
+    /// caller handed <see langword="null"/> must treat the product as having history, which keeps an
+    /// unknown value unavailable rather than silently dropping it from a total.</para>
+    /// </summary>
+    public bool? HasInventoryHistory { get; init; }
+
+    /// <summary>
     /// Units the machines currently need refilled from storage. Zero unless a caller resolved the
     /// live machine fleet (<see cref="ListLowStockProducts"/>), exactly as the former
     /// <c>ProductService.GetAll</c>/<c>Get</c> left it unset.

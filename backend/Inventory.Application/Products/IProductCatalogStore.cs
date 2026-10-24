@@ -51,6 +51,13 @@ public interface IProductCatalogStore
     /// <para><see cref="ProductRecord.DeletionEligibility"/> is deliberately <strong>not</strong>
     /// resolved here: none of those callers deletes a product, and the answer costs a count of every
     /// kind of row that refers to one. A caller that needs it asks one of the other two reads.</para>
+    ///
+    /// <para><see cref="ProductRecord.HasInventoryHistory"/> <strong>is</strong> resolved here, and
+    /// only here (issue #861): the home Dashboard summary aggregates its inventory valuation from
+    /// this one snapshot, and without that evidence a product that has never held inventory cannot be
+    /// told from one whose inventory is unknown. It costs nothing for a catalogue whose products all
+    /// carry a costing position or storage stock - the adapter asks about history only for the
+    /// products that could still be empty.</para>
     /// </summary>
     Task<IReadOnlyList<ProductRecord>> ListUnorderedAsync(
         ProductCatalogFilter filter, CancellationToken cancellationToken);
