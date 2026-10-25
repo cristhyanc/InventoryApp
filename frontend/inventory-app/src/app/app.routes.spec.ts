@@ -17,6 +17,8 @@ import { SignInComponent } from './auth/sign-in.component';
 import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
 import { ProviderLockedComponent } from './provider/provider-locked.component';
 import { StockHistoryPageComponent } from './components/stock/stock-history-page.component';
+import { ProductFormComponent } from './components/products/product-form.component';
+import { ProductImportPageComponent } from './components/products/product-import-page.component';
 import { AdminImportsComponent } from './components/admin/imports/admin-imports.component';
 import { HistoricalCostRecoveryComponent } from './components/admin/historical-cost-recovery/historical-cost-recovery.component';
 import { AvcoTransitionComponent } from './components/admin/avco-transition/avco-transition.component';
@@ -85,6 +87,38 @@ describe('Admin Imports route (issue #389)', () => {
   it('serves the dedicated Admin Imports page at /admin/imports, behind authentication', async () => {
     expect(route('admin/imports').canActivate).toContain(MsalGuard);
     await expect(loadedComponent('admin/imports')).resolves.toBe(AdminImportsComponent);
+  });
+});
+
+/**
+ * The dedicated Import products page (issue #888), which hosts the catalogue review Admin → Imports
+ * used to open as a panel. It carries exactly the three guards `/admin/imports` carries, because it
+ * is the same import behind the same capability, and no provider guard: a connection that cannot
+ * serve the catalogue is answered by the review's own unavailable handling.
+ */
+describe('Product import route (issue #888)', () => {
+  it('serves the dedicated Import products page at /products/import, behind the three Imports.Run guards', async () => {
+    const guards = route('products/import').canActivate ?? [];
+
+    expect(guards).toHaveLength(3);
+    expect(guards[0]).toBe(MsalGuard);
+    expect(guards[1]).toBe(accountStateGuard);
+    await expect(loadedComponent('products/import')).resolves.toBe(ProductImportPageComponent);
+  });
+
+  /**
+   * It is declared above the `products` shell, so it does not inherit the shell's
+   * `Inventory.Operate` requirement, and a member who may import but not operate inventory still
+   * reaches it. Being a two-segment path, exact matching also keeps it clear of the three-segment
+   * `products/:id/...` routes whatever the declaration order.
+   */
+  it('is declared before the products shell and resolves to its own page, not a product-id route', async () => {
+    const paths = routes.map((candidate) => candidate.path);
+
+    expect(paths.indexOf('products/import')).toBeGreaterThanOrEqual(0);
+    expect(paths.indexOf('products/import')).toBeLessThan(paths.indexOf('products'));
+    expect(route('products/import').canActivate).not.toBe(route('products').canActivate);
+    await expect(loadedComponent('products/:id/edit')).resolves.toBe(ProductFormComponent);
   });
 });
 

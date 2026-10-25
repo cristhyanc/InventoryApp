@@ -153,6 +153,18 @@ export const routes: Routes = [
     loadComponent: () => import('./components/products/product-form.component').then((m) => m.ProductFormComponent)
   },
   {
+    // The dedicated Import products page (issue #888): the catalogue review used to be a panel
+    // Admin -> Imports opened, and is now a page of its own. It is declared as a top-level route
+    // above the `products` shell deliberately - inside it the review would inherit the shell's
+    // `Inventory.Operate` requirement on top of the `Imports.Run` the import itself needs, and
+    // Angular's exact matching of a two-segment path keeps it clear of the `products/:id/...`
+    // routes, which are all three segments.
+    path: 'products/import',
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Imports.Run')],
+    loadComponent: () =>
+      import('./components/products/product-import-page.component').then((m) => m.ProductImportPageComponent)
+  },
+  {
     path: 'stock-history',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Inventory.Operate')],
     loadComponent: () => import('./components/stock/stock-history-page.component').then((m) => m.StockHistoryPageComponent)

@@ -45,6 +45,7 @@ describe('breadcrumbRoutes (issue #457 route inventory)', () => {
 
     expect(patterns).toEqual([
       '/products/:id/edit',
+      '/products/import',
       '/machines/:id',
       '/sites/:id/products',
       '/purchases/new',
@@ -77,6 +78,17 @@ describe('buildBreadcrumbTrail', () => {
     expect(buildBreadcrumbTrail('/products/42/edit', null)).toEqual([
       { label: 'Products', path: '/products', current: false },
       { label: 'Edit product', current: true }
+    ]);
+  });
+
+  /**
+   * The dedicated Import products page (issue #888). Its URL is two segments, so it must not be
+   * read as a product-id route: `/products/import` is its own entry, not `/products/:id/edit`.
+   */
+  it('builds Products > Import products for the dedicated import page (issue #888)', () => {
+    expect(buildBreadcrumbTrail('/products/import', null)).toEqual([
+      { label: 'Products', path: '/products', current: false },
+      { label: 'Import products', current: true }
     ]);
   });
 

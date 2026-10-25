@@ -215,6 +215,8 @@ describe('primary navigation (issue #391)', () => {
   it('groups the Inventory pages, with Products keeping its own name and URL', () => {
     expect(childRoutes('Inventory')).toEqual([
       { label: 'Products', route: '/products' },
+      // Directly under the page it imports into (issue #888).
+      { label: 'Import products', route: '/products/import' },
       { label: 'Take Inventory', route: '/take-inventory' },
       { label: 'Categories', route: '/categories' },
       { label: 'Stock History', route: '/stock-history' }
@@ -951,6 +953,42 @@ describe('navigationFor with the provider answer (issue #729)', () => {
     for (const provider of [availability('Ready'), availability('PendingPermissions'), undefined]) {
       expect(childRoutes('Admin', navigationFor(OWNER, false, 'offered', provider))).toEqual(adminChildRoutes);
     }
+  });
+
+  /**
+   * The dedicated Import products page (issue #888) is a provider tool for the same reason the
+   * Admin imports are: with no usable connection there is no provider catalogue to review, so the
+   * entry is left out rather than shown locked. The Inventory group survives it either way, because
+   * the business's own stock keeping works with no provider at all.
+   */
+  it('hides Import products until the connection is usable, keeping the rest of the Inventory group', () => {
+    for (const status of ['NotConfigured', 'NeedsAttention'] as const) {
+      const inventory = childRoutes('Inventory', navigationFor(OWNER, false, 'offered', availability(status))).map(
+        (child) => child.route
+      );
+
+      expect(inventory).not.toContain('/products/import');
+      expect(inventory).toContain('/products');
+    }
+
+    for (const provider of [availability('Ready'), availability('PendingPermissions'), undefined]) {
+      expect(
+        childRoutes('Inventory', navigationFor(OWNER, false, 'offered', provider)).map((child) => child.route)
+      ).toContain('/products/import');
+    }
+  });
+
+  /** Capability rules come first here too: an Operator never had `Imports.Run`, so it stays hidden. */
+  it('hides Import products from a member without Imports.Run, whatever the provider says', () => {
+    for (const provider of [availability('Ready'), undefined]) {
+      expect(navLinks(navigationFor(OPERATOR, false, 'offered', provider)).map((entry) => entry.route)).not.toContain(
+        '/products/import'
+      );
+    }
+
+    expect(navLinks(navigationFor(MANAGER, false, 'offered', availability('Ready'))).map((entry) => entry.route)).toContain(
+      '/products/import'
+    );
   });
 
   /**

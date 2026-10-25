@@ -1,47 +1,27 @@
 import { TestBed } from '@angular/core/testing';
-import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
+import { provideRouter } from '@angular/router';
 import { Observable, of, throwError } from 'rxjs';
 import { AdminImportsComponent } from './admin-imports.component';
-import { CatalogueReviewService } from '../../../services/catalogue-review.service';
-import { CategoryService } from '../../../services/category.service';
 import { ImportService } from '../../../services/import.service';
-import { ProductService } from '../../../services/product.service';
 import { ToastService } from '../../../services/toast.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
 
 /**
- * The catalogue review the page composes since issue #739 is covered by its own spec; here it is
- * stubbed down to the calls the page could make, so what these tests assert is the page's own
- * behaviour - that "Import products" opens the review rather than importing anything directly.
+ * Since issue #888 this page runs two imports - the Nayax sales upload and the pending
+ * reimbursement XML - and hosts no catalogue review: the product catalogue import has its own page
+ * at `/products/import` (`ProductImportPageComponent`, with its own spec) and this page's Import
+ * products card is a link to it.
  */
-const startReview = jest.fn(() =>
-  of({
-    reviewId: 1,
-    startedAtUtc: '2026-10-20T02:00:00Z',
-    categories: [],
-    products: [],
-    unitVolumeNote: '',
-    unlinkedCategoryCount: 0,
-    unlinkedProductCount: 0,
-    unresolvedSaleCount: 0
-  }));
-
 async function render(
   importService: Partial<ImportService>,
   toast?: Partial<ToastService>,
-  sessionActive: Observable<boolean> = of(false),
-  queryParams: Record<string, string> = {}
+  sessionActive: Observable<boolean> = of(false)
 ) {
-  startReview.mockClear();
   await TestBed.configureTestingModule({
     imports: [AdminImportsComponent],
     providers: [
       provideRouter([]),
-      { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap: convertToParamMap(queryParams) } } },
       { provide: ImportService, useValue: importService },
-      { provide: CatalogueReviewService, useValue: { start: startReview, apply: jest.fn() } },
-      { provide: ProductService, useValue: { getAll: () => of([]) } },
-      { provide: CategoryService, useValue: { getAll: () => of([]) } },
       { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn(), ...toast } },
       { provide: SupportSessionService, useValue: { active$: sessionActive } }
     ]
@@ -144,8 +124,10 @@ describe('AdminImportsComponent Nayax sales upload (issue #389)', () => {
     fixture.componentInstance.loading = true;
     fixture.detectChanges();
 
+    // The two imports this page runs, and not Download template, which calls no API. Import
+    // products is a link to its own page since issue #888 and is not a control this flag reaches.
     const disabled = Array.from(host.querySelectorAll('button')).filter(button => button.disabled);
-    expect(disabled).toHaveLength(3);
+    expect(disabled).toHaveLength(2);
   });
 });
 
@@ -200,63 +182,26 @@ describe('AdminImportsComponent Nayax sales template (issue #389)', () => {
   });
 });
 
-describe('AdminImportsComponent product catalogue import (issue #739)', () => {
-  it('opens the catalogue review instead of importing the catalogue directly', async () => {
-    const { fixture, host } = await render({});
+describe('AdminImportsComponent product catalogue import (issues #739 and #888)', () => {
+  it('links its Import products card to the dedicated page and renders no review of its own', async () => {
+    const { host } = await render({});
 
-    const button = Array.from(host.querySelectorAll('button')).find(x => x.textContent?.includes('Import products'));
-    button?.click();
-    fixture.detectChanges();
+    const card = Array.from(host.querySelectorAll('section.card')).find((section) =>
+      section.querySelector('.card-title')?.textContent?.includes('Import products')
+    );
+    expect(card).toBeTruthy();
 
-    expect(fixture.componentInstance.reviewing).toBe(true);
-    expect(host.querySelector('[data-testid="catalogue-review"]')).toBeTruthy();
-    // The review reads the catalogue itself; the page starts no import of its own and the direct
-    // catalogue import no longer exists.
-    expect(startReview).toHaveBeenCalledTimes(1);
-    expect(fixture.componentInstance.loading).toBe(false);
-  });
+    // The card keeps its title and its description, so the page still says what the import is.
+    expect(card!.querySelector('.card-title')?.textContent?.trim()).toBe('Import products');
+    expect(card!.textContent).toContain('Review the Nayax catalogue against your own products');
 
-  it('takes the review off screen when it asks to be closed, leaving the action available again', async () => {
-    const { fixture, host } = await render({});
+    const link = card!.querySelector('a');
+    expect(link?.textContent?.trim()).toBe('Import products');
+    expect(link?.getAttribute('href')).toBe('/products/import');
 
-    fixture.componentInstance.importProducts();
-    fixture.detectChanges();
-    fixture.componentInstance.closeReview();
-    fixture.detectChanges();
-
+    // Nothing opens here any more, and the page starts no import of its own.
+    expect(card!.querySelector('button')).toBeNull();
     expect(host.querySelector('[data-testid="catalogue-review"]')).toBeNull();
-    const button = Array.from(host.querySelectorAll('button')).find(x => x.textContent?.includes('Import products'));
-    expect(button?.disabled).toBe(false);
-  });
-});
-
-describe('AdminImportsComponent review=catalogue query parameter (issue #875)', () => {
-  it('opens the catalogue review on load through the same importProducts() path its own button uses', async () => {
-    const { fixture } = await render({}, undefined, of(false), { review: 'catalogue' });
-
-    expect(fixture.componentInstance.reviewing).toBe(true);
-    expect(startReview).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not open the review from the parameter while a support session is active', async () => {
-    const { fixture } = await render({}, undefined, of(true), { review: 'catalogue' });
-
-    expect(fixture.componentInstance.reviewing).toBe(false);
-    expect(startReview).not.toHaveBeenCalled();
-  });
-
-  it('behaves exactly as today without the parameter', async () => {
-    const { fixture } = await render({}, undefined, of(false), {});
-
-    expect(fixture.componentInstance.reviewing).toBe(false);
-    expect(startReview).not.toHaveBeenCalled();
-  });
-
-  it('ignores any other value of the parameter', async () => {
-    const { fixture } = await render({}, undefined, of(false), { review: 'sales' });
-
-    expect(fixture.componentInstance.reviewing).toBe(false);
-    expect(startReview).not.toHaveBeenCalled();
   });
 });
 
@@ -308,7 +253,6 @@ describe('AdminImportsComponent in a support session (issue #661)', () => {
     const { host } = await render({}, undefined, of(true));
 
     expect(importButton(host, 'Choose sales file').disabled).toBe(true);
-    expect(importButton(host, 'Import products').disabled).toBe(true);
     expect(importButton(host, 'Import XML files').disabled).toBe(true);
   });
 
@@ -316,8 +260,20 @@ describe('AdminImportsComponent in a support session (issue #661)', () => {
     const { host } = await render({}, undefined, of(false));
 
     expect(importButton(host, 'Choose sales file').disabled).toBe(false);
-    expect(importButton(host, 'Import products').disabled).toBe(false);
     expect(importButton(host, 'Import XML files').disabled).toBe(false);
+  });
+
+  /**
+   * The Import products card is a link, not a control this page disables (issue #888): it starts
+   * nothing, and `/products/import` withholds the review and shows its own notice during a session,
+   * so the import is unavailable from here either way. Hiding the link would hide where the import
+   * lives from the one page that is meant to say so.
+   */
+  it('leaves the Import products link in place, because the destination refuses the import itself', async () => {
+    const { host } = await render({}, undefined, of(true));
+
+    const link = Array.from(host.querySelectorAll('a')).find((x) => x.textContent?.trim() === 'Import products');
+    expect(link?.getAttribute('href')).toBe('/products/import');
   });
 
   it('leaves the client-side template download available, because it calls no API', async () => {
@@ -326,17 +282,14 @@ describe('AdminImportsComponent in a support session (issue #661)', () => {
     expect(importButton(host, 'Download template').disabled).toBe(false);
   });
 
-  it('calls no import API, and opens no catalogue review, from a guarded handler while a session is active', async () => {
+  it('calls no import API from a guarded handler while a session is active', async () => {
     const importPendingXmlFiles = jest.fn();
     const importNayaxSales = jest.fn();
     const { fixture } = await render({ importPendingXmlFiles, importNayaxSales }, undefined, of(true));
 
-    fixture.componentInstance.importProducts();
     fixture.componentInstance.importXml();
     fixture.componentInstance.onSalesSelected(selectionEvent('sales.csv'));
 
-    expect(fixture.componentInstance.reviewing).toBe(false);
-    expect(startReview).not.toHaveBeenCalled();
     expect(importPendingXmlFiles).not.toHaveBeenCalled();
     expect(importNayaxSales).not.toHaveBeenCalled();
     expect(fixture.componentInstance.loading).toBe(false);

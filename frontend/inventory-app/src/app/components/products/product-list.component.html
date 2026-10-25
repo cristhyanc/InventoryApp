@@ -38,8 +38,7 @@
       @if (showImportProducts) {
         <a
           data-testid="import-products-link"
-          routerLink="/admin/imports"
-          [queryParams]="{ review: 'catalogue' }"
+          routerLink="/products/import"
           class="btn btn-secondary">Import products</a>
       }
       @if (!sessionActive) {

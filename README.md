@@ -1189,8 +1189,8 @@ does not manage.
   page's own search/filter toolbar to the right of search, Category and Reset (issue #832) — it used
   to sit in its own row below the toolbar. **Import products** sits beside New Product on that same
   toolbar (issue #875) for a member who holds `Imports.Run` while Nayax is usable and no support
-  session is active — it opens the same catalogue review Admin → Imports does, at
-  `/admin/imports?review=catalogue`, rather than being a second entry point with its own behaviour.
+  session is active — it opens the catalogue import's own page, **Products → Import products**
+  (`/products/import`, issue #888), rather than being a second entry point with its own behaviour.
   **A catalogue read Nayax has refused hides it even while the connection is usable.** A
   `PendingPermissions` connection is usable precisely because the Nayax account may have granted some
   reads and refused others, so the button asks about the catalogue read itself as well: once that
@@ -1259,13 +1259,17 @@ does not manage.
   "cola", "COLA" and "Cola" all find a product named "Coca Cola".
 - **A category products use is not deleted.** The refusal says how many products use it; move them
   to another category first, otherwise they would be left with no category at all.
-- **Importing the Nayax catalogue is a review you decide, entry by entry** (issue #739). **Admin →
-  Imports → Import products** opens it, for every business, and so does **Products (All Products) →
+- **Importing the Nayax catalogue is a review you decide, entry by entry** (issue #739), **and it
+  has its own page: Products → Import products** (`/products/import`, issue #888). The sidebar's
+  **Inventory → Import products** entry goes there, for every business that may run imports with a
+  usable Nayax connection, and so does **Products (All Products) →
   Import products** (issue #875) when the signed-in member may run imports, Nayax is usable, no
   support session is active, and Nayax has not refused this application permission to read the
   catalogue — a refused catalogue read hides that button even though the connection itself is usable
   (`PendingPermissions` is a usable status), while a permission nothing has stated yet still offers
-  it. Both buttons open the identical review. It is no longer refused for a business
+  it. **Admin → Imports → Import products** is a link to the same page, so every entry point opens
+  the identical review; the review itself used to be a panel at the bottom of Admin → Imports, and
+  closing it now returns you to Products. It is no longer refused for a business
   that keeps its own products (it was, until this change, because the old import recognised a product
   only by Nayax's own id and would have created a duplicate of each of yours), and there is no
   longer a direct import that writes Nayax's catalogue straight through: nothing is written until you
@@ -1347,7 +1351,7 @@ its stored values are gone.
 - The **product form** has no Unit Price input. The **All Products** and **Needs Ordering** pages
   have no Price column or price sort, the home dashboard's **Reorder Alerts** table has no Unit
   Price column, and the **Stock History** page's product summary shows three tiles instead of four.
-- **Import products** (Admin → Imports) no longer asks you to keep or take a Nayax price. Linking a
+- **Import products** (Products → Import products) no longer asks you to keep or take a Nayax price. Linking a
   product still replaces its **name and category** with the provider's, and those changes are still
   listed as applied automatically; there is simply no price to decide about any more.
 - **A catalogue review you had already started before this release cannot be applied.** It was read
@@ -1585,7 +1589,7 @@ the page asks you to wait a few minutes, and no call reaches Nayax.
 
 ### Connecting Nayax when you already have products
 
-Once the connection is saved, **Admin → Imports → Import products** brings Nayax's catalogue in.
+Once the connection is saved, **Products → Import products** brings Nayax's catalogue in.
 It opens a **review**: nothing is written until you press Apply, and every row it writes is a row
 you decided about. That is how a business that has been keeping its own products connects Nayax
 without ending up with two of everything — matching names are never linked for you, because two
@@ -1902,7 +1906,8 @@ out.
   The Nayax permission *key* behind a read is not named, because no published contract states it (see
   [docs/architecture.md § Provider-locked navigation](docs/architecture.md#provider-locked-navigation-issue-729)).
 - **The provider's repair and admin tools are hidden, not locked**: Admin → Imports (the Nayax sales
-  and settlement imports) and Admin → Nayax Sale Timestamp Repair are left out of the menu until the
+  and settlement imports), Inventory → Import products (the catalogue review's own page, issue #888)
+  and Admin → Nayax Sale Timestamp Repair are left out of the menu until the
   connection is usable, because without a provider there is nothing of the provider's to import or
   repair. The costing and GST repairs are the business's own data and stay. **Admin → Nayax Settings
   is now Admin → Integrations** and is always reachable — it is where a connection is made — with the

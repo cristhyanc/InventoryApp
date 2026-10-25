@@ -253,6 +253,10 @@ export const primaryNavigation: readonly NavItem[] = [
     icon: 'inventory_2',
     children: [
       link('Products', '/products', 'Inventory.Operate'),
+      // The dedicated Import products page (issue #888), directly under the page it imports into.
+      // A provider tool like the Admin imports: with no usable connection there is no catalogue of
+      // the provider's to review, so the entry is left out rather than shown locked.
+      providerToolLink('Import products', '/products/import', 'Imports.Run'),
       link('Take Inventory', '/take-inventory', 'Inventory.Operate'),
       link('Categories', '/categories', 'Inventory.Operate'),
       link('Stock History', '/stock-history', 'Inventory.Operate')
