@@ -591,6 +591,22 @@ describe('MachineDetailComponent financial figures gated on Dashboard.ViewFinanc
     expect(host.textContent).toContain('$4.75');
   });
 
+  it('draws each summary tile as a white stat card rather than a gray tile lost on the gray page canvas', async () => {
+    const host = await render(true);
+
+    const tiles = Array.from(host.querySelector('[data-testid="machine-summary-cards"]')?.children ?? []);
+    expect(tiles.map((tile) => tile.textContent)).toEqual([
+      expect.stringContaining('Machine'),
+      expect.stringContaining('Today Gross'),
+      expect.stringContaining('Today Direct Profit'),
+      expect.stringContaining('Current Week Gross')
+    ]);
+    for (const tile of tiles) {
+      expect(tile.classList).toContain('stat-card');
+      expect(tile.classList).not.toContain('bg-md-gray-100');
+    }
+  });
+
   it('renders without error when a granted role is sent a machine and product with the figures absent', async () => {
     const host = await TestBed.configureTestingModule({
       imports: [MachineDetailComponent],

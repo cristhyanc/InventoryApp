@@ -18,22 +18,24 @@
   </ng-container>
 
   <ng-container *ngIf="machine$ | async as machine">
-    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-      <div class="rounded-md-card bg-md-gray-100 p-4">
+    <!-- The summary tiles are the shared white `.stat-card`, not a gray tile: the page canvas is
+         itself md-gray-100, so a borderless gray tile has no visible edge on it. -->
+    <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4" data-testid="machine-summary-cards">
+      <div class="stat-card">
         <div class="text-md-badge uppercase tracking-wide value-muted">Machine</div>
         <div class="mt-2 text-md-card-title font-semibold text-md-gray-800">{{ machine?.machineName || 'Unnamed machine' }}</div>
         <div class="text-md-body text-md-gray-600">#{{ machine?.machineNumber || machine?.machineID }}</div>
       </div>
       @if (canViewFinancials) {
-        <div class="rounded-md-card bg-md-gray-100 p-4">
+        <div class="stat-card">
           <div class="text-md-badge uppercase tracking-wide value-muted">Today Gross</div>
           <div class="mt-2 text-md-card-title font-semibold text-md-info-text">{{ machine?.todayGrossRevenue == null ? 'Unavailable' : ('$' + machine!.todayGrossRevenue!.toFixed(2)) }}</div>
         </div>
-        <div class="rounded-md-card bg-md-gray-100 p-4">
+        <div class="stat-card">
           <div class="text-md-badge uppercase tracking-wide value-muted">Today Direct Profit</div>
           <div class="mt-2 text-md-card-title font-semibold text-md-info-text">{{ machine?.todayDirectProfit == null ? 'Profit unavailable' : ('$' + machine!.todayDirectProfit!.toFixed(2)) }}</div>
         </div>
-        <div class="rounded-md-card bg-md-gray-100 p-4">
+        <div class="stat-card">
           <div class="text-md-badge uppercase tracking-wide value-muted">Current Week Gross</div>
           <div class="mt-2 text-md-card-title font-semibold text-md-info-text">{{ machine?.currentWeekGrossRevenue == null ? 'Unavailable' : ('$' + machine!.currentWeekGrossRevenue!.toFixed(2)) }}</div>
         </div>
