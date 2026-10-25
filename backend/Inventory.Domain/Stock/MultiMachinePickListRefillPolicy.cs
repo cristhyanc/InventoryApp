@@ -199,19 +199,7 @@ public static class MultiMachinePickListRefillPolicy
             // One refusal per allocation, in this order. "Not enough stock" for a product that is not
             // the caller's would be a statement about somebody else's shelf, so an unknown product is
             // refused as an unknown product and nothing further is read into it.
-            string? message = null;
-            if (!machines.TryGetValue(line.MachineId, out var machine) || !machine.IsActive)
-            {
-                message = PickListRefillPolicy.MachineMustBeActiveMessage;
-            }
-            else if (!products.TryGetValue(line.ProductId, out var product))
-            {
-                message = PickListRefillPolicy.UnknownProductMessage;
-            }
-            else if (!product.IsActive)
-            {
-                message = PickListRefillPolicy.RetiredProductMessage;
-            }
+            var message = DescribeMachineOrProductRefusal(line, machines, products);
 
             if (message is not null)
             {
@@ -220,12 +208,48 @@ public static class MultiMachinePickListRefillPolicy
             }
         }
 
-        // The rule this endpoint exists for. A product's allocations come off one shelf, so the
-        // quantity to compare with storage is their sum: 6 to one machine and 6 to another is 12 off
-        // a shelf of 10, however comfortably each one fits on its own. Only a product the business
-        // actually has and still offers has a shelf to compare with - an unknown or retired one is
-        // already refused as what it is, and a stock sentence about it would be a statement about a
-        // product the caller does not have.
+        refusals.AddRange(BuildAggregateStockRefusals(lines, products, refused));
+
+        return new([], [.. refusals.OrderBy(refusal => refusal.AllocationIndex)]);
+    }
+
+    /// <summary>
+    /// What one allocation's own machine and product say about it, independent of every other
+    /// allocation in the batch - everything <see cref="ValidateAgainstState"/> can decide before the
+    /// aggregate storage rule, which needs the whole batch at once.
+    /// </summary>
+    private static string? DescribeMachineOrProductRefusal(
+        MultiMachineRefillLine line,
+        IReadOnlyDictionary<long, PickListRefillMachineFacts> machines,
+        IReadOnlyDictionary<long, PickListRefillProductFacts> products)
+    {
+        if (!machines.TryGetValue(line.MachineId, out var machine) || !machine.IsActive)
+        {
+            return PickListRefillPolicy.MachineMustBeActiveMessage;
+        }
+
+        if (!products.TryGetValue(line.ProductId, out var product))
+        {
+            return PickListRefillPolicy.UnknownProductMessage;
+        }
+
+        return product.IsActive ? null : PickListRefillPolicy.RetiredProductMessage;
+    }
+
+    /// <summary>
+    /// The rule this endpoint exists for. A product's allocations come off one shelf, so the
+    /// quantity to compare with storage is their sum: 6 to one machine and 6 to another is 12 off
+    /// a shelf of 10, however comfortably each one fits on its own. Only a product the business
+    /// actually has and still offers has a shelf to compare with - an unknown or retired one is
+    /// already refused as what it is, and a stock sentence about it would be a statement about a
+    /// product the caller does not have. An allocation already refused for its machine or product
+    /// keeps that refusal, so a client ends up with exactly one message per line.
+    /// </summary>
+    private static List<MultiMachineRefillAllocationRefusal> BuildAggregateStockRefusals(
+        IReadOnlyList<MultiMachineRefillLine> lines,
+        IReadOnlyDictionary<long, PickListRefillProductFacts> products,
+        HashSet<int> refused)
+    {
         var totals = new Dictionary<long, int>();
         foreach (var line in lines)
         {
@@ -235,12 +259,11 @@ public static class MultiMachinePickListRefillPolicy
             }
         }
 
+        List<MultiMachineRefillAllocationRefusal> refusals = [];
         for (var index = 0; index < lines.Count; index++)
         {
             var line = lines[index];
 
-            // One refusal per allocation: an allocation already refused above keeps that refusal, so
-            // a client can put exactly one message on each line.
             if (refused.Contains(index)
                 || !totals.TryGetValue(line.ProductId, out var total)
                 || total <= products[line.ProductId].QuantityInStock)
@@ -258,6 +281,6 @@ public static class MultiMachinePickListRefillPolicy
                 NotEnoughStockForTotalMessage(total, products[line.ProductId].QuantityInStock)));
         }
 
-        return new([], [.. refusals.OrderBy(refusal => refusal.AllocationIndex)]);
+        return refusals;
     }
 }
