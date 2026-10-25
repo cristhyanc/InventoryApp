@@ -1133,6 +1133,19 @@ does not manage.
   unique within the business (compared without case, so
   "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
   the initial restock movement it always did, at the optional initial unit **cost**.
+- **New Product is read down in titled sections** (issue #892). **Products → New Product** groups
+  its fields under **Product details** — Name beside SKU, Category beside Unit Label, Description
+  across the row below them, and then the compact **Active product** checkbox — **Opening
+  inventory** (Opening Stock beside Initial Unit Cost) and **Reordering** (Low Stock Threshold
+  beside Restock To, with the same hints and the same "Restock To must be greater than or equal to
+  the Low Stock Threshold" message). Each section is one column on a narrow screen and two columns
+  from a medium one, and the controls in a row start at the same height, so a field's help text no
+  longer pushes the control beside it to the bottom of the row. **GST rule** is the last choice the
+  page asks for and the single **Create Product** / **Cancel** row is below it, by reading and by
+  Tab alike — so the rule is chosen before the product is created. Nothing else changed: the same
+  fields, values, defaults, labels and validation, the same category picker, the same
+  support-session restriction, and the same two writes described next. **Editing** a product keeps
+  its existing layout, because a provider-managed name and category are locked there.
 - **Choose the new product's GST rule while creating it** (issue #829). **Products → New Product**
   offers the same **GST rule** picker the edit page does — **Taxable**, **GST-free** or **No rule**,
   with the same meanings and the same help. The rule is its own resource, so creating a product with
@@ -1141,7 +1154,8 @@ does not manage.
   If the rule write fails the page says exactly that — "The product was created, but its GST rule
   was not saved." — keeps the product that now exists along with the rule you chose, and offers
   **Save GST rule** beside the picker, which retries the rule alone with the choice on screen now.
-  **Create Product** is gone at that point, so there is no way to create a second product; a create
+  **Create Product** is gone from the row below at that point, so there is no way to create a
+  second product; a create
   whose rule was not stored is never reported as finished, and you can also leave the page and set
   the rule later by editing the product.
   Choosing the rule here classifies no purchase and is not retroactive — see
@@ -1406,7 +1420,8 @@ classified:
   bookkeeping configuration rather than a catalogue field.
 - **Products → New Product → GST rule** (issue #829). The same picker, for a product that does not
   exist yet: there is no stored rule to read, so it is ready to use immediately and has no Save of
-  its own — **Create Product** saves it with the product, as described under
+  its own — **Create Product**, in the action row below it (issue #892), saves it with the product,
+  as described under
   [Products and categories](#products-and-categories). A **Save GST rule** button appears there only
   if the product was created and its rule was not, to retry that one write.
 - **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product

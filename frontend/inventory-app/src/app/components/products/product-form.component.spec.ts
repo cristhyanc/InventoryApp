@@ -835,6 +835,204 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
 });
 
 /**
+ * How New Product is laid out (issue #892).
+ *
+ * The fields used to flow through one `md:grid-cols-2 xl:grid-cols-3` grid, which put Opening Stock
+ * and Initial Unit Cost on different rows, isolated Unit Label, bottom-aligned the Active checkbox
+ * against the Category helper text, and left Create Product *above* the GST choice. These tests pin
+ * the grouping, the field order inside each group, and that the one action row comes after the GST
+ * rule - in the DOM, which is also the keyboard order.
+ *
+ * None of the create behaviour moves: the GST panel stays the same single
+ * `ProductCreateGstRuleComponent` with the same inputs and outputs (issue #829), and the footer
+ * submits the form it names through the native `form` attribute rather than a second handler, so
+ * there is still exactly one `save()`.
+ */
+describe('ProductFormComponent New Product layout (issue #892)', () => {
+  /** The section headings a person reads down the card, including the composed GST panel's own. */
+  const headings = (host: HTMLElement) =>
+    Array.from(host.querySelectorAll('.card-body h2')).map((heading) => heading.textContent?.trim());
+
+  const section = (host: HTMLElement, name: string) =>
+    host.querySelector<HTMLElement>(`[data-testid="product-section-${name}"]`)!;
+
+  /** The field grid of one section, which is the only grid a section has. */
+  const grid = (host: HTMLElement, name: string) => section(host, name).querySelector<HTMLElement>('.grid')!;
+
+  /**
+   * The grid's own cells, in the order they are reached by reading and by Tab. Each cell is a
+   * direct child of the grid - a field label, or the composed category picker, whose own inner
+   * combobox belongs to that component rather than to this layout.
+   */
+  const controlNames = (container: HTMLElement) =>
+    Array.from(container.children).map((cell) => {
+      if (cell.tagName === 'APP-PRODUCT-CATEGORY-PICKER') {
+        return 'app-product-category-picker';
+      }
+      const control = cell.querySelector('input, select, textarea');
+      return control?.getAttribute('name') ?? cell.tagName.toLowerCase();
+    });
+
+  it('groups the fields into titled sections, with the GST rule before the single action row', async () => {
+    const { host } = await render({ routeParams: {} });
+
+    expect(headings(host)).toEqual(['Product details', 'Opening inventory', 'Reordering', 'GST rule']);
+
+    // One GST choice, mounted once, and one action row - after it.
+    expect(host.querySelectorAll('app-product-create-gst-rule').length).toBe(1);
+    expect(host.querySelectorAll('app-product-gst-rule').length).toBe(1);
+
+    const actions = host.querySelectorAll('[data-testid="product-form-actions"]');
+    expect(actions.length).toBe(1);
+    const gstPanel = host.querySelector('app-product-create-gst-rule')!;
+    expect(gstPanel.compareDocumentPosition(actions[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(Array.from(actions[0].querySelectorAll('button, a')).map((control) => control.textContent?.trim())).toEqual([
+      'Create Product',
+      'Cancel'
+    ]);
+  });
+
+  it('pairs Name with SKU and Category with Unit Label, with Description spanning the row below them', async () => {
+    const { host } = await render({ routeParams: {} });
+
+    const details = grid(host, 'product-details');
+    expect(controlNames(details)).toEqual(['name', 'sku', 'app-product-category-picker', 'unit', 'description']);
+
+    const classes = Array.from(details.classList);
+    expect(classes).toContain('md:grid-cols-2');
+    expect(classes).toContain('items-start');
+    // The three-column auto-flow is what split the pairs up; it must not come back here.
+    expect(classes).not.toContain('xl:grid-cols-3');
+
+    const description = host.querySelector('[name="description"]')!.closest('label')!;
+    expect(Array.from(description.classList)).toContain('md:col-span-2');
+  });
+
+  it('puts the Active product checkbox outside the field grid, compact and left aligned', async () => {
+    const { host } = await render({ routeParams: {} });
+
+    const active = host.querySelector('[name="isActive"]')!.closest('label')!;
+    const details = grid(host, 'product-details');
+
+    expect(details.contains(active)).toBe(false);
+    expect(section(host, 'product-details').contains(active)).toBe(true);
+    // Neither stretched across a grid cell nor bottom-aligned against the Category helper text.
+    expect(Array.from(active.classList)).toContain('inline-flex');
+    expect(Array.from(active.classList)).not.toContain('self-end');
+  });
+
+  it('puts Opening Stock beside Initial Unit Cost, in their own section', async () => {
+    const { host } = await render({ routeParams: {} });
+
+    const opening = grid(host, 'opening-inventory');
+    expect(controlNames(opening)).toEqual(['quantityInStock', 'initialUnitCost']);
+    expect(Array.from(opening.classList)).toEqual(expect.arrayContaining(['md:grid-cols-2', 'items-start']));
+  });
+
+  it('puts Low Stock Threshold beside Restock To, keeping their hints and their validation message', async () => {
+    const { fixture, component, host } = await render({ routeParams: {} });
+
+    const reordering = grid(host, 'reordering');
+    expect(controlNames(reordering)).toEqual(['lowStockThreshold', 'restockTo']);
+    expect(Array.from(reordering.classList)).toEqual(expect.arrayContaining(['md:grid-cols-2', 'items-start']));
+    expect(Array.from(reordering.querySelectorAll('.field-hint')).map((hint) => hint.textContent?.trim())).toEqual([
+      'Minimum home stock before a new order is needed.',
+      'Target home stock after machines are replenished and the order is received.'
+    ]);
+
+    component.form.lowStockThreshold = 10;
+    component.form.restockTo = 4;
+    fixture.detectChanges();
+
+    const message = section(host, 'reordering').querySelector('.field-error');
+    expect(message?.textContent).toContain('Restock To must be greater than or equal to the Low Stock Threshold');
+  });
+
+  /**
+   * The footer is outside the form because the GST panel above it owns form controls of its own, and
+   * nesting one form in another is not markup a browser keeps. It submits the product form by naming
+   * it, so there is still exactly one submit path and one `save()`.
+   */
+  it('creates the product from the footer below the GST rule, through the form that footer names', async () => {
+    const { fixture, component, host, create, setGstRule, navigate } = await render({
+      routeParams: {},
+      create: jest.fn(() => of(product({ id: 55 })))
+    });
+
+    const form = host.querySelector('form')!;
+    const submit = host.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(form.id).toBeTruthy();
+    expect(submit.getAttribute('form')).toBe(form.id);
+    expect(form.contains(submit)).toBe(false);
+    // The GST choice owns controls, so it stays out of the product form rather than nesting one.
+    expect(form.querySelector('app-product-create-gst-rule')).toBeNull();
+    expect(host.querySelectorAll('form').length).toBe(1);
+
+    component.form.name = 'New Snack';
+    fixture.detectChanges();
+    submit.click();
+    fixture.detectChanges();
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'New Snack' }));
+    expect(setGstRule).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledWith(['/products']);
+  });
+
+  it('leaves the category picker’s own buttons unable to submit the product', async () => {
+    const { host, typeCategory, categoryOption, clickCategoryOption, create } = await render({ routeParams: {} });
+
+    typeCategory('sn');
+    expect(
+      Array.from(host.querySelectorAll('app-product-category-picker button')).every(
+        (button) => button.getAttribute('type') === 'button'
+      )
+    ).toBe(true);
+
+    clickCategoryOption(categoryOption('Snacks')!);
+
+    expect(create).not.toHaveBeenCalled();
+    expect(host.querySelector('h1')?.textContent).toContain('New Product');
+  });
+
+  it('keeps the footer’s Cancel on the product list and withdraws Create once the product exists', async () => {
+    const { host, component, chooseGstRule, submit, gstRuleRetry } = await render({
+      routeParams: {},
+      create: jest.fn(() => of(product({ id: 55 }))),
+      setGstRule: jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })))
+    });
+
+    const actions = host.querySelector('[data-testid="product-form-actions"]')!;
+    expect(actions.querySelector<HTMLAnchorElement>('a.btn-secondary')?.getAttribute('href')).toBe('/products');
+
+    chooseGstRule('Taxable');
+    component.form.name = 'New Snack';
+    submit();
+
+    // The one outstanding write is the rule, and its retry is the only control left offered.
+    expect(actions.querySelector('button[type="submit"]')).toBeNull();
+    expect(host.querySelector('button[type="submit"]')).toBeNull();
+    expect(gstRuleRetry()?.textContent).toContain('Save GST rule');
+    expect(actions.querySelector<HTMLAnchorElement>('a.btn-secondary')?.getAttribute('href')).toBe('/products');
+  });
+
+  it('leaves Edit Product on its existing layout, with its own action row inside the form', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('[data-testid="product-section-product-details"]')).toBeNull();
+    expect(host.querySelector('[data-testid="product-section-opening-inventory"]')).toBeNull();
+    expect(headings(host)).toEqual(['GST rule', 'Supplier price comparison']);
+
+    const form = host.querySelector('form')!;
+    expect(Array.from(form.querySelector('.grid')!.classList)).toEqual(
+      expect.arrayContaining(['md:grid-cols-2', 'xl:grid-cols-3'])
+    );
+    expect(form.contains(host.querySelector('button[type="submit"]'))).toBe(true);
+    expect(host.querySelector('button[type="submit"]')?.getAttribute('form')).toBeNull();
+  });
+});
+
+/**
  * Save while a support session is active (issue #554). A session grants `InventoryOperate`, so
  * this control would otherwise still render enabled.
  */
