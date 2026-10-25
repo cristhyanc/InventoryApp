@@ -2488,7 +2488,22 @@ a {
   text-decoration: none;
 }
 
-input, select, textarea {
+/*
+ * Checkboxes and radios (issue #874) keep their native size instead of the full-width,
+ * text-input padding and border every other `input` gets: a flex label would otherwise stretch
+ * the box across the row and draw the tick far from the label text (issue #872). The focus and
+ * disabled rules below still target bare `input`, so checkboxes and radios keep those.
+ *
+ * The exclusion is wrapped in `:where()` because `:where()` contributes **zero** specificity:
+ * `input:where(…)` still weighs exactly as much as the bare `input` this rule used to be, so
+ * every single-class utility that has always overridden it keeps winning - `.w-24` on Take
+ * Inventory's counted-stock input, `.w-auto` on the report filters' date inputs,
+ * `.border-md-danger` on an invalid purchase price. Written as a bare
+ * `input:not([type='checkbox']):not([type='radio'])` the two attribute selectors would outweigh
+ * a single class and silently restore full width and the default border to all three.
+ */
+
+input:where(:not([type='checkbox']):not([type='radio'])), select, textarea {
   width: 100%;
   border-radius: 0.375rem;
   border-width: 1px;
@@ -2504,17 +2519,17 @@ input, select, textarea {
   color: rgb(51 65 85 / var(--tw-text-opacity, 1));
 }
 
-input::-moz-placeholder, select::-moz-placeholder, textarea::-moz-placeholder {
+input:where(:not([type='checkbox']):not([type='radio']))::-moz-placeholder, select::-moz-placeholder, textarea::-moz-placeholder {
   --tw-text-opacity: 1;
   color: rgb(148 163 184 / var(--tw-text-opacity, 1));
 }
 
-input::placeholder, select::placeholder, textarea::placeholder {
+input:where(:not([type='checkbox']):not([type='radio']))::placeholder, select::placeholder, textarea::placeholder {
   --tw-text-opacity: 1;
   color: rgb(148 163 184 / var(--tw-text-opacity, 1));
 }
 
-input:focus, select:focus, textarea:focus {
+input:where(:not([type='checkbox']):not([type='radio'])):focus, select:focus, textarea:focus {
   --tw-border-opacity: 1;
   border-color: rgb(26 115 232 / var(--tw-border-opacity, 1));
 }
