@@ -81,4 +81,24 @@ public sealed class FakeLocalMachineStore : ILocalMachineStore
         LastActivation = isActive;
         return Task.FromResult(LocalMachineWriteAttempt.Succeeded(id));
     }
+
+    /// <summary>
+    /// Removes the machine (issue #896). Which machines <em>may</em> be deleted is decided against
+    /// the stored rows of four other tables and is proved in
+    /// <c>InventoryApi.Tests.Adapters.Persistence.EfLocalMachineStoreDeletionTests</c>;
+    /// <see cref="RefusalToReturn"/> stands in for that refusal here.
+    /// </summary>
+    public Task<LocalMachineWriteAttempt> DeleteAsync(long id, CancellationToken cancellationToken)
+    {
+        var existing = _machines.SingleOrDefault(machine => machine.Id == id);
+        if (existing is null) return Task.FromResult(LocalMachineWriteAttempt.NotFound());
+        if (RefusalToReturn is { } refusal) return Task.FromResult(LocalMachineWriteAttempt.Refused(refusal));
+
+        _machines.Remove(existing);
+        LastDeletedId = id;
+        return Task.FromResult(LocalMachineWriteAttempt.Succeeded(id));
+    }
+
+    /// <summary>The machine the last successful delete removed.</summary>
+    public long? LastDeletedId { get; private set; }
 }

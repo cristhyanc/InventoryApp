@@ -5,7 +5,6 @@ using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 
 namespace Inventory.Infrastructure.Persistence;
 
@@ -53,12 +52,19 @@ public sealed class EfProviderMachineLinkStore : IProviderMachineLinkStore
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <c>BEGIN IMMEDIATE</c> since issue #896, through the shared
+    /// <see cref="SqliteWriteLockTransaction"/>: the machine delete has to be serialised against this
+    /// apply, and a deferred transaction takes its write lock only at the first write - after both
+    /// operations have read the machine they disagree about. Taking the write lock when the
+    /// transaction opens makes the second one wait and then read the first one's committed state, so
+    /// the loser is answered with a deliberate refusal rather than a lock error. It changes nothing
+    /// about what a link may do.
+    /// </remarks>
     public async Task<IProviderMachineLinkTransaction> BeginTransactionAsync(
         CancellationToken cancellationToken) =>
         new ProviderMachineLinkTransaction(
-            _db.Database.IsRelational() && _db.Database.CurrentTransaction is null
-                ? await _db.Database.BeginTransactionAsync(cancellationToken)
-                : null);
+            await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken));
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<LocalMachineLinkRow>> ListLocalMachinesAsync(
@@ -184,26 +190,22 @@ public sealed class EfProviderMachineLinkStore : IProviderMachineLinkStore
     }
 
     /// <summary>
-    /// The caller's transaction. <c>null</c> when the context is not relational or already inside
-    /// one, in which case commit and rollback belong to whoever opened it - the same shape
-    /// <see cref="EfCatalogueReviewStore"/> uses.
+    /// The caller's transaction, over the shared write lock. It is a no-op when the context is not
+    /// relational or already inside somebody else's transaction, in which case commit and rollback
+    /// belong to whoever opened that one - the same shape <see cref="EfCatalogueReviewStore"/> uses.
     /// </summary>
     private sealed class ProviderMachineLinkTransaction : IProviderMachineLinkTransaction
     {
-        private readonly IDbContextTransaction? _transaction;
+        private readonly SqliteWriteLockTransaction _transaction;
 
-        public ProviderMachineLinkTransaction(IDbContextTransaction? transaction)
+        public ProviderMachineLinkTransaction(SqliteWriteLockTransaction transaction)
         {
             _transaction = transaction;
         }
 
         public Task CommitAsync(CancellationToken cancellationToken) =>
-            _transaction?.CommitAsync(cancellationToken) ?? Task.CompletedTask;
+            _transaction.CommitAsync(cancellationToken);
 
-        public async ValueTask DisposeAsync()
-        {
-            if (_transaction is not null)
-                await _transaction.DisposeAsync();
-        }
+        public ValueTask DisposeAsync() => _transaction.DisposeAsync();
     }
 }

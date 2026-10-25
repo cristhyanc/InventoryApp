@@ -247,6 +247,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateLocalMachine>();
         services.AddScoped<RenameLocalMachine>();
         services.AddScoped<SetLocalMachineActivation>();
+        // Deleting one the business added by mistake (issue #896): only while nothing refers to it
+        // and no provider names it, decided and carried out as one operation in the store.
+        services.AddScoped<DeleteLocalMachine>();
         // Provider machine linking (issue #742): the one place a provider machine becomes - or waits
         // to become - one of those records. It reads the live fleet, so unlike the five above it
         // needs a working provider connection.

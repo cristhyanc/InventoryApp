@@ -240,10 +240,13 @@ public class OperatorReadableFinancialFigureTests
         "PUT api/Suppliers/{id:int}",
 
         // The machine write surface of issue #740: the business's own machine records. A machine is
-        // name-only - it carries no revenue, cost or valuation of any kind - and each of these three
-        // answers a status code or the one refusal sentence saying the name is missing. The list and
-        // read actions are deliberately *not* here: they declare their response payload, so the scan
-        // above inspects them like any other read.
+        // name-only - it carries no revenue, cost or valuation of any kind - and each of these
+        // answers a status code or one refusal sentence. The delete's refusal (issue #896) names the
+        // *kinds* of history that refer to the machine and how many rows of each, which is a count of
+        // rows and never an amount: no sale, cost, margin or valuation figure appears in it. The list
+        // and read actions are deliberately *not* here: they declare their response payload, so the
+        // scan above inspects them like any other read.
+        "DELETE api/local-machines/{id:long}",
         "POST api/local-machines/{id:long}/deactivate",
         "POST api/local-machines/{id:long}/reactivate",
         "PUT api/local-machines/{id:long}",

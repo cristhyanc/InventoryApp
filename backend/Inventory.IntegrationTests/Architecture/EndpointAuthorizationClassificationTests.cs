@@ -348,6 +348,10 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/local-machines/{id:long}", "PUT", Capability.InventoryOperate)]
     [InlineData("api/local-machines/{id:long}/deactivate", "POST", Capability.InventoryOperate)]
     [InlineData("api/local-machines/{id:long}/reactivate", "POST", Capability.InventoryOperate)]
+    // Deleting a machine added by mistake (issue #896) is the same surface and the same capability:
+    // it may only remove a machine nothing refers to, so it is not a stronger power than the create
+    // it undoes.
+    [InlineData("api/local-machines/{id:long}", "DELETE", Capability.InventoryOperate)]
 
     // Provider machine linking (issue #742): the join between the two machine resources above. It
     // declares the same capability both of them do - deciding which machine a provider number means

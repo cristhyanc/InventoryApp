@@ -6,6 +6,7 @@ import { Observable, Subscription } from 'rxjs';
 import { LocalMachine } from '../../../models/models';
 import { LocalMachineService } from '../../../services/local-machine.service';
 import { SupportSessionService } from '../../../support-session/support-session.service';
+import { ConfirmationDialogComponent } from '../../shared/confirmation-dialog.component';
 import { IconComponent } from '../../shared/icon.component';
 import { ListLoadState } from '../../shared/list-load-state';
 
@@ -53,8 +54,12 @@ export function machineWriteErrorMessage(error: unknown): string {
  * never connected one - which is the point of the issue. It shows no revenue, no stock and no sync:
  * those are the live fleet's, and the page withholds them itself.</p>
  *
- * <p><strong>No delete.</strong> Stored sales, refills, counts and expenses refer to a machine, so a
- * machine that stops trading is deactivated and stays listed. The API offers no delete either.</p>
+ * <p><strong>Delete is only for a machine added by mistake</strong> (issue #896). A machine with
+ * machine stock counts, stock movements, pick-list refills or operating expenses is deactivated and
+ * stays listed, because that history refers to it; so is a machine the provider names. Which is
+ * which is the server's answer, published as <code>canDelete</code>/<code>deletionRefusal</code>
+ * from the one deletion policy - this component offers Delete only on a plain <code>true</code> and
+ * shows the server's refusal for the rest, rather than deciding anything itself.</p>
  *
  * <p>Write controls are hidden while a support session is active, on the established rule (issues
  * #554, #658): the session grants <code>Inventory.Operate</code>, which is what this surface would
@@ -64,7 +69,7 @@ export function machineWriteErrorMessage(error: unknown): string {
 @Component({
   selector: 'app-local-machine-list',
   standalone: true,
-  imports: [CommonModule, FormsModule, IconComponent],
+  imports: [CommonModule, FormsModule, IconComponent, ConfirmationDialogComponent],
   templateUrl: './local-machine-list.component.html'
 })
 export class LocalMachineListComponent implements OnInit, OnDestroy {
@@ -77,6 +82,9 @@ export class LocalMachineListComponent implements OnInit, OnDestroy {
   /** The machine being renamed, and its draft name. */
   editingId: number | null = null;
   editingName = '';
+
+  /** The machine whose deletion is awaiting confirmation, which is what renders the dialog. */
+  confirmingMachine: LocalMachine | null = null;
 
   /** The last refusal, worded by the server where it worded one. */
   error: string | null = null;
@@ -162,6 +170,61 @@ export class LocalMachineListComponent implements OnInit, OnDestroy {
   reactivate(machine: LocalMachine): void {
     if (this.sessionActive || this.saving) return;
     this.write(this.machines$.reactivate(machine.id));
+  }
+
+  /**
+   * Whether the API says this machine may be deleted (issue #896). `canDelete` is the deletion
+   * rule's own answer, published by the machine list from the same
+   * `Inventory.Domain.Machines.MachineDeletionPolicy` that refuses the delete itself: a provider
+   * link, machine stock counts, stock movements, pick-list refills and operating expenses all reach
+   * it. Delete is offered only on a plain `true` - an absent answer (a response that never resolved
+   * the question) is not permission - and never for a machine the provider names, which is managed
+   * at the provider exactly as its rename and deactivation are.
+   *
+   * The answer stays advisory - it is as fresh as the last fetch - and the server decides again
+   * inside the delete's own transaction, which `deleteConfirmed` still surfaces.
+   */
+  canDelete(machine: LocalMachine): boolean {
+    return machine.canDelete === true && !machine.isProviderNamed;
+  }
+
+  /**
+   * Why this machine may not be deleted, in the server's own words, for a machine the business
+   * maintains itself. A provider machine is left out on purpose: the row already says "From Nayax"
+   * and offers neither rename nor deactivation, so repeating the sentence would only crowd it.
+   */
+  deletionRefusal(machine: LocalMachine): string | null {
+    if (machine.isProviderNamed || machine.canDelete !== false) return null;
+    return machine.deletionRefusal ?? null;
+  }
+
+  confirmDelete(machine: LocalMachine): void {
+    // Checked here as well as hidden in the template, so the write is actually unavailable rather
+    // than merely invisible - the endpoint refuses it either way.
+    if (this.sessionActive || this.saving || !this.canDelete(machine)) return;
+    this.error = null;
+    this.confirmingMachine = machine;
+  }
+
+  cancelDelete(): void {
+    // No request was made and none is made now: cancelling leaves the row exactly as it was.
+    this.confirmingMachine = null;
+  }
+
+  /**
+   * Sends the one delete. The machine being confirmed is cleared first, so a second click on the
+   * dialog's button has nothing left to send even before `saving` closes the window.
+   */
+  deleteConfirmed(): void {
+    const machine = this.confirmingMachine;
+    this.confirmingMachine = null;
+    if (machine === null || this.sessionActive || this.saving) return;
+
+    // The refusal the server words is shown as it is: Delete was offered because `canDelete` said
+    // so, but that answer was read before this click, and the machine can have gained an expense, a
+    // count, a movement, a refill or a provider link in between. `write` reloads only on success,
+    // so the row a refusal is about is still there.
+    this.write(this.machines$.delete(machine.id));
   }
 
   /**

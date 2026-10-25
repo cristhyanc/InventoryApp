@@ -5,9 +5,10 @@
   <div class="card-body">
     <p class="text-md-body value-muted">
       The machines this business operates. A machine is kept here whether or not a provider knows
-      about it, and one that stops trading is deactivated rather than deleted, because recorded
-      transactions, refills and counts refer to it. A machine from Nayax is renamed and deactivated
-      in Nayax, not here.
+      about it. One that stops trading is deactivated rather than deleted, because recorded
+      transactions, refills, counts and expenses refer to it; a machine added by mistake, that
+      nothing refers to yet, can be deleted. A machine from Nayax is renamed, deactivated and
+      deleted in Nayax, not here.
     </p>
 
     @if (!sessionActive) {
@@ -97,8 +98,19 @@
                               Reactivate
                             </button>
                           }
+                          <!-- Delete is offered only where the API says it is allowed (issue #896):
+                               a machine nothing refers to and no provider names. Every other
+                               machine is deactivated instead, and the reason is beside it. -->
+                          @if (canDelete(machine)) {
+                            <button type="button" class="btn btn-sm btn-danger" [disabled]="saving" (click)="confirmDelete(machine)">
+                              Delete
+                            </button>
+                          }
                         }
                       </div>
+                      @if (deletionRefusal(machine); as refusal) {
+                        <p class="mt-1 text-md-caption value-muted">{{ refusal }}</p>
+                      }
                     }
                   </td>
                 </tr>
@@ -110,3 +122,15 @@
     </div>
   </div>
 </section>
+
+<!-- The shared confirmation dialog, composed rather than authored here, naming the machine it is
+     about (issue #896). Cancel sends nothing at all; Confirm sends exactly one request. -->
+@if (confirmingMachine) {
+  <app-confirmation-dialog
+    title="Confirm delete"
+    confirmLabel="Delete"
+    cancelLabel="Cancel"
+    [message]="'Delete machine \'' + confirmingMachine.name + '\'? This cannot be undone.'"
+    (confirmed)="deleteConfirmed()"
+    (canceled)="cancelDelete()" />
+}

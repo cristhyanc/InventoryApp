@@ -57,9 +57,12 @@ public class LocalMachine : IBusinessOwned
     public string Name { get; set; } = string.Empty;
 
     /// <summary>
-    /// Whether the machine is in service. A machine is deactivated rather than deleted, because
-    /// stored sales, refills and counts refer to it and a machine that stops trading is history
-    /// rather than a mistake.
+    /// Whether the machine is in service. A machine with history is deactivated rather than deleted,
+    /// because stored sales, refills, counts and expenses refer to it and a machine that stops
+    /// trading is history rather than a mistake. A machine nothing refers to and no provider names
+    /// <em>can</em> be deleted since issue #896 - that is the machine added by mistake, and
+    /// <c>Inventory.Domain.Machines.MachineDeletionPolicy</c> is the one rule that tells the two
+    /// apart.
     /// </summary>
     public bool IsActive { get; set; } = true;
 

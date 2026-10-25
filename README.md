@@ -1934,8 +1934,8 @@ connected (issue #740). Before it, a machine was never stored at all — every m
 of the live Nayax fleet — so a business with no provider had no machines.
 
 - **The Machines page is two lists.** *Your machines* is always there: it lists every machine this
-  business has recorded, active and inactive, and holds the Add, Rename, Deactivate and Reactivate
-  actions. *Live from Nayax* — the revenue and profit figures, and the links into each machine's
+  business has recorded, active and inactive, and holds the Add, Rename, Deactivate, Reactivate and
+  Delete actions. *Live from Nayax* — the revenue and profit figures, and the links into each machine's
   stock and Sync Restock workflow — appears below it only while the Nayax connection can serve the
   fleet read. With no usable provider the live section is not shown at all, and the page is the local
   machine list alone; if the fleet read fails for some other reason (an outage, a transport failure),
@@ -1946,16 +1946,26 @@ of the live Nayax fleet — so a business with no provider had no machines.
   resolves a machine by its name.
 - **Rename one** with `PUT /api/local-machines/{id}`.
 - **Deactivate and reactivate**, with `POST /api/local-machines/{id}/deactivate` and
-  `.../reactivate`. **There is no delete.** Recorded transactions, refills, machine counts and
-  expenses refer to a machine, so a machine that stops trading keeps all of its history and stays in
-  the list, marked *Inactive*, ready to be put back in service.
-- **A machine from Nayax is renamed and deactivated in Nayax, not here.** The list offers no
-  Rename or Deactivate on a row marked "From Nayax", and the API refuses both with `400` and the
-  sentence "This machine comes from Nayax and cannot be renamed here. Nothing was saved." (or
-  "deactivated here").
-  **Reactivate** is still offered, so a Nayax machine deactivated before this rule can be put back
-  in service. The machine keeps the name it was given when it was recorded or linked: nothing
-  copies a later Nayax rename across.
+  `.../reactivate`. **This is what a machine with history gets instead of a delete.** Recorded
+  transactions, refills, machine counts and expenses refer to a machine, so a machine that stops
+  trading keeps all of its history and stays in the list, marked *Inactive*, ready to be put back in
+  service.
+- **Delete a machine you added by mistake**, with `DELETE /api/local-machines/{id}` — and only one
+  that nothing refers to yet. **Delete** appears on a row only where the server says the machine may
+  be deleted, asks you to confirm and names the machine, and nothing is sent if you cancel. Every
+  other machine says, in the server's own words, what refers to it — "This machine cannot be deleted
+  because its history refers to it (2 machine stock counts, 1 operating expense)" — and is
+  deactivated instead. What counts as history is a machine stock count, a stock movement (a refill
+  included), a pick-list refill or an operating expense; **nothing is ever deleted along with the
+  machine**, which is exactly why a machine with any of them is refused. A machine from Nayax is
+  never offered Delete.
+- **A machine from Nayax is renamed, deactivated and deleted in Nayax, not here.** The list offers no
+  Rename, Deactivate or Delete on a row marked "From Nayax", and the API refuses all three with `400`
+  and the sentence "This machine comes from Nayax and cannot be renamed here. Nothing was saved." (or
+  "deactivated here", or "This machine comes from Nayax and cannot be deleted here. Nothing was
+  deleted."). **Reactivate** is still offered, so a Nayax machine deactivated before this rule can be
+  put back in service. The machine keeps the name it was given when it was recorded or linked:
+  nothing copies a later Nayax rename across.
 - **A machine the provider named is marked "From Nayax".** Every machine this database already
   referred to — through a sale, a refill, a machine count, an expense, a stock event, a sale
   timestamp repair or an inventory-cost transition — was given a local record when this change was

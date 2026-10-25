@@ -1,4 +1,5 @@
 using Inventory.Application.Machines;
+using Inventory.Domain.Machines;
 using InventoryApi.Controllers;
 using InventoryApi.DTOs;
 using InventoryApi.Tests.Application.Machines;
@@ -9,7 +10,7 @@ namespace InventoryApi.Tests.Controllers;
 
 /// <summary>
 /// <c>/api/local-machines</c> (issue #740, parent #329 child G1): the HTTP shape of create, rename,
-/// deactivate and reactivate over the business's own machine records.
+/// deactivate, reactivate and - since issue #896 - delete over the business's own machine records.
 /// </summary>
 public class LocalMachinesControllerTests
 {
@@ -19,7 +20,8 @@ public class LocalMachinesControllerTests
             new GetLocalMachine(store),
             new CreateLocalMachine(store),
             new RenameLocalMachine(store),
-            new SetLocalMachineActivation(store));
+            new SetLocalMachineActivation(store),
+            new DeleteLocalMachine(store));
 
     [Fact]
     public async Task GetAll_returns_ok_with_active_and_inactive_machines_ordered_by_name()
@@ -146,17 +148,96 @@ public class LocalMachinesControllerTests
     }
 
     /// <summary>
-    /// There is no delete action at all: stored sales, refills, counts and expenses refer to a
-    /// machine, so a machine that stops trading is deactivated rather than removed.
+    /// The delete answers <c>204</c> and removes the machine (issue #896). Before that issue this
+    /// resource deliberately had no delete action at all; the rule changed to "only a machine nothing
+    /// refers to", which the store decides - what the controller owns is the status code.
     /// </summary>
     [Fact]
-    public void The_resource_offers_no_delete()
+    public async Task Delete_returns_no_content_and_removes_the_machine()
     {
-        var actions = typeof(LocalMachinesController)
-            .GetMethods()
-            .Select(method => method.Name)
-            .ToArray();
+        var store = new FakeLocalMachineStore([new LocalMachineRecord(1, "Added by mistake", IsActive: true)]);
+        var controller = CreateController(store);
 
-        Assert.DoesNotContain("Delete", actions);
+        Assert.IsType<NoContentResult>(await controller.Delete(1, CancellationToken.None));
+
+        Assert.Equal(1, store.LastDeletedId);
+        Assert.Null(await store.FindByIdAsync(1, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// A refused delete - a machine with history, or one the provider names - is a <c>400</c>
+    /// carrying the store's own sentence, the same shape the rename and deactivation refusals use,
+    /// and the machine is still there.
+    /// </summary>
+    [Fact]
+    public async Task Delete_returns_bad_request_with_the_stores_refusal_and_keeps_the_machine()
+    {
+        const string refusal =
+            "This machine cannot be deleted because its history refers to it (1 operating expense).";
+        var store = new FakeLocalMachineStore([new LocalMachineRecord(1, "Atrium", IsActive: true)])
+        {
+            RefusalToReturn = refusal,
+        };
+        var controller = CreateController(store);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(await controller.Delete(1, CancellationToken.None));
+
+        Assert.Equal(refusal, badRequest.Value);
+        Assert.NotNull(await store.FindByIdAsync(1, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// A machine of another business is invisible through the central tenant query filters, so the
+    /// delete reports the same <c>404</c> an unknown id gets - never a refusal that would confirm the
+    /// row exists somewhere.
+    /// </summary>
+    [Fact]
+    public async Task Delete_returns_not_found_for_a_machine_of_another_business()
+    {
+        var controller = CreateController(new FakeLocalMachineStore());
+
+        Assert.IsType<NotFoundResult>(await controller.Delete(999, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// The list and the single-machine read publish the deletion rule's own answer (issue #896),
+    /// following the product pattern of issues #737 and #825: a plain <c>true</c> where the delete
+    /// would be allowed, and the server's refusal where it would not. A record that did not resolve
+    /// the question publishes neither, because absence is not permission.
+    /// </summary>
+    [Fact]
+    public async Task The_list_and_the_read_publish_can_delete_and_the_refusal()
+    {
+        const string refusal = "This machine cannot be deleted because its history refers to it (1 sale).";
+        var store = new FakeLocalMachineStore(
+        [
+            new LocalMachineRecord(1, "Added by mistake", IsActive: true)
+            {
+                DeletionEligibility = new LocalMachineDeletionEligibility(null),
+            },
+            new LocalMachineRecord(2, "Busy machine", IsActive: true)
+            {
+                DeletionEligibility = new LocalMachineDeletionEligibility(refusal),
+            },
+            new LocalMachineRecord(3, "Unresolved", IsActive: true),
+        ]);
+        var controller = CreateController(store);
+
+        var ok = Assert.IsType<OkObjectResult>((await controller.GetAll(CancellationToken.None)).Result);
+        var machines = Assert.IsAssignableFrom<IEnumerable<LocalMachineResponse>>(ok.Value)
+            .ToDictionary(machine => machine.Name, StringComparer.Ordinal);
+
+        Assert.Equal(true, machines["Added by mistake"].CanDelete);
+        Assert.Null(machines["Added by mistake"].DeletionRefusal);
+        Assert.Equal(false, machines["Busy machine"].CanDelete);
+        Assert.Equal(refusal, machines["Busy machine"].DeletionRefusal);
+        // Never resolved, so neither answer is published: absence is not permission.
+        Assert.Null(machines["Unresolved"].CanDelete);
+        Assert.Null(machines["Unresolved"].DeletionRefusal);
+
+        var one = Assert.IsType<LocalMachineResponse>(
+            Assert.IsType<OkObjectResult>((await controller.Get(2, CancellationToken.None)).Result).Value);
+        Assert.Equal(false, one.CanDelete);
+        Assert.Equal(refusal, one.DeletionRefusal);
     }
 }
