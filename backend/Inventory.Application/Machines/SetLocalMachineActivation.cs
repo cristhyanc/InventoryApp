@@ -5,7 +5,10 @@ namespace Inventory.Application.Machines;
 ///
 /// <para><strong>Deactivation, not deletion.</strong> Stored sales, refills, machine counts and
 /// expenses refer to a machine, so a machine that stops trading is history rather than a mistake:
-/// there is no delete, and nothing here touches a quantity, a cost or any stored movement.</para>
+/// this is what it gets instead of a delete, and nothing here touches a quantity, a cost or any
+/// stored movement. <see cref="DeleteLocalMachine"/> exists for the other case - a machine added by
+/// mistake that nothing refers to at all (issue #896) - and refuses every machine this use case is
+/// for.</para>
 ///
 /// <para><strong>A provider machine is not deactivated here.</strong> A machine the business's sales
 /// provider names is taken out of service at the provider, so the store refuses its deactivation

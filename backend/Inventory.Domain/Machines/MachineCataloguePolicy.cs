@@ -69,6 +69,16 @@ public static class MachineCataloguePolicy
         $"This machine comes from {ProviderName(provider)} and cannot be deactivated here. Nothing was saved.";
 
     /// <summary>
+    /// Why a machine the business's sales provider names may not be deleted here (issue #896). It
+    /// deliberately does not offer deactivation, which is refused here for the same reason: the
+    /// machine is managed at the provider. <see cref="MachineDeletionPolicy"/> is where the rest of
+    /// the deletion rule lives; this sentence is here so every provider refusal names the provider
+    /// the same way.
+    /// </summary>
+    public static string ProviderMachineDeletionRefusal(ExternalProvider? provider) =>
+        $"This machine comes from {ProviderName(provider)} and cannot be deleted here. Nothing was deleted.";
+
+    /// <summary>
     /// The provider to name in a refusal, on the terms of the catalogue refusals of issue #736: a row
     /// carrying an external id always belongs to a business whose <c>SalesProvider</c> is set, so the
     /// fallback describes a state this application cannot reach rather than guessing a name.
