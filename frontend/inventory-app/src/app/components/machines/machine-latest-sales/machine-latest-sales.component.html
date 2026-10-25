@@ -88,9 +88,9 @@
       <!-- Client-side paging over the window already loaded (issue #886): changing page or page
            size never re-reads the API or Nayax, it only changes which loaded rows are shown. -->
       <div class="page-actions mt-3" data-testid="latest-sales-pagination">
-        <p class="text-sm value-muted" data-testid="latest-sales-range" role="status">
+        <output class="text-sm value-muted" data-testid="latest-sales-range">
           Showing {{ firstShown() }}&ndash;{{ lastShown() }} of {{ latest.sales.length }} sales
-        </p>
+        </output>
         <div class="field">
           <label class="field-label" for="latest-sales-page-size">Rows per page</label>
           <select
