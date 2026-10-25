@@ -31,6 +31,12 @@ import { MachineLatestSale, MachineLatestSales } from '../../../models/models';
  * pattern), so an unprivileged caller never receives them. This panel only chooses the sentence to
  * show in that column, from the same `GET /api/me/access` capability every other hidden figure on
  * this page reads, and never converts a withheld or absent amount to `0`.</p>
+ *
+ * <p><strong>Paging is client-side over the one loaded window</strong> (issue #886). The whole
+ * answer to a single `getLatestSales` call is already on screen; paging only changes which of its
+ * rows are rendered and never issues a second request. The page resets to 1 whenever a fresh answer
+ * replaces the current one - on load, on Refresh and on a machine change - and whenever the page
+ * size changes; the page size itself survives a Refresh.</p>
  */
 @Component({
   selector: 'app-machine-latest-sales',
@@ -73,6 +79,15 @@ export class MachineLatestSalesComponent implements OnDestroy {
    * capability has not been read yet; the API is what actually withholds the amounts.
    */
   canViewFinancials = true;
+
+  /** The page-size choices offered below the table; the first is the default. */
+  readonly pageSizeOptions = [20, 50, 100];
+
+  /** The selected page size. Resets to page 1 whenever it changes. */
+  pageSize = this.pageSizeOptions[0];
+
+  /** The zero-based page currently shown. Reset to 0 on every fresh answer and page-size change. */
+  pageIndex = 0;
 
   private requestedMachineId: number | null = null;
   private readonly machineId$ = new Subject<number | null>();
@@ -166,7 +181,55 @@ export class MachineLatestSalesComponent implements OnDestroy {
     return sale.currencyCode ? `${amount} ${sale.currencyCode}` : `${amount} (currency not reported)`;
   }
 
+  /** The rows for the current page, in the newest-first order the API sent. */
+  pagedSales(): MachineLatestSale[] {
+    if (!this.latest) {
+      return [];
+    }
+
+    const start = this.pageIndex * this.pageSize;
+    return this.latest.sales.slice(start, start + this.pageSize);
+  }
+
+  /** At least 1, so Previous/Next and the page indicator show only when there is another page. */
+  pageCount(): number {
+    return Math.max(1, Math.ceil(this.totalSales / this.pageSize));
+  }
+
+  firstShown(): number {
+    return this.totalSales === 0 ? 0 : this.pageIndex * this.pageSize + 1;
+  }
+
+  lastShown(): number {
+    return Math.min((this.pageIndex + 1) * this.pageSize, this.totalSales);
+  }
+
+  previousPage(): void {
+    this.pageIndex = Math.max(0, this.pageIndex - 1);
+  }
+
+  nextPage(): void {
+    this.pageIndex = Math.min(this.pageCount() - 1, this.pageIndex + 1);
+  }
+
+  /** A new page size is a fresh view of the same loaded rows, so it returns to page 1. */
+  onPageSizeChange(event: Event): void {
+    const value = Number((event.target as HTMLSelectElement).value);
+    if (!this.pageSizeOptions.includes(value)) {
+      return;
+    }
+
+    this.pageSize = value;
+    this.pageIndex = 0;
+  }
+
+  private get totalSales(): number {
+    return this.latest?.sales.length ?? 0;
+  }
+
   private request(machineId: number | null): Observable<MachineLatestSales | null> {
+    this.pageIndex = 0;
+
     if (machineId === null) {
       this.loading = false;
       this.error = null;

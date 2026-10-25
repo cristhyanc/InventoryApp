@@ -290,4 +290,185 @@ describe('MachineLatestSalesComponent (issue #768)', () => {
     expect(calls).toEqual([]);
     expect((host.querySelector('[data-testid="refresh-latest-sales"]') as HTMLButtonElement).disabled).toBe(true);
   });
+
+  /**
+   * Client-side paging of the Sales tab (issue #886). The whole window is already loaded from the
+   * single `getLatestSales` read; paging only changes which already-loaded rows are on screen and
+   * must never call the API again.
+   */
+  describe('paging (issue #886)', () => {
+    function manySales(count: number): MachineLatestSale[] {
+      return Array.from({ length: count }, (_, index) => {
+        const id = count - index;
+        return sale({ transactionId: id, productName: `Sale ${id}` });
+      });
+    }
+
+    function rowProducts(host: HTMLElement): string[] {
+      return Array.from(host.querySelectorAll('tbody tr')).map((row) => row.textContent ?? '');
+    }
+
+    it('shows the first 20 rows with a range line and page indicator when there are more than 20', async () => {
+      const { host } = await render(() => of(available(manySales(45))));
+
+      const rows = rowProducts(host);
+      expect(rows).toHaveLength(20);
+      expect(rows[0]).toContain('Sale 45');
+      expect(rows[19]).toContain('Sale 26');
+
+      const range = host.querySelector('[data-testid="latest-sales-range"]')?.textContent ?? '';
+      expect(range.replace(/\s+/g, ' ')).toContain('Showing 1–20 of 45');
+
+      const indicator = host.querySelector('[data-testid="latest-sales-page-indicator"]')?.textContent ?? '';
+      expect(indicator.replace(/\s+/g, ' ')).toContain('Page 1 of 3');
+
+      expect((host.querySelector('[data-testid="latest-sales-previous-page"]') as HTMLButtonElement).disabled)
+        .toBe(true);
+      expect((host.querySelector('[data-testid="latest-sales-next-page"]') as HTMLButtonElement).disabled)
+        .toBe(false);
+    });
+
+    it('moves forward and back through pages with Next and Previous, disabling at the bounds', async () => {
+      const { fixture, host } = await render(() => of(available(manySales(45))));
+
+      const next = () => host.querySelector('[data-testid="latest-sales-next-page"]') as HTMLButtonElement;
+      const previous = () => host.querySelector('[data-testid="latest-sales-previous-page"]') as HTMLButtonElement;
+
+      next().click();
+      fixture.detectChanges(false);
+      expect(rowProducts(host)[0]).toContain('Sale 25');
+      expect(rowProducts(host)).toHaveLength(20);
+      expect(host.querySelector('[data-testid="latest-sales-page-indicator"]')?.textContent).toContain('Page 2 of 3');
+      expect(previous().disabled).toBe(false);
+      expect(next().disabled).toBe(false);
+
+      next().click();
+      fixture.detectChanges(false);
+      expect(rowProducts(host)).toHaveLength(5);
+      expect(rowProducts(host)[0]).toContain('Sale 5');
+      expect(rowProducts(host)[4]).toContain('Sale 1');
+      expect(host.querySelector('[data-testid="latest-sales-page-indicator"]')?.textContent).toContain('Page 3 of 3');
+      expect(next().disabled).toBe(true);
+      expect(previous().disabled).toBe(false);
+
+      previous().click();
+      fixture.detectChanges(false);
+      expect(host.querySelector('[data-testid="latest-sales-page-indicator"]')?.textContent).toContain('Page 2 of 3');
+    });
+
+    it('hides Previous/Next, but may still show the range line, when rows do not exceed the page size', async () => {
+      const { host } = await render(() => of(available(manySales(15))));
+
+      expect(rowProducts(host)).toHaveLength(15);
+      expect(host.querySelector('[data-testid="latest-sales-previous-page"]')).toBeNull();
+      expect(host.querySelector('[data-testid="latest-sales-next-page"]')).toBeNull();
+      expect(host.querySelector('[data-testid="latest-sales-page-indicator"]')).toBeNull();
+      expect(host.querySelector('[data-testid="latest-sales-range"]')?.textContent).toContain('Showing 1–15 of 15');
+    });
+
+    it('returns to page 1 when the page size changes', async () => {
+      const { fixture, host } = await render(() => of(available(manySales(45))));
+
+      (host.querySelector('[data-testid="latest-sales-next-page"]') as HTMLButtonElement).click();
+      fixture.detectChanges(false);
+      expect(host.querySelector('[data-testid="latest-sales-page-indicator"]')?.textContent).toContain('Page 2 of 3');
+
+      const select = host.querySelector('[data-testid="latest-sales-page-size"]') as HTMLSelectElement;
+      select.value = '50';
+      select.dispatchEvent(new Event('change'));
+      fixture.detectChanges(false);
+
+      expect(rowProducts(host)).toHaveLength(45);
+      expect(host.querySelector('[data-testid="latest-sales-previous-page"]')).toBeNull();
+      expect(host.querySelector('[data-testid="latest-sales-range"]')?.textContent).toContain('Showing 1–45 of 45');
+    });
+
+    it('resets to page 1 on Refresh, keeping the selected page size', async () => {
+      const { fixture, host } = await render(() => of(available(manySales(45))));
+
+      (host.querySelector('[data-testid="latest-sales-next-page"]') as HTMLButtonElement).click();
+      fixture.detectChanges(false);
+      expect(host.querySelector('[data-testid="latest-sales-page-indicator"]')?.textContent).toContain('Page 2 of 3');
+
+      (host.querySelector('[data-testid="refresh-latest-sales"]') as HTMLButtonElement).click();
+      fixture.detectChanges(false);
+
+      expect(host.querySelector('[data-testid="latest-sales-page-indicator"]')?.textContent).toContain('Page 1 of 3');
+      expect(rowProducts(host)[0]).toContain('Sale 45');
+    });
+
+    it('resets to page 1 when the machine changes', async () => {
+      const answers = new Map<number, Subject<MachineLatestSales>>([
+        [7, new Subject<MachineLatestSales>()],
+        [8, new Subject<MachineLatestSales>()]
+      ]);
+      const { fixture, host } = await render((id) => answers.get(id)!);
+
+      answers.get(7)!.next(available(manySales(45), 7));
+      fixture.detectChanges(false);
+      (host.querySelector('[data-testid="latest-sales-next-page"]') as HTMLButtonElement).click();
+      fixture.detectChanges(false);
+      expect(host.querySelector('[data-testid="latest-sales-page-indicator"]')?.textContent).toContain('Page 2 of 3');
+
+      fixture.componentRef.setInput('machineId', 8);
+      fixture.detectChanges(false);
+      answers.get(8)!.next(available(manySales(45), 8));
+      fixture.detectChanges(false);
+
+      expect(host.querySelector('[data-testid="latest-sales-page-indicator"]')?.textContent).toContain('Page 1 of 3');
+      expect(rowProducts(host)[0]).toContain('Sale 45');
+    });
+
+    it('shows no pagination controls while loading', async () => {
+      const { host } = await render(() => new Subject<MachineLatestSales>());
+      expect(host.querySelector('[data-testid="latest-sales-pagination"]')).toBeNull();
+    });
+
+    it('shows no pagination controls on a failed read', async () => {
+      const { host } = await render(() => throwError(() => new Error('offline')));
+      expect(host.querySelector('[data-testid="latest-sales-pagination"]')).toBeNull();
+    });
+
+    it('shows no pagination controls on an unavailable-provider answer', async () => {
+      const { host } = await render(() =>
+        of(unavailable('NoSalesProvider', 'This business has no sales provider connected.')));
+      expect(host.querySelector('[data-testid="latest-sales-pagination"]')).toBeNull();
+    });
+
+    it('shows no pagination controls on the honest empty state', async () => {
+      const { host } = await render(() => of(available([])));
+      expect(host.querySelector('[data-testid="latest-sales-pagination"]')).toBeNull();
+    });
+
+    it('never calls getLatestSales again while paging or changing the page size', async () => {
+      const { fixture, host, calls } = await render(() => of(available(manySales(45))));
+
+      (host.querySelector('[data-testid="latest-sales-next-page"]') as HTMLButtonElement).click();
+      fixture.detectChanges(false);
+      (host.querySelector('[data-testid="latest-sales-previous-page"]') as HTMLButtonElement).click();
+      fixture.detectChanges(false);
+
+      const select = host.querySelector('[data-testid="latest-sales-page-size"]') as HTMLSelectElement;
+      select.value = '100';
+      select.dispatchEvent(new Event('change'));
+      fixture.detectChanges(false);
+
+      expect(calls).toEqual([7]);
+    });
+
+    it('keeps the amount column behaviour unchanged across pages', async () => {
+      const withheldSale = sale({ transactionId: 46, productName: 'Sale 46', saleAmount: null, currencyCode: null });
+      const sales = [withheldSale, ...manySales(45)];
+      const { fixture, host } = await render(() => of(available(sales)), false);
+
+      expect(rowProducts(host)[0]).toContain('Not available for your role');
+
+      (host.querySelector('[data-testid="latest-sales-next-page"]') as HTMLButtonElement).click();
+      fixture.detectChanges(false);
+
+      for (const row of rowProducts(host)) {
+        expect(row).toContain('Not available for your role');
+      }
+    });
+  });
 });

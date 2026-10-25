@@ -13261,6 +13261,18 @@ request stream, so an in-flight read for the machine the operator navigated away
 unsubscribed and its late answer ignored, and the rows clear at the same moment — the shape issue
 #669 established for a superseded business context.
 
+**The Sales tab pages the one loaded window client-side** (issue #886). The endpoint and the use
+case above are unchanged: `MachineLatestSalesComponent` still makes exactly one `getLatestSales`
+call per load and per Refresh, and the whole answer - every sale Nayax's rolling window reported -
+is already in `latest.sales` before any page is shown. Previous/Next and a page-size choice of 20,
+50 or 100 (default 20) then narrow which of those already-loaded rows are rendered; neither ever
+calls the API or Nayax again, because there is nothing left to fetch. The page resets to 1 whenever
+a fresh answer replaces the current one - on load, on Refresh and on a machine change - and whenever
+the page size changes, while the page size itself survives a Refresh. Previous is disabled on page 1
+and Next on the last page, and both controls are hidden (with the "Showing" range line still shown)
+once every loaded row already fits on one page. This is presentation only: no field, order or
+withheld-amount rule above changes between pages.
+
 The page itself owns only the tabs. **Sales** is first and is the tab every machine opens on
 (the owner's 18 October 2026 decision), **Products** is second, and they are an ARIA tab list with
 roving tabindex: the arrow keys move and select, `Home`/`End` jump to the ends, and each
