@@ -11292,10 +11292,18 @@ that stops trading is deactivated and stays listed. Because the capability is `I
 which a support session grants, every write here is refused in a read-only support session by the one
 central rule that allows it only `GET` and `HEAD` (issue #551) — there is no per-action check for it.
 
-A rename is allowed on a provider-named machine, unlike a product's or a category's name ([Manual
-catalogue: who owns a product's fields](#manual-catalogue-who-owns-a-products-fields-issue-736)):
-nothing synchronises a machine's name, so no import can overwrite the operator's own label and there
-is no second name to defend.
+**A provider-named machine is not renamed or deactivated here.** #740 originally allowed both;
+the owner reversed that, because a machine the provider names is managed at the provider.
+`EfLocalMachineStore` refuses a rename, and a deactivation, of a row carrying `ExternalMachineId`
+with `MachineCataloguePolicy.ProviderMachineRenameRefusal` / `ProviderMachineDeactivationRefusal`
+(a `400` naming the provider, worded from `Business.SalesProvider` as the catalogue refusals of
+[issue #736](#manual-catalogue-who-owns-a-products-fields-issue-736) are). The refusal is decided
+against the stored row inside the write's own transaction, so a machine linked between a caller's
+read and the write is still refused. **Reactivation is never refused**, so a provider machine
+deactivated before the rule existed can be put back in service. `LocalMachineListComponent` hides
+Rename and Deactivate on a row whose `isProviderNamed` is true, and refuses both in code as well.
+Nothing synchronises a machine's name, so a provider machine keeps the name it was recorded or
+linked with even after a rename at the provider.
 
 **The page, and why it stopped being provider-locked.** The Machines menu entry came off the
 provider signal - out of the "Needs Nayax" section issue #868 has since removed altogether - and
@@ -11638,7 +11646,8 @@ the ones the next review treats as settled.
 
 **Linking is the only thing that happens.** No sale, stock movement, machine count, expense, cost or
 report is read or written, and a linked machine keeps **its own name**: nothing synchronises a
-machine's name (#740), so unlike a linked product or category there is no second name to defend.
+machine's name (#740). Once linked, the machine can no longer be renamed or deactivated locally
+(see [Local machines and external machine ids](#local-machines-and-external-machine-ids-issue-740)).
 Until a provider machine is linked, its provider data stays under its raw provider number exactly as
 before — `NayaxSales.MachineID`, the stock events, the timestamp repairs and the report machine
 filters are unchanged — and it keeps appearing on every provider-only page, because those pages are

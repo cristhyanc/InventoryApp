@@ -190,6 +190,56 @@ describe('LocalMachineListComponent (issue #740)', () => {
 });
 
 /**
+ * A machine the business's sales provider names is renamed and taken out of service at the
+ * provider, so the list offers neither action for it; the API refuses both as well. Reactivate stays,
+ * so a provider machine deactivated before that rule can be put back in service.
+ */
+describe('LocalMachineListComponent for a machine the provider names', () => {
+  it('offers neither Rename nor Deactivate on an active provider machine', async () => {
+    const { host } = await render({ machines: [localMachine({ id: 7, name: 'Machine 7', isProviderNamed: true })] });
+
+    expect(host.textContent).toContain('From Nayax');
+    expect(buttonLabelled(host, 'Rename')).toBeUndefined();
+    expect(buttonLabelled(host, 'Deactivate')).toBeUndefined();
+    expect(buttonLabelled(host, 'Reactivate')).toBeUndefined();
+  });
+
+  it('still offers Reactivate on an inactive provider machine, and reactivates it', async () => {
+    const machine = localMachine({ id: 7, isActive: false, isProviderNamed: true });
+    const { host, service } = await render({ machines: [machine] });
+
+    expect(buttonLabelled(host, 'Rename')).toBeUndefined();
+    buttonLabelled(host, 'Reactivate')!.click();
+
+    expect(service.reactivate).toHaveBeenCalledWith(7);
+  });
+
+  it('keeps Rename and Deactivate on the machines the business added itself, in the same list', async () => {
+    const { host } = await render({
+      machines: [localMachine({ id: 7, isProviderNamed: true }), localMachine({ id: 8, name: 'Lobby' })]
+    });
+
+    const rows = Array.from(host.querySelectorAll('tbody tr'));
+    expect(buttonLabelled(rows[0] as HTMLElement, 'Rename')).toBeUndefined();
+    expect(buttonLabelled(rows[1] as HTMLElement, 'Rename')).toBeDefined();
+    expect(buttonLabelled(rows[1] as HTMLElement, 'Deactivate')).toBeDefined();
+  });
+
+  it('refuses the rename and deactivation in code too, so they are unavailable rather than merely invisible', async () => {
+    const machine = localMachine({ id: 7, isProviderNamed: true });
+    const { component, service } = await render({ machines: [machine] });
+
+    component.startRename(machine);
+    expect(component.editingId).toBeNull();
+    component.saveRename();
+    component.deactivate(machine);
+
+    expect(service.rename).not.toHaveBeenCalled();
+    expect(service.deactivate).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * A read-only support session grants `Inventory.Operate`, which is what this surface would otherwise
  * gate its writes on, so the controls are hidden rather than left to be refused (issues #554, #658).
  * The list itself stays readable: that is what a support session is for.

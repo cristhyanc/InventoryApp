@@ -1939,13 +1939,18 @@ of the live Nayax fleet — so a business with no provider had no machines.
   new id. A machine needs a name and nothing else. Names are deliberately **not** unique within a
   business: two machines in one corridor may legitimately both be called "Level 3", and nothing
   resolves a machine by its name.
-- **Rename one** with `PUT /api/local-machines/{id}`. Unlike a product's or a category's name, a
-  machine's name is yours even when the provider named the machine: nothing synchronises a machine's
-  name, so no import can overwrite it.
+- **Rename one** with `PUT /api/local-machines/{id}`.
 - **Deactivate and reactivate**, with `POST /api/local-machines/{id}/deactivate` and
   `.../reactivate`. **There is no delete.** Recorded transactions, refills, machine counts and
   expenses refer to a machine, so a machine that stops trading keeps all of its history and stays in
   the list, marked *Inactive*, ready to be put back in service.
+- **A machine from Nayax is renamed and deactivated in Nayax, not here.** The list offers no
+  Rename or Deactivate on a row marked "From Nayax", and the API refuses both with `400` and the
+  sentence "This machine comes from Nayax and cannot be renamed here. Nothing was saved." (or
+  "deactivated here").
+  **Reactivate** is still offered, so a Nayax machine deactivated before this rule can be put back
+  in service. The machine keeps the name it was given when it was recorded or linked: nothing
+  copies a later Nayax rename across.
 - **A machine the provider named is marked "From Nayax".** Every machine this database already
   referred to — through a sale, a refill, a machine count, an expense, a stock event, a sale
   timestamp repair or an inventory-cost transition — was given a local record when this change was

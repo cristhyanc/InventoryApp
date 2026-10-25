@@ -10,8 +10,8 @@ public enum LocalMachineWriteOutcome
     NotFound,
 
     /// <summary>
-    /// The write was refused with a message a caller may be shown. Today that is only a missing
-    /// name: a machine is name-only, and nothing else about it can clash.
+    /// The write was refused with a message a caller may be shown: a missing name, or a rename or
+    /// deactivation of a machine the business's sales provider names.
     /// </summary>
     Refused,
 }

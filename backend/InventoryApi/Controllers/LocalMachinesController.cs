@@ -10,7 +10,8 @@ namespace InventoryApi.Controllers;
 
 /// <summary>
 /// The machines this business operates, as records it owns (issue #740, parent #329 child G1):
-/// create one, rename it, take it out of service, put it back.
+/// create one, rename it, take it out of service, put it back. A machine the business's sales
+/// provider names cannot be renamed or taken out of service here; it can be put back.
 ///
 /// <para><strong>It works with no sales provider at all</strong>, which is the point of the issue. It
 /// is therefore a different resource from <c>/api/machines</c>, which is the live Nayax fleet with
@@ -103,11 +104,12 @@ public class LocalMachinesController : ControllerBase
     }
 
     /// <summary>
-    /// Renames a machine. A machine the provider named is renamed too: nothing synchronises a
-    /// machine's name, so the operator's own label is the only one there is.
+    /// Renames a machine. A machine the business's sales provider names is managed there and is
+    /// refused.
     /// </summary>
     /// <response code="204">The machine was renamed.</response>
-    /// <response code="400">The refusal message: the submitted name is blank.</response>
+    /// <response code="400">The refusal message: the submitted name is blank, or the provider names
+    /// the machine.</response>
     /// <response code="404">No such machine in this business.</response>
     [HttpPut("{id:long}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
@@ -125,12 +127,15 @@ public class LocalMachinesController : ControllerBase
 
     /// <summary>
     /// Takes the machine out of service. It stays listed and keeps every stored sale, refill, count
-    /// and expense that refers to it; there is no delete.
+    /// and expense that refers to it; there is no delete. A machine the business's sales provider
+    /// names is taken out of service there and is refused.
     /// </summary>
     /// <response code="204">The machine is inactive.</response>
+    /// <response code="400">The refusal message: the provider names the machine.</response>
     /// <response code="404">No such machine in this business.</response>
     [HttpPost("{id:long}/deactivate")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Deactivate(long id, CancellationToken cancellationToken) =>
         Result(await _setLocalMachineActivation.Handle(id, isActive: false, cancellationToken));
