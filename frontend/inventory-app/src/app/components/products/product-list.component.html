@@ -25,15 +25,27 @@
     <button type="button" class="btn btn-secondary" (click)="resetFilters()">Reset</button>
 
     <!--
-      New Product (issue #825), last in the DOM so it is last in the keyboard order, and pushed to
-      the right edge from `sm` up. On a narrow screen it simply wraps onto the next line with the
-      controls before it instead of forcing the toolbar wider than the viewport.
-      Hidden rather than disabled while a support session is active (issue #554): a session grants
-      InventoryOperate, so this write would otherwise still render.
+      Import products and New Product (issues #875 and #825), last in the DOM so they are last in
+      the keyboard order. The wrapper carries `sm:ml-auto` so the pair sits at the right edge from
+      `sm` up, and its own `flex-wrap` keeps both reachable without a horizontal scroll on a narrow
+      screen, where they simply wrap onto the next line with the controls before them.
+      New Product is hidden rather than disabled while a support session is active (issue #554): a
+      session grants InventoryOperate, so this write would otherwise still render. Import products
+      is withheld on the same `showImportProducts` answer for the same reason - it also requires
+      `Imports.Run` and a provider the catalogue review can actually read.
     -->
-    @if (!sessionActive) {
-      <a routerLink="/products/new" class="btn btn-primary self-center sm:ml-auto">New Product</a>
-    }
+    <div class="flex flex-wrap items-center gap-2 self-center sm:ml-auto">
+      @if (showImportProducts) {
+        <a
+          data-testid="import-products-link"
+          routerLink="/admin/imports"
+          [queryParams]="{ review: 'catalogue' }"
+          class="btn btn-secondary">Import products</a>
+      }
+      @if (!sessionActive) {
+        <a routerLink="/products/new" class="btn btn-primary">New Product</a>
+      }
+    </div>
   </div>
 </div>
 
