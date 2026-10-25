@@ -115,7 +115,7 @@
                 <td class="table-cell">{{ p.category?.name }}</td>
                 <td class="table-cell">
                   <span class="badge" [ngClass]="p.isActive ? (p.isLowStock ? 'badge-danger' : 'badge-success') : 'badge-neutral'">
-                    {{ p.quantityInStock }} {{ p.unit }}
+                    {{ p.quantityInStock }}
                   </span>
                 </td>
                 @if (statusFilter === 'all') {
