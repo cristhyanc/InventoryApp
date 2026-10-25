@@ -28,10 +28,10 @@ test('creating, editing and deleting a purchase moves inventory and costing with
   await page.getByRole('button', { name: 'Add Product' }).click();
   await page.getByTestId('purchase-item-product').selectOption({ label: seeded.purchaseProduct });
   await page.getByTestId('purchase-item-quantity').fill('10');
-  // The line's price entry defaults to the total paid for it (issue #707), so $20.00 for 10 units
-  // is the $2.00 unit cost this purchase is costed at.
+  // Typing into the line's Total price field makes that the entered figure (issues #707 and #878),
+  // so $20.00 for 10 units fills the Unit price with the $2.00 this purchase is costed at.
   await page.getByTestId('purchase-item-line-total').fill('20');
-  await expect(page.getByTestId('purchase-item-derived-unit-cost')).toContainText('$2.0000');
+  await expect(page.getByTestId('purchase-item-cost')).toHaveValue('2.0000');
   await page.getByRole('button', { name: 'Add Purchase' }).click();
 
   await expect(page).toHaveURL(/\/purchases$/);

@@ -7,6 +7,7 @@ import { BookkeepingReportComponent } from './bookkeeping-report.component';
 import { ReportingService } from '../../services/reporting.service';
 import { MachineService } from '../../services/machine.service';
 import { BookkeepingReport } from '../../features/reports/bookkeeping/models/bookkeeping-report.model';
+import { ReportProviderAvailability } from '../../features/reports/shared/models/reporting.models';
 import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
 
 const REPORT: BookkeepingReport = {
@@ -174,6 +175,169 @@ describe('BookkeepingReportComponent conditional data quality and calculation he
 });
 
 /**
+ * Issue #804: Bookkeeping shows the sales volume behind its own total and the average sale over
+ * it, so an operator no longer has to open the Reporting Dashboard for them.
+ */
+describe('BookkeepingReportComponent transaction count and average sale (issue #804)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('shows the completed transaction count and the average sale the API reported', async () => {
+    const host = await render({ sales: 1000, transactionCount: 40, averageSale: 25 });
+
+    expect(host.querySelector('[data-testid="transactions"]')!.textContent).toContain('40');
+    expect(host.querySelector('[data-testid="average-sale"]')!.textContent).toContain('$25.00');
+    expect(host.textContent).toContain('average sale');
+  });
+
+  it('shows a measured zero for a covered period that genuinely sold nothing', async () => {
+    const host = await render({
+      sales: 0, transactionCount: 0, averageSale: 0,
+      providerAvailability: {
+        sales: { state: 'Complete', asOfUtc: null, isComplete: true },
+        fees: { state: 'Complete', asOfUtc: null, isComplete: true },
+        combined: { state: 'Complete', asOfUtc: null, isComplete: true }
+      }
+    });
+
+    expect(host.querySelector('[data-testid="transactions"]')!.textContent).toContain('0');
+    expect(host.querySelector('[data-testid="average-sale"]')!.textContent).toContain('$0.00');
+  });
+
+  it('explains both figures in the calculation help rather than leaving them undefined', async () => {
+    const host = await render();
+
+    const help = host.querySelector('[data-testid="calculation-help"]')!.textContent ?? '';
+    expect(help).toContain('transaction count');
+    expect(help).toContain('average sale');
+  });
+});
+
+/**
+ * Issue #805: Bookkeeping compares the reimbursement its own card sales and fees expect against the
+ * reimbursement the settlement import actually recorded, so an operator no longer has to open the
+ * Reporting Dashboard to reconcile a month. The calculated expectation, the imported actual and the
+ * established net reimbursement are three different figures and must read as three.
+ */
+describe('BookkeepingReportComponent expected-versus-actual reimbursement (issue #805)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  const COMPLETE: ReportProviderAvailability = {
+    sales: { state: 'Complete', asOfUtc: null, isComplete: true },
+    fees: { state: 'Complete', asOfUtc: null, isComplete: true },
+    combined: { state: 'Complete', asOfUtc: null, isComplete: true }
+  };
+
+  it('shows the calculated expected reimbursement, the imported actual and the difference between them', async () => {
+    const host = await render({
+      cardSales: 100, nayaxFeesIncludingGst: 5, netSettlement: 94,
+      expectedReimbursement: 95, actualReimbursement: 94, reimbursementDifference: -1,
+      isReconciled: false, reconciliationStatus: 'Needs Review', reconciliationTolerance: 0.01,
+      providerAvailability: COMPLETE
+    });
+
+    const section = host.querySelector('[data-testid="reimbursement-reconciliation"]')!;
+    expect(section).not.toBeNull();
+    expect(section.querySelector('[data-testid="expected-reimbursement"]')!.textContent).toContain('$95.00');
+    expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).toContain('$94.00');
+    expect(section.querySelector('[data-testid="reimbursement-difference"]')!.textContent).toContain('-$1.00');
+    expect(section.querySelector('[data-testid="reconciliation-status"]')!.textContent).toContain('Needs Review');
+    // The established net reimbursement figure keeps its own card and its own meaning.
+    expect(host.querySelector('[data-testid="net-reimbursement"]')!.textContent).toContain('$94.00');
+    expect(section.textContent).toContain('Expected');
+    expect(section.textContent).toContain('Actual');
+  });
+
+  it('marks a reconciled period as reconciled', async () => {
+    const host = await render({
+      expectedReimbursement: 95, actualReimbursement: 95, reimbursementDifference: 0,
+      isReconciled: true, reconciliationStatus: 'Reconciled', reconciliationTolerance: 0.01,
+      providerAvailability: COMPLETE
+    });
+
+    const status = host.querySelector('[data-testid="reconciliation-status"]')!;
+    expect(status.textContent).toContain('Reconciled');
+    expect(status.classList.contains('badge-success')).toBe(true);
+  });
+
+  it('shows a pending comparison when no settlement import covers the period, never a difference', async () => {
+    const host = await render({
+      expectedReimbursement: 95, actualReimbursement: 0, reimbursementDifference: -95,
+      isReconciled: false, reconciliationStatus: 'Pending', reconciliationTolerance: 0.01,
+      providerAvailability: COMPLETE
+    });
+
+    const section = host.querySelector('[data-testid="reimbursement-reconciliation"]')!;
+    expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).toContain('Pending');
+    expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).not.toContain('$0.00');
+    expect(section.querySelector('[data-testid="reimbursement-difference"]')!.textContent).not.toContain('$');
+    expect(section.querySelector('[data-testid="expected-reimbursement"]')!.textContent).toContain('$95.00');
+  });
+
+  it('shows an imported zero as a measured zero for a covered period', async () => {
+    const host = await render({
+      expectedReimbursement: 0, actualReimbursement: 0, reimbursementDifference: 0,
+      isReconciled: true, reconciliationStatus: 'Reconciled', reconciliationTolerance: 0.01,
+      providerAvailability: COMPLETE
+    });
+
+    const section = host.querySelector('[data-testid="reimbursement-reconciliation"]')!;
+    expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).toContain('$0.00');
+    expect(section.querySelector('[data-testid="reconciliation-status"]')!.textContent).toContain('Reconciled');
+  });
+
+  it('shows the settlement availability state instead of an actual reimbursement nothing measured', async () => {
+    const host = await render({
+      expectedReimbursement: 95, actualReimbursement: 0, reimbursementDifference: -95,
+      isReconciled: false, reconciliationStatus: 'Needs Review', reconciliationTolerance: 0.01,
+      providerAvailability: {
+        sales: { state: 'Complete', asOfUtc: null, isComplete: true },
+        fees: { state: 'Missing', asOfUtc: null, isComplete: false },
+        combined: { state: 'Missing', asOfUtc: null, isComplete: false }
+      }
+    });
+
+    const section = host.querySelector('[data-testid="reimbursement-reconciliation"]')!;
+    expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).toContain('No provider data');
+    expect(section.querySelector('[data-testid="actual-reimbursement"]')!.textContent).not.toContain('$0.00');
+  });
+
+  it('states the tolerance the API reported rather than a hard-coded one', async () => {
+    const host = await render({
+      expectedReimbursement: 95, actualReimbursement: 95, reimbursementDifference: 0,
+      isReconciled: true, reconciliationStatus: 'Reconciled', reconciliationTolerance: 0.05,
+      providerAvailability: COMPLETE
+    });
+
+    expect(host.querySelector('[data-testid="reimbursement-reconciliation"]')!.textContent).toContain('$0.05');
+  });
+
+  it('explains the two sides in the calculation help', async () => {
+    const host = await render();
+
+    const help = host.querySelector('[data-testid="calculation-help"]')!.textContent ?? '';
+    expect(help).toContain('expected reimbursement');
+    expect(help).toContain('imported');
+  });
+
+  it('builds the comparison from shared tokens the committed stylesheet already compiles', async () => {
+    const host = await render({ reconciliationStatus: 'Reconciled', isReconciled: true, providerAvailability: COMPLETE });
+    const css = readFileSync(join(__dirname, '..', '..', '..', 'styles.css'), 'utf8');
+
+    const section = host.querySelector('[data-testid="reimbursement-reconciliation"]')!;
+    const tokens = new Set<string>();
+    for (const element of [section, ...Array.from(section.querySelectorAll('*'))]) {
+      element.classList.forEach(token => tokens.add(token));
+    }
+
+    expect(tokens.size).toBeGreaterThan(0);
+    for (const token of tokens) {
+      // A responsive token's colon is escaped in the compiled stylesheet's own selector.
+      expect(css).toContain(`.${token.replace(/:/g, '\\:')}`);
+    }
+  });
+});
+
+/**
  * Regression coverage for issue #453: this component shares the `.stat-card-head`/`.icon-tile`
  * arrangement validated structurally by `stat-card-icon-position.spec.ts`, so it only needs to
  * confirm this specific production template was updated to the same order.
@@ -199,7 +363,8 @@ describe('BookkeepingReportComponent stat-card icon tile position (issue #453)',
     const host = fixture.nativeElement as HTMLElement;
 
     const heads = Array.from(host.querySelectorAll('.stat-card-head'));
-    expect(heads).toHaveLength(4);
+    // Five since issue #804 added the Transactions card.
+    expect(heads).toHaveLength(5);
     for (const head of heads) {
       const children = Array.from(head.children);
       expect(children[0].classList.contains('stat-card-content')).toBe(true);

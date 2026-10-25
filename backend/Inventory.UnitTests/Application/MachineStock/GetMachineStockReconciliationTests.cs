@@ -145,6 +145,27 @@ public class GetMachineStockReconciliationTests
             () => UseCase(store, observations).Handle(Machine, CancellationToken.None));
     }
 
+    /// <summary>
+    /// The ledger projection and the reconciliation only ever see a product id; this use case is what
+    /// hands them the name the store already loaded (issue #834), so a data-quality message about
+    /// this product names it instead of reading only an id an operator would have to look up.
+    /// </summary>
+    [Fact]
+    public async Task A_data_quality_message_names_the_product_the_store_already_resolved_a_name_for()
+    {
+        var store = StoreWith(Facts(counts: [new MachineStockCountFact(1, Product, 20, CountedAt)]));
+        var observations = new Mock<IMachineStockObservationSource>();
+        observations.Setup(x => x.GetObservationAsync(MachineId, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new NayaxNotConnectedException(NayaxConnectionStatus.NotConfigured));
+
+        var result = await UseCase(store, observations).Handle(Machine, CancellationToken.None);
+
+        var row = Assert.Single(result.Products);
+        var issue = Assert.Single(
+            row.DataQuality, issue => issue.Code == MachineStockDataQualityIssueCodes.ObservedStockUnavailable);
+        Assert.Contains($"product Coke Zero ({Product})", issue.Message);
+    }
+
     [Fact]
     public async Task An_observed_slot_outside_the_callers_catalogue_is_dropped()
     {

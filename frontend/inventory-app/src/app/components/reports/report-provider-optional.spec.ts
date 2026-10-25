@@ -2,7 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
 import { Observable, of, throwError } from 'rxjs';
-import { Machine, Site } from '../../models/models';
+import { Machine, SiteListItem } from '../../models/models';
 import {
   SpecConnectionStatus,
   provideNayaxConnectionStatus
@@ -18,8 +18,13 @@ function machine(machineID: number, machineName: string): Machine {
   return { machineID, machineName } as Machine;
 }
 
-function site(): Site {
-  return { siteId: 1, siteName: 'Lobby' } as Site;
+/**
+ * One row of the light site list the report's site filter reads (issue #841). The filter shows the
+ * name only, so `machineCount` is carried here purely to keep the fixture the shape the endpoint
+ * publishes - this picker deliberately ignores it.
+ */
+function site(): SiteListItem {
+  return { siteId: 1, name: 'Lobby', machineCount: 2 };
 }
 
 function notConnected(): HttpErrorResponse {
@@ -58,13 +63,20 @@ async function renderMachineReport(options: {
 
 async function renderSiteCommissions(options: {
   status?: SpecConnectionStatus;
-  sites?: Observable<Site[]>;
+  sites?: Observable<SiteListItem[]>;
 } = {}) {
   await TestBed.configureTestingModule({
     imports: [SiteCommissionsReportComponent],
     providers: [
       { provide: ReportingService, useValue: { siteCommissions: jest.fn(() => of({ rows: [] })) } },
-      { provide: SiteService, useValue: { getAll: jest.fn(() => options.sites ?? of([site()])) } },
+      {
+        provide: SiteService,
+        useValue: {
+          getList: jest.fn(() => options.sites ?? of([site()])),
+          // Present so a test can assert the heavy site-summaries read is not made (issue #841).
+          getAll: jest.fn(() => of([]))
+        }
+      },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       provideNayaxConnectionStatus(options.status ?? 'Ready')
     ]
@@ -76,7 +88,7 @@ async function renderSiteCommissions(options: {
   return {
     component: fixture.componentInstance,
     host: fixture.nativeElement as HTMLElement,
-    siteService: TestBed.inject(SiteService) as unknown as { getAll: jest.Mock }
+    siteService: TestBed.inject(SiteService) as unknown as { getList: jest.Mock; getAll: jest.Mock }
   };
 }
 
@@ -98,6 +110,11 @@ afterEach(() => TestBed.resetTestingModule());
  * `MachineReportComponent` stands for every page built on `ReportPageBase`: the filter, the load
  * and the error sentence all live there, so one page proves the shared behaviour and the others
  * differ only in the report they request.
+ *
+ * Since issue #868 the machine report's **route** is locked while the business has no Nayax
+ * connection at all, so a navigation no longer arrives here in that state - but the page's own
+ * rule is unchanged, and it is what a connection that stopped working, or one whose fleet read was
+ * refused, still runs into with the report open.
  */
 describe('Report machine filter without a provider (issue #728)', () => {
   it('offers the machine filter for a connected business', async () => {
@@ -107,13 +124,24 @@ describe('Report machine filter without a provider (issue #728)', () => {
     expect(machineFilterError(host)).toBeNull();
   });
 
-  it('hides the machine filter without a provider, and asks for no machines', async () => {
-    const { host, machineService } = await renderMachineReport({ status: 'NotConfigured' });
+  /**
+   * `NeedsAttention` is the state this now matters most in (issue #868): the report itself
+   * **opens** for credentials that are stored and no longer work - what it reports on is stored -
+   * while the live fleet read behind the machine filter cannot be made, so the filter is hidden
+   * rather than offered as an "All machines" that narrows nothing. `NotConfigured` is asserted
+   * beside it because the shared answer can settle there while the page is already open, even
+   * though `requireProvider` now keeps a navigation to it from arriving in that state.
+   */
+  it.each(['NeedsAttention', 'NotConfigured'] as const)(
+    'hides the machine filter when the connection is %s, and asks for no machines',
+    async (status) => {
+      const { host, machineService } = await renderMachineReport({ status });
 
-    expect(machineService.getAll).not.toHaveBeenCalled();
-    expect(machineSelect(host)).toBeUndefined();
-    expect(machineFilterError(host)).toBeNull();
-  });
+      expect(machineService.getAll).not.toHaveBeenCalled();
+      expect(machineSelect(host)).toBeUndefined();
+      expect(machineFilterError(host)).toBeNull();
+    }
+  );
 
   it('hides it when the machine read itself is refused', async () => {
     const { host, component } = await renderMachineReport({
@@ -152,10 +180,24 @@ describe('Site Commissions site filter without a provider (issue #728)', () => {
     expect(siteFilterError(host)).toBeNull();
   });
 
+  /**
+   * Issue #841: the filter is filled from the light site list, through the same
+   * `loadProviderList` path, so the three outcomes above are unchanged while the request behind
+   * them stops costing one Nayax read per machine in the fleet.
+   */
+  it('fills the filter from the light site list and never asks for the site summaries', async () => {
+    const { host, siteService } = await renderSiteCommissions();
+
+    expect(siteService.getList).toHaveBeenCalledTimes(1);
+    expect(siteService.getAll).not.toHaveBeenCalled();
+    expect(Array.from(host.querySelectorAll('option')).map((option) => option.textContent?.trim()))
+      .toEqual(['All Sites', 'Lobby']);
+  });
+
   it('hides the site filter without a provider, and asks for no sites', async () => {
     const { host, siteService } = await renderSiteCommissions({ status: 'NotConfigured' });
 
-    expect(siteService.getAll).not.toHaveBeenCalled();
+    expect(siteService.getList).not.toHaveBeenCalled();
     expect(siteSelect(host)).toBeUndefined();
     expect(siteFilterError(host)).toBeNull();
   });

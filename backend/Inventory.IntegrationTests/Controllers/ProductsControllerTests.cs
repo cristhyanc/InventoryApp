@@ -597,13 +597,21 @@ public class ProductsControllerTests
         Assert.Equal(0, result.ProductsWithUnknownCost);
     }
 
+    /// <summary>
+    /// The product that makes the total unavailable is one holding inventory nothing has valued. Its
+    /// storage stock is part of the fixture since issue #861: a product with no value <em>and</em> no
+    /// units <em>and</em> no recorded history is empty rather than unknown, which
+    /// <see cref="InventoryValueSummary_IsAvailable_WhenAnUnknownCostProductHasNeverHeldInventory"/>
+    /// is about, so pinning this endpoint's "unavailable" answer needs a product that really does
+    /// hold something.
+    /// </summary>
     [Fact]
     public async Task InventoryValueSummary_IsUnavailable_WhenAnyProductHasUnknownCost()
     {
         using var db = CreateDbContext();
         db.Products.AddRange(
-            new Product { Id = 1, Name = "Coke", InventoryValue = 40m },
-            new Product { Id = 2, Name = "Never rebuilt", InventoryValue = null });
+            new Product { Id = 1, Name = "Coke", InventoryValue = 40m, QuantityInStock = 10 },
+            new Product { Id = 2, Name = "Never rebuilt", InventoryValue = null, QuantityInStock = 6 });
         await db.SaveChangesAsync();
 
         var result = await CreateController(db).InventoryValueSummary(CancellationToken.None);
@@ -611,6 +619,29 @@ public class ProductsControllerTests
         Assert.Null(result.TotalInventoryValue);
         Assert.False(result.IsComplete);
         Assert.Equal(1, result.ProductsWithUnknownCost);
+    }
+
+    /// <summary>
+    /// Issue #861 through the endpoint: a newly created product that has never held inventory - no
+    /// value, no costing position, no storage units and no recorded purchase, movement, sale or
+    /// costing history - leaves the known stock's total available, and is still one of the products
+    /// the tile counts.
+    /// </summary>
+    [Fact]
+    public async Task InventoryValueSummary_IsAvailable_WhenAnUnknownCostProductHasNeverHeldInventory()
+    {
+        using var db = CreateDbContext();
+        db.Products.AddRange(
+            new Product { Id = 1, Name = "Coke", InventoryValue = 40m, QuantityInStock = 10 },
+            new Product { Id = 2, Name = "Brand new", InventoryValue = null, QuantityInStock = 0 });
+        await db.SaveChangesAsync();
+
+        var result = await CreateController(db).InventoryValueSummary(CancellationToken.None);
+
+        Assert.Equal(40m, result.TotalInventoryValue);
+        Assert.True(result.IsComplete);
+        Assert.Equal(0, result.ProductsWithUnknownCost);
+        Assert.Equal(2, result.TotalProducts);
     }
 
     [Fact]

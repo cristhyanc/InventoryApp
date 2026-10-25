@@ -103,12 +103,30 @@ public class GetDashboardSummaryTests
         int lowStockThreshold = 0,
         int restockTo = 0,
         bool isActive = true,
-        decimal? inventoryValue = 0m) =>
+        decimal? inventoryValue = 0m,
+        int? costingQuantity = null,
+        bool? hasInventoryHistory = null) =>
         FakeProductCatalogStore.Product(
             id, name, quantityInStock, lowStockThreshold, restockTo, isActive: isActive) with
         {
             InventoryValue = inventoryValue,
+            CostingQuantity = costingQuantity,
+            HasInventoryHistory = hasInventoryHistory,
         };
+
+    /// <summary>
+    /// A product exactly as a create leaves it, with the catalogue read's own evidence that nothing
+    /// has ever put inventory into it (issue #861).
+    /// </summary>
+    private static ProductRecord NeverStockedProduct(long id, string name, bool isActive = true) =>
+        Product(
+            id,
+            name,
+            quantityInStock: 0,
+            isActive: isActive,
+            inventoryValue: null,
+            costingQuantity: null,
+            hasInventoryHistory: false);
 
     [Fact]
     public async Task The_summary_is_stamped_with_the_one_instant_and_business_date_every_metric_used()
@@ -365,6 +383,72 @@ public class GetDashboardSummaryTests
         Assert.Equal(1, inventory.ProductsWithUnknownCost);
         Assert.Equal(2, inventory.ProductCount);
         Assert.Equal(17, inventory.UnitsInStorage);
+    }
+
+    /// <summary>
+    /// Issue #861: a product nothing has ever put inventory into holds nothing, so it leaves the
+    /// total available and is not counted as missing cost data. It is still one of the products the
+    /// card counts - <c>productCount</c> describes the catalogue, and the unknown-cost count
+    /// describes its data quality; they are deliberately different figures.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_never_stocked_product_leaves_the_valuation_available_whatever_its_active_status(
+        bool isActive)
+    {
+        var catalog = new FakeProductCatalogStore(
+            Product(100, "Coke", quantityInStock: 12, inventoryValue: 30m, costingQuantity: 12,
+                hasInventoryHistory: true),
+            NeverStockedProduct(200, "Brand new", isActive));
+
+        var inventory = (await UseCase(catalog: catalog).FullSummary()).Inventory;
+
+        Assert.Equal(30m, inventory.InventoryValueAtCost);
+        Assert.True(inventory.IsInventoryValueComplete);
+        Assert.Equal(0, inventory.ProductsWithUnknownCost);
+        Assert.Equal(2, inventory.ProductCount);
+        Assert.Equal(12, inventory.UnitsInStorage);
+    }
+
+    /// <summary>
+    /// The fail-closed direction, and the reason the record's evidence is a <c>bool?</c>: a read path
+    /// that did not resolve a product's inventory history has not proved its absence, so an unknown
+    /// value still makes the total unavailable rather than being quietly dropped from it.
+    /// </summary>
+    [Fact]
+    public async Task An_unresolved_inventory_history_keeps_an_unknown_value_blocking_the_total()
+    {
+        var catalog = new FakeProductCatalogStore(
+            Product(100, "Coke", quantityInStock: 12, inventoryValue: 30m, hasInventoryHistory: true),
+            Product(200, "Evidence not resolved", inventoryValue: null, hasInventoryHistory: null));
+
+        var inventory = (await UseCase(catalog: catalog).FullSummary()).Inventory;
+
+        Assert.Null(inventory.InventoryValueAtCost);
+        Assert.False(inventory.IsInventoryValueComplete);
+        Assert.Equal(1, inventory.ProductsWithUnknownCost);
+        Assert.Equal(2, inventory.ProductCount);
+    }
+
+    /// <summary>
+    /// Not all inactive products are excluded: the rule is about evidence, never status. An inactive
+    /// product that still holds stock of unknown value keeps the total unavailable.
+    /// </summary>
+    [Fact]
+    public async Task An_inactive_product_holding_stock_of_unknown_value_still_blocks_the_valuation()
+    {
+        var catalog = new FakeProductCatalogStore(
+            Product(100, "Coke", quantityInStock: 12, inventoryValue: 30m, hasInventoryHistory: true),
+            Product(200, "Discontinued, never costed", quantityInStock: 4, isActive: false,
+                inventoryValue: null, hasInventoryHistory: true));
+
+        var inventory = (await UseCase(catalog: catalog).FullSummary()).Inventory;
+
+        Assert.Null(inventory.InventoryValueAtCost);
+        Assert.False(inventory.IsInventoryValueComplete);
+        Assert.Equal(1, inventory.ProductsWithUnknownCost);
+        Assert.Equal(16, inventory.UnitsInStorage);
     }
 
     [Fact]

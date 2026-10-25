@@ -111,6 +111,22 @@ public class CostLedgerFingerprintTests
     }
 
     /// <summary>
+    /// Issue #833: the product's name travels with the ledger only so a refusal can name the
+    /// product. It is not a replay input - renaming a product changes no quantity, cost or issue
+    /// classification - so it must not invalidate an outstanding costing-repair preview.
+    /// </summary>
+    [Fact]
+    public void The_products_name_is_not_a_replay_input_and_does_not_change_the_fingerprint()
+    {
+        Assert.Equal(
+            Compute(product: new CostReplayProduct(7, 5, 4, 8m, "Coke")),
+            Compute(product: new CostReplayProduct(7, 5, 4, 8m, "Coke Zero")));
+        Assert.Equal(
+            Compute(product: new CostReplayProduct(7, 5, 4, 8m)),
+            Compute(product: new CostReplayProduct(7, 5, 4, 8m, "Coke")));
+    }
+
+    /// <summary>
     /// Timestamps are fingerprinted as instants, not as formatted text: SQLite materialises a
     /// stored <c>DateTime</c> as <see cref="DateTimeKind.Unspecified"/> (see the AppDbContext
     /// comments), and the replay compares ticks alone, so the fingerprint must not make the same

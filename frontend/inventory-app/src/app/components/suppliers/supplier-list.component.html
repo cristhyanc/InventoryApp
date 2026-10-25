@@ -28,6 +28,23 @@
           <input id="supplierEmail" [(ngModel)]="form.email" name="email" type="email" placeholder="Optional" />
         </div>
         <div class="field">
+          <label class="field-label" for="supplierUrl">Website</label>
+          <input
+            id="supplierUrl"
+            [(ngModel)]="form.url"
+            name="url"
+            type="url"
+            inputmode="url"
+            [maxlength]="urlMaxLength"
+            placeholder="Optional, e.g. https://example.com"
+            [attr.aria-invalid]="urlError ? 'true' : null"
+            [attr.aria-describedby]="urlError ? 'supplierUrlError' : null"
+          />
+          @if (urlError) {
+            <p id="supplierUrlError" class="field-error" role="alert">{{ urlError }}</p>
+          }
+        </div>
+        <div class="field">
           <label class="field-label" for="supplierAddress">Address</label>
           <textarea id="supplierAddress" [(ngModel)]="form.address" name="address" rows="2" placeholder="Optional"></textarea>
         </div>
@@ -64,6 +81,7 @@
                 <th scope="col" class="table-cell">Contact</th>
                 <th scope="col" class="table-cell">Phone</th>
                 <th scope="col" class="table-cell">Email</th>
+                <th scope="col" class="table-cell">Website</th>
                 <th scope="col" class="table-cell"></th>
               </tr>
             </thead>
@@ -74,6 +92,16 @@
                   <td class="table-cell">{{ s.contactName }}</td>
                   <td class="table-cell">{{ s.phone }}</td>
                   <td class="table-cell">{{ s.email }}</td>
+                  <!-- Only an http(s) address the client rule also accepts becomes a link
+                       (issue #847); anything else shows as plain text, so a value that reached
+                       the database without passing the server rule is never clickable. -->
+                  <td class="table-cell">
+                    @if (canLinkTo(s)) {
+                      <a [href]="s.url" target="_blank" rel="noopener noreferrer">{{ s.url }}</a>
+                    } @else {
+                      {{ s.url }}
+                    }
+                  </td>
                   <td class="table-cell">
                     <div class="flex flex-wrap gap-2">
                       <button type="button" class="btn btn-sm btn-secondary" (click)="startEdit(s)">

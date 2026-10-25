@@ -22,6 +22,7 @@ using Inventory.Application.NayaxProcessingFees;
 using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
+using Inventory.Application.PlatformOptions;
 using Inventory.Application.Products;
 using Inventory.Application.Providers;
 using Inventory.Application.Purchases;
@@ -54,6 +55,7 @@ using Inventory.Infrastructure.Reporting.Persistence;
 using Inventory.Infrastructure.Sites;
 using Inventory.Infrastructure.Time;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Inventory.Infrastructure;
 
@@ -187,6 +189,24 @@ public static class InfrastructureServiceCollectionExtensions
         // start, the end and the deactivation hook all run on the request's own denied-scope context
         // and inside MembershipWriteGuard's transaction on it.
         services.AddScoped<ISupportSessionStore, EfSupportSessionStore>();
+        // The platform supplier presets (issue #848): one more tiny adapter over one table, and the
+        // one table in this schema that names no business in any statement because it is about none.
+        // Scoped like every adapter here, so it runs on the request's own denied-scope context.
+        services.AddScoped<ISupplierPresetStore, EfSupplierPresetStore>();
+        // The shared switchable option visibility (issue #873): the second table in this schema that
+        // names no business, for the same reason - the setting is one answer for the whole
+        // application. Scoped like every adapter here, so the Super Admin's write runs on the
+        // request's own denied-scope context and a member's read on their own resolved one; neither
+        // scope selects anything, because there is no owner to compare.
+        services.AddScoped<IOptionVisibilityStore, EfOptionVisibilityStore>();
+        // The one provisioning write of issue #849: the copies of those presets a business receives
+        // when its application is approved. A separate one-method adapter rather than a method on
+        // the directory store above, because this is the only platform-admin path that writes a
+        // tenant-owned row and that is exactly what makes it worth reading on its own. Scoped like
+        // every adapter here, so it runs on the request's own denied-scope context and inside the
+        // approval's transaction on it - which is also the only way its narrow provisioning lease
+        // can be taken at all.
+        services.AddScoped<IBusinessSupplierProvisioningStore, EfBusinessSupplierProvisioningStore>();
         services.AddScoped<IBusinessProfileStore, EfBusinessProfileStore>();
         // The Owner-only settings read and write (issue #548), deliberately a separate adapter from
         // the profile read above: that one answers every request, this one is a rare write that has
@@ -209,6 +229,11 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ISiteCommissionStore, EfSiteCommissionStore>();
         services.AddScoped<ICategoryStore, EfCategoryStore>();
         services.AddScoped<ILocalMachineStore, EfLocalMachineStore>();
+        // Provider machine linking (issue #742): the one adapter that writes
+        // LocalMachine.ExternalMachineId, and the only reason the port above never does. Scoped like
+        // every other adapter here: its authoritative read and its write are one transaction on the
+        // request's own AppDbContext.
+        services.AddScoped<IProviderMachineLinkStore, EfProviderMachineLinkStore>();
         services.AddScoped<ISupplierStore, EfSupplierStore>();
         services.AddScoped<IOperatingExpenseStore, EfOperatingExpenseStore>();
         services.AddScoped<IProductStore, EfProductStore>();
@@ -397,6 +422,15 @@ public static class InfrastructureServiceCollectionExtensions
     ///
     /// Validation and the base address happen here, eagerly, so a missing or non-https base URL
     /// fails registration at startup rather than the first Nayax call.
+    ///
+    /// <strong>The port is the caching decorator, not the HTTP client (issues #840 and #842.)</strong>
+    /// <see cref="CachingNayaxLynxClient"/> is what every consumer resolves, and it wraps the typed
+    /// <see cref="NayaxLynxClient"/> registered under its own type; the machine lists it keeps live in
+    /// the one singleton <see cref="NayaxMachineListCache"/> and each machine's selections in the one
+    /// singleton <see cref="NayaxMachineProductsCache"/>, because a cache that was per request would
+    /// cache nothing a second page load - or a simultaneous one - could use. The <c>HttpClient</c>
+    /// itself is still named after the port, so its resilience pipeline and base address are
+    /// unchanged.
     /// </summary>
     /// <exception cref="InvalidOperationException">The configured base URL is missing or invalid.</exception>
     public static IServiceCollection AddNayaxLynxClient(this IServiceCollection services, NayaxLynxOptions options)
@@ -405,9 +439,34 @@ public static class InfrastructureServiceCollectionExtensions
 
         var baseAddress = NayaxLynxConfiguration.BuildBaseAddress(options);
 
+        // The resilience handler reads the current instant through the application's clock port to
+        // interpret an HTTP-date Retry-After on a 429 (issue #844). TryAdd because
+        // AddInfrastructureServices registers the same singleton, and either call may come first:
+        // attaching the handler must never depend on the order the two registrations ran in.
+        services.TryAddSingleton<IClock, SystemClock>();
         services.AddTransient<NayaxResilienceHandler>();
-        services.AddHttpClient<INayaxLynxClient, NayaxLynxClient>(http => http.BaseAddress = baseAddress)
+        services.AddHttpClient<NayaxLynxClient>(nameof(INayaxLynxClient), http => http.BaseAddress = baseAddress)
             .AddHttpMessageHandler<NayaxResilienceHandler>();
+
+        // Singletons: the whole point of issues #840 and #842 is that a list read on one request is
+        // still good on the next one, and on the two that started beside it. Neither holds a
+        // credential, a token or a connection status - only machine ids, names and site ids, and the
+        // machines' own selections - under keys that name the business they belong to.
+        services.AddSingleton<NayaxMachineListCache>();
+        services.AddSingleton<NayaxMachineProductsCache>();
+
+        // The decorator takes the HTTP client as INayaxLynxCachedReadClient - the port plus the reads
+        // and the machine-product write that are sent with a credential the decorator has already
+        // resolved and gated, so each cache key names the credentials the request really carried - and
+        // resolves the credential provider and the business scope per request like every other
+        // consumer. A test can still put its own double behind it. Transient, as the typed client it
+        // wraps is.
+        services.AddTransient<INayaxLynxClient>(serviceProvider => new CachingNayaxLynxClient(
+            serviceProvider.GetRequiredService<NayaxLynxClient>(),
+            serviceProvider.GetRequiredService<INayaxRequestCredentialProvider>(),
+            serviceProvider.GetRequiredService<IBusinessScope>(),
+            serviceProvider.GetRequiredService<NayaxMachineListCache>(),
+            serviceProvider.GetRequiredService<NayaxMachineProductsCache>()));
 
         // The connection-test check runner (issue #536) gets its own HttpClient from the same base
         // address and the same resilience handler, and registers no credential here either: it

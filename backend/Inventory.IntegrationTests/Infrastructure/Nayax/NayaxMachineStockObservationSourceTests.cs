@@ -15,6 +15,11 @@ namespace InventoryApi.Tests.Infrastructure.Nayax;
 /// A slot it cannot resolve is dropped, exactly as an unidentified slot already was, and never
 /// offered as the local product that happens to be numbered like the remote one - a shrinkage
 /// reported against the wrong product is worse than a slot that is not reported at all.
+///
+/// <para>It is also a declared fresh caller (issue #842): an observation is what the machine says it
+/// is holding at this instant, so the client here answers the fresh read only and throws on the
+/// cached one - an adapter that started reading through the 60-second cache would move a reported
+/// shrinkage, and this is what makes that fail loudly.</para>
 /// </summary>
 public class NayaxMachineStockObservationSourceTests
 {
@@ -25,8 +30,11 @@ public class NayaxMachineStockObservationSourceTests
         INayaxProductLinkStore productLinks, params NayaxMachineProduct[] slots)
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(MachineId, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([.. slots]);
+        nayax.Setup(x => x.GetMachineProductsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new NotSupportedException(
+                "The machine-stock observation source must read the machine's slots fresh."));
 
         return new NayaxMachineStockObservationSource(nayax.Object, productLinks, new FakeClock(ObservedAt));
     }

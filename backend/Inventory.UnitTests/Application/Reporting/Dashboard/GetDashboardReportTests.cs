@@ -3,6 +3,7 @@ using Inventory.Application.Reporting.Dashboard;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting.Availability;
+using Inventory.Domain.Reporting.Dashboard;
 using InventoryApi.Tests.Application.Reporting.Gst;
 using InventoryApi.Tests.Application.Reporting.ProductProfitability;
 using Xunit;
@@ -16,7 +17,17 @@ public class GetDashboardReportTests
         int cardTransactionCount = 8, int cashTransactionCount = 2, decimal nayaxFeesIncludingGst = 4.4m,
         decimal nayaxFeesExGst = 4m, decimal siteCommission = 3m, decimal? netProfit = 40m,
         decimal? netMarginPercent = 36.36m, decimal? directProfit = null, decimal? directMarginPercent = null,
-        bool isCogsComplete = true, decimal partialCostOfGoods = 50m, bool hasMissingFeeRates = false) => new(
+        bool isCogsComplete = true, decimal partialCostOfGoods = 50m, bool hasMissingFeeRates = false,
+        int transactionCount = 10, decimal importedNetSettlement = 74m, bool importedContainsRows = true)
+    {
+        // The expected-versus-actual reimbursement comparison is the bookkeeping report's own since
+        // issue #805, decided there by the same Domain policy this summary used to call. The fake
+        // applies that policy, so the figures this summary composes are the ones the real
+        // bookkeeping report would publish for these card sales, fees and imported settlement.
+        var reimbursement = DashboardReimbursementPolicy.Calculate(new DashboardReimbursementInputs(
+            CardSales: cardSales, FeesIncludingGst: nayaxFeesIncludingGst,
+            ActualReimbursement: importedNetSettlement, ImportedContainsRows: importedContainsRows));
+        return new(
         From: new DateTime(2025, 8, 1), To: new DateTime(2025, 8, 31), FinancialYear: "FY2025-26",
         Sales: sales, CostOfGoods: isCogsComplete ? partialCostOfGoods : null, GrossProfit: grossProfit,
         Fees: nayaxFeesExGst, NetSettlement: cardSales - nayaxFeesIncludingGst, GstOnSales: 10m, GstOnFees: 0.4m,
@@ -27,6 +38,15 @@ public class GetDashboardReportTests
         {
             PartialCostOfGoods = partialCostOfGoods,
             IsCogsComplete = isCogsComplete,
+            // The completed-transaction count and the average sale over it are the bookkeeping
+            // report's own figures since issue #804; this summary republishes them.
+            TransactionCount = transactionCount,
+            AverageSale = transactionCount == 0 ? 0m : sales / transactionCount,
+            ExpectedReimbursement = reimbursement.ExpectedReimbursement,
+            ActualReimbursement = reimbursement.ActualReimbursement,
+            ReimbursementDifference = reimbursement.Difference,
+            IsReconciled = reimbursement.IsReconciled,
+            ReconciliationStatus = reimbursement.Status,
             DirectProfit = directProfit,
             DirectMarginPercent = directMarginPercent,
             NayaxProcessingFees = hasMissingFeeRates
@@ -37,6 +57,7 @@ public class GetDashboardReportTests
             // availability note is added. DashboardReportAvailabilityTests replaces this.
             ProviderAvailability = CompleteAvailability
         };
+    }
 
     private static readonly ReportProviderAvailabilityDto CompleteAvailability = ReportProviderAvailabilityDto.From(
         new ReportAvailabilityDto(nameof(ReportAvailabilityState.Complete), null),
@@ -102,11 +123,16 @@ public class GetDashboardReportTests
         Assert.False(report.DataQuality.GstClassificationMissing);
     }
 
+    /// <summary>
+    /// Issue #804 relocated the completed-transaction count into the bookkeeping report this
+    /// summary already composes, so the two pages read one definition. The machine and product
+    /// counts remain the dashboard facts port's own, because no other report needs that projection.
+    /// </summary>
     [Fact]
-    public async Task Transaction_machine_and_product_counts_come_from_the_dashboard_facts_port()
+    public async Task Transaction_count_and_average_sale_come_from_the_composed_bookkeeping_report()
     {
-        var facts = FakeDashboardReportFactsProvider.Complete(transactionCount: 25, machineCount: 4, productCount: 6);
-        var useCase = UseCase(CompleteBookkeeping(sales: 250m), EmptyProductReport(), facts);
+        var facts = FakeDashboardReportFactsProvider.Complete(machineCount: 4, productCount: 6);
+        var useCase = UseCase(CompleteBookkeeping(sales: 250m, transactionCount: 25), EmptyProductReport(), facts);
 
         var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
 
@@ -115,6 +141,18 @@ public class GetDashboardReportTests
         Assert.Equal(4, report.MachineCount);
         Assert.Equal(6, report.ProductCount);
         Assert.Equal(10m, report.AverageSale);
+    }
+
+    [Fact]
+    public async Task A_period_with_no_completed_transaction_reports_a_zero_average_sale()
+    {
+        var useCase = UseCase(CompleteBookkeeping(sales: 0m, transactionCount: 0), EmptyProductReport(),
+            FakeDashboardReportFactsProvider.Complete());
+
+        var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
+
+        Assert.Equal(0, report.Transactions);
+        Assert.Equal(0m, report.AverageSale);
     }
 
     [Fact]
@@ -132,15 +170,24 @@ public class GetDashboardReportTests
         Assert.Equal(1, report.UnmappedProductCount);
     }
 
+    /// <summary>
+    /// Issue #805 relocated the expected-versus-actual comparison into the bookkeeping report this
+    /// summary already composes, so the two pages report one set of figures and one status for a
+    /// period. This summary republishes them exactly, as it already did for the transaction count.
+    /// </summary>
     [Fact]
-    public async Task Expected_reimbursement_is_card_sales_less_fees_and_actual_comes_from_the_facts_port()
+    public async Task The_reimbursement_comparison_comes_from_the_composed_bookkeeping_report()
     {
-        var bookkeeping = CompleteBookkeeping(cardSales: 100m, nayaxFeesIncludingGst: 5m);
-        var facts = FakeDashboardReportFactsProvider.Complete(importedNetSettlement: 95m, importedContainsRows: true);
-        var useCase = UseCase(bookkeeping, EmptyProductReport(), facts);
+        var bookkeeping = CompleteBookkeeping(cardSales: 100m, nayaxFeesIncludingGst: 5m, importedNetSettlement: 95m);
+        var useCase = UseCase(bookkeeping, EmptyProductReport(), FakeDashboardReportFactsProvider.Complete());
 
         var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
 
+        Assert.Equal(bookkeeping.ExpectedReimbursement, report.ExpectedReimbursement);
+        Assert.Equal(bookkeeping.ActualReimbursement, report.ActualReimbursement);
+        Assert.Equal(bookkeeping.ActualReimbursement, report.NetReimbursement);
+        Assert.Equal(bookkeeping.ReimbursementDifference, report.ReimbursementDifference);
+        Assert.Equal(bookkeeping.ReconciliationTolerance, report.ReconciliationTolerance);
         Assert.Equal(95m, report.ExpectedReimbursement);
         Assert.Equal(95m, report.ActualReimbursement);
         Assert.Equal(0m, report.ReimbursementDifference);
@@ -151,14 +198,15 @@ public class GetDashboardReportTests
     [Fact]
     public async Task No_imported_rows_reports_pending_reconciliation()
     {
-        var bookkeeping = CompleteBookkeeping(cardSales: 100m, nayaxFeesIncludingGst: 5m);
-        var facts = FakeDashboardReportFactsProvider.Complete(importedContainsRows: false, importedNetSettlement: 0m);
-        var useCase = UseCase(bookkeeping, EmptyProductReport(), facts);
+        var bookkeeping = CompleteBookkeeping(cardSales: 100m, nayaxFeesIncludingGst: 5m,
+            importedContainsRows: false, importedNetSettlement: 0m);
+        var useCase = UseCase(bookkeeping, EmptyProductReport(), FakeDashboardReportFactsProvider.Complete());
 
         var report = await useCase.Handle(new ReportingFilterDto(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31)), CancellationToken.None);
 
         Assert.Equal("Pending", report.ReconciliationStatus);
         Assert.False(report.IsReconciled);
+        Assert.Equal(0m, report.ActualReimbursement);
     }
 
     [Fact]
@@ -206,7 +254,7 @@ public class GetDashboardReportTests
     [Fact]
     public async Task Incomplete_commission_configuration_adds_a_note_and_its_warnings()
     {
-        var facts = new DashboardReportFacts(10, 2, 3, true, 74m, CommissionIsComplete: false,
+        var facts = new DashboardReportFacts(2, 3, CommissionIsComplete: false,
             CommissionWarnings: ["Overlapping commission agreements cover one or more sales for the selected machine."]);
         var useCase = UseCase(CompleteBookkeeping(), EmptyProductReport(), facts);
 

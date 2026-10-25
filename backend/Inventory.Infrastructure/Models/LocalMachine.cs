@@ -22,10 +22,11 @@ namespace Inventory.Infrastructure.Models;
 /// <c>Product.ExternalProductId</c> (issue #759), with the same rules: issued by
 /// <c>Business.SalesProvider</c>, unique per business among the machines that have one, written for
 /// Nayax only through <c>Inventory.Domain.Providers.NayaxExternalId</c>, and never read as a local
-/// id. It is <strong>not editable through the API</strong>: the <c>AddMachines</c> backfill wrote it
-/// for the machines that existed, and only provider synchronization and the provider machine review
-/// (issue #742) may set it afterwards. It is deliberately off the wire, like the product and
-/// category columns.</para>
+/// id. It is <strong>never a value a request chooses</strong>: the <c>AddMachines</c> backfill wrote
+/// it for the machines that existed, and since issue #742 the provider machine review is the one
+/// thing that writes it afterwards - from a provider fleet read the server made itself, either
+/// automatically or on an operator's explicit link-or-create decision. It is deliberately off the
+/// wire, like the product and category columns.</para>
 ///
 /// <para>Issue #740 repointed nothing at this table. Since issue #780 (G2a)
 /// <c>OperatingExpense.MachineId</c> holds <see cref="Id"/>, and since issue #741 (the stock half of

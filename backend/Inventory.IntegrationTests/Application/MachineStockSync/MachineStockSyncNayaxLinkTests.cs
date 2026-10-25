@@ -85,7 +85,7 @@ public class MachineStockSyncNayaxLinkTests
                     EventDateTimeVmc = DateTime.SpecifyKind(EventTime.AddHours(10), DateTimeKind.Unspecified),
                 },
             ]);
-        nayax.Setup(x => x.GetMachineProductsAsync(MachineId, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(MachineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([
                 new NayaxMachineProduct { NayaxProductID = NayaxProductId, MDBCode = Mdb, ProductName = ProductName },
             ]);
@@ -129,6 +129,7 @@ public class MachineStockSyncNayaxLinkTests
         var evt = Assert.Single(preview.Events);
         Assert.Equal(NayaxStockEventMatchStatus.NeedsReview, evt.MatchStatus);
         Assert.Null(evt.MatchedProductId);
-        Assert.Contains($"No local product is mapped to Nayax product {NayaxProductId}", evt.NeedsReviewReason);
+        Assert.Contains(
+            $"No local product is mapped to Nayax product {ProductName} ({NayaxProductId})", evt.NeedsReviewReason);
     }
 }

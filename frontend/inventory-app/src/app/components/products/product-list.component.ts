@@ -2,7 +2,7 @@ import { Component, OnDestroy, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
-import { EMPTY, Subject, Subscription } from 'rxjs';
+import { EMPTY, Subject, Subscription, combineLatest } from 'rxjs';
 import { catchError, switchMap, takeUntil, tap } from 'rxjs/operators';
 import { ProductService } from '../../services/product.service';
 import { CategoryService } from '../../services/category.service';
@@ -22,6 +22,8 @@ import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 import { AccessService } from '../../access/access.service';
+import { ProviderAvailability, ProviderAvailabilityService, providerFeatureOffered } from '../../provider/provider-availability.service';
+import { providerToolsOffered } from '../../provider/provider-lock';
 import {
   PURCHASE_COSTS_NOT_READ_YET,
   ProductPurchaseCostColumn,
@@ -59,6 +61,14 @@ export class ProductListComponent implements OnInit, OnDestroy {
   categories: Category[] = [];
   readonly loadState = new ListLoadState();
   confirmingProduct: Product | null = null;
+  /**
+   * The product whose deactivation is waiting to be confirmed (issue #825), or `null` while none
+   * is. Deactivation is reversible and keeps everything, but it does take a product out of the
+   * working catalogue, the product pickers and the reorder alerts, so it is confirmed rather than
+   * being one unexplained click - whether it was started from the Deactivate button or from the
+   * Status toggle. Reactivation stays one click: putting a product back is not a loss.
+   */
+  confirmingDeactivation: Product | null = null;
   search = '';
   categoryId: number | '' = '';
   /**
@@ -93,6 +103,16 @@ export class ProductListComponent implements OnInit, OnDestroy {
   canViewFinancials = true;
 
   /**
+   * Whether Import products is offered beside New Product (issue #875): only while the member
+   * holds `Imports.Run`, the shared provider-availability signal says the provider tools are
+   * offered (`providerToolsOffered`), the `productCatalogue` feature is offered
+   * (`providerFeatureOffered`), and no support session is active. It is recomputed whenever any of
+   * those three answers changes, the same way `canViewFinancials` is, so the button appears and
+   * disappears without a reload.
+   */
+  showImportProducts = false;
+
+  /**
    * The ids of the products currently displayed, handed to `<app-product-purchase-costs>` as the
    * one piece of context that read needs. They change only once a new fetch actually succeeds (a
    * failed refetch leaves the previous rows on screen), which is the one moment the previous
@@ -113,6 +133,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
   private readonly destroy$ = new Subject<void>();
   private readonly sessionActiveSubscription: Subscription;
   private readonly financialsAccessSubscription: Subscription;
+  private readonly importProductsVisibilitySubscription: Subscription;
 
   constructor(
     private productService: ProductService,
@@ -120,12 +141,20 @@ export class ProductListComponent implements OnInit, OnDestroy {
     private toastService: ToastService,
     private router: Router,
     supportSession: SupportSessionService,
-    access: AccessService
+    access: AccessService,
+    provider: ProviderAvailabilityService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
     this.financialsAccessSubscription = access
       .allows('Dashboard.ViewFinancials')
       .subscribe((allowed) => (this.canViewFinancials = allowed));
+    this.importProductsVisibilitySubscription = combineLatest([
+      access.allows('Imports.Run'),
+      provider.watch(),
+      supportSession.active$
+    ]).subscribe(([importsRunAllowed, providerAvailability, sessionActive]) => {
+      this.showImportProducts = ProductListComponent.importProductsOffered(importsRunAllowed, providerAvailability, sessionActive);
+    });
   }
 
   ngOnInit(): void {
@@ -148,6 +177,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.destroy$.complete();
     this.sessionActiveSubscription.unsubscribe();
     this.financialsAccessSubscription.unsubscribe();
+    this.importProductsVisibilitySubscription.unsubscribe();
   }
 
   private fetchProducts() {
@@ -193,7 +223,26 @@ export class ProductListComponent implements OnInit, OnDestroy {
     this.search = '';
     this.categoryId = '';
     this.statusFilter = 'active';
+    this.clearStatusSortWhenHidden();
     this.applyFilters();
+  }
+
+  /**
+   * The Status filter's own change handler (issue #828): switching to "Only active" hides the
+   * Status column, so a sort by it would otherwise point at a column no longer on screen.
+   */
+  onStatusFilterChange(value: ProductStatusFilter): void {
+    this.statusFilter = value;
+    this.clearStatusSortWhenHidden();
+    this.applyFilters();
+  }
+
+  /** Clears a Status sort back to the default order once "Only active" hides the column it sorts. */
+  private clearStatusSortWhenHidden(): void {
+    if (this.statusFilter === 'active' && this.sortColumn === 'status') {
+      this.sortColumn = null;
+      this.sortDirection = 'asc';
+    }
   }
 
   /**
@@ -202,27 +251,14 @@ export class ProductListComponent implements OnInit, OnDestroy {
    * `Inventory.Domain.Products.ProductDeletionPolicy` that refuses the delete itself - a provider
    * link, stock movements, purchase lines, supplier order lines, sales, machine stock counts and
    * costing records all reach it. Delete is offered only on a plain `true`: an absent answer (a
-   * response that never resolved the question) is not permission, and the row then offers the
-   * retirement path, which is always available.
+   * response that never resolved the question) is not permission, and the row then offers
+   * Deactivate instead, which is always available for an active product.
    *
    * The answer stays advisory - it is as fresh as the last fetch - and the server decides again
    * inside the delete's own transaction, which `deleteConfirmed` still surfaces.
    */
   canDelete(product: Product): boolean {
     return product.canDelete === true;
-  }
-
-  /**
-   * Why Delete is not offered, and which control retires the product instead: the server's own
-   * refusal (so the page never words the rule a second time), followed by the name of the control
-   * on this row that does what the refusal points at.
-   */
-  deleteRefusalNote(product: Product): string {
-    const retirement = product.isActive
-      ? 'Use the Status toggle to deactivate it.'
-      : 'It is deactivated; use the Status toggle to reactivate it.';
-    const refusal = product.deletionRefusal?.trim();
-    return refusal ? `${refusal} ${retirement}` : `This product cannot be deleted. ${retirement}`;
   }
 
   confirmDelete(product: Product): void {
@@ -313,6 +349,25 @@ export class ProductListComponent implements OnInit, OnDestroy {
     return column === 'averageCost' || column === 'lastPurchase' || column === 'cheapestPurchase';
   }
 
+  /**
+   * Whether Import products belongs beside New Product right now (issue #875). A provider answer
+   * that has not settled yet (`undefined`) fails open, the same way `navigationFor`'s own
+   * provider-tools check does: an unread status is not a refusal.
+   */
+  private static importProductsOffered(
+    importsRunAllowed: boolean,
+    provider: ProviderAvailability | undefined,
+    sessionActive: boolean
+  ): boolean {
+    if (!importsRunAllowed || sessionActive) {
+      return false;
+    }
+    if (provider === undefined) {
+      return true;
+    }
+    return providerToolsOffered(provider.connection) && providerFeatureOffered(provider.features.productCatalogue);
+  }
+
   sortBy(column: ProductSortColumn): void {
     const next = nextSortState(this.sortColumn, this.sortDirection, column);
     this.sortColumn = next.column;
@@ -365,11 +420,69 @@ export class ProductListComponent implements OnInit, OnDestroy {
     return `$${value.toFixed(2)}`;
   }
 
+  /**
+   * The Status badge. Deactivating goes through the same confirmation the Deactivate button opens
+   * (issue #825), so the two controls cannot mean different things; reactivating writes straight
+   * away, as it always has.
+   */
   toggleActive(product: Product): void {
     if (this.sessionActive) {
       return;
     }
-    this.productService.update(product.id, {
+    if (product.isActive) {
+      this.confirmDeactivate(product);
+      return;
+    }
+
+    this.writeActive(product, true).subscribe({
+      next: () => this.applyFilters(),
+      error: () => this.toastService.error('Failed to update product status.')
+    });
+  }
+
+  confirmDeactivate(product: Product): void {
+    // Checked here as well as hidden in the template, so the write is actually unavailable rather
+    // than merely invisible - the endpoint refuses it either way. An already-inactive product has
+    // nothing to deactivate.
+    if (this.sessionActive || !product.isActive) {
+      return;
+    }
+    this.confirmingDeactivation = product;
+  }
+
+  cancelDeactivate(): void {
+    this.confirmingDeactivation = null;
+  }
+
+  deactivateConfirmed(): void {
+    const product = this.confirmingDeactivation;
+    if (!product) {
+      return;
+    }
+
+    this.confirmingDeactivation = null;
+    this.writeActive(product, false).subscribe({
+      // The product leaves the default "Only active" view on success; "All" keeps it on screen to
+      // reactivate.
+      next: () => this.applyFilters(),
+      error: (error) => this.toastService.error(apiErrorMessage(error, 'Failed to deactivate product.'))
+    });
+  }
+
+  /** What the confirmation says deactivation does, and what it leaves alone. */
+  deactivationMessage(product: Product): string {
+    return (
+      `Deactivate '${product.name}'? It will be hidden from the working catalogue and the reorder alerts, ` +
+      'keeps its history, stock and costs, and can be reactivated at any time.'
+    );
+  }
+
+  /**
+   * The one activation write this page makes: the existing product update with `isActive` set and
+   * every other field sent back as it was fetched, so flipping the flag changes nothing else.
+   */
+  private writeActive(product: Product, isActive: boolean) {
+    return this.productService.update(product.id, {
       name: product.name,
       sku: product.sku ?? null,
       description: product.description ?? null,
@@ -377,10 +490,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
       restockTo: product.restockTo,
       unit: product.unit ?? null,
       categoryId: product.categoryId ?? null,
-      isActive: !product.isActive
-    }).subscribe({
-      next: () => this.applyFilters(),
-      error: () => this.toastService.error('Failed to update product status.')
+      isActive
     });
   }
 }

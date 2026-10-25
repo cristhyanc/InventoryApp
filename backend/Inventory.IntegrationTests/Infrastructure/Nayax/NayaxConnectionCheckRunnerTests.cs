@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.Net;
+using System.Reflection;
 using System.Text;
 using Inventory.Application.Nayax;
 using Inventory.Domain.Nayax;
@@ -96,6 +97,41 @@ public class NayaxConnectionCheckRunnerTests
 
         Assert.DoesNotContain("POST", handler.Requests.Select(request => request.Method));
         Assert.All(handler.Requests, request => Assert.Equal("GET", request.Method));
+    }
+
+    /// <summary>
+    /// The connection test reads the machine list and one machine's products - the test above pins
+    /// that - and stays completely outside the caches of issues #840 and #842 while doing it, in both
+    /// directions: it can read nothing from either cache and write nothing into them.
+    ///
+    /// <para>That is not a nicety. The credentials being tested are a pair an Owner pasted, which may
+    /// belong to a different Nayax operator account entirely, so neither its fleet nor its machines'
+    /// selections are the business's: a test that filled a cache would make every page in the
+    /// application show the machines and stock levels of whatever account was being considered, and a
+    /// test that read from one would report data the submitted token never fetched. The isolation is
+    /// structural - this runner builds its own
+    /// <see cref="NayaxLynxClient"/> over the candidate credentials and is constructed from an
+    /// <see cref="HttpClient"/> and a logger and nothing else, so it never resolves the cached port -
+    /// and this test is what keeps it that way.</para>
+    /// </summary>
+    [Fact]
+    public void The_connection_test_cannot_reach_either_cache()
+    {
+        var constructor = Assert.Single(typeof(NayaxConnectionCheckRunner).GetConstructors());
+
+        Assert.Equal(
+            new[] { typeof(HttpClient), typeof(ILogger<NayaxLynxClient>) },
+            constructor.GetParameters().Select(parameter => parameter.ParameterType));
+
+        var fieldTypes = typeof(NayaxConnectionCheckRunner)
+            .GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .Select(field => field.FieldType)
+            .ToList();
+
+        Assert.DoesNotContain(typeof(NayaxMachineListCache), fieldTypes);
+        Assert.DoesNotContain(typeof(NayaxMachineProductsCache), fieldTypes);
+        Assert.DoesNotContain(typeof(INayaxLynxClient), fieldTypes);
+        Assert.DoesNotContain(typeof(CachingNayaxLynxClient), fieldTypes);
     }
 
     [Fact]

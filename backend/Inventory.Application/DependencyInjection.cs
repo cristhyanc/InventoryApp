@@ -21,6 +21,7 @@ using Inventory.Application.Onboarding;
 using Inventory.Application.PickList;
 using Inventory.Application.PlatformAdmin;
 using Inventory.Application.PlatformDiagnostics;
+using Inventory.Application.PlatformOptions;
 using Inventory.Application.Products;
 using Inventory.Application.Purchases;
 using Inventory.Application.Reorder;
@@ -150,6 +151,21 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetActiveSupportSession>();
         services.AddScoped<EndSupportSession>();
 
+        // The Super Admin's platform supplier presets (issue #848). Scoped like the two surfaces
+        // above because they read and write through the request's own AppDbContext - which here
+        // carries a denied business scope, since a preset belongs to no business at all.
+        services.AddScoped<ListSupplierPresets>();
+        services.AddScoped<CreateSupplierPreset>();
+        services.AddScoped<UpdateSupplierPreset>();
+
+        // The shared switchable option visibility (issue #873). The write is the Super Admin's and
+        // runs under a denied business scope like the presets above; the read is every member's,
+        // through GetCurrentAccess, and runs under their ordinary resolved scope. Both are scoped
+        // because both go through the request's own AppDbContext, and the setting is about no
+        // business, so neither one's scope selects anything.
+        services.AddScoped<GetOptionVisibility>();
+        services.AddScoped<SetHistoricalGstClassificationVisibility>();
+
         // The member's display-only name and email address, refreshed from their sign-in token
         // (issue #524). The hourly throttle and the hand-off queue are singletons because both are
         // state about the process rather than about one request: "this membership was refreshed
@@ -221,6 +237,9 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<GetNayaxCatalogReconciliation>();
         services.AddScoped<GetSiteSummaries>();
         services.AddScoped<GetSiteProducts>();
+        // The light site list the site pickers fill from (issue #841): one machine-list read, no
+        // per-machine read at all.
+        services.AddScoped<ListSites>();
         // The business's own machine records (issue #740), which work with no provider at all. They
         // are deliberately separate from the live-fleet use cases below.
         services.AddScoped<ListLocalMachines>();
@@ -228,6 +247,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CreateLocalMachine>();
         services.AddScoped<RenameLocalMachine>();
         services.AddScoped<SetLocalMachineActivation>();
+        // Provider machine linking (issue #742): the one place a provider machine becomes - or waits
+        // to become - one of those records. It reads the live fleet, so unlike the five above it
+        // needs a working provider connection.
+        services.AddScoped<ReviewProviderMachines>();
+        services.AddScoped<ApplyProviderMachineLinks>();
         // The route id of every api/machines/{id} endpoint is a local machine (issue #741); this is
         // the one place it becomes the pair of ids the features behind those routes need.
         services.AddScoped<ResolveMachineIdentity>();
@@ -250,6 +274,10 @@ public static class ApplicationServiceCollectionExtensions
         // remembers is state about the process rather than about one request, so "this business has
         // synchronized ten times in the last two minutes" must be the same answer for every request.
         services.AddSingleton<NayaxSalesSyncRateLimiter>();
+        // The recent-sync skip of issue #843, a singleton for the same reason: "this business's
+        // sales finished synchronizing a minute ago, under the credentials it holds now" is a fact
+        // about the process, and a per-request memory would remember nothing at all.
+        services.AddSingleton<NayaxSalesSyncFreshness>();
         services.AddScoped<SyncLatestNayaxSales>();
         services.AddScoped<ComputePurchaseTotalValidation>();
         services.AddScoped<ComputePurchaseGstSummary>();

@@ -2,7 +2,6 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute } from '@angular/router';
 import { of } from 'rxjs';
 import { DailyReportComponent } from './daily-report.component';
-import { DashboardReportComponent } from './dashboard-report.component';
 import { MachineReportComponent } from './machine-report.component';
 import { ProductReportComponent } from './product-report.component';
 import { ReconciliationReportComponent } from './reconciliation-report.component';
@@ -10,7 +9,7 @@ import { SiteCommissionsReportComponent } from './site-commissions-report.compon
 import { TransactionSalesReportComponent } from './transaction-sales-report.component';
 import { countOrState } from './report-formatting';
 import {
-  DailyReport, DashboardReport, MachineReport, ProductReport, ReconciliationReport, ReportAvailability,
+  DailyReport, MachineReport, ProductReport, ReconciliationReport, ReportAvailability,
   ReportProviderAvailability, ReportingService, SiteCommissionReport, TransactionSalesReport,
 } from '../../services/reporting.service';
 import { provideNayaxConnectionStatus } from '../../provider/provider-availability.spec-helpers';
@@ -252,61 +251,6 @@ describe('ProductReportComponent provider availability', () => {
   });
 });
 
-function dashboard(providerAvailability?: ReportProviderAvailability, sales = 0): DashboardReport {
-  return {
-    from: '2026-07-01', to: '2026-07-31', sales, totalSales: sales, grossProfit: 0, transactions: 0,
-    quantity: 0, machineCount: 0, productCount: 0, unmappedProductCount: 0,
-    dataQuality: { ...emptyQuality },
-    cardSales: 0, cashSales: 0, nayaxFeesIncludingGst: 0, siteCommission: 0, netProfit: 0,
-    netMarginPercent: 0, grossMarginPercent: 0, averageSale: 0, isCogsComplete: true,
-    costOfGoodsSold: 0, expectedReimbursement: 0, actualReimbursement: 0, reimbursementDifference: 0,
-    reconciliationStatus: 'Reconciled', isReconciled: true, reconciliationTolerance: 0.01,
-    deliveryCosts: 12.5, packageCosts: 3.25, otherOperatingExpenses: 40,
-    providerAvailability,
-  };
-}
-
-describe('DashboardReportComponent provider availability', () => {
-  it('shows no notice and real zeros when both families are complete', async () => {
-    const host = await render(DashboardReportComponent, {
-      dashboard: jest.fn(() => of(dashboard(availability(complete, complete)))),
-    });
-
-    expect(host.querySelector('[data-testid="provider-availability"]')).toBeNull();
-    expect(host.querySelector('[data-testid="dashboard-total-sales"]')!.textContent).toContain('$0.00');
-    expect(host.querySelector('[data-testid="dashboard-transactions"]')!.textContent).toContain('0');
-  });
-
-  it('shows every provider figure as absent rather than as zero', async () => {
-    const host = await render(DashboardReportComponent, {
-      dashboard: jest.fn(() => of(dashboard(availability(missing, missing)))),
-    });
-
-    expect(host.querySelector('[data-testid="provider-availability"]')).not.toBeNull();
-    for (const id of ['dashboard-total-sales', 'dashboard-gross-profit', 'dashboard-net-profit',
-      'dashboard-transactions', 'dashboard-cost-of-goods', 'dashboard-nayax-fees']) {
-      const cell = host.querySelector(`[data-testid="${id}"]`);
-      expect(cell).not.toBeNull();
-      expect(cell!.textContent).toContain('No provider data');
-      expect(cell!.textContent).not.toContain('$0.00');
-    }
-    expect(host.querySelector('[data-testid="dashboard-gross-margin"]')!.textContent).not.toContain('0.0%');
-    // This page shows no figure the business records itself, so there is nothing here that should
-    // stay exact; the bookkeeping report, which does show them, asserts that in its own spec.
-    expect(host.textContent).not.toContain('$0.00');
-  });
-
-  it('labels the two families separately, as the bookkeeping report decided them', async () => {
-    const host = await render(DashboardReportComponent, {
-      dashboard: jest.fn(() => of(dashboard(availability(staleTo18July, missing), 880))),
-    });
-
-    expect(host.querySelector('[data-testid="dashboard-total-sales"]')!.textContent).toContain('$880.00');
-    expect(host.querySelector('[data-testid="dashboard-sales-availability"]')!.textContent).toContain('As of 18 July 2026');
-    expect(host.querySelector('[data-testid="dashboard-fee-availability"]')!.textContent).toContain('No provider data');
-  });
-});
-
 function transactions(salesAvailability?: ReportAvailability, sales = 0): TransactionSalesReport {
   return {
     from: '2026-07-01', to: '2026-07-31', rows: [], page: 1, pageSize: 50, totalCount: 0,
@@ -364,7 +308,7 @@ async function renderSiteCommissions(report: SiteCommissionReport) {
     imports: [SiteCommissionsReportComponent],
     providers: [
       { provide: ReportingService, useValue: { siteCommissions: jest.fn(() => of(report)) } },
-      { provide: SiteService, useValue: { getAll: jest.fn(() => of([])) } },
+      { provide: SiteService, useValue: { getList: jest.fn(() => of([])) } },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       provideNayaxConnectionStatus('Ready'),
     ],

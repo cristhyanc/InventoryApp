@@ -41,7 +41,7 @@ public sealed class EfSupplierOrderStoreTests : IDisposable
     {
         await using (var seed = TestAppDbContext.Unrestricted(_options))
         {
-            seed.Suppliers.Add(new Supplier { Id = 1, Name = "Costco" });
+            seed.Suppliers.Add(new Supplier { Id = 1, Name = "Costco", Url = "https://costco.test" });
             seed.Products.Add(new Product { Id = 1, Name = "Coke" });
             await seed.SaveChangesAsync();
         }
@@ -56,6 +56,8 @@ public sealed class EfSupplierOrderStoreTests : IDisposable
                 CancellationToken.None);
             orderId = created.Id;
             Assert.Equal("Costco", created.Supplier!.Name);
+            // The supplier's optional website travels with the nested supplier (issue #847).
+            Assert.Equal("https://costco.test", created.Supplier.Url);
             Assert.Equal("Coke", created.Lines.Single().Product.Name);
         }
 
@@ -64,6 +66,7 @@ public sealed class EfSupplierOrderStoreTests : IDisposable
         var fetched = await store2.FindByIdAsync(orderId, CancellationToken.None);
         Assert.NotNull(fetched);
         Assert.Equal(DomainStatus.Ordered, fetched!.Status);
+        Assert.Equal("https://costco.test", fetched.Supplier!.Url);
         Assert.Equal(24m, fetched.Lines.Single().QuantityOrdered);
     }
 

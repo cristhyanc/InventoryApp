@@ -15,6 +15,34 @@
         }
       </select>
     </label>
+
+    @if (machinesLoadFailed) {
+      <p data-testid="manual-pick-list-machines-failed" role="alert" class="text-md-body text-md-danger-text self-center">
+        {{ machinesLoadFailedMessage }}
+      </p>
+    } @else if (machineSelectorShown) {
+      <label class="text-sm self-center" for="manual-pick-list-machine">
+        Machine (optional)
+        <select id="manual-pick-list-machine" class="ml-2 max-w-[180px]" [(ngModel)]="selectedMachineId">
+          <option [ngValue]="null">No machine</option>
+          @for (machine of activeMachines; track machine.id) {
+            <option [ngValue]="machine.id">{{ machine.name }}</option>
+          }
+        </select>
+      </label>
+    }
+
+    @if (machineResolutionPending) {
+      <p data-testid="manual-pick-list-machine-resolution-pending" role="status" class="text-md-body value-muted self-center">
+        {{ machineResolutionPendingMessage }}
+      </p>
+    }
+
+    @if (machineAttributionFailed) {
+      <p data-testid="manual-pick-list-machine-attribution-failed" role="alert" class="text-md-body text-md-danger-text self-center">
+        {{ machineAttributionFailedMessage }}
+      </p>
+    }
   </div>
 </section>
 

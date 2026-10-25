@@ -348,7 +348,19 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/local-machines/{id:long}", "PUT", Capability.InventoryOperate)]
     [InlineData("api/local-machines/{id:long}/deactivate", "POST", Capability.InventoryOperate)]
     [InlineData("api/local-machines/{id:long}/reactivate", "POST", Capability.InventoryOperate)]
+
+    // Provider machine linking (issue #742): the join between the two machine resources above. It
+    // declares the same capability both of them do - deciding which machine a provider number means
+    // is the same day-to-day inventory work as recording the machine or refilling it - so no role
+    // gains or loses a surface, and the read-only support session is refused both writes by the
+    // central GET/HEAD rule rather than by a check of its own.
+    [InlineData("api/machine-link-review", "POST", Capability.InventoryOperate)]
+    [InlineData("api/machine-link-review/apply", "POST", Capability.InventoryOperate)]
     [InlineData("api/Sites", "GET", Capability.InventoryOperate)]
+    // The light site list (issue #841) is the same read as the site list above, with the per-machine
+    // stock and revenue left out, so it declares the same capability rather than a weaker one: a
+    // site's id and name are no more public than the row they were taken from.
+    [InlineData("api/Sites/list", "GET", Capability.InventoryOperate)]
     [InlineData("api/purchases", "POST", Capability.PurchasingOperate)]
     [InlineData("api/purchases/{id:int}/file", "GET", Capability.PurchasingOperate)]
     [InlineData("api/SupplierOrders", "POST", Capability.PurchasingOperate)]
@@ -595,11 +607,12 @@ public class EndpointAuthorizationClassificationTests
     }
 
     /// <summary>
-    /// The class-2 surface, endpoint by endpoint, as the four issues that created it list them: the
+    /// The class-2 surface, endpoint by endpoint, as the five issues that created it list them: the
     /// read-only diagnostics API of #336, the Super Admin's business directory and decisions of
-    /// #544, its lifecycle transitions and member release of #545, and the support-session control
+    /// #544, its lifecycle transitions and member release of #545, the support-session control
     /// endpoints of #550 - which are class 2 for the same reasons and are reached as the
-    /// administrator themselves, never through the support-session header. It is kept beside the rule
+    /// administrator themselves, never through the support-session header - and the platform supplier
+    /// presets of #848, which name no business at all. It is kept beside the rule
     /// above because the rule would still pass if one of these routes quietly moved to a capability
     /// policy - and a platform-admin endpoint on a business capability would be unsatisfiable for the
     /// only caller it exists for, while a business role would have become a second way into a
@@ -619,6 +632,9 @@ public class EndpointAuthorizationClassificationTests
     [InlineData("api/super-admin/support-sessions/{businessId:int}", "POST")]
     [InlineData("api/super-admin/support-sessions/active", "GET")]
     [InlineData("api/super-admin/support-sessions/active/end", "POST")]
+    [InlineData("api/super-admin/supplier-presets", "GET")]
+    [InlineData("api/super-admin/supplier-presets", "POST")]
+    [InlineData("api/super-admin/supplier-presets/{id:int}", "PUT")]
     public void The_platform_admin_endpoints_are_class_two_and_nothing_else(string route, string httpMethod)
     {
         var endpoint = Endpoint(route, httpMethod);

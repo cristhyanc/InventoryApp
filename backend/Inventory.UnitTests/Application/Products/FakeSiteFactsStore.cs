@@ -31,9 +31,20 @@ public sealed class FakeSiteFactsStore : ISiteFactsStore
     public Task<IReadOnlyDictionary<long, SiteProductCostBasis>> GetProductCostBasisAsync(CancellationToken cancellationToken) =>
         throw new NotSupportedException();
 
+    /// <summary>
+    /// The sites commission was resolved for, in order. It is how a caller that decides <em>which</em>
+    /// site prices a row - <c>ListMachineProducts</c>, since issue #846 reads that from the cached
+    /// machine list - can be held to the site it claims to have used, and to not resolving one at all
+    /// for a machine with no site.
+    /// </summary>
+    public List<long> ResolvedSiteIds { get; } = new();
+
     public Task<SiteCardCommissionResolution> ResolveCardCommissionAsync(
-        long siteId, DateTime asOfDate, IReadOnlyCollection<decimal> candidateRetailPrices, CancellationToken cancellationToken) =>
-        Task.FromResult(new SiteCardCommissionResolution(_configurationUnavailable, _commissionByPrice));
+        long siteId, DateTime asOfDate, IReadOnlyCollection<decimal> candidateRetailPrices, CancellationToken cancellationToken)
+    {
+        ResolvedSiteIds.Add(siteId);
+        return Task.FromResult(new SiteCardCommissionResolution(_configurationUnavailable, _commissionByPrice));
+    }
 
     public Task<decimal?> ResolveEffectiveFeeExGstAsync(DateTime asOfDate, CancellationToken cancellationToken) =>
         Task.FromResult(_feeExGst);

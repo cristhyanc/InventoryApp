@@ -37,6 +37,15 @@ namespace Inventory.Application.PlatformAdmin;
 /// activates nothing, so it runs no eligibility check, and it requires no active Owner afterwards:
 /// a refused application is not a business that has to stay reachable.</para>
 ///
+/// <para><strong>An approval also provisions the business it approves (issue #849).</strong> Inside
+/// the same transaction, immediately after the status write,
+/// <see cref="IBusinessSupplierProvisioningStore"/> copies the enabled platform supplier presets
+/// into the business as its own suppliers and stamps the copy instant on it. It is one operation
+/// with the approval on purpose: an approved business that did not get them would be a half-finished
+/// tenant, and a copy that committed without the approval would hand suppliers to a business that is
+/// still waiting. A failure there therefore rolls the status change back with it and no audit event
+/// is emitted. A rejection provisions nothing - there is no business to equip.</para>
+///
 /// <para><strong>The audit event is emitted after the commit, and carries no name, address or
 /// reason text.</strong> See <see cref="PlatformBusinessDecisionAuditEntry"/>.</para>
 /// </summary>
@@ -44,6 +53,7 @@ public sealed class BusinessApplicationDecisionWriter
 {
     private readonly IAuthenticatedActorAccessor _actorAccessor;
     private readonly IPlatformBusinessDirectoryStore _store;
+    private readonly IBusinessSupplierProvisioningStore _provisioning;
     private readonly MembershipWriteGuard _guard;
     private readonly IPlatformBusinessDecisionAudit _audit;
     private readonly IClock _clock;
@@ -51,12 +61,14 @@ public sealed class BusinessApplicationDecisionWriter
     public BusinessApplicationDecisionWriter(
         IAuthenticatedActorAccessor actorAccessor,
         IPlatformBusinessDirectoryStore store,
+        IBusinessSupplierProvisioningStore provisioning,
         MembershipWriteGuard guard,
         IPlatformBusinessDecisionAudit audit,
         IClock clock)
     {
         _actorAccessor = actorAccessor;
         _store = store;
+        _provisioning = provisioning;
         _guard = guard;
         _audit = audit;
         _clock = clock;
@@ -200,6 +212,18 @@ public sealed class BusinessApplicationDecisionWriter
             }
 
             await _store.ApproveAsync(businessId, decidedAtUtc, cancellationToken).ConfigureAwait(false);
+
+            // The new business's own copies of the enabled supplier presets (issue #849), in this
+            // same transaction and with the same instant, so an approved business never exists
+            // without them: if this throws, the status change rolls back with it, the business is
+            // still Pending and no audit event is emitted.
+            //
+            // The id handed over is current.BusinessId - the key of the row this transaction read -
+            // and never the route value the request carried, exactly as the deactivation's invite
+            // cancellation hands over the id it read (AGENTS.md § Tenant ownership).
+            await _provisioning
+                .CopyEnabledSupplierPresetsAsync(current.BusinessId, decidedAtUtc, cancellationToken)
+                .ConfigureAwait(false);
 
             return new Applied(
                 current.Status,

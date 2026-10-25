@@ -93,7 +93,8 @@ public class EfProductCatalogStoreRetirementTests : IDisposable
     {
         await using var db = TestAppDbContext.For(_options, BusinessA);
 
-        var products = await StoreFor(db).ListUnorderedAsync(WorkingCatalogue(), CancellationToken.None);
+        var products = await StoreFor(db).ListUnorderedAsync(
+            WorkingCatalogue(), resolveInventoryHistory: false, CancellationToken.None);
 
         Assert.Equal(["Active"], products.Select(product => product.Name));
     }
@@ -108,9 +109,9 @@ public class EfProductCatalogStoreRetirementTests : IDisposable
         await using var db = TestAppDbContext.For(_options, BusinessA);
 
         var working = await StoreFor(db).ListUnorderedAsync(
-            WorkingCatalogue("SHARED-SKU"), CancellationToken.None);
+            WorkingCatalogue("SHARED-SKU"), resolveInventoryHistory: false, CancellationToken.None);
         var whole = await StoreFor(db).ListUnorderedAsync(
-            WholeCatalogue("SHARED-SKU"), CancellationToken.None);
+            WholeCatalogue("SHARED-SKU"), resolveInventoryHistory: false, CancellationToken.None);
 
         Assert.Equal(["Active"], working.Select(product => product.Name));
         Assert.Equal(["Active", "Retired"], whole.Select(product => product.Name).Order());
@@ -129,7 +130,7 @@ public class EfProductCatalogStoreRetirementTests : IDisposable
         await using var db = TestAppDbContext.For(_options, BusinessA);
 
         var products = await StoreFor(db).ListUnorderedAsync(
-            ProductCatalogFilter.None, CancellationToken.None);
+            ProductCatalogFilter.None, resolveInventoryHistory: false, CancellationToken.None);
 
         Assert.Equal(["Active", "Retired"], products.Select(product => product.Name).Order());
     }

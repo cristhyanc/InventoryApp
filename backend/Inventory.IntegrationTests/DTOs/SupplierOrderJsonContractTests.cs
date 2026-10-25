@@ -54,7 +54,7 @@ public class SupplierOrderJsonContractTests
         9,
         BusinessId: 2,
         4,
-        new SupplierOrderSupplierRecord(4, "Acme", "Pat", "123", "a@b.c", "1 Road"),
+        new SupplierOrderSupplierRecord(4, "Acme", "Pat", "123", "a@b.c", "1 Road", "https://acme.test"),
         new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc),
         new DateTime(2026, 9, 10, 8, 0, 0, DateTimeKind.Utc),
         "Order #42",
@@ -89,6 +89,7 @@ public class SupplierOrderJsonContractTests
                     Phone = record.Supplier.Phone,
                     Email = record.Supplier.Email,
                     Address = record.Supplier.Address,
+                    Url = record.Supplier.Url,
                 },
             OrderDate = record.OrderDate,
             ExpectedDate = record.ExpectedDate,
@@ -183,7 +184,7 @@ public class SupplierOrderJsonContractTests
             document.RootElement.EnumerateObject().Select(property => property.Name));
 
         Assert.Equal(
-            new[] { "id", "name", "contactName", "phone", "email", "address" },
+            new[] { "id", "name", "contactName", "phone", "email", "address", "url" },
             document.RootElement.GetProperty("supplier").EnumerateObject().Select(property => property.Name));
 
         Assert.Equal(
@@ -226,7 +227,7 @@ public class SupplierOrderJsonContractTests
         Assert.Equal((long?)5, product.GetProperty("categoryId").GetInt64());
 
         Assert.Equal(
-            new[] { "id", "name", "contactName", "phone", "email", "address" },
+            new[] { "id", "name", "contactName", "phone", "email", "address", "url" },
             document.RootElement.GetProperty("supplier").EnumerateObject().Select(property => property.Name));
     }
 

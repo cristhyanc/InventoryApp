@@ -33,7 +33,7 @@ import { IconComponent } from '../shared/icon.component';
           <p>{{ notice.detail }}</p>
         </div>
       }
-      <section class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <section class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <article class="stat-card">
           <div class="stat-card-head"><div class="stat-card-content"><p class="stat-card-label">Gross Sales</p><p class="stat-card-value" data-testid="gross-sales">{{ moneyOrState(report.sales, salesAvailability(report)) }}</p></div><span class="icon-tile icon-tile-dark"><app-icon name="attach_money" /></span></div>
           <p class="stat-card-footer"><span class="value-muted">Card {{ moneyOrState(report.cardSales, salesAvailability(report)) }} · Cash {{ moneyOrState(report.cashSales, salesAvailability(report)) }}</span></p>
@@ -50,12 +50,25 @@ import { IconComponent } from '../shared/icon.component';
         <article class="stat-card">
           <div class="stat-card-head"><div class="stat-card-content"><p class="stat-card-label">{{ machineId ? 'Direct Margin' : 'Net Margin' }}</p><p class="stat-card-value" data-testid="net-margin">{{ percentOrState(machineId ? report.directMarginPercent : report.netMarginPercent, combinedAvailability(report)) }}</p></div><span class="icon-tile icon-tile-dark"><app-icon name="trending_up" /></span></div>
         </article>
+        <article class="stat-card">
+          <div class="stat-card-head"><div class="stat-card-content"><p class="stat-card-label">Transactions</p><p class="stat-card-value" data-testid="transactions">{{ countOrState(report.transactionCount, salesAvailability(report)) }}</p></div><span class="icon-tile icon-tile-dark"><app-icon name="assignment" /></span></div>
+          <p class="stat-card-footer"><span class="value-muted"><span data-testid="average-sale">{{ moneyOrState(report.averageSale, salesAvailability(report)) }}</span> average sale</span></p>
+        </article>
       </section>
       @if (machineId) { <p class="value-muted">Net profit is unavailable because shared business overhead is not allocated to individual machines.</p> }
       <div class="grid gap-5 lg:grid-cols-2">
         <section class="card"><div class="card-header"><h2 class="card-title">Cost of Sales</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Gross Sales</span><strong>{{ moneyOrState(report.sales, salesAvailability(report)) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Card Sales</span><strong>{{ moneyOrState(report.cardSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between pl-4"><span class="value-muted">Cash Sales</span><strong>{{ moneyOrState(report.cashSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between"><span>COGS</span><strong>{{ report.isCogsComplete === false ? 'Partial ' + money(report.partialCostOfGoods) : moneyOrState(report.costOfGoods, salesAvailability(report)) }}</strong></div>@if (report.isCogsComplete === false) {<div class="text-md-warning-text">{{ report.uncostedTransactionCount }} completed sale(s) uncosted ({{ money(report.uncostedSalesAmount) }})</div>}<div class="flex justify-between border-t border-md-gray-200 pt-3"><span class="font-semibold">Gross Profit</span><strong>{{ moneyOrState(report.grossProfit, salesAvailability(report), 'Profit unavailable') }}</strong></div><div class="flex justify-between"><span class="value-muted">Gross Margin</span><strong>{{ report.grossProfit == null ? 'Profit unavailable' : percentOrState(margin(report.sales, report.grossProfit), salesAvailability(report)) }}</strong></div></div></section>
         <section class="card"><div class="card-header"><h2 class="card-title">Operating Costs</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>Total Nayax Processing Fees</span><strong data-testid="nayax-fees">{{ moneyOrState(report.nayaxFeesIncludingGst, feesAvailability(report)) }}</strong></div><div class="pl-2"><span class="value-muted">@if (availabilityBadge(feesAvailability(report)); as badge) { <span data-testid="fees-availability">{{ badge }}</span> } @else if (report.nayaxProcessingFees?.hasEstimatedFees) { {{ money(report.nayaxProcessingFees?.actualFeeIncGst) }} actual · {{ money(report.nayaxProcessingFees?.estimatedFeeIncGst) }} estimated } @else {Actual}</span></div><div class="flex justify-between"><span>Site Commission</span><strong data-testid="site-commission">{{ moneyOrState(report.siteCommission, salesAvailability(report)) }}</strong></div><div class="flex justify-between"><span>Delivery Costs</span><strong data-testid="delivery-costs">{{ money(report.deliveryCosts) }}</strong></div><div class="flex justify-between"><span>Package Costs</span><strong data-testid="package-costs">{{ money(report.packageCosts) }}</strong></div>@for (entry of categoryEntries(report); track entry[0]) {<div class="flex justify-between"><span>{{ categoryLabel(entry[0]) }}</span><strong>{{ money(entry[1]) }}</strong></div>}<div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Total Operating Costs</span><strong data-testid="total-operating-costs">{{ moneyOrState(totalOperatingCosts(report), combinedAvailability(report)) }}</strong></div></div></section>
         <section class="card lg:col-span-2"><div class="card-header"><h2 class="card-title">Nayax Card Settlement</h2></div><div class="card-body max-w-xl space-y-3"><div class="flex justify-between"><span>Card Sales</span><strong data-testid="settlement-card-sales">{{ moneyOrState(report.cardSales, salesAvailability(report)) }}</strong></div><div class="flex justify-between"><span>- Nayax Fees</span><strong data-testid="settlement-fees">{{ moneyOrState(report.nayaxFeesIncludingGst, feesAvailability(report)) }}</strong></div><div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Net Reimbursement</span><strong data-testid="net-reimbursement">{{ moneyOrState(report.netSettlement, combinedAvailability(report)) }}</strong></div></div><div class="card-footer">Net reimbursement is the amount paid by Nayax for card sales and is not business profit.</div></section>
+        <section class="card lg:col-span-2" data-testid="reimbursement-reconciliation">
+          <div class="card-header"><h2 class="card-title">Nayax Reimbursement Reconciliation</h2><span class="badge" [ngClass]="reconciliationBadgeClass(report.reconciliationStatus)" data-testid="reconciliation-status">{{ report.reconciliationStatus || 'Pending' }}{{ report.isReconciled ? ' ✓' : '' }}</span></div>
+          <div class="card-body max-w-xl space-y-3">
+            <div class="flex justify-between"><span>Expected Reimbursement (calculated)</span><strong data-testid="expected-reimbursement">{{ moneyOrState(report.expectedReimbursement, combinedAvailability(report)) }}</strong></div>
+            <div class="flex justify-between"><span>Actual Reimbursement (imported)</span><strong data-testid="actual-reimbursement">{{ actualReimbursementLabel(report) }}</strong></div>
+            <div class="flex justify-between border-t border-md-gray-200 pt-3 text-md-card-title"><span class="font-semibold">Difference</span><strong data-testid="reimbursement-difference">{{ reimbursementDifferenceLabel(report) }}</strong></div>
+          </div>
+          <div class="card-footer">Expected reimbursement is calculated from this period's card sales less the Nayax fees including GST. Actual reimbursement is what an imported Nayax settlement recorded for the period, matched on the transaction period it covers. Reconciled when the absolute difference is at most {{ money(report.reconciliationTolerance ?? 0.01) }}; until a settlement import covers this period the comparison stays pending.</div>
+        </section>
         <section class="card"><div class="card-header"><h2 class="card-title">GST</h2></div><div class="card-body space-y-3"><div class="flex justify-between"><span>GST on Sales (estimated)</span><strong>{{ moneyOrState(report.gstOnSales, salesAvailability(report)) }}</strong></div><p class="value-muted" data-testid="gst-on-sales-estimate">Estimated GST on sales - assumes all included sales are taxable at 10% (GST-inclusive).</p><div class="flex justify-between"><span>GST on Nayax Fees</span><strong>{{ moneyOrState(report.gstOnFees, feesAvailability(report)) }}</strong></div></div></section>
         <section class="card"><div class="card-header"><h2 class="card-title">Cash Reconciliation</h2></div><div class="card-body"><div class="flex justify-between"><span>Cash Sales</span><strong data-testid="reconciliation-cash-sales">{{ moneyOrState(report.cashSales, salesAvailability(report)) }}</strong></div></div><div class="card-footer">Cash collection data is not currently recorded.</div></section>
       </div>
@@ -73,10 +86,11 @@ import { IconComponent } from '../shared/icon.component';
       <details class="card card-body" data-testid="calculation-help">
         <summary class="card-title cursor-pointer">How this report is calculated</summary>
         <div class="space-y-3 pt-3">
-          <p>Sales count only approved, completed Nayax transactions. Pending, refunded, cancelled and declined transactions are ordinary payment outcomes and are left out of every figure here.</p>
+          <p>Sales count only approved, completed Nayax transactions. Pending, refunded, cancelled and declined transactions are ordinary payment outcomes and are left out of every figure here. The transaction count is how many of those completed transactions this period and machine scope holds, and the average sale is gross sales divided by it.</p>
           <p>Cost of goods and profit use the cost recorded on each sale when that sale was costed, so an earlier period keeps the cost history it was built from. A completed sale with no recorded cost stays uncosted: cost of goods is shown as partial and profit is left unavailable rather than estimated from today's product cost.</p>
           <p>Site commission comes from the effective-dated site commission agreement that covered each sale's date, so a rate that changed part-way through the period applies from the date it took effect.</p>
           <p>Nayax processing fees use the imported fee amounts for the dates those cover, and the configured rate for the remaining dates; any estimated part is shown beside the fee total.</p>
+          <p>The expected reimbursement is calculated from this period's card sales less those Nayax fees including GST. The actual reimbursement is not calculated at all: it is the amount an imported Nayax settlement recorded for the period, matched on the transaction period that settlement covers rather than on the date it was paid out or imported. A period with no imported settlement yet is shown as pending rather than compared against a zero.</p>
           <p>GST on sales is an estimate: GST classification is not recorded per sale, so every included sale is assumed taxable at 10% (GST-inclusive). GST on Nayax fees and operating-expense GST come from imported and recorded amounts, and are not estimated this way.</p>
         </div>
       </details>
@@ -109,6 +123,40 @@ export class BookkeepingReportComponent extends ReportPageBase<BookkeepingReport
   }
   categoryLabel(category: string): string { return category.replace(/([a-z])([A-Z])/g, '$1 $2'); }
   totalOperatingCosts(report: BookkeepingReport): number { return (report.nayaxFeesIncludingGst ?? 0) + (report.siteCommission ?? 0) + (report.deliveryCosts ?? 0) + (report.packageCosts ?? 0) + (report.structuredOperatingExpenses ?? report.otherOperatingExpenses ?? 0); }
+
+  /**
+   * The badge class for the reimbursement comparison's status (issue #805), in the same two-state
+   * vocabulary the Reporting Dashboard's own reconciliation card uses: only `Reconciled` is a
+   * success, and both `Needs Review` and `Pending` are things to look at. The status itself is
+   * decided on the server; nothing here recomputes it.
+   */
+  reconciliationBadgeClass(status?: string): string {
+    return status === 'Reconciled' ? 'badge-success' : 'badge-warning';
+  }
+
+  /** Whether no imported settlement row covers this period, so there is no actual to compare. */
+  isReimbursementPending(report: BookkeepingReport): boolean {
+    return (report.reconciliationStatus || 'Pending') === 'Pending';
+  }
+
+  /**
+   * The imported actual reimbursement: the amount when a settlement import covers the period, the
+   * settlement availability state in place of a zero nothing measured, and the word `Pending` when
+   * no imported row covers the period at all - which is a different statement from a settlement
+   * that really paid nothing, and the one case where this figure is not an amount.
+   */
+  actualReimbursementLabel(report: BookkeepingReport): string {
+    return this.isReimbursementPending(report)
+      ? 'Pending'
+      : this.moneyOrState(report.actualReimbursement, this.feesAvailability(report));
+  }
+
+  /** The signed difference, or nothing to show while the comparison is pending. */
+  reimbursementDifferenceLabel(report: BookkeepingReport): string {
+    return this.isReimbursementPending(report)
+      ? '—'
+      : this.moneyOrState(report.reimbursementDifference, this.combinedAvailability(report));
+  }
 
   /** The state the API decided for every figure derived from stored provider sales (issue #730). */
   salesAvailability(report: BookkeepingReport): ReportAvailability | undefined {
@@ -154,7 +202,8 @@ export class BookkeepingReportComponent extends ReportPageBase<BookkeepingReport
     if (!incomplete.length) return null;
     return {
       title: 'Incomplete: provider data does not cover this whole period.',
-      detail: 'Sales, the card/cash split, cost of goods, site commission, the Nayax fees, the net card settlement '
+      detail: 'Sales, the card/cash split, the transaction count and average sale, cost of goods, site commission, '
+        + 'the Nayax fees, the net card settlement, the imported actual reimbursement and the reimbursement comparison '
         + 'and every profit and margin built on them are shown with their state instead of a figure wherever '
         + 'nothing was recorded - they are not a measured zero. Delivery, packaging and operating expenses come '
         + 'from your own records and are unaffected.'

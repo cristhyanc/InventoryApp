@@ -116,6 +116,27 @@ public class MachineStockReconciliationPolicyTests
     }
 
     [Fact]
+    public void The_observed_stock_unavailable_message_names_the_product_when_the_ledger_knows_its_name()
+    {
+        var reconciliation = MachineStockReconciliationPolicy.Reconcile(
+            LedgerWithExpected(12) with { ProductName = "Coke" }, observedQuantity: null);
+
+        var issue = Assert.Single(
+            reconciliation.Issues, issue => issue.Code == MachineStockDataQualityIssueCodes.ObservedStockUnavailable);
+        Assert.Contains($"for product Coke ({Product})", issue.Message);
+    }
+
+    [Fact]
+    public void The_observed_stock_unavailable_message_falls_back_to_the_bare_id_without_a_name()
+    {
+        var reconciliation = MachineStockReconciliationPolicy.Reconcile(LedgerWithExpected(12), observedQuantity: null);
+
+        var issue = Assert.Single(
+            reconciliation.Issues, issue => issue.Code == MachineStockDataQualityIssueCodes.ObservedStockUnavailable);
+        Assert.Contains($"for product {Product}", issue.Message);
+    }
+
+    [Fact]
     public void An_unbaselined_product_reports_the_observation_without_inventing_a_discrepancy()
     {
         var reconciliation = MachineStockReconciliationPolicy.Reconcile(

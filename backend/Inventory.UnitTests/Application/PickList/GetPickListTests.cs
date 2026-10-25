@@ -11,8 +11,13 @@ namespace InventoryApi.Tests.Application.PickList;
 /// The read-only Pick List projection use case (issue #221): reuses the PAR/<c>MissingStockByMDB</c>
 /// arithmetic already authoritative for a machine's current stock and restock target
 /// (<c>InventoryApi.Services.MachineService.GetMachineProducts</c>) and the bounded-parallelism
-/// pattern already established for fanning <c>GetMachineProductsAsync</c> out across machines
+/// pattern already established for fanning the machine's selections out across machines
 /// (<see cref="CalculateReorderNeeds"/>, issue #47). These tests use deterministic test doubles only.
+///
+/// <para>The Pick List is a declared fresh caller (issue #842): it is what an operator loads a van
+/// from, so it reads <c>GetMachineProductsFreshAsync</c> and never the 60-second cached selections.
+/// That is why every double here answers the fresh read, and a use case that started reading through
+/// the cache would fail these tests rather than quietly plan a refill from a minute-old figure.</para>
 /// </summary>
 public class GetPickListTests
 {
@@ -46,11 +51,35 @@ public class GetPickListTests
         Assert.Empty(result.Products);
     }
 
+    /// <summary>
+    /// The fresh-caller contract of issue #842, stated as its own test: the only Nayax call the Pick
+    /// List makes for a selected machine is the fresh selections read. The mock is strict, so reading
+    /// the cached selections - or anything else - fails here rather than in production, where it would
+    /// mean an operator picking from a figure up to a minute old.
+    /// </summary>
+    [Fact]
+    public async Task Handle_ReadsEachMachinesSelectionsFresh_NeverTheCachedOnes()
+    {
+        var nayax = new Mock<INayaxLynxClient>(MockBehavior.Strict);
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct>
+            {
+                new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 4 },
+            });
+        var storage = StorageWith((100, "Coke Zero", 50));
+
+        var result = await new GetPickList(nayax.Object, storage.Object, FakeNayaxProductLinkStore.EveryIdLinkedToItself()).Handle([1], CancellationToken.None);
+
+        Assert.Equal(4, Assert.Single(result.Products).TotalQuantityToPick);
+        nayax.Verify(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()), Times.Once);
+        nayax.VerifyNoOtherCalls();
+    }
+
     [Fact]
     public async Task Handle_ComputesCurrentTargetAndPickQuantity_FromTheSameParAndMissingStockArithmeticAsMachineService()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 4 },
@@ -80,7 +109,7 @@ public class GetPickListTests
     public async Task Handle_ExcludesARetiredProduct_AndKeepsTheActiveOneOnTheSameMachine()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 4 },
@@ -100,7 +129,7 @@ public class GetPickListTests
     public async Task Handle_ExposesMdbCode_PerMachineProductEntry()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 4 },
@@ -119,9 +148,9 @@ public class GetPickListTests
     public async Task Handle_PreservesDifferentMdbCodesPerMachine_ForTheSameProductOnDifferentMachines()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 3 } });
-        nayax.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 45, PAR = 8, MissingStockByMDB = 5 } });
         var storage = StorageWith((100, "Coke Zero", 100));
 
@@ -143,9 +172,9 @@ public class GetPickListTests
     public async Task Handle_PreservesRepeatedMdbCode_AcrossDifferentMachines()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 3 } });
-        nayax.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 5 } });
         var storage = StorageWith((100, "Coke Zero", 100));
 
@@ -161,7 +190,7 @@ public class GetPickListTests
     public async Task Handle_OrdersProductsAscendingByMdbCode_NumericallyNotLexically()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 100, MDBCode = 10, PAR = 10, MissingStockByMDB = 1 },
@@ -181,7 +210,7 @@ public class GetPickListTests
     public async Task Handle_OrdersMissingMdbCodesDeterministically_BeforeAnyCode()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 100, MDBCode = 5, PAR = 10, MissingStockByMDB = 1 },
@@ -199,7 +228,7 @@ public class GetPickListTests
     public async Task Handle_BreaksMdbCodeTies_ByProductNameOrdinal()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 100, MDBCode = 7, PAR = 10, MissingStockByMDB = 1 },
@@ -216,9 +245,9 @@ public class GetPickListTests
     public async Task Handle_SumsQuantityToPick_AcrossSelectedMachinesForTheSameProduct()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 3 } });
-        nayax.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 8, MissingStockByMDB = 5 } });
         var storage = StorageWith((100, "Coke Zero", 100));
 
@@ -233,7 +262,7 @@ public class GetPickListTests
     public async Task Handle_SumsQuantityToPick_ForDuplicateProductMappingsWithinTheSameMachine()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 100, PAR = 5, MissingStockByMDB = 2 },
@@ -253,7 +282,7 @@ public class GetPickListTests
     public async Task Handle_ReturnsZeroPickQuantity_WhenAMachineIsAlreadyAtOrAboveItsTarget()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 0 } });
         var storage = StorageWith((100, "Coke Zero", 50));
 
@@ -269,9 +298,9 @@ public class GetPickListTests
     public async Task Handle_ProjectsStorageShortage_WhenCombinedPickQuantityExceedsPhysicalStorage()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 8 } });
-        nayax.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 7 } });
         var storage = StorageWith((100, "Coke Zero", 10));
 
@@ -287,7 +316,7 @@ public class GetPickListTests
     public async Task Handle_ReportsNoShortage_WhenCombinedPickQuantityDoesNotExceedPhysicalStorage()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 3 } });
         var storage = StorageWith((100, "Coke Zero", 10));
 
@@ -301,7 +330,7 @@ public class GetPickListTests
     public async Task Handle_ExcludesAMachineProduct_WithNoMatchingLocalCatalogueRow()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 3 },
@@ -319,7 +348,7 @@ public class GetPickListTests
     public async Task Handle_IgnoresMachineProductsWithNoNayaxProductId()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = null, PAR = 10, MissingStockByMDB = 3 },
@@ -335,7 +364,7 @@ public class GetPickListTests
     public async Task Handle_DoesNotAlterInventory_ItOnlyReadsThroughThePorts()
     {
         var nayax = new Mock<INayaxLynxClient>(MockBehavior.Strict);
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, PAR = 10, MissingStockByMDB = 3 } });
         var storage = StorageWith((100, "Coke Zero", 10));
 
@@ -350,7 +379,7 @@ public class GetPickListTests
     {
         var nayax = new Mock<INayaxLynxClient>();
         using var cts = new CancellationTokenSource();
-        nayax.Setup(x => x.GetMachineProductsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
             .Returns<long, CancellationToken>((_, ct) =>
             {
                 cts.Cancel();
@@ -366,7 +395,7 @@ public class GetPickListTests
     /// <summary>
     /// Mirrors <c>CalculateReorderNeedsTests.Handle_BoundsPerMachineConcurrency_ToTheConfiguredLimit</c>
     /// (issue #47): proves the same bounded-fan-out guarantee holds for the Pick List's own
-    /// per-machine <c>GetMachineProductsAsync</c> calls, deterministically via a shared gate rather
+    /// per-machine selection reads, deterministically via a shared gate rather
     /// than timing.
     /// </summary>
     [Fact]
@@ -376,7 +405,7 @@ public class GetPickListTests
         var tracker = new ConcurrencyTrackingNayaxClient(expectedMaxConcurrency);
         var machineIds = Enumerable.Range(1, 6).Select(id => (long)id).ToArray();
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
             .Returns<long, CancellationToken>((_, ct) => tracker.GetMachineProductsAsync(ct));
         var storage = new Mock<IPickListStorageStockStore>();
         storage.Setup(x => x.GetStorageProductsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))

@@ -1,4 +1,5 @@
 using Inventory.Domain.Exceptions;
+using Inventory.Domain.Products;
 
 namespace Inventory.Domain.Costing;
 
@@ -58,13 +59,15 @@ public static class InventoryCostTransitionPolicy
     /// <summary>
     /// The product's stock in one machine: the sum over its slots of <c>PAR - MissingStockByMDB</c>.
     /// A slot missing either value, or reporting a quantity outside <c>0..PAR</c>, is rejected rather
-    /// than guessed.
+    /// than guessed. <paramref name="productName"/> is optional (issue #833): a caller that has it
+    /// names the product in the refusal, and one that does not keeps the bare-ID wording.
     /// </summary>
     /// <exception cref="OverflowException">The machine's quantity is outside <see cref="int"/> range.</exception>
     public static int MachineQuantity(
         long productId,
         string machineLabel,
-        IEnumerable<InventoryCostTransitionSlot> slots)
+        IEnumerable<InventoryCostTransitionSlot> slots,
+        string? productName = null)
     {
         ArgumentNullException.ThrowIfNull(slots);
 
@@ -73,11 +76,11 @@ public static class InventoryCostTransitionPolicy
         {
             if (!slot.Par.HasValue || !slot.MissingStockByMdb.HasValue)
                 throw new DomainValidationException(
-                    $"Nayax stock is incomplete for product {productId} in machine {machineLabel}: PAR and MissingStockByMDB are required.");
+                    $"Nayax stock is incomplete for {ProductLabel.Phrase(productId, productName)} in machine {machineLabel}: PAR and MissingStockByMDB are required.");
             var slotQuantity = slot.Par.Value - slot.MissingStockByMdb.Value;
             if (slotQuantity < 0 || slotQuantity > slot.Par.Value)
                 throw new DomainValidationException(
-                    $"Nayax stock is invalid for product {productId} in machine {machineLabel}.");
+                    $"Nayax stock is invalid for {ProductLabel.Phrase(productId, productName)} in machine {machineLabel}.");
             quantity = checked(quantity + slotQuantity);
         }
 

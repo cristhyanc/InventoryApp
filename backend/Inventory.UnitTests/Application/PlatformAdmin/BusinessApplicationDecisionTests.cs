@@ -33,6 +33,14 @@ public class BusinessApplicationDecisionTests
     private readonly FakePlatformBusinessDirectoryStore _store = new();
     private readonly FakeBusinessMembershipWriteStore _writeStore = new();
     private readonly FakePlatformBusinessDecisionAudit _audit = new();
+    private readonly FakeBusinessSupplierProvisioningStore _provisioning = new();
+
+    public BusinessApplicationDecisionTests()
+    {
+        // So the copy of issue #849 appears in the write store's order of operations, which is where
+        // "inside the transaction, before the commit" is asserted.
+        _provisioning.Recorder = _writeStore.Record;
+    }
 
     #region Approving
 
@@ -163,6 +171,105 @@ public class BusinessApplicationDecisionTests
             () => Approve().Handle(PendingBusinessId, CancellationToken.None));
 
         Assert.Equal(BusinessDecisionPolicy.ApplicantUnavailableMessage, conflict.Message);
+        AssertNothingWasDecided();
+    }
+
+    #endregion
+
+    #region Provisioning the approved business (issue #849)
+
+    /// <summary>
+    /// An approval hands the copy of the enabled supplier presets to the provisioning port, once,
+    /// inside the write transaction and before the commit, with the decision instant and with the
+    /// business id of the row the transaction itself read - never the route value the request
+    /// carried.
+    /// </summary>
+    [Fact]
+    public async Task An_approval_provisions_the_business_inside_the_transaction_before_committing()
+    {
+        GivenPendingApplication();
+        GivenApplicantMemberships(new IdentityMembership(ApplicantMembershipId, IsActive: true));
+
+        await Approve().Handle(PendingBusinessId, CancellationToken.None);
+
+        var copy = Assert.Single(_provisioning.Copies);
+        Assert.Equal(PendingBusinessId, copy.BusinessId);
+        Assert.Equal(DecidedAt, copy.CopiedAtUtc);
+
+        var operations = _writeStore.Operations;
+        Assert.Equal(
+            [
+                FakeBusinessMembershipWriteStore.Begin,
+                FakeBusinessMembershipWriteStore.IdentityRead,
+                FakeBusinessSupplierProvisioningStore.Copy,
+                FakeBusinessMembershipWriteStore.Commit,
+                FakeBusinessMembershipWriteStore.Dispose,
+            ],
+            operations);
+    }
+
+    /// <summary>
+    /// A rejection provisions nothing: there is no business starting to trade, so there is nothing
+    /// to equip, and a refused applicant must not leave suppliers behind on a business nobody can
+    /// reach.
+    /// </summary>
+    [Fact]
+    public async Task A_rejection_provisions_nothing()
+    {
+        GivenPendingApplication();
+
+        await Reject().Handle(PendingBusinessId, "Not enough detail.", CancellationToken.None);
+
+        Assert.Empty(_provisioning.Copies);
+    }
+
+    /// <summary>
+    /// All or nothing: a copy that fails takes the approval with it. Nothing is committed and
+    /// nothing is audited, so the application is still waiting for a decision rather than trading
+    /// without the suppliers it was supposed to start with.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_copy_refuses_the_approval_and_audits_nothing()
+    {
+        GivenPendingApplication();
+        GivenApplicantMemberships(new IdentityMembership(ApplicantMembershipId, IsActive: true));
+        _provisioning.FailWith = new InvalidOperationException("The supplier preset copy failed.");
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => Approve().Handle(PendingBusinessId, CancellationToken.None));
+
+        Assert.Equal("The supplier preset copy failed.", failure.Message);
+        Assert.DoesNotContain(FakeBusinessMembershipWriteStore.Commit, _writeStore.Operations);
+        Assert.Contains(FakeBusinessMembershipWriteStore.Dispose, _writeStore.Operations);
+        Assert.Empty(_audit.Entries);
+    }
+
+    /// <summary>
+    /// A refused approval never reaches the copy at all. The refusal here is the in-transaction one -
+    /// the applicant changed while the write lock was awaited - because that is the case where the
+    /// decision had already started.
+    /// </summary>
+    [Fact]
+    public async Task An_approval_refused_inside_the_transaction_provisions_nothing()
+    {
+        GivenPendingApplication();
+        GivenApplicantMemberships(new IdentityMembership(ApplicantMembershipId, IsActive: true));
+
+        // Another membership becomes the business's single active one while this approval waits for
+        // the write lock, so the exclusion this transaction was entered with no longer describes it.
+        _writeStore.WhileWaitingForTheWriteLock = () =>
+            _store.Targets[PendingBusinessId] = _store.Targets[PendingBusinessId] with
+            {
+                Applicant = new PlatformBusinessApplicant(
+                    ApplicantMembershipId + 1,
+                    _store.Targets[PendingBusinessId].Applicant!.Identity,
+                    IsActive: true),
+            };
+
+        await Assert.ThrowsAsync<DomainConflictException>(
+            () => Approve().Handle(PendingBusinessId, CancellationToken.None));
+
+        Assert.Empty(_provisioning.Copies);
         AssertNothingWasDecided();
     }
 
@@ -382,6 +489,7 @@ public class BusinessApplicationDecisionTests
         var writer = new BusinessApplicationDecisionWriter(
             FakeAuthenticatedActorAccessor.NotAuthenticated(),
             _store,
+            _provisioning,
             new MembershipWriteGuard(_writeStore),
             _audit,
             new FakeClock(DecidedAt));
@@ -461,6 +569,7 @@ public class BusinessApplicationDecisionTests
         new(
             FakeAuthenticatedActorAccessor.Identified(Administrator()),
             _store,
+            _provisioning,
             new MembershipWriteGuard(_writeStore),
             _audit,
             new FakeClock(DecidedAt));

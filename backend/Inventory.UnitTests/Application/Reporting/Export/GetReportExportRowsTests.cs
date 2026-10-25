@@ -329,7 +329,10 @@ public class GetReportExportRowsTests
         foreach (var column in new[]
         {
             "GrossSales", "CardSales", "CashSales", "CardTransactions", "CashTransactions", "COGS",
-            "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "SiteCommission"
+            "NayaxFeeExGst", "NayaxFeeGST", "NayaxFeeIncGST", "SiteCommission",
+            // Issue #804: the completed-transaction count and the average sale are provider-sourced
+            // too, so an uncovered period must not export either of them as a measured zero.
+            "Transactions", "AverageSale"
         })
         {
             Assert.Equal("Missing", Column(column));
@@ -370,6 +373,122 @@ public class GetReportExportRowsTests
         Assert.Equal("Complete", Column("SalesDataAvailability"));
         Assert.Equal("Complete", Column("FeeDataAvailability"));
         Assert.Equal("Complete", Column("CombinedDataAvailability"));
+    }
+
+    /// <summary>
+    /// Issue #804: the downloaded bookkeeping row carries the same completed-transaction count and
+    /// average sale the API returned, so a file read away from the application cannot disagree with
+    /// the page it came from.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_carries_the_same_transaction_count_and_average_sale_as_the_api_report()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete(sales: 250m, transactionCount: 10)));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+        var apiResult = await bookkeeping.Handle(filter, CancellationToken.None);
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal(10, apiResult.TransactionCount);
+        Assert.Equal(25m, apiResult.AverageSale);
+        Assert.Equal(Invariant(apiResult.TransactionCount), Cell(table, "Transactions"));
+        Assert.Equal(Invariant(apiResult.AverageSale), Cell(table, "AverageSale"));
+    }
+
+    /// <summary>
+    /// A covered period that genuinely sold nothing exports a real zero for both, because only a
+    /// <c>Complete</c> state may print a zero as a zero.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_of_a_covered_period_with_no_sales_exports_a_real_zero_transaction_count_and_average()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete(
+                sales: 0m, cost: 0m, cardSales: 0m, cardTransactions: 0, cashSales: 0m, cashTransactions: 0)));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal("Complete", Cell(table, "SalesDataAvailability"));
+        Assert.Equal("0", Cell(table, "Transactions"));
+        Assert.Equal("0", Cell(table, "AverageSale"));
+    }
+
+    /// <summary>
+    /// Issue #805: the downloaded bookkeeping row carries the same expected-versus-actual
+    /// reimbursement comparison the API report returned, so a file read away from the application
+    /// cannot disagree with the page it came from - and the calculated expectation stays a separate
+    /// column from the imported actual and from <c>NetSettlement</c>.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_carries_the_same_reimbursement_comparison_as_the_api_report()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete()));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+        var apiResult = await bookkeeping.Handle(filter, CancellationToken.None);
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal(Invariant(apiResult.ExpectedReimbursement), Cell(table, "ExpectedReimbursement"));
+        Assert.Equal(Invariant(apiResult.ActualReimbursement), Cell(table, "ActualReimbursement"));
+        Assert.Equal(Invariant(apiResult.ReimbursementDifference), Cell(table, "ReimbursementDifference"));
+        Assert.Equal(apiResult.ReconciliationStatus, Cell(table, "ReconciliationStatus"));
+        Assert.Equal(apiResult.IsReconciled.ToString(), Cell(table, "IsReconciled"));
+        Assert.Equal(Invariant(apiResult.ReconciliationTolerance), Cell(table, "ReconciliationTolerance"));
+        Assert.Equal(Invariant(apiResult.NetSettlement), Cell(table, "NetSettlement"));
+        Assert.NotEqual(Cell(table, "ExpectedReimbursement"), Cell(table, "ActualReimbursement"));
+    }
+
+    /// <summary>
+    /// The same rule as every other provider figure in this file: an actual reimbursement nothing
+    /// accounted for is exported as its state, never as a measured zero, while the status column
+    /// still says the import is <c>Pending</c>.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_reports_an_unavailable_reimbursement_comparison_as_its_state_not_a_zero()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(NoProviderData()));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        foreach (var column in new[] { "ExpectedReimbursement", "ActualReimbursement", "ReimbursementDifference" })
+        {
+            Assert.Equal("Missing", Cell(table, column));
+            Assert.NotEqual("0", Cell(table, column));
+        }
+
+        Assert.Equal("Pending", Cell(table, "ReconciliationStatus"));
+        Assert.Equal("False", Cell(table, "IsReconciled"));
+        Assert.Equal("0.01", Cell(table, "ReconciliationTolerance"));
+    }
+
+    /// <summary>
+    /// A covered period whose settlement import really did settle nothing exports a real zero, and
+    /// its status says the two sides were compared - the distinction a reader cannot otherwise make
+    /// from a file.
+    /// </summary>
+    [Fact]
+    public async Task Bookkeeping_export_of_a_covered_period_exports_an_imported_zero_as_a_real_zero()
+    {
+        var bookkeeping = new GetBookkeepingReport(new FakeBookkeepingReportFactsProvider(
+            FakeBookkeepingReportFactsProvider.Complete(
+                sales: 0m, cost: 0m, cardSales: 0m, cardTransactions: 0, cashSales: 0m, cashTransactions: 0) with
+            {
+                ProcessingFees = new NayaxProcessingFeeResult(0m, 0m, 0m, 0m, 0m, 0m, 0, DateTime.UtcNow, null),
+                ImportedNetSettlement = 0m,
+            }));
+        var filter = new ReportingFilterDto(new DateTime(2025, 7, 1), new DateTime(2025, 7, 31));
+
+        var table = await Sut(bookkeeping: bookkeeping).Handle("bookkeeping", filter, CancellationToken.None);
+
+        Assert.Equal("Complete", Cell(table, "FeeDataAvailability"));
+        Assert.Equal("0", Cell(table, "ActualReimbursement"));
+        Assert.Equal("0", Cell(table, "ReimbursementDifference"));
+        Assert.Equal("Reconciled", Cell(table, "ReconciliationStatus"));
+        Assert.Equal("True", Cell(table, "IsReconciled"));
     }
 
     [Fact]

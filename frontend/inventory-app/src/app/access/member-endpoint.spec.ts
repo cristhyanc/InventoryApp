@@ -83,11 +83,30 @@ describe('classifyMemberRequest (issue #602)', () => {
       expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
     });
 
+    /**
+     * The platform supplier presets of issue #848: the collection and `{id}`. Class-2
+     * platform-admin authorization again, and this one names no business at all, so a `403` from it
+     * says nothing about a membership or a business role either.
+     */
+    it.each([
+      '/api/super-admin/supplier-presets',
+      '/api/super-admin/supplier-presets/',
+      '/api/super-admin/supplier-presets/7',
+      '/api/Super-Admin/Supplier-Presets/7',
+      '/api/super-admin/supplier-presets?x=1'
+    ])('classifies %s as the platform-admin surface (issue #848)', (url) => {
+      expect(classifyMemberRequest(url, LOCAL)).toBe('platform-admin');
+    });
+
     it.each([
       // A segment that merely begins with the same letters is a different endpoint, and the
       // default for anything the exclusions do not name has to stay `member`.
       '/api/super-admin/businesses-archive',
-      '/api/super-admin-businesses/pending-count'
+      '/api/super-admin-businesses/pending-count',
+      '/api/super-admin/supplier-presets-archive',
+      // The business's own suppliers are an ordinary member endpoint and must stay one.
+      '/api/suppliers',
+      '/api/suppliers/7'
     ])('classifies %s as a member endpoint', (url) => {
       expect(classifyMemberRequest(url, LOCAL)).toBe('member');
     });

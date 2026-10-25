@@ -1,25 +1,18 @@
 import { TestBed } from '@angular/core/testing';
 import { convertToParamMap, ActivatedRoute } from '@angular/router';
-import { of } from 'rxjs';
+import { firstValueFrom, of, throwError } from 'rxjs';
 import { SiteProductsComponent } from './site-products.component';
 import { SiteService } from '../../services/site.service';
-import { Site, SiteProduct } from '../../models/models';
+import { SiteListItem, SiteProduct } from '../../models/models';
 import { AccessService } from '../../access/access.service';
 import { NayaxConnectionService, NayaxConnectionStatusName } from '../../services/nayax-connection.service';
 
-function site(overrides: Partial<Site> = {}): Site {
-  return {
-    siteId: 1,
-    siteName: 'Head Office',
-    machineCount: 2,
-    totalStockPercentage: 80,
-    lowProductCount: 0,
-    emptyProductCount: 0,
-    todayRevenue: 0,
-    currentWeekRevenue: 0,
-    previousComparableWeekRevenue: 0,
-    ...overrides
-  };
+/**
+ * One row of the light site list this page resolves its site from (issue #841), including the
+ * `machineCount` the subtitle states.
+ */
+function site(overrides: Partial<SiteListItem> = {}): SiteListItem {
+  return { siteId: 1, name: 'Head Office', machineCount: 2, ...overrides };
 }
 
 function product(overrides: Partial<SiteProduct> = {}): SiteProduct {
@@ -51,7 +44,7 @@ function createComponent(
   siteRoute: ActivatedRoute = route()
 ): SiteProductsComponent {
   const siteService = {
-    getAll: () => of([site()]),
+    getList: () => of([site()]),
     getProducts: () => of(products)
   } as unknown as SiteService;
 
@@ -60,6 +53,123 @@ function createComponent(
   component.products$.subscribe();
   return component;
 }
+
+/**
+ * The page resolves its site from the light site list (issue #841) and asks for the site summaries
+ * not at all: those are built from every machine's Nayax products across the whole fleet, which this
+ * page only ever took a site name out of.
+ */
+describe('SiteProductsComponent site header from the light site list (issue #841)', () => {
+  function stub(sites = [site()]) {
+    return {
+      getList: jest.fn(() => of(sites)),
+      getAll: jest.fn(() => of([])),
+      getProducts: jest.fn(() => of([product()]))
+    };
+  }
+
+  it('reads the light site list and never the site summaries', async () => {
+    const siteService = stub();
+    const component = new SiteProductsComponent(route(), siteService as unknown as SiteService, accessServiceStub());
+    component.ngOnInit();
+
+    const resolved = await firstValueFrom(component.site$);
+
+    expect(siteService.getList).toHaveBeenCalledTimes(1);
+    expect(siteService.getAll).not.toHaveBeenCalled();
+    expect(resolved).toEqual(site());
+  });
+
+  it('resolves no site when the list holds no such id, without reporting an error', async () => {
+    const siteService = stub([site({ siteId: 99 })]);
+    const component = new SiteProductsComponent(route(), siteService as unknown as SiteService, accessServiceStub());
+    component.ngOnInit();
+
+    expect(await firstValueFrom(component.site$)).toBeNull();
+    expect(component.error$.value).toBe('');
+  });
+
+  it('reports a failed site read without claiming the site does not exist', async () => {
+    const siteService = {
+      getList: jest.fn(() => throwError(() => new Error('boom'))),
+      getProducts: jest.fn(() => of([]))
+    };
+    const component = new SiteProductsComponent(route(), siteService as unknown as SiteService, accessServiceStub());
+    component.ngOnInit();
+
+    expect(await firstValueFrom(component.site$)).toBeNull();
+    expect(component.error$.value).toBe('Failed to load site details.');
+  });
+
+  it('names the CSV export file after the site name the light list gave', async () => {
+    const siteService = stub();
+    const component = new SiteProductsComponent(route(), siteService as unknown as SiteService, accessServiceStub());
+    component.ngOnInit();
+    component.products$.subscribe();
+
+    const link = document.createElement('a');
+    const createElement = jest.spyOn(document, 'createElement').mockReturnValue(link);
+    const click = jest.spyOn(link, 'click').mockImplementation(() => undefined);
+    URL.createObjectURL = jest.fn(() => 'blob:site');
+    URL.revokeObjectURL = jest.fn();
+
+    try {
+      component.exportProducts(site());
+      expect(link.download).toBe('Head-Office-products.csv');
+      expect(click).toHaveBeenCalled();
+    } finally {
+      createElement.mockRestore();
+    }
+  });
+});
+
+/**
+ * The subtitle keeps the machine count it has always stated, now taken from the light site list's
+ * own `machineCount` (issue #841, owner decision of 23 October 2026) rather than from the site
+ * summary this page no longer reads. It is rendered rather than asserted on the component, because
+ * the sentence is template text and the regression this guards against was a template that dropped
+ * the count.
+ */
+describe('SiteProductsComponent subtitle machine count from the light site list (issue #841)', () => {
+  async function render(listed: SiteListItem) {
+    const siteService = {
+      getList: () => of([listed]),
+      getProducts: () => of([product()])
+    } as unknown as SiteService;
+
+    await TestBed.configureTestingModule({
+      imports: [SiteProductsComponent],
+      providers: [
+        { provide: ActivatedRoute, useValue: route() },
+        { provide: SiteService, useValue: siteService },
+        { provide: NayaxConnectionService, useValue: { status: () => of({ status: 'Ready', machineChecksPending: false }) } },
+        { provide: AccessService, useValue: { allows: () => of(true) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(SiteProductsComponent);
+    fixture.detectChanges();
+    return (fixture.nativeElement as HTMLElement).querySelector('.page-subtitle')?.textContent?.trim();
+  }
+
+  afterEach(() => TestBed.resetTestingModule());
+
+  it('states the site name and the machine count the light list published', async () => {
+    expect(await render(site({ name: 'Head Office', machineCount: 3 }))).toBe(
+      'Head Office products across 3 machines.'
+    );
+  });
+
+  // The sentence is the one this page has always rendered, pluralisation and all: issue #841
+  // restores it verbatim, and changing "1 machines" is a wording change nobody asked for.
+  it('states a single-machine site with its own count, never the fleet total', async () => {
+    expect(await render(site({ name: 'Lobby', machineCount: 1 }))).toBe('Lobby products across 1 machines.');
+  });
+
+  it('keeps the unnamed-site fallback beside the count', async () => {
+    expect(await render(site({ name: '', machineCount: 2 }))).toBe('Unnamed site products across 2 machines.');
+  });
+});
 
 describe('SiteProductsComponent default sort', () => {
   it('defaults to ascending MDB Code with natural numeric ordering (2 before 10)', () => {
@@ -196,7 +306,7 @@ describe('SiteProductsComponent multi-machine MDB codes', () => {
 
 describe('SiteProductsComponent rendered table', () => {
   async function render(products: SiteProduct[], nayaxStatus: NayaxConnectionStatusName = 'Ready', canViewFinancials = true) {
-    const siteService = { getAll: () => of([site()]), getProducts: () => of(products) } as unknown as SiteService;
+    const siteService = { getList: () => of([site()]), getProducts: () => of(products) } as unknown as SiteService;
 
     await TestBed.configureTestingModule({
       imports: [SiteProductsComponent],
@@ -312,7 +422,7 @@ describe('SiteProductsComponent rendered table', () => {
  */
 describe('SiteProductsComponent Estimated Card Profit gated on Dashboard.ViewFinancials (issue #699)', () => {
   async function render(products: SiteProduct[], canViewFinancials: boolean) {
-    const siteService = { getAll: () => of([site()]), getProducts: () => of(products) } as unknown as SiteService;
+    const siteService = { getList: () => of([site()]), getProducts: () => of(products) } as unknown as SiteService;
 
     await TestBed.configureTestingModule({
       imports: [SiteProductsComponent],

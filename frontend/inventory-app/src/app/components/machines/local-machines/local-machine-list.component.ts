@@ -39,7 +39,9 @@ export function machineWriteErrorMessage(error: unknown): string {
 
 /**
  * The business's own machine records, with the actions that maintain them (issue #740, parent #329
- * child G1): add a machine, rename one, take one out of service, put it back.
+ * child G1): add a machine, rename one, take one out of service, put it back. A machine the
+ * provider names offers neither rename nor deactivation - it is managed at the provider and the API
+ * refuses both - but can still be put back in service.
  *
  * <p>It is a dedicated feature component rather than more template on the Machines page, as the page
  * composition boundary requires (docs/architecture.md § Page composition boundary, issue #191): the
@@ -128,6 +130,8 @@ export class LocalMachineListComponent implements OnInit, OnDestroy {
   }
 
   startRename(machine: LocalMachine): void {
+    // A machine from the provider is renamed there; the API refuses it either way.
+    if (machine.isProviderNamed) return;
     this.editingId = machine.id;
     this.editingName = machine.name;
     this.error = null;
@@ -150,7 +154,8 @@ export class LocalMachineListComponent implements OnInit, OnDestroy {
   }
 
   deactivate(machine: LocalMachine): void {
-    if (this.sessionActive || this.saving) return;
+    // A machine from the provider is taken out of service there; the API refuses it either way.
+    if (this.sessionActive || this.saving || machine.isProviderNamed) return;
     this.write(this.machines$.deactivate(machine.id));
   }
 

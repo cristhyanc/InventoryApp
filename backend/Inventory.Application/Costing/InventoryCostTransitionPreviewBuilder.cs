@@ -39,7 +39,7 @@ internal sealed class InventoryCostTransitionPreviewBuilder
         CancellationToken cancellationToken)
     {
         var ids = products.Select(x => x.Id).ToArray();
-        var machineStocks = await ReadMachineStocksAsync(ids, cancellationToken);
+        var machineStocks = await ReadMachineStocksAsync(products, cancellationToken);
         var cutoffAt = _clock.UtcNow;
         var replayedByProduct = await _store.SumPhysicalMovementsAsync(ids, cutoffAt, cancellationToken);
         var previews = products.Select(product => BuildProductPreview(
@@ -96,33 +96,44 @@ internal sealed class InventoryCostTransitionPreviewBuilder
             preview.InventoryValue,
             preview.LegacyReplayedPhysicalQuantity);
 
+    /// <summary>
+    /// Takes the products rather than their ids because a refused slot names the product (issue
+    /// #833), and this is where the name the preview already holds reaches the policy.
+    /// </summary>
     private async Task<Dictionary<long, List<InventoryCostTransitionMachineStockDto>>> ReadMachineStocksAsync(
-        IReadOnlyCollection<long> productIds,
+        IReadOnlyCollection<InventoryCostTransitionProduct> products,
         CancellationToken cancellationToken)
     {
+        var productIds = products.Select(x => x.Id).ToList();
         var productIdSet = productIds.ToHashSet();
         var results = productIds.ToDictionary(x => x, _ => new List<InventoryCostTransitionMachineStockDto>());
-        var machines = (await _nayax.GetMachinesAsync(cancellationToken))
+        // Fresh, never the cached list or the cached selections (issues #840 and #842): the preview
+        // and the apply both record an opening machine stock per machine, which becomes a costing
+        // baseline, so the fleet they are built over - and the quantities in it - have to be as they
+        // are now.
+        var machines = (await _nayax.GetMachinesFreshAsync(cancellationToken))
             .OrderBy(x => x.MachineName)
             .ThenBy(x => x.MachineID)
             .ToList();
         var snapshots = await Task.WhenAll(machines.Select(async machine =>
         {
-            var slots = await _nayax.GetMachineProductsAsync(machine.MachineID, cancellationToken);
+            var slots = await _nayax.GetMachineProductsFreshAsync(machine.MachineID, cancellationToken);
             return (Machine: machine, Slots: slots.Where(x =>
                 x.NayaxProductID.HasValue && productIdSet.Contains(x.NayaxProductID.Value)).ToList());
         }));
         foreach (var snapshot in snapshots)
         {
             var machineLabel = snapshot.Machine.MachineName ?? snapshot.Machine.MachineID.ToString(CultureInfo.CurrentCulture);
-            foreach (var productId in productIds)
+            foreach (var product in products)
             {
+                var productId = product.Id;
                 var quantity = InventoryCostTransitionPolicy.MachineQuantity(
                     productId,
                     machineLabel,
                     snapshot.Slots
                         .Where(x => x.NayaxProductID == productId)
-                        .Select(x => new InventoryCostTransitionSlot(x.PAR, x.MissingStockByMDB)));
+                        .Select(x => new InventoryCostTransitionSlot(x.PAR, x.MissingStockByMDB)),
+                    product.Name);
                 results[productId].Add(new(
                     snapshot.Machine.MachineID,
                     snapshot.Machine.MachineName ?? $"Machine {snapshot.Machine.MachineID}",

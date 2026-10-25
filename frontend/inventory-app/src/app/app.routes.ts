@@ -1,4 +1,5 @@
-import { Routes } from '@angular/router';
+import { inject } from '@angular/core';
+import { Router, Routes } from '@angular/router';
 import { MsalGuard } from '@azure/msal-angular';
 import { ACCESS_NOT_ALLOWED_PATH, requireCapability } from './access/capability.guard';
 import { BUSINESS_APPLICATION_ROUTE, accountStateGuard } from './access/account-state.guard';
@@ -16,6 +17,7 @@ import {
 import { InviteLinkReopenComponent } from './access/invite-link-reopen.component';
 import { AuthCallbackComponent } from './auth/auth-callback.component';
 import { SIGN_IN_ROUTE } from './auth/intended-destination';
+import { signInPageGuard } from './auth/sign-in-page.guard';
 import { SignInComponent } from './auth/sign-in.component';
 import { designSystemRoutes } from './design-system/design-system.routes';
 import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
@@ -34,8 +36,9 @@ import { requireProvider } from './provider/provider-lock.guard';
  * ones it would otherwise send somebody *to* - `/welcome`, `/application-pending`,
  * `/application-rejected`, `/access-unavailable`, `/apply` and the `/invite` acceptance page - because a person already
  * sent to one of them must not be sent away from it; `/access-not-allowed` carries no capability
- * for the reason already documented beside it, and `/super-admin/diagnostics` and
- * `/super-admin/businesses` (issues #546, #547) carry neither guard: their authority is the
+ * for the reason already documented beside it, and `/super-admin/diagnostics`,
+ * `/super-admin/businesses` and `/super-admin/supplier-presets` (issues #546, #547, #848) carry
+ * neither guard: their authority is the
  * platform-admin check, not a business role or membership, so each carries `platformAdminGuard`
  * instead and sends a refusal to the dashboard rather than to any membership-handling destination
  * (see `access/platform-admin.guard.ts`).
@@ -46,8 +49,11 @@ export const routes: Routes = [
   {
     // Public: the sign-in page where a signed-out visitor chooses which trusted authority to sign
     // in against (issue #711). It is what `SignInAuthorityGuard` sends them to instead of starting
-    // a redirect, so it cannot itself be behind a guard, and it starts no redirect of its own.
+    // a redirect, so it cannot itself be behind an authentication guard, and it starts no redirect
+    // of its own. `signInPageGuard` only sends a person who is already signed in on to the home
+    // page, rather than showing them the chooser again after a successful sign-in.
     path: SIGN_IN_ROUTE,
+    canActivate: [signInPageGuard],
     component: SignInComponent
   },
   {
@@ -60,7 +66,8 @@ export const routes: Routes = [
   {
     // The "needs a provider" page (issue #729). Like `/access-not-allowed` above it is where a
     // guard *sends* an operator, so it carries no capability of its own: the destinations that
-    // redirect here need different ones (`Inventory.Operate`, `SiteCommissions.Manage`), each
+    // redirect here need different ones (`Inventory.Operate`, `Reports.View`,
+    // `SiteCommissions.Manage` and, since issue #869, `Data.Repair`), each
     // already checked by the capability guard that ran before `requireProvider`, and sending
     // somebody away from their own explanation is the one thing this page must not do.
     path: PROVIDER_LOCKED_PATH,
@@ -252,9 +259,18 @@ export const routes: Routes = [
       import('./components/purchases/purchase-edit/purchase-edit-page.component').then((m) => m.PurchaseEditPageComponent)
   },
   {
+    // The retired Reporting Dashboard page (issue #806, parent #803): its distinct capabilities -
+    // transaction count, average sale and the expected-versus-actual reimbursement comparison, with
+    // exports - now live on Bookkeeping, so the old address redirects there instead of serving its
+    // own page. A string `redirectTo` only copies a query parameter it names itself (Angular's
+    // `:name` placeholder convention), so a plain string here would silently drop every filter -
+    // this returns a `UrlTree` built from the original request's own `queryParams` instead, which
+    // carries whatever the old bookmark held (date, period, machine) forward untouched.
+    // `/reports/bookkeeping`'s own guards below decide access, exactly as `/reports`'s guards once
+    // did.
     path: 'reports',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
-    loadComponent: () => import('./components/reports/dashboard-report.component').then((m) => m.DashboardReportComponent)
+    pathMatch: 'full',
+    redirectTo: ({ queryParams }) => inject(Router).createUrlTree(['/reports/bookkeeping'], { queryParams })
   },
   {
     path: 'reports/bookkeeping',
@@ -262,30 +278,39 @@ export const routes: Routes = [
     loadComponent: () => import('./components/reports/bookkeeping-report.component').then((m) => m.BookkeepingReportComponent)
   },
   {
+    // Daily, Transactions, Reconciliation, Machines and Products carry `requireProvider` since
+    // issue #868, which supersedes decision P5 for exactly these five at the user's request: a
+    // business with no Nayax connection at all sees the connection-required page here, as it
+    // already did on Site Commissions. The feature is `providerRecords`, the narrowest dependency
+    // there is - these reports read **stored** sales, so a connection whose read Nayax refused, and
+    // credentials that stopped working, leave them open, and the history they report on is never
+    // deleted. Bookkeeping and GST carry no provider guard at all. Like every provider guard it is
+    // declared **after** `requireCapability`, so a role without `Reports.View` reaches its own
+    // explanation rather than an invitation to connect a provider it still could not use.
     path: 'reports/daily',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
     loadComponent: () => import('./components/reports/daily-report.component').then((m) => m.DailyReportComponent)
   },
   {
     path: 'reports/transactions',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
     loadComponent: () =>
       import('./components/reports/transaction-sales-report.component').then((m) => m.TransactionSalesReportComponent)
   },
   {
     path: 'reports/reconciliation',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
     loadComponent: () =>
       import('./components/reports/reconciliation-report.component').then((m) => m.ReconciliationReportComponent)
   },
   {
     path: 'reports/machines',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
     loadComponent: () => import('./components/reports/machine-report.component').then((m) => m.MachineReportComponent)
   },
   {
     path: 'reports/products',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View')],
+    canActivate: [MsalGuard, accountStateGuard, requireCapability('Reports.View'), requireProvider('providerRecords')],
     loadComponent: () => import('./components/reports/product-report.component').then((m) => m.ProductReportComponent)
   },
   {
@@ -299,8 +324,9 @@ export const routes: Routes = [
     //
     // It is also the one report that is not a read of stored data: a site is known only from the
     // live fleet read, so with no usable provider it has no sites to report on and the API answers
-    // `isAvailable: false` (issue #731). Issue #729 therefore locks it with the other live provider
-    // destinations, while every report over stored sales deliberately stays open.
+    // `isAvailable: false` (issue #731). Issue #729 therefore locked it on the live fleet read,
+    // which issue #868 left exactly as it is - it is the five reports over stored records that
+    // joined it, on the narrower `providerRecords`.
     path: 'reports/site-commissions',
     canActivate: [
       MsalGuard,
@@ -338,6 +364,11 @@ export const routes: Routes = [
     loadComponent: () => import('./components/admin/imports/admin-imports.component').then((m) => m.AdminImportsComponent)
   },
   {
+    // Deliberately **not** provider-locked (issue #869, the user's decision of 24 October 2026):
+    // this page makes no Nayax call at all - `BackfillNayaxHistoricalSaleCosts` reads the Nayax cost
+    // already stored on imported sales - so a disconnected business with imported history can still
+    // recover those costs. It is the one Admin maintenance page over provider data that keeps no
+    // provider guard, and that is a decision rather than an omission.
     path: 'admin/historical-cost-recovery',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Data.Repair')],
     loadComponent: () =>
@@ -346,8 +377,19 @@ export const routes: Routes = [
       )
   },
   {
+    // Provider-locked since issue #869: the transition preview reads the machines and then their
+    // products from Nayax (`InventoryCostTransitionPreviewBuilder`), so with no usable connection
+    // the page has no baseline to offer and shows the connection-required page instead. The feature
+    // is the live fleet read, which is why credentials that stopped working lock it too - unlike the
+    // five stored-record reports of issue #868. Declared **after** `requireCapability`, as every
+    // provider guard is.
     path: 'admin/avco-transition',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('Data.Repair')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('Data.Repair'),
+      requireProvider('machineFleet')
+    ],
     loadComponent: () =>
       import('./components/admin/avco-transition/avco-transition.component').then((m) => m.AvcoTransitionComponent)
   },
@@ -403,14 +445,36 @@ export const routes: Routes = [
       )
   },
   {
+    // The Super Admin Supplier presets page (issue #848): the one platform-wide list of suggested
+    // suppliers, which #835 child C copies into each newly approved business. Platform-admin
+    // authority, not a business role, decides it - the same `platformAdminGuard` as the two
+    // super-admin routes above, and for the same reason.
+    path: 'super-admin/supplier-presets',
+    canActivate: [MsalGuard, platformAdminGuard],
+    loadComponent: () =>
+      import('./components/super-admin/supplier-presets/super-admin-supplier-presets.component').then(
+        (m) => m.SuperAdminSupplierPresetsComponent
+      )
+  },
+  {
     path: 'admin/nayax-settings',
     canActivate: [MsalGuard, accountStateGuard, requireCapability('Integration.Manage')],
     loadComponent: () =>
       import('./components/admin/nayax-settings/nayax-settings.component').then((m) => m.NayaxSettingsComponent)
   },
   {
+    // Provider-locked since issue #869, on the same live fleet read as the site commission report:
+    // this page's site picker is that read (`GET /api/sites`), and a site is known only from it, so
+    // with no usable connection there is no site to write an agreement against. Declared **after**
+    // `requireCapability`, so a role without `SiteCommissions.Manage` still reaches its own
+    // explanation rather than an invitation to connect a provider it could not use.
     path: 'admin/site-commission-agreements',
-    canActivate: [MsalGuard, accountStateGuard, requireCapability('SiteCommissions.Manage')],
+    canActivate: [
+      MsalGuard,
+      accountStateGuard,
+      requireCapability('SiteCommissions.Manage'),
+      requireProvider('machineFleet')
+    ],
     loadComponent: () =>
       import('./components/admin/site-commission-agreements/site-commission-agreements.component').then(
         (m) => m.SiteCommissionAgreementsComponent

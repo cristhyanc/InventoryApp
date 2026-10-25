@@ -8,7 +8,7 @@ namespace Inventory.Infrastructure.Nayax;
 /// <summary>
 /// The machine-stock observation adapter (issue #56): what the machine itself reports it is holding,
 /// read from the live Nayax machine-product slots through the existing
-/// <see cref="INayaxLynxClient.GetMachineProductsAsync"/> port.
+/// <see cref="INayaxLynxClient.GetMachineProductsFreshAsync"/> port.
 ///
 /// It is a translation and nothing else. It carries <c>PAR</c> and <c>MissingStockByMDB</c> across
 /// exactly as Nayax reports them - including their absence, which the published contract allows for
@@ -46,7 +46,11 @@ public sealed class NayaxMachineStockObservationSource : IMachineStockObservatio
     public async Task<MachineStockObservation> GetObservationAsync(
         long machineId, CancellationToken cancellationToken)
     {
-        var slots = await _nayax.GetMachineProductsAsync(machineId, cancellationToken);
+        // Fresh, never the cached selections (issue #842): an observation is the machine's own
+        // statement of what it is holding at this instant, and the ledger compares it with the
+        // expected level to report a shrinkage or an overage. A minute-old figure here would move
+        // that difference.
+        var slots = await _nayax.GetMachineProductsFreshAsync(machineId, cancellationToken);
         var observedAtUtc = _clock.UtcNow;
 
         var identifiedSlots = slots.Where(slot => slot.NayaxProductID.HasValue).ToList();

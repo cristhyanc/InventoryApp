@@ -55,7 +55,7 @@ public class SyncLatestNayaxSalesCoverageTests
     private static Mock<INayaxLynxClient> Fleet(params long[] machineIds)
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(machineIds.Select(id => new NayaxMachine { MachineID = id, MachineName = $"Machine {id}" }).ToList());
         return nayax;
     }

@@ -12,6 +12,7 @@ import { WelcomeComponent } from './access/welcome.component';
 import { ApplicationPendingComponent } from './access/application-pending.component';
 import { ApplicationRejectedComponent } from './access/application-rejected.component';
 import { routes } from './app.routes';
+import { signInPageGuard } from './auth/sign-in-page.guard';
 import { SignInComponent } from './auth/sign-in.component';
 import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
 import { ProviderLockedComponent } from './provider/provider-locked.component';
@@ -24,6 +25,7 @@ import { HistoricalGstClassificationComponent } from './components/admin/histori
 import { NayaxSaleTimestampRepairComponent } from './components/admin/nayax-sale-timestamp-repair/nayax-sale-timestamp-repair.component';
 import { PlatformDiagnosticsComponent } from './components/admin/diagnostics/platform-diagnostics.component';
 import { SuperAdminBusinessesComponent } from './components/super-admin/businesses/super-admin-businesses.component';
+import { SuperAdminSupplierPresetsComponent } from './components/super-admin/supplier-presets/super-admin-supplier-presets.component';
 import { AdminUsersComponent } from './components/admin/users/admin-users.component';
 import { RolesComponent } from './components/admin/roles/roles.component';
 import { BusinessSettingsComponent } from './components/admin/business-settings/business-settings.component';
@@ -160,6 +162,23 @@ describe('Admin costing and maintenance routes (issue #390)', () => {
     expect(redirect.redirectTo).toBe('/super-admin/diagnostics');
     expect(redirect.pathMatch).toBe('full');
     expect(redirect.canActivate).toBeUndefined();
+  });
+
+  /**
+   * The retired Reporting Dashboard page (issue #806, parent #803): its distinct capabilities now
+   * live on Bookkeeping, so its old address redirects there instead of serving its own page. See
+   * `reporting-dashboard-redirect.spec.ts` for the query-preservation and access-control behaviour
+   * this wiring produces once the router runs it.
+   */
+  it('redirects the old /reports address to /reports/bookkeeping, with no guard of its own', () => {
+    const redirect = route('reports');
+
+    // A redirect function, not a plain string, so the original query string survives - see the
+    // comment beside it in `app.routes.ts` and `reporting-dashboard-redirect.spec.ts`.
+    expect(typeof redirect.redirectTo).toBe('function');
+    expect(redirect.pathMatch).toBe('full');
+    expect(redirect.canActivate).toBeUndefined();
+    expect(redirect.loadComponent).toBeUndefined();
   });
 
   /**
@@ -321,6 +340,22 @@ describe('super-admin routing (issue #546)', () => {
   it('loads the Super Admin Businesses page component', async () => {
     await expect(loadedComponent('super-admin/businesses')).resolves.toBe(SuperAdminBusinessesComponent);
   });
+
+  /**
+   * The Supplier presets page (issue #848) is guarded exactly like the two above, for the same
+   * reason: its authority is the platform-admin check and no business role or membership.
+   */
+  it('guards /super-admin/supplier-presets with MsalGuard then platformAdminGuard, and nothing else', () => {
+    expect(route('super-admin/supplier-presets').canActivate).toEqual([MsalGuard, platformAdminGuard]);
+  });
+
+  it('carries no accountStateGuard on /super-admin/supplier-presets either', () => {
+    expect(route('super-admin/supplier-presets').canActivate ?? []).not.toContain(accountStateGuard);
+  });
+
+  it('loads the Super Admin Supplier presets page component', async () => {
+    await expect(loadedComponent('super-admin/supplier-presets')).resolves.toBe(SuperAdminSupplierPresetsComponent);
+  });
 });
 
 /**
@@ -331,31 +366,36 @@ describe('super-admin routing (issue #546)', () => {
  * that the URL behaves like the locked menu entry - typing `/machines` with no provider reaches one
  * explanation instead of a page of refusals.
  */
-describe('provider-locked routes (issue #729)', () => {
+describe('provider-locked routes (issues #729, #868)', () => {
   /**
    * The live provider destinations. `machines` left this list in issue #740: the machine list page
    * now has the business's own machine records to show and its own create/rename/deactivate actions,
    * so it carries no provider guard. The machine **details** page still does - every panel on it is
    * a Nayax read - and giving it a local half belongs to the provider machine review (issue #742).
+   *
+   * The five reports over stored provider records joined it in issue #868, on `providerRecords`
+   * rather than on a live read: see `PROVIDER_RECORD_REPORT_PATHS` below.
    */
   const lockedPaths = ['machines/:id', 'sites', 'sites/:id/products', 'reports/site-commissions'];
 
-  /**
-   * **Historical reports stay accessible** (decision P5). These read stored sales, so they carry no
-   * provider guard at all and open normally with no provider, reporting their own availability
-   * states instead (issues #730 and #731). The site commission report is deliberately not here: a
-   * site is known only from the live fleet read, so it has nothing stored to report on.
-   */
-  const storedDataReportPaths = [
-    'reports',
-    'reports/bookkeeping',
+  /** The five reports issue #868 locks while the business has no Nayax connection at all. */
+  const PROVIDER_RECORD_REPORT_PATHS = [
     'reports/daily',
     'reports/transactions',
     'reports/reconciliation',
     'reports/machines',
-    'reports/products',
-    'reports/gst'
+    'reports/products'
   ];
+
+  /**
+   * **Bookkeeping and GST stay unlocked** (issue #868): they are the two reports a business with no
+   * Nayax connection keeps, so they carry no provider guard at all and report their own
+   * availability states instead (issues #730 and #731).
+   *
+   * `reports` itself is absent since issue #806: it no longer serves a page of its own, so it
+   * carries no guard at all - see the "retired Reporting Dashboard redirect" tests below.
+   */
+  const unlockedReportPaths = ['reports/bookkeeping', 'reports/gst'];
 
   it('serves the needs-a-provider page behind authentication alone', async () => {
     expect(route(PROVIDER_LOCKED_PATH).canActivate).toEqual([MsalGuard]);
@@ -363,7 +403,7 @@ describe('provider-locked routes (issue #729)', () => {
   });
 
   it('guards every live provider route, after its capability guard rather than before it', () => {
-    for (const path of lockedPaths) {
+    for (const path of [...lockedPaths, ...PROVIDER_RECORD_REPORT_PATHS]) {
       const guards = route(path).canActivate ?? [];
 
       expect(guards).toHaveLength(4);
@@ -375,8 +415,24 @@ describe('provider-locked routes (issue #729)', () => {
     }
   });
 
-  it('leaves every report over stored data with no provider guard at all', () => {
-    for (const path of storedDataReportPaths) {
+  /**
+   * Issue #868 supersedes decision P5 for exactly these five: each declares `requireProvider`
+   * **after** `requireCapability('Reports.View')`, so a member without that capability still
+   * reaches the access-not-allowed page rather than an invitation to connect Nayax.
+   */
+  it('guards the five stored-record reports with a provider guard declared last', () => {
+    for (const path of PROVIDER_RECORD_REPORT_PATHS) {
+      const guards = route(path).canActivate ?? [];
+
+      expect(guards).toHaveLength(4);
+      expect(guards[0]).toBe(MsalGuard);
+      expect(guards[1]).toBe(accountStateGuard);
+      expect(guards[3]).not.toBe(guards[2]);
+    }
+  });
+
+  it('leaves Bookkeeping and GST with no provider guard at all', () => {
+    for (const path of unlockedReportPaths) {
       expect(route(path).canActivate).toHaveLength(3);
     }
   });
@@ -410,14 +466,56 @@ describe('provider-locked routes (issue #729)', () => {
 });
 
 /**
+ * The two Admin destinations issue #869 locks: Site Commission Agreements, whose site picker is the
+ * live fleet read, and the Inventory AVCO Transition Baseline, whose preview reads the machines and
+ * their products. Both declare the live fleet read, so a business with no usable connection sees the
+ * same connection-required page Site Commissions already showed.
+ *
+ * Nayax Historical Cost Recovery deliberately stays unlocked (the user's decision of 24 October
+ * 2026): it makes no Nayax call at all - it reads the Nayax cost already stored on imported sales -
+ * so a disconnected business with imported history can still recover those costs.
+ */
+describe('provider-locked Admin routes (issue #869)', () => {
+  const LOCKED_ADMIN_PATHS = ['admin/site-commission-agreements', 'admin/avco-transition'];
+
+  it.each(LOCKED_ADMIN_PATHS)('guards /%s with a provider guard declared after its capability guard', (path) => {
+    const guards = route(path).canActivate ?? [];
+
+    expect(guards).toHaveLength(4);
+    expect(guards[0]).toBe(MsalGuard);
+    expect(guards[1]).toBe(accountStateGuard);
+    // The capability guard stays third, so a role that does not include the page reaches its own
+    // explanation rather than an invitation to connect a provider it still could not use. That
+    // order is driven, rather than only counted, in `provider/provider-lock.guard.spec.ts`.
+    expect(guards[3]).not.toBe(guards[2]);
+  });
+
+  it('leaves Nayax Historical Cost Recovery with no provider guard at all', () => {
+    expect(route('admin/historical-cost-recovery').canActivate).toHaveLength(3);
+  });
+
+  /**
+   * The other Admin pages are out of issue #869's scope and keep exactly the guards they had: the
+   * two costing/GST repairs over the business's own data, and the two provider tools the menu hides
+   * outright rather than locking (asserted above).
+   */
+  it.each(['admin/costing-repair', 'admin/historical-gst-classification', 'admin/users', 'admin/roles'])(
+    'leaves /%s with no provider guard either',
+    (path) => {
+      expect(route(path).canActivate).toHaveLength(3);
+    }
+  );
+});
+
+/**
  * The sign-in page (issue #711). It is the page `SignInAuthorityGuard` sends a signed-out visitor
  * to instead of starting a redirect, so it has to be reachable without authentication - exactly
  * like the `/auth` callback, and for the same reason.
  */
 describe('sign-in routing (issue #711)', () => {
-  it('serves the sign-in page publicly, with no guard at all', () => {
+  it('serves the sign-in page publicly, guarded only against a visitor who is already signed in', () => {
     expect(route('sign-in').component).toBe(SignInComponent);
-    expect(route('sign-in').canActivate).toBeUndefined();
+    expect(route('sign-in').canActivate).toEqual([signInPageGuard]);
     expect(route('sign-in').canMatch).toBeUndefined();
   });
 

@@ -1,7 +1,9 @@
 using System.Linq.Expressions;
+using System.Text;
 
 using Inventory.Application.Products;
 using Inventory.Domain.Products;
+using Inventory.Domain.Reporting.Dashboard;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -44,8 +46,13 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
             cancellationToken);
 
     public async Task<IReadOnlyList<ProductRecord>> ListUnorderedAsync(
-        ProductCatalogFilter filter, CancellationToken cancellationToken) =>
-        ToRecords(await Filtered(_db.Products.AsNoTracking(), filter).ToListAsync(cancellationToken));
+        ProductCatalogFilter filter, bool resolveInventoryHistory, CancellationToken cancellationToken)
+    {
+        var products = await Filtered(_db.Products.AsNoTracking(), filter).ToListAsync(cancellationToken);
+        return resolveInventoryHistory
+            ? await WithInventoryHistoryAsync(products, cancellationToken)
+            : [.. products.Select(ToRecord)];
+    }
 
     public async Task<ProductRecord?> FindAsync(long id, CancellationToken cancellationToken)
     {
@@ -56,6 +63,13 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
         var records = await WithDeletionEligibilityAsync([product], cancellationToken);
         return records[0];
     }
+
+    /// <summary>
+    /// The character <see cref="LikePattern"/> writes before a <c>%</c>, <c>_</c> or itself, so a
+    /// character <c>LIKE</c> treats specially (issue #827) is matched literally when a person types
+    /// it into a search rather than acting as a wildcard.
+    /// </summary>
+    private const char SearchEscapeCharacter = '\\';
 
     private static IQueryable<Product> Filtered(IQueryable<Product> products, ProductCatalogFilter filter)
     {
@@ -70,9 +84,17 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
 
         if (!string.IsNullOrWhiteSpace(filter.Search))
         {
-            var search = filter.Search;
-            query = query.Where(product => product.Name.Contains(search)
-                || (product.Sku != null && product.Sku.Contains(search)));
+            // LIKE rather than Contains (issue #827): EF Core's SQLite provider translates Contains
+            // to instr(...), which SQLite compares byte-for-byte, so a search typed in a different
+            // case than the stored name or SKU found nothing. SQLite's LIKE, unlike instr, folds
+            // ASCII letter case by default - the only case-insensitivity SQLite offers without the
+            // collation change this issue excludes - though it still leaves non-ASCII letters
+            // unfolded. The escape character keeps a literal '%' or '_' a person types from acting
+            // as a wildcard.
+            var pattern = $"%{LikePattern(filter.Search)}%";
+            var escapeCharacter = SearchEscapeCharacter.ToString();
+            query = query.Where(product => EF.Functions.Like(product.Name, pattern, escapeCharacter)
+                || (product.Sku != null && EF.Functions.Like(product.Sku, pattern, escapeCharacter)));
         }
 
         if (filter.CategoryId.HasValue) query = query.Where(product => product.CategoryId == filter.CategoryId);
@@ -80,13 +102,68 @@ public sealed class EfProductCatalogStore : IProductCatalogStore
         return query;
     }
 
+    /// <summary>
+    /// <paramref name="value"/> with every character <c>LIKE</c> treats specially - <c>%</c>,
+    /// <c>_</c> and <see cref="SearchEscapeCharacter"/> itself - preceded by the escape character, so
+    /// each is matched literally once the result is wrapped in the leading and trailing <c>%</c> that
+    /// make the search a substring match.
+    /// </summary>
+    private static string LikePattern(string value)
+    {
+        var pattern = new StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            if (character is '%' or '_' or SearchEscapeCharacter) pattern.Append(SearchEscapeCharacter);
+            pattern.Append(character);
+        }
+
+        return pattern.ToString();
+    }
+
     private static IQueryable<Product> WithDetail(IQueryable<Product> products) =>
         products
             .Include(product => product.Category)
             .Include(product => product.StockAdjustments);
 
-    private static IReadOnlyList<ProductRecord> ToRecords(IEnumerable<Product> products) =>
-        products.Select(ToRecord).ToList();
+    /// <summary>
+    /// The same records, each carrying whether anything records inventory ever having been in it
+    /// (issue #861): the evidence the home Dashboard's valuation needs to tell a product that has
+    /// never held inventory from one whose inventory is genuinely unknown. Called only when
+    /// <see cref="ListUnorderedAsync"/>'s caller asked for it - the other callers get
+    /// <see cref="ProductRecord.HasInventoryHistory"/> left <see langword="null"/> and pay nothing for
+    /// this.
+    ///
+    /// <para><strong>Only the products that could still be empty are asked about.</strong> A product
+    /// whose own stored columns already establish a position - an inventory value, a costing quantity
+    /// or storage stock - is valued or unknown on those columns alone, so its history would change
+    /// nothing; <see cref="ProductInventoryValuationFact.CouldNeverHaveHeldInventory"/> is the Domain
+    /// rule that decides which, read here rather than restated. Every product being stocked is the
+    /// normal case, and then this costs no query at all.</para>
+    ///
+    /// <para>Resolved <see langword="false"/> rather than left <see langword="null"/> for the rest:
+    /// "this product holds a costing position" is itself the answer that it is not an empty one, and a
+    /// caller must not have to tell "no history" from "not asked" for a row that was in fact decided.</para>
+    /// </summary>
+    private async Task<IReadOnlyList<ProductRecord>> WithInventoryHistoryAsync(
+        IReadOnlyList<Product> products, CancellationToken cancellationToken)
+    {
+        if (products.Count == 0) return [];
+
+        var candidates = products
+            .Where(product => ProductInventoryValuationFact.CouldNeverHaveHeldInventory(
+                product.InventoryValue, product.CostingQuantity, product.QuantityInStock))
+            .Select(product => product.Id)
+            .ToHashSet();
+        var withHistory = await EfProductInventoryHistoryQueries.WithRecordedInventoryHistoryAsync(
+            _db, candidates, cancellationToken);
+
+        return products
+            .Select(product => ToRecord(product) with
+            {
+                HasInventoryHistory = !candidates.Contains(product.Id) || withHistory.Contains(product.Id),
+            })
+            .ToList();
+    }
 
     /// <summary>
     /// The same records, each carrying the deletion rule's own answer for it (issue #737): whether

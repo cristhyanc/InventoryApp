@@ -16,7 +16,7 @@ public class GetPickListNayaxLinkTests
     private static Mock<INayaxLynxClient> MachineReporting(long machineId, params NayaxMachineProduct[] selections)
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(machineId, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(machineId, It.IsAny<CancellationToken>()))
             .ReturnsAsync([.. selections]);
         return nayax;
     }

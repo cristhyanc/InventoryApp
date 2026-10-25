@@ -84,6 +84,10 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
             Assert.True(applicant.IsActive);
             Assert.Null(business.RejectionReason);
             Assert.Equal(MembershipWriteRaceHarness.SeededAt, applicant.StatusChangedAtUtc);
+
+            // And it provisioned the business it approved, once (issue #849).
+            Assert.Equal(Now, business.SupplierPresetsCopiedAtUtc);
+            Assert.Equal(EnabledPresetCount(), _harness.Suppliers().Count);
         }
         else
         {
@@ -93,6 +97,11 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
             Assert.Equal("Not enough detail.", business.RejectionReason);
             Assert.False(applicant.IsActive);
             Assert.Equal(Now, applicant.StatusChangedAtUtc);
+
+            // The approval's supplier copies rolled back with it: a refused application receives
+            // nothing (issue #849).
+            Assert.Null(business.SupplierPresetsCopiedAtUtc);
+            Assert.Empty(_harness.Suppliers());
         }
     }
 
@@ -115,7 +124,54 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
         var business = _harness.Businesses().Single(candidate => candidate.Id == PendingBusinessId);
         Assert.Equal(BusinessStatus.Active, business.Status);
         Assert.True(_harness.Memberships().Single(membership => membership.Id == _applicantMembershipId).IsActive);
+
+        // Exactly one set of supplier copies, not two (issue #849). The loser's copy rolled back
+        // with its refused decision, and the marker the winner stamped is what would refuse a third
+        // attempt even if the status rule somehow let one through.
+        Assert.Equal(Now, business.SupplierPresetsCopiedAtUtc);
+        var copies = _harness.Suppliers();
+        Assert.Equal(EnabledPresetCount(), copies.Count);
+        Assert.All(copies, supplier => Assert.Equal(PendingBusinessId, supplier.BusinessId));
+        Assert.Equal(copies.Select(supplier => supplier.Name).Distinct().Count(), copies.Count);
     }
+
+    /// <summary>
+    /// All or nothing, with the failure injected where the issue asks for it: the copy throws, and
+    /// the approval it is part of rolls back. The business is still waiting for a decision, it holds
+    /// no supplier, its marker is still null, and nothing was audited - the state a second attempt
+    /// can be made from safely.
+    /// </summary>
+    [Fact]
+    public async Task A_failed_supplier_copy_rolls_the_whole_approval_back()
+    {
+        var audit = new FakePlatformBusinessDecisionAudit();
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => ApproveAsync(
+                PendingBusinessId,
+                CancellationToken.None,
+                new FailingBusinessSupplierProvisioningStore(),
+                audit));
+
+        Assert.Equal(FailingBusinessSupplierProvisioningStore.Message, failure.Message);
+
+        var business = _harness.Businesses().Single(candidate => candidate.Id == PendingBusinessId);
+        Assert.Equal(BusinessStatus.Pending, business.Status);
+        Assert.Null(business.DecidedAtUtc);
+        Assert.Null(business.SupplierPresetsCopiedAtUtc);
+        Assert.Empty(_harness.Suppliers());
+        Assert.Empty(audit.Entries);
+
+        // And the applicant is untouched, so the application can still be decided afterwards.
+        Assert.True(_harness.Memberships().Single(membership => membership.Id == _applicantMembershipId).IsActive);
+    }
+
+    /// <summary>
+    /// How many suppliers one approval is expected to create: one per enabled preset, read from the
+    /// rows the migration shipped rather than from a number written here, so changing the shipped
+    /// list changes this expectation with it.
+    /// </summary>
+    private int EnabledPresetCount() => _harness.SupplierPresets().Count(preset => preset.IsEnabled);
 
     /// <summary>
     /// The sequential half, and the one an operator meets in practice: deciding an application that
@@ -186,8 +242,15 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
         await db.SaveChangesAsync();
     }
 
-    private Task<PlatformBusinessDecision?> ApproveAsync(int businessId, CancellationToken cancellationToken) =>
-        WithWriter(writer => new ApproveBusinessApplication(writer).Handle(businessId, cancellationToken));
+    private Task<PlatformBusinessDecision?> ApproveAsync(
+        int businessId,
+        CancellationToken cancellationToken,
+        IBusinessSupplierProvisioningStore? provisioning = null,
+        FakePlatformBusinessDecisionAudit? audit = null) =>
+        WithWriter(
+            writer => new ApproveBusinessApplication(writer).Handle(businessId, cancellationToken),
+            provisioning,
+            audit);
 
     private Task<PlatformBusinessDecision?> RejectAsync(
         int businessId,
@@ -202,15 +265,21 @@ public class PlatformBusinessDecisionConcurrencyTests : IAsyncDisposable
     /// supplies it.
     /// </summary>
     private async Task<PlatformBusinessDecision?> WithWriter(
-        Func<BusinessApplicationDecisionWriter, Task<PlatformBusinessDecision?>> decide)
+        Func<BusinessApplicationDecisionWriter, Task<PlatformBusinessDecision?>> decide,
+        IBusinessSupplierProvisioningStore? provisioning = null,
+        FakePlatformBusinessDecisionAudit? audit = null)
     {
         await using var db = TestAppDbContext.Denied(_harness.Options);
 
         return await decide(new BusinessApplicationDecisionWriter(
             FakeAuthenticatedActorAccessor.Identified(MembershipWriteRaceHarness.Actor(AdministratorOid)),
             new EfPlatformBusinessDirectoryStore(db),
+            // The real provisioning adapter by default, on the same context and therefore in the
+            // same transaction, because the copies of issue #849 are part of what these races are
+            // about; a test that needs the copy to fail passes its own.
+            provisioning ?? new EfBusinessSupplierProvisioningStore(db),
             new MembershipWriteGuard(new EfBusinessMembershipWriteStore(db)),
-            new FakePlatformBusinessDecisionAudit(),
+            audit ?? new FakePlatformBusinessDecisionAudit(),
             new FakeClock(Now)));
     }
 

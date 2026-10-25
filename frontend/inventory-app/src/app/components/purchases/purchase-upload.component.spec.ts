@@ -76,7 +76,7 @@ function uploadedItems(upload: jest.Mock): PurchaseItemPayload[] {
 /**
  * A ready-to-submit manual purchase form with one line: 3 units for the $6.00 paid for the line,
  * which is the $2.00 unit cost the request carries. The line is filled through the component's own
- * change handlers, the way the template does it (issue #707).
+ * change handlers, the way the template does it (issues #707 and #878).
  */
 function readyToUpload(supplierOrderId: string | null = null, sessionActive: Observable<boolean> = of(false)) {
   const harness = createHarness(supplierOrderId, sessionActive);
@@ -86,7 +86,7 @@ function readyToUpload(supplierOrderId: string | null = null, sessionActive: Obs
   const item = harness.component.items[0];
   item.productId = 5;
   harness.component.onLineQuantityChange(item, 3);
-  harness.component.onLineAmountChange(item, 6);
+  harness.component.onLineTotalChange(item, 6);
   return harness;
 }
 
@@ -178,8 +178,8 @@ describe('PurchaseUploadComponent GST classification mapping (issue #431)', () =
   });
 });
 
-describe('PurchaseUploadComponent per-line price entry (issue #707)', () => {
-  it('starts every new line on the total paid for the line, with nothing entered yet', () => {
+describe('PurchaseUploadComponent per-line price entry (issues #707, #878)', () => {
+  it('starts every new line with the total paid as the winning field, nothing entered yet', () => {
     const { component } = createHarness(null);
 
     component.addItem();
@@ -194,7 +194,7 @@ describe('PurchaseUploadComponent per-line price entry (issue #707)', () => {
     const item = component.items[0];
 
     component.onLineQuantityChange(item, 20);
-    component.onLineAmountChange(item, 32.5);
+    component.onLineTotalChange(item, 32.5);
 
     expect(item.unitCost).toBe(1.625);
     expect(component.savedLineAmount(item)).toBe(32.5);
@@ -204,16 +204,16 @@ describe('PurchaseUploadComponent per-line price entry (issue #707)', () => {
     expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 20, unitCost: 1.625 }]);
   });
 
-  it('derives the line total from an entered unit price', () => {
+  it('derives the line total from a unit price typed into the Unit price field', () => {
     const { component, upload } = readyToUpload();
     const item = component.items[0];
 
     component.onLineQuantityChange(item, 24);
-    component.onLinePriceEntryModeChange(item, 'unit');
-    component.onLineAmountChange(item, 1.6625);
+    component.onLineUnitCostChange(item, 1.6625);
 
+    expect(item.priceEntryMode).toBe('unit');
     expect(item.lineTotal).toBe(39.9);
-    expect(component.derivedLineTotal(item)).toBe(39.9);
+    expect(component.totalPriceValue(item)).toBe('39.90');
 
     component.upload();
 
@@ -225,7 +225,11 @@ describe('PurchaseUploadComponent per-line price entry (issue #707)', () => {
     const item = component.items[0];
 
     component.onLineQuantityChange(item, 300);
-    component.onLineAmountChange(item, 100);
+    component.onLineTotalChange(item, 100);
+
+    // The Unit price field shows four decimals; what the request carries is the exact quotient.
+    expect(component.unitPriceValue(item)).toBe('0.3333');
+
     component.upload();
 
     const submitted = uploadedItems(upload)[0];
@@ -235,17 +239,46 @@ describe('PurchaseUploadComponent per-line price entry (issue #707)', () => {
     expect(Math.round(submitted.quantity * submitted.unitCost * 100) / 100).toBe(100);
   });
 
-  it('recalculates when the quantity changes, so no figure is left stale', () => {
+  it('hands the win to the field typed into last, in either direction', () => {
+    const { component, upload } = readyToUpload();
+    const item = component.items[0];
+
+    component.onLineQuantityChange(item, 28);
+    component.onLineTotalChange(item, 100);
+
+    expect(item.unitCost).toBe(100 / 28);
+
+    component.onLineUnitCostChange(item, 1.5);
+
+    expect([item.priceEntryMode, item.unitCost, item.lineTotal]).toEqual(['unit', 1.5, 42]);
+
+    component.onLineTotalChange(item, 56);
+
+    expect([item.priceEntryMode, item.unitCost, item.lineTotal]).toEqual(['total', 2, 56]);
+
+    component.upload();
+
+    expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 28, unitCost: 2 }]);
+  });
+
+  it('recalculates from the field that won last when the quantity changes', () => {
     const { component } = readyToUpload();
     const item = component.items[0];
 
     component.onLineQuantityChange(item, 20);
-    component.onLineAmountChange(item, 32.5);
+    component.onLineTotalChange(item, 32.5);
     component.onLineQuantityChange(item, 10);
 
+    // A typed total is spread over the new quantity; the total itself stays as it was typed.
     expect(item.lineTotal).toBe(32.5);
     expect(item.unitCost).toBe(3.25);
-    expect(component.derivedUnitCost(item)).toBe(3.25);
+
+    component.onLineUnitCostChange(item, 1.5);
+    component.onLineQuantityChange(item, 20);
+
+    // A typed unit price is multiplied by the new quantity and is itself left alone.
+    expect(item.unitCost).toBe(1.5);
+    expect(item.lineTotal).toBe(30);
   });
 
   it('keeps the unit cost a supplier order prefilled and shows its matching line total', () => {
@@ -263,18 +296,25 @@ describe('PurchaseUploadComponent per-line price entry (issue #707)', () => {
     expect(uploadedItems(upload)).toEqual([{ productId: 5, quantity: 10, unitCost: 2 }]);
   });
 
-  it('refuses a line with no amount entered, in either mode', () => {
+  it('refuses a line whose winning field was cleared, and clears the calculated one', () => {
     const { component, upload } = readyToUpload();
     const item = component.items[0];
 
-    component.onLineAmountChange(item, null);
+    component.onLineTotalChange(item, null);
+
+    expect(item.unitCost).toBeNull();
+    expect(component.unitPriceValue(item)).toBeNull();
+
     component.upload();
 
     expect(upload).not.toHaveBeenCalled();
     expect(component.error).toContain('1 item(s)');
 
-    component.onLinePriceEntryModeChange(item, 'unit');
-    component.onLineAmountChange(item, null);
+    component.onLineUnitCostChange(item, null);
+
+    expect(item.lineTotal).toBeNull();
+    expect(component.totalPriceValue(item)).toBeNull();
+
     component.upload();
 
     expect(upload).not.toHaveBeenCalled();
@@ -284,10 +324,11 @@ describe('PurchaseUploadComponent per-line price entry (issue #707)', () => {
     const { component, upload } = readyToUpload();
     const item = component.items[0];
 
-    component.onLineAmountChange(item, 32.5);
+    component.onLineTotalChange(item, 32.5);
     component.onLineQuantityChange(item, 0);
 
     expect(item.unitCost).toBeNull();
+    expect(component.unitPriceValue(item)).toBeNull();
     expect(component.lineProblem(item)).toBe('Enter a whole number of units above zero.');
 
     component.upload();
@@ -298,17 +339,31 @@ describe('PurchaseUploadComponent per-line price entry (issue #707)', () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
+  it('clears the total rather than leaving a stale one under an unusable quantity', () => {
+    const { component, upload } = readyToUpload();
+    const item = component.items[0];
+
+    component.onLineUnitCostChange(item, 1.5);
+    component.onLineQuantityChange(item, 2.5);
+
+    expect(item.lineTotal).toBeNull();
+    expect(component.totalPriceValue(item)).toBeNull();
+
+    component.upload();
+    expect(upload).not.toHaveBeenCalled();
+  });
+
   it('never submits a non-finite price', () => {
     const { component, upload } = readyToUpload();
 
-    component.onLineAmountChange(component.items[0], Number.NaN);
+    component.onLineTotalChange(component.items[0], Number.NaN);
     component.upload();
 
     expect(upload).not.toHaveBeenCalled();
   });
 });
 
-describe('PurchaseUploadComponent price entry controls (issue #707)', () => {
+describe('PurchaseUploadComponent price entry controls (issue #878)', () => {
   async function render() {
     const route = { queryParamMap: of(convertToParamMap({})) } as unknown as ActivatedRoute;
     const upload = jest.fn(() => of({} as Purchase));
@@ -351,35 +406,82 @@ describe('PurchaseUploadComponent price entry controls (issue #707)', () => {
     fixture.detectChanges();
   }
 
-  it('shows the total paid as the editable amount and the unit cost as a calculated figure', async () => {
+  /** One of the line's two price inputs. */
+  function priceInput(host: HTMLElement, testId: string): HTMLInputElement {
+    const input = host.querySelector(`[data-testid="${testId}"]`) as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    return input!;
+  }
+
+  it('offers both prices as editable inputs with their own labels, and no selector or hint', async () => {
+    const { host } = await render();
+
+    expect(host.querySelector('[data-testid="purchase-item-price-mode"]')).toBeNull();
+    expect(host.querySelector('[data-testid="purchase-item-derived-unit-cost"]')).toBeNull();
+    expect(host.querySelector('[data-testid="purchase-item-derived-line-total"]')).toBeNull();
+    expect(host.textContent).not.toContain('Line total:');
+    expect(host.textContent).not.toContain('Unit cost:');
+
+    const unitPrice = priceInput(host, 'purchase-item-cost');
+    const totalPrice = priceInput(host, 'purchase-item-line-total');
+
+    expect(unitPrice.readOnly).toBe(false);
+    expect(totalPrice.readOnly).toBe(false);
+    expect(unitPrice.getAttribute('aria-label')).toBe('Unit price for item 1');
+    expect(totalPrice.getAttribute('aria-label')).toBe('Total price for item 1');
+  });
+
+  it('fills the Unit price field to four decimals from a typed total, unrounded in the request', async () => {
     const { fixture, host, component } = await render();
 
-    expect(host.querySelector('[data-testid="purchase-item-price-mode"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="purchase-item-line-total"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="purchase-item-cost"]')).toBeNull();
+    component.onLineQuantityChange(component.items[0], 300);
+    await typeInto(fixture, 'purchase-item-line-total', '100');
+
+    expect(component.items[0].unitCost).toBe(100 / 300);
+    expect(priceInput(host, 'purchase-item-cost').value).toBe('0.3333');
+  });
+
+  it('fills the Total price field to the cent from a typed unit price', async () => {
+    const { fixture, host, component } = await render();
+
+    component.onLineQuantityChange(component.items[0], 28);
+    await typeInto(fixture, 'purchase-item-cost', '1.5');
+
+    expect(component.items[0].priceEntryMode).toBe('unit');
+    expect(component.items[0].unitCost).toBe(1.5);
+    expect(priceInput(host, 'purchase-item-line-total').value).toBe('42.00');
+  });
+
+  it('keeps both fields editable as the win passes between them', async () => {
+    const { fixture, host, component } = await render();
 
     await typeInto(fixture, 'purchase-item-line-total', '32.50');
 
     expect(component.items[0].unitCost).toBe(1.625);
-    expect(host.querySelector('[data-testid="purchase-item-derived-unit-cost"]')!.textContent)
-      .toContain('$1.6250');
-  });
-
-  it('swaps which amount is editable when the operator picks Unit price', async () => {
-    const { fixture, host, component } = await render();
-
-    component.onLineQuantityChange(component.items[0], 24);
-    component.onLinePriceEntryModeChange(component.items[0], 'unit');
-    fixture.detectChanges();
-
-    expect(host.querySelector('[data-testid="purchase-item-line-total"]')).toBeNull();
-    expect(host.querySelector('[data-testid="purchase-item-cost"]')).not.toBeNull();
+    expect(priceInput(host, 'purchase-item-cost').value).toBe('1.6250');
 
     await typeInto(fixture, 'purchase-item-cost', '1.6625');
 
+    expect(component.items[0].priceEntryMode).toBe('unit');
     expect(component.items[0].unitCost).toBe(1.6625);
-    expect(host.querySelector('[data-testid="purchase-item-derived-line-total"]')!.textContent)
-      .toContain('$39.90');
+    expect(priceInput(host, 'purchase-item-line-total').value).toBe('33.25');
+  });
+
+  it('leaves an unrounded calculated unit cost alone when its field is only focused and blurred', async () => {
+    const { fixture, host, component } = await render();
+
+    component.onLineQuantityChange(component.items[0], 300);
+    await typeInto(fixture, 'purchase-item-line-total', '100');
+
+    const unitPrice = priceInput(host, 'purchase-item-cost');
+    unitPrice.dispatchEvent(new Event('focus'));
+    unitPrice.dispatchEvent(new Event('blur'));
+    fixture.detectChanges();
+
+    // The displayed 0.3333 must not become the submitted value: 300 x 0.3333 is $99.99, not $100.
+    expect(component.items[0].priceEntryMode).toBe('total');
+    expect(component.items[0].unitCost).toBe(100 / 300);
+    expect(component.savedLineAmount(component.items[0])).toBe(100);
   });
 });
 

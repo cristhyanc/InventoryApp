@@ -30,6 +30,7 @@ public class BookkeepingReportAvailabilityTests
         CashSales = 0m,
         CardTransactions = 0,
         CashTransactions = 0,
+        TransactionCount = 0,
         PartialCostOfGoods = 0m,
         ImportedHasNetSettlement = false,
         ImportedNetSettlement = 0m,
@@ -137,6 +138,92 @@ public class BookkeepingReportAvailabilityTests
 
         Assert.Equal(nameof(ReportAvailabilityState.Complete), report.ProviderAvailability.Sales.State);
         Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Fees.State);
+    }
+
+    /// <summary>
+    /// Issue #804: the transaction count and the average sale are provider-sourced, so the sales
+    /// family's note has to name them. A period nothing covered reports both as zero in the
+    /// contract, and that zero is exactly the one the state exists to stop a reader believing.
+    /// </summary>
+    [Fact]
+    public async Task The_sales_note_names_the_transaction_count_and_average_sale_when_nothing_covered_the_period()
+    {
+        var report = await Report(NoProviderData(FakeBookkeepingReportFactsProvider.Complete()));
+
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Sales.State);
+        Assert.Equal(0, report.TransactionCount);
+        Assert.Equal(0m, report.AverageSale);
+        Assert.Contains("transaction count", Notes(report), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("average sale", Notes(report), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Partially covered sales are real partial data: the count and the average stay exactly as
+    /// counted, beside the stale state that says they may not be all of the period's.
+    /// </summary>
+    [Fact]
+    public async Task Partially_covered_sales_keep_the_counted_transaction_count_and_average_sale()
+    {
+        var facts = FakeBookkeepingReportFactsProvider.Complete(sales: 100m, transactionCount: 10) with
+        {
+            SalesCoverage = [new ReportCoverageRange(From.AddDays(-30), new DateTime(2026, 7, 18, 6, 0, 0, DateTimeKind.Utc))],
+        };
+
+        var report = await Report(facts);
+
+        Assert.Equal(nameof(ReportAvailabilityState.Stale), report.ProviderAvailability.Sales.State);
+        Assert.Equal(10, report.TransactionCount);
+        Assert.Equal(10m, report.AverageSale);
+    }
+
+    /// <summary>
+    /// Issue #805: the imported actual reimbursement is settlement-sourced and the comparison built
+    /// on it depends on both families, so the fee note has to name them and the combined state has
+    /// to govern the difference. A period with no settlement import reports an actual of zero in the
+    /// contract, and that zero is exactly the one the state exists to stop a reader believing.
+    /// </summary>
+    [Fact]
+    public async Task The_fee_note_names_the_actual_reimbursement_and_the_reconciliation_when_no_settlement_covered_the_period()
+    {
+        var facts = FakeBookkeepingReportFactsProvider.Complete() with
+        {
+            SettlementCoverage = [],
+            ImportedContainsRows = false,
+            ImportedHasNetSettlement = false,
+            ImportedNetSettlement = 0m,
+        };
+
+        var report = await Report(facts);
+
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Fees.State);
+        Assert.Equal(nameof(ReportAvailabilityState.Missing), report.ProviderAvailability.Combined.State);
+        Assert.Equal(0m, report.ActualReimbursement);
+        Assert.Equal("Pending", report.ReconciliationStatus);
+        Assert.Contains("actual reimbursement", Notes(report), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("reconciliation", Notes(report), StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Incomplete provider data never makes the comparison itself disappear: the amounts stay as
+    /// calculated beside the state that says they may not be all of the period's, which is what the
+    /// presentations substitute for a zero. Stale settlement coverage is still settlement coverage.
+    /// </summary>
+    [Fact]
+    public async Task Partially_covered_settlement_keeps_the_imported_actual_reimbursement_it_read()
+    {
+        var lastCovered = new DateTime(2026, 7, 18, 6, 0, 0, DateTimeKind.Utc);
+        var facts = FakeBookkeepingReportFactsProvider.Complete() with
+        {
+            SettlementCoverage = [new ReportCoverageRange(From.AddDays(-30), lastCovered)],
+        };
+
+        var report = await Report(facts);
+
+        Assert.Equal(nameof(ReportAvailabilityState.Stale), report.ProviderAvailability.Fees.State);
+        Assert.Equal(lastCovered, report.ProviderAvailability.Fees.AsOfUtc);
+        Assert.Equal(74m, report.ActualReimbursement);
+        Assert.Equal(75.6m, report.ExpectedReimbursement);
+        Assert.Equal("Needs Review", report.ReconciliationStatus);
     }
 
     [Fact]

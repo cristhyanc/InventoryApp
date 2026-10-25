@@ -4,6 +4,7 @@ using Inventory.Application.Suppliers;
 using Inventory.Domain.Gst;
 using InventoryApi.Auth;
 using InventoryApi.DTOs;
+using InventoryApi.Http;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Identity.Web.Resource;
@@ -70,15 +71,36 @@ public class SuppliersController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<SupplierResponse>> Create(SupplierDto dto, CancellationToken cancellationToken)
     {
-        var supplier = await _createSupplier.Handle(dto.Name, dto.ContactName, dto.Phone, dto.Email, dto.Address, cancellationToken);
-        return CreatedAtAction(nameof(Get), new { id = supplier.Id }, ToResponse(supplier));
+        ArgumentNullException.ThrowIfNull(dto);
+
+        var result = await _createSupplier.Handle(
+            new SupplierFields(dto.Name, dto.ContactName, dto.Phone, dto.Email, dto.Address, dto.Url),
+            cancellationToken);
+
+        return result.Outcome switch
+        {
+            SupplierWriteOutcome.Success =>
+                CreatedAtAction(nameof(Get), new { id = result.Supplier!.Id }, ToResponse(result.Supplier)),
+            _ => BadRequest(UrlProblem(result.ValidationError!)),
+        };
     }
 
     [HttpPut("{id:int}")]
     public async Task<IActionResult> Update(int id, SupplierDto dto, CancellationToken cancellationToken)
     {
-        var ok = await _updateSupplier.Handle(id, dto.Name, dto.ContactName, dto.Phone, dto.Email, dto.Address, cancellationToken);
-        return ok ? NoContent() : NotFound();
+        ArgumentNullException.ThrowIfNull(dto);
+
+        var result = await _updateSupplier.Handle(
+            id,
+            new SupplierFields(dto.Name, dto.ContactName, dto.Phone, dto.Email, dto.Address, dto.Url),
+            cancellationToken);
+
+        return result.Outcome switch
+        {
+            SupplierWriteOutcome.Success => NoContent(),
+            SupplierWriteOutcome.NotFound => NotFound(),
+            _ => BadRequest(UrlProblem(result.ValidationError!)),
+        };
     }
 
     [HttpDelete("{id:int}")]
@@ -134,5 +156,19 @@ public class SuppliersController : ControllerBase
     }
 
     private static SupplierResponse ToResponse(SupplierRecord record) =>
-        new(record.Id, record.Name, record.ContactName, record.Phone, record.Email, record.Address);
+        new(record.Id, record.Name, record.ContactName, record.Phone, record.Email, record.Address, record.Url);
+
+    /// <summary>
+    /// The only field a supplier write refuses today is <c>url</c> (issue #847), so the refusal is
+    /// reported against that field. It is a <see cref="ValidationProblemDetails"/> - the shape
+    /// <c>[ApiController]</c> already produces for a body that fails model binding - so a client
+    /// puts the message back on the form field the operator typed in, rather than reading a bare
+    /// string.
+    /// </summary>
+    private static ValidationProblemDetails UrlProblem(string message) =>
+        new(new Dictionary<string, string[]>(StringComparer.Ordinal) { ["url"] = [message] })
+        {
+            Title = DomainExceptionHandler.ValidationTitle,
+            Status = StatusCodes.Status400BadRequest,
+        };
 }

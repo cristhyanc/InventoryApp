@@ -532,3 +532,71 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     });
   });
 });
+
+/**
+ * Mark as ordered in the search/filter toolbar (issue #832). It used to sit in its own right-aligned
+ * row below the toolbar, which was the only placement; it now sits inside the toolbar, right-aligned
+ * beside the filters already there, matching how issue #825 placed New Product on the Products page.
+ */
+describe('ProductNeedsOrderingComponent Mark as ordered in the toolbar (issue #832)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(sessionActive: Observable<boolean> = of(false)) {
+    await TestBed.configureTestingModule({
+      imports: [ProductNeedsOrderingComponent],
+      providers: [
+        provideRouter([]),
+        {
+          provide: ProductService,
+          useValue: { getLowStock: () => of({ products: [], mode: 'MachineAware', machineNeedUnavailableReason: null }), update: jest.fn() }
+        },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierService, useValue: { getAll: () => of([]) } },
+        { provide: SupplierOrderService, useValue: { create: jest.fn() } },
+        { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: sessionActive } },
+        { provide: AccessService, useValue: { allows: () => of(true) } }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductNeedsOrderingComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement };
+  }
+
+  function toolbar(host: HTMLElement): HTMLElement {
+    return host.querySelector('.card .card-body') as HTMLElement;
+  }
+
+  it('renders exactly one Mark as ordered button, inside the search/filter toolbar', async () => {
+    const { host } = await render();
+
+    const buttons = Array.from(host.querySelectorAll('button')).filter((button) => button.textContent?.trim() === 'Mark as ordered');
+    expect(buttons).toHaveLength(1);
+    expect(toolbar(host).contains(buttons[0])).toBe(true);
+  });
+
+  it('keeps search, category, Reset and Mark as ordered reachable in that keyboard order', async () => {
+    const { host } = await render();
+
+    const order = Array.from(toolbar(host).querySelectorAll<HTMLElement>('input, select, button, a')).map(
+      (control) => control.getAttribute('placeholder') ?? control.textContent?.trim()
+    );
+    expect(order).toEqual(['Search name or SKU', 'All Categories', 'Reset', 'Mark as ordered']);
+    expect(toolbar(host).querySelector('[tabindex="-1"]')).toBeNull();
+  });
+
+  it('lets the toolbar wrap instead of overflowing', async () => {
+    const { host } = await render();
+
+    expect(Array.from(toolbar(host).classList)).toEqual(expect.arrayContaining(['flex', 'flex-wrap']));
+    expect(Array.from(toolbar(host).classList)).not.toContain('overflow-x-auto');
+  });
+
+  it('hides Mark as ordered from the toolbar while a support session is active', async () => {
+    const { host } = await render(of(true));
+
+    expect(Array.from(host.querySelectorAll('button')).some((button) => button.textContent?.trim() === 'Mark as ordered')).toBe(false);
+  });
+});

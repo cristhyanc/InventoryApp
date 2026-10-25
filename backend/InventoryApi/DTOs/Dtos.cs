@@ -129,9 +129,18 @@ public record CategoryResponse(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<string>? ProviderManagedFields = null);
 
-public record SupplierDto(string Name, string? ContactName, string? Phone, string? Email, string? Address);
+/// <summary>
+/// The supplier create/update body. <c>url</c> is the optional website (issue #847) and is
+/// validated by <c>Inventory.Application.Suppliers.SupplierUrlPolicy</c> rather than by an
+/// attribute here, so every write path runs the one rule.
+/// </summary>
+public record SupplierDto(string Name, string? ContactName, string? Phone, string? Email, string? Address, string? Url);
 
-public record SupplierResponse(int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address);
+/// <summary>
+/// A supplier as the API publishes it. Schema-identical to the legacy <c>Supplier</c> component
+/// that every nested <c>supplier</c> object references, <c>url</c> included (issue #847).
+/// </summary>
+public record SupplierResponse(int Id, string Name, string? ContactName, string? Phone, string? Email, string? Address, string? Url);
 
 /// <summary>
 /// One purchase line in the JSON <c>items</c> field of a purchase create/update form (issue #429).
@@ -210,6 +219,17 @@ public record SiteSummaryDto(
     decimal? CurrentWeekRevenue,
     decimal? PreviousComparableWeekRevenue
 );
+
+// One row of GET /api/sites/list, the light site list a site picker fills from (issue #841): the id
+// a filter submits, the name it shows, and the number of machines the fleet has at that site. It is
+// deliberately not a reduced SiteSummaryDto - a stock percentage, alert count or revenue figure
+// would each need the per-machine Nayax read this endpoint exists to avoid. The machine count does
+// not: the fleet read behind this list already groups every machine by its site, so the count is the
+// size of that group and costs no second request of any kind, which is why the owner's 23 October
+// 2026 decision put it on this row rather than removing the Site Products subtitle that states it.
+// A consumer that only fills a dropdown ignores it. GET /api/sites keeps serving the full row to the
+// Dashboard and the Sites page.
+public record SiteListItemDto(long SiteId, string Name, int MachineCount);
 
 public record SiteProductMachineMdbCodeDto(long MachineId, string MachineLabel, int? MdbCode);
 

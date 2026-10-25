@@ -1,5 +1,6 @@
 import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { Capability, CapabilitySet } from '../access/capabilities';
+import { OptionVisibility } from '../access/option-visibility';
 import { ProviderAvailability } from '../provider/provider-availability.service';
 import { ProviderFeature } from '../provider/provider-feature-permissions';
 import { ProviderLock, providerLockOf, providerToolsOffered } from '../provider/provider-lock';
@@ -18,24 +19,44 @@ import { ProviderLock, providerLockOf, providerToolsOffered } from '../provider/
  * check the same capability themselves (see docs/architecture.md § Capability authorization), so a
  * destination that is not rendered hides a page rather than protecting one.
  *
- * Since issue #729 (child E2 of issue #329, decision P6) the order is also a statement about the
- * business's sales provider: everything that works without one comes first, and the live provider
- * destinations sit in their own section at the bottom, where they are shown **locked** rather than
- * hidden while the provider cannot serve them. The provider answer comes from the shared signal of
- * issue #728 and is applied **after** the capability set, so an entry the role cannot see stays
- * hidden rather than becoming a locked advertisement for a page that role never had.
+ * Since issue #729 (child E2 of issue #329, decision P6) a destination may also declare what it
+ * needs from the business's sales provider: `lockedWithout` names the read, and while the shared
+ * availability signal of issue #728 refuses it the entry is shown **locked** rather than hidden.
+ * That answer is applied **after** the capability set, so an entry the role cannot see stays hidden
+ * rather than becoming a locked advertisement for a page that role never had.
  *
- * Issue #740 (child G1) moved `Machines` out of that section and into the top one: a business keeps
- * its own machine records now, so the destination always has something to show and its own
- * create/rename/deactivate actions to offer. The page withholds its live stock, revenue and sync
- * parts itself while the provider cannot serve them, which is a decision about one page's content
- * rather than about whether a destination exists.
+ * Issue #740 (child G1) took `Machines` off that signal entirely: a business keeps its own machine
+ * records now, so the destination always has something to show and its own create/rename/deactivate
+ * actions to offer. The page withholds its live stock, revenue and sync parts itself while the
+ * provider cannot serve them, which is a decision about one page's content rather than about
+ * whether a destination exists.
  *
- * The reports are deliberately not in that section: Bookkeeping, Daily, Transactions,
- * Reconciliation and machine profitability read **stored** data, so they open normally with no
- * provider and report their own availability states (issues #730 and #731), and previously imported
- * history stays readable after a disconnect (decision P5). Locking them would hide a business's own
- * records behind a connection they no longer have.
+ * Issue #868 removed the "Needs Nayax" section issue #729 had put the live provider destinations
+ * in: `Sites` sits immediately above `Machines`, `Site Commissions` is back among the reports, and
+ * a destination's provider dependency is carried by the entry itself rather than by where it sits.
+ * It also **supersedes decision P5 for five reports**, at the user's request: Daily, Transactions,
+ * Reconciliation, Machines and Products declare `providerRecords`, so a business with no Nayax
+ * connection at all is shown the same connection-required page on them that Site Commissions
+ * already showed. `providerRecords` is deliberately the narrowest dependency there is - a working
+ * connection with a refused read, and credentials that stopped working, keep these reports open,
+ * because what they report on is already stored and nothing about it is read live. Bookkeeping and
+ * GST declare nothing and are never locked.
+ *
+ * Issue #873 adds the one thing in this file that is not about a capability or a provider: a Super
+ * Admin may stop `Historical GST Classification` being **offered** to everybody else. The shared
+ * setting arrives with the capability set, on `GET /api/me/access`, and is applied here as
+ * {@link OptionVisibility} - it hides that one destination from a member who is not the platform
+ * administrator, leaves it in the Super Admin's own menu marked with an `Off` pill, and changes no
+ * capability and no other entry. Like everything else here it hides a page rather than protecting
+ * one: the classification endpoints keep authorizing every request by `Data.Repair` in both states,
+ * and the route entered directly still resolves.
+ *
+ * Issue #869 does the same for two Admin destinations, on the **live fleet read** rather than on
+ * stored records: `Site Commission Agreements`, whose site picker is that read, and `AVCO
+ * Transition`, whose preview reads the machines and then their products. `Historical Cost Recovery`
+ * deliberately declares nothing and is never locked (the user's decision of 24 October 2026): it
+ * makes no Nayax call at all, reading the Nayax cost already stored on imported sales, so a
+ * disconnected business with imported history can still recover those costs.
  */
 
 /**
@@ -73,9 +94,11 @@ export interface NavLink {
 
 /**
  * A heading over the entries that follow it, with no page and no action of its own (issue #729).
- * It exists so the live provider destinations read as one section at the bottom of the menu rather
- * than as three unexplained entries, and `navigationFor` drops it when every entry under it was
- * left out - a heading over nothing says a section exists that this member does not have.
+ * It held the live provider destinations together as one "Needs Nayax" section until issue #868
+ * removed that section, so nothing declares one today; the type and the sidebar's rendering of it
+ * are kept, like {@link NavPlaceholder}, for the next menu that needs a heading. `navigationFor`
+ * drops a heading when every entry under it was left out - a heading over nothing says a section
+ * exists that this member does not have.
  */
 export interface NavSectionHeading {
   readonly kind: 'section';
@@ -94,6 +117,30 @@ export interface NavSectionHeading {
 export interface NavPlaceholder {
   readonly kind: 'placeholder';
   readonly label: string;
+}
+
+/**
+ * The route of the one Admin destination whose visibility a Super Admin may switch (issue #873).
+ *
+ * It is named by its route rather than by a flag on the entry because there is exactly one of them
+ * and because the API names it the same way: `GET /api/me/access` reports one boolean about this one
+ * option. A general feature-flag framework is explicitly out of scope of that issue, so a second
+ * switchable option would be a second named constant and a second field, decided by its own issue -
+ * never a map of arbitrary keys this file resolves.
+ */
+export const switchableOptionRoute = '/admin/historical-gst-classification';
+
+/**
+ * Whether `route` is the switchable destination and the application has switched it **off** - which
+ * is what the sidebar and the Admin hub render the `Off` pill from, what this file withholds the
+ * destination from an ordinary member for, and the only thing either of them renders it from.
+ *
+ * It says nothing about who is looking: a destination is only ever *offered* to a Super Admin while
+ * it is off, so a rendered switched-off entry is by construction a Super Admin's. `undefined`
+ * options are "not known" and are never switched off (see {@link OptionVisibility}).
+ */
+export function optionSwitchedOff(route: string, options: OptionVisibility | undefined): boolean {
+  return route === switchableOptionRoute && options?.historicalGstClassificationVisible === false;
 }
 
 /** Anything a group may hold: a real destination or an inert placeholder. */
@@ -119,6 +166,15 @@ function providerToolLink(label: string, route: string, capability: Capability):
 }
 
 /**
+ * A report over sales this business recorded through Nayax (issue #868). It makes no live read, so
+ * it declares `providerRecords`: it is locked only while the business has no Nayax connection at
+ * all, and stays open for credentials that stopped working or a read Nayax refused.
+ */
+function providerRecordsReportLink(label: string, route: string): NavLink {
+  return { ...link(label, route, 'Reports.View'), lockedWithout: 'providerRecords' };
+}
+
+/**
  * The business `Admin` group's declared destinations, exported on their own so the Admin hub page
  * (`AdminComponent`) can filter its own cards from the same capability-to-route data the sidebar
  * renders, rather than a second, hand-kept copy that could drift from it (issue #674).
@@ -132,12 +188,27 @@ export const adminNavGroup: NavGroup = {
     // a sales provider, so it is also the one destination every locked page sends an Owner to, and
     // it stays in the top section whatever the provider's state - it has to be reachable to fix it.
     link('Integrations', '/admin/nayax-settings', 'Integration.Manage'),
-    link('Site Commission Agreements', '/admin/site-commission-agreements', 'SiteCommissions.Manage'),
+    {
+      // Locked on the live fleet read since issue #869, for the same reason the site commission
+      // report is: this page's site picker *is* that read (`GET /api/sites`), and a site is known
+      // only from it, so with no usable connection there is no site to write an agreement against.
+      ...link('Site Commission Agreements', '/admin/site-commission-agreements', 'SiteCommissions.Manage'),
+      lockedWithout: 'machineFleet'
+    },
     // The Nayax sales and settlement imports, and the Nayax sale timestamp repair: hidden until the
     // provider is usable (issue #729).
     providerToolLink('Imports', '/admin/imports', 'Imports.Run'),
+    // Deliberately never locked (issue #869, the user's decision of 24 October 2026): this page
+    // makes no Nayax call at all - it reads the Nayax cost already stored on imported sales - so a
+    // disconnected business with imported history can still recover those costs.
     link('Historical Cost Recovery', '/admin/historical-cost-recovery', 'Data.Repair'),
-    link('AVCO Transition', '/admin/avco-transition', 'Data.Repair'),
+    {
+      // Locked on the live fleet read since issue #869: the transition preview reads the machines
+      // and then their products from Nayax, so without a usable connection it has no baseline to
+      // offer.
+      ...link('AVCO Transition', '/admin/avco-transition', 'Data.Repair'),
+      lockedWithout: 'machineFleet'
+    },
     link('Costing Repair', '/admin/costing-repair', 'Data.Repair'),
     link('Historical GST Classification', '/admin/historical-gst-classification', 'Data.Repair'),
     providerToolLink('Nayax Sale Timestamp Repair', '/admin/nayax-sale-timestamp-repair', 'Data.Repair'),
@@ -147,25 +218,26 @@ export const adminNavGroup: NavGroup = {
   ]
 };
 
-/**
- * The heading over the live provider destinations (issue #729). It names the provider, because that
- * is what an operator has to act on, and its sentence says what the section needs rather than what
- * it currently is: the entries under it carry their own lock state, one per feature.
- */
-export const providerSectionHeading: NavSectionHeading = {
-  kind: 'section',
-  label: 'Needs Nayax',
-  description: 'These read live data from Nayax.'
-};
-
 export const primaryNavigation: readonly NavItem[] = [
   { kind: 'link', label: 'Dashboard', route: '/', icon: 'home', capability: 'Dashboard.View' },
   { kind: 'link', label: 'Pick List', route: '/pick-list', icon: 'assignment', capability: 'PickList.View' },
   {
-    // In the top section since issue #740 (child G1 of issue #329): a business now keeps its own
-    // machine records, which it creates, renames, deactivates and reactivates with no provider at
-    // all, so the destination declares no `lockedWithout` and is never locked. The page hides its
-    // live stock, revenue and sync parts itself while the provider cannot serve them.
+    // A site is known only from the live fleet read's `CustomerID`, so the site list needs that
+    // read and has nothing local to fall back on (AGENTS.md § Site commissions). Manual sites are
+    // deliberately out of scope of issue #740. It sits immediately above Machines since issue #868,
+    // which removed the "Needs Nayax" section it used to be the first entry of.
+    kind: 'link',
+    label: 'Sites',
+    route: '/sites',
+    icon: 'location_on',
+    capability: 'Inventory.Operate',
+    lockedWithout: 'machineFleet'
+  },
+  {
+    // Never locked since issue #740 (child G1 of issue #329): a business now keeps its own machine
+    // records, which it creates, renames, deactivates and reactivates with no provider at all, so
+    // the destination declares no `lockedWithout`. The page hides its live stock, revenue and sync
+    // parts itself while the provider cannot serve them.
     kind: 'link',
     label: 'Machines',
     route: '/machines',
@@ -198,48 +270,38 @@ export const primaryNavigation: readonly NavItem[] = [
   },
   { kind: 'link', label: 'Expenses', route: '/expenses', icon: 'attach_money', capability: 'Expenses.Manage' },
   {
-    // Every report here reads stored data, so none of them is ever locked by provider status
-    // (issue #729, decision P5): each one reports its own availability states instead (#730, #731).
+    // Every report is here again since issue #868, which brought the site commission report back
+    // from the "Needs Nayax" section it left for in issue #729. What a report needs from the
+    // provider is declared on the entry: Bookkeeping and GST need nothing, the five
+    // `providerRecordsReportLink` entries need a Nayax connection to exist at all, and Site
+    // Commissions needs the live fleet read. Each one still reports its own availability states
+    // inside the page (#730, #731).
     kind: 'group',
     label: 'Reports',
     icon: 'bar_chart',
     children: [
-      link('Dashboard', '/reports', 'Reports.View'),
       link('Bookkeeping', '/reports/bookkeeping', 'Reports.View'),
-      link('Daily', '/reports/daily', 'Reports.View'),
-      link('Transactions', '/reports/transactions', 'Reports.View'),
-      link('Reconciliation', '/reports/reconciliation', 'Reports.View'),
-      link('Machines', '/reports/machines', 'Reports.View'),
-      link('Products', '/reports/products', 'Reports.View'),
+      providerRecordsReportLink('Daily', '/reports/daily'),
+      providerRecordsReportLink('Transactions', '/reports/transactions'),
+      providerRecordsReportLink('Reconciliation', '/reports/reconciliation'),
+      providerRecordsReportLink('Machines', '/reports/machines'),
+      providerRecordsReportLink('Products', '/reports/products'),
+      {
+        // The one report that is not a read of stored data at all: with no usable provider it has
+        // no sites to report on and the API answers `isAvailable: false` (issue #731), so it keeps
+        // the live fleet read it has always declared. The API puts it on SiteCommissions.Manage
+        // rather than Reports.View, because it is the surface the agreements are maintained from
+        // (issue #526); its breadcrumb has always named Reports as its parent page.
+        kind: 'link',
+        label: 'Site Commissions',
+        route: '/reports/site-commissions',
+        capability: 'SiteCommissions.Manage',
+        lockedWithout: 'machineFleet'
+      },
       link('GST', '/reports/gst', 'Reports.View')
     ]
   },
-  adminNavGroup,
-  providerSectionHeading,
-  {
-    // A site is known only from the live fleet read's `CustomerID`, so the site list needs that
-    // read and has nothing local to fall back on (AGENTS.md § Site commissions). Manual sites are
-    // deliberately out of scope of issue #740.
-    kind: 'link',
-    label: 'Sites',
-    route: '/sites',
-    icon: 'location_on',
-    capability: 'Inventory.Operate',
-    lockedWithout: 'machineFleet'
-  },
-  {
-    // The site commission report moved out of the Reports group here (issue #729): unlike every
-    // report left there it is not a read of stored data at all - with no usable provider it has no
-    // sites to report on and answers `isAvailable: false` (issue #731). The API puts it on
-    // SiteCommissions.Manage rather than Reports.View, because it is the surface the agreements are
-    // maintained from (issue #526); its breadcrumb still names Reports as its parent page.
-    kind: 'link',
-    label: 'Site Commissions',
-    route: '/reports/site-commissions',
-    icon: 'attach_money',
-    capability: 'SiteCommissions.Manage',
-    lockedWithout: 'machineFleet'
-  }
+  adminNavGroup
 ];
 
 /**
@@ -271,6 +333,17 @@ export const businessesNavLink: NavLink = {
 };
 
 /**
+ * The Supplier presets page (issue #848): the one platform-wide list of suggested suppliers, which
+ * issue #835 child C copies into each newly approved business. Like the two links above it declares
+ * no capability - no business role grants it, only the platform-admin probe below does.
+ */
+export const supplierPresetsNavLink: NavLink = {
+  kind: 'link',
+  label: 'Supplier Presets',
+  route: '/super-admin/supplier-presets'
+};
+
+/**
  * The top-level Super Admin group (issue #546, parent #510 under #328): kept apart from the
  * business `Admin` group because neither of its destinations is granted by a business role.
  * `navigationFor` composes it in only while `GET /api/admin/diagnostics/access` confirms the
@@ -281,7 +354,7 @@ export const superAdminNavGroup: NavGroup = {
   kind: 'group',
   label: 'Super Admin',
   icon: 'settings',
-  children: [platformDiagnosticsNavLink, businessesNavLink]
+  children: [platformDiagnosticsNavLink, businessesNavLink, supplierPresetsNavLink]
 };
 
 /**
@@ -320,6 +393,13 @@ export const superAdminNavGroup: NavGroup = {
  * the answer has not settled yet, and then nothing is withheld and nothing is locked: the menu must
  * not flicker items away, and an unread status is not a refusal (issue #728's fail-open rule).
  *
+ * `options` is the shared switchable-option answer (issue #873), applied in the same pass as the
+ * capability set and **after** it in effect: the one switchable destination is left out while the
+ * application has switched it off, unless `hasPlatformDiagnosticsAccess` says this is the platform
+ * administrator, who keeps it in both states. It can only ever remove an entry the capabilities
+ * already allowed - switching the option on adds nothing to a member whose role never had it - and
+ * `undefined` removes nothing at all (see {@link OptionVisibility}).
+ *
  * Everything here copies rather than mutates, so `primaryNavigation` stays the full declared
  * navigation and one member's rendered menu can never leak into another's.
  */
@@ -327,10 +407,15 @@ export function navigationFor(
   capabilities: CapabilitySet | undefined,
   hasPlatformDiagnosticsAccess: boolean,
   businessNavigation: BusinessNavigationVisibility,
-  provider?: ProviderAvailability
+  provider?: ProviderAvailability,
+  options?: OptionVisibility
 ): readonly NavItem[] {
   const business: readonly NavItem[] = businessNavigation === 'offered' ? primaryNavigation : [];
   const offered = hasPlatformDiagnosticsAccess ? [...business, superAdminNavGroup] : business;
+
+  // A Super Admin is exempt from the switch, so nothing is withheld for them; neither is anything
+  // withheld while the capability set itself is unknown, where the whole pass is skipped below.
+  const switchedOff = hasPlatformDiagnosticsAccess ? undefined : options;
 
   const allowed =
     capabilities === undefined
@@ -340,23 +425,35 @@ export function navigationFor(
             return [item];
           }
           if (item.kind === 'link') {
-            return allowsLink(capabilities, item) ? [item] : [];
+            return allowsLink(capabilities, item, switchedOff) ? [item] : [];
           }
 
-          const children = item.children.filter((child) => allowsChild(capabilities, child));
+          const children = item.children.filter((child) => allowsChild(capabilities, child, switchedOff));
           return children.length === 0 ? [] : [{ ...item, children }];
         });
 
   return withOccupiedSections(withProviderTools(allowed, provider));
 }
 
-function allowsLink(capabilities: CapabilitySet, navLink: NavLink): boolean {
+function allowsLink(
+  capabilities: CapabilitySet,
+  navLink: NavLink,
+  switchedOff: OptionVisibility | undefined
+): boolean {
+  if (optionSwitchedOff(navLink.route, switchedOff)) {
+    return false;
+  }
+
   return navLink.capability === undefined || capabilities.has(navLink.capability);
 }
 
 /** A placeholder is always kept; a link is kept only while `allowsLink` allows it. */
-function allowsChild(capabilities: CapabilitySet, child: NavGroupChild): boolean {
-  return child.kind === 'placeholder' || allowsLink(capabilities, child);
+function allowsChild(
+  capabilities: CapabilitySet,
+  child: NavGroupChild,
+  switchedOff: OptionVisibility | undefined
+): boolean {
+  return child.kind === 'placeholder' || allowsLink(capabilities, child, switchedOff);
 }
 
 /**

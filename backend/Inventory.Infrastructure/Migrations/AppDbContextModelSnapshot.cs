@@ -54,6 +54,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int>("Status")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("SupplierPresetsCopiedAtUtc")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("TimeZoneId")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -1493,6 +1496,22 @@ namespace Inventory.Infrastructure.Migrations
                     b.ToTable("PickListRefillLines");
                 });
 
+            modelBuilder.Entity("Inventory.Infrastructure.Models.PlatformOptionVisibility", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("HistoricalGstClassificationVisible")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("PlatformOptionVisibility");
+                });
+
             modelBuilder.Entity("Inventory.Infrastructure.Models.Product", b =>
                 {
                     b.Property<long>("Id")
@@ -2023,6 +2042,10 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int>("ProductLineGstDefault")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("Url")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
 
                     b.HasIndex("BusinessId");
@@ -2142,6 +2165,43 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("SupplierOrderLineId");
 
                     b.ToTable("SupplierOrderReceiptAllocations");
+                });
+
+            modelBuilder.Entity("Inventory.Infrastructure.Models.SupplierPreset", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalisedName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Url")
+                        .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalisedName")
+                        .IsUnique();
+
+                    b.ToTable("SupplierPresets");
                 });
 
             modelBuilder.Entity("Inventory.Infrastructure.Models.SupportSession", b =>

@@ -200,6 +200,73 @@ public class EfBookkeepingReportFactsProviderTests
         Assert.True(facts.IsCogsComplete);
     }
 
+    /// <summary>
+    /// Issue #804: the completed-transaction count this report now publishes is the count of the
+    /// very rows its own totals are summed from - approved status 12 only, with every other
+    /// outcome excluded exactly as it is from gross sales. A completed sale whose payment method
+    /// classifies as neither card nor cash is still one of them, so the count is not the card and
+    /// cash counts added together.
+    /// </summary>
+    [Fact]
+    public async Task Transaction_count_counts_completed_sales_only_including_an_unknown_payment_method()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.NayaxSales.AddRange(
+            new NayaxSales { TransactionID = 1, MachineID = 10, SettlementValue = 10m, PaymentMethod = "Credit Card", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 4m },
+            new NayaxSales { TransactionID = 2, MachineID = 10, SettlementValue = 5m, PaymentMethod = "Cash", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 2m },
+            new NayaxSales { TransactionID = 3, MachineID = 10, SettlementValue = 6m, PaymentMethod = "Mystery Tender", MachineAuthorizationTime = new DateTime(2025, 8, 1), TransactionStatusId = NayaxTransactionStatusIds.Completed, CostOfGoodsSold = 3m },
+            Sale(4, NayaxTransactionStatusIds.PendingSettlementNotFinal, 99m),
+            Sale(5, NayaxTransactionStatusIds.Refunded, 99m),
+            Sale(6, NayaxTransactionStatusIds.CancelledOrDeclined26, 99m),
+            Sale(7, 9999, 99m),
+            Sale(8, null, 99m));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
+
+        Assert.Equal(3, facts.TransactionCount);
+        Assert.Equal(1, facts.CardTransactions);
+        Assert.Equal(1, facts.CashTransactions);
+        Assert.Equal(1, facts.UnknownTransactions);
+        Assert.Equal(21m, facts.GrossSales);
+    }
+
+    [Fact]
+    public async Task Transaction_count_is_scoped_to_the_selected_machine_and_date_range()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.NayaxSales.AddRange(
+            Sale(1, NayaxTransactionStatusIds.Completed, 10m, machineId: 10),
+            Sale(2, NayaxTransactionStatusIds.Completed, 10m, machineId: 10),
+            Sale(3, NayaxTransactionStatusIds.Completed, 10m, machineId: 20),
+            Sale(4, NayaxTransactionStatusIds.Completed, 10m, machineId: 10, authorizationTime: new DateTime(2025, 8, 2)));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), 10, CancellationToken.None);
+
+        Assert.Equal(2, facts.TransactionCount);
+        Assert.Equal(20m, facts.GrossSales);
+    }
+
+    [Fact]
+    public async Task A_period_with_no_completed_sale_reports_a_zero_transaction_count()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.NayaxSales.Add(Sale(1, NayaxTransactionStatusIds.PendingSettlementNotFinal, 99m));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 1), null, CancellationToken.None);
+
+        Assert.Equal(0, facts.TransactionCount);
+        Assert.Equal(0m, facts.GrossSales);
+    }
+
     private static NayaxSales Sale(
         long transactionId, int? transactionStatusId, decimal settlementValue,
         long machineId = 10, DateTime? authorizationTime = null, decimal? costOfGoodsSold = null) =>
@@ -213,6 +280,82 @@ public class EfBookkeepingReportFactsProviderTests
             TransactionStatusId = transactionStatusId,
             CostOfGoodsSold = costOfGoodsSold
         };
+
+    /// <summary>
+    /// Issue #805: this adapter's imported-settlement summary is what the report's actual
+    /// reimbursement and its reconciliation status rest on (the reporting dashboard's adapter read
+    /// the identical shared query until that issue removed the duplicate). An imported
+    /// reimbursement is matched on its own covered reimbursement period, not on a payout or import
+    /// date, so this is relational coverage of that overlap predicate and of the FK-backed
+    /// navigation the shared query reads it through.
+    /// </summary>
+    [Fact]
+    public async Task An_imported_reimbursement_covering_the_period_reports_its_net_settlement()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.ImportedFiles.Add(ImportedFileWith(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), 94m));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
+
+        Assert.True(facts.ImportedContainsRows);
+        Assert.True(facts.ImportedHasNetSettlement);
+        Assert.Equal(94m, facts.ImportedNetSettlement);
+    }
+
+    /// <summary>
+    /// A reimbursement whose covered period lies outside the requested range is a different
+    /// period's settlement and must not be matched into this one, which is what leaves the report
+    /// reporting <c>Pending</c> rather than reconciling against somebody else's month.
+    /// </summary>
+    [Fact]
+    public async Task An_imported_reimbursement_covering_another_period_is_not_matched()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.ImportedFiles.Add(ImportedFileWith(new DateTime(2025, 9, 1), new DateTime(2025, 9, 30), 94m));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
+
+        Assert.False(facts.ImportedContainsRows);
+        Assert.False(facts.ImportedHasNetSettlement);
+        Assert.Equal(0m, facts.ImportedNetSettlement);
+    }
+
+    /// <summary>
+    /// A settlement import that really did settle nothing is a row that exists and a total of zero.
+    /// The report compares it like any other amount; only the absence of a row is <c>Pending</c>.
+    /// </summary>
+    [Fact]
+    public async Task An_imported_reimbursement_of_zero_still_reports_that_rows_exist()
+    {
+        await using var connection = (await CreateSqliteAsync()).Connection;
+        await using var db = TestAppDbContext.Unrestricted(new DbContextOptionsBuilder<AppDbContext>().UseSqlite(connection).Options);
+        db.ImportedFiles.Add(ImportedFileWith(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), 0m));
+        await db.SaveChangesAsync();
+        var provider = new EfBookkeepingReportFactsProvider(db, TestFinancialUseCases.ProcessingFees(db), EmptyCommissions());
+
+        var facts = await provider.GetFactsAsync(new DateTime(2025, 8, 1), new DateTime(2025, 8, 31), null, CancellationToken.None);
+
+        Assert.True(facts.ImportedContainsRows);
+        Assert.Equal(0m, facts.ImportedNetSettlement);
+    }
+
+    private static ImportedFile ImportedFileWith(DateTime from, DateTime to, decimal total)
+    {
+        var file = new ImportedFile { FileName = "settlement.xml", FileHash = $"{from:yyyyMM}-{total}", ImportedAt = DateTime.UtcNow };
+        file.Reimbursements.Add(new ImportedReimbursement
+        {
+            ReimbursementStartDate = from,
+            ReimbursementEndDate = to,
+            Total = total
+        });
+        return file;
+    }
 
     [Fact]
     public async Task Receipt_delivery_and_package_costs_are_zero_when_no_receipts_are_in_range()

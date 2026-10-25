@@ -79,14 +79,26 @@ public sealed class EfPurchaseStore : IPurchaseStore
         return existingCount == productIds.Count;
     }
 
-    public async Task<(long ProductId, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
+    public async Task<(long ProductId, string? ProductName, DateTime CutoffAt)?> FindConflictingCostTransitionBaselineAsync(
         IReadOnlyCollection<long> productIds, DateTime purchaseDate, CancellationToken cancellationToken)
     {
         if (productIds.Count == 0) return null;
         var cutoffsByProduct = await _db.InventoryCostTransitionBaselines.AsNoTracking()
             .Where(x => productIds.Contains(x.ProductId))
             .ToDictionaryAsync(x => x.ProductId, x => x.CutoffAt, cancellationToken);
-        return PurchaseCostTransitionPolicy.FindConflictingBaseline(productIds, purchaseDate, cutoffsByProduct);
+        if (PurchaseCostTransitionPolicy.FindConflictingBaseline(productIds, purchaseDate, cutoffsByProduct)
+            is not { } conflict)
+        {
+            return null;
+        }
+
+        // Only the refused product's name, and only on the refusal path, so the ordinary write is
+        // unchanged (issue #833). Which product conflicts is still decided by the policy above.
+        var productName = await _db.Products.AsNoTracking()
+            .Where(product => product.Id == conflict.ProductId)
+            .Select(product => product.Name)
+            .FirstOrDefaultAsync(cancellationToken);
+        return (conflict.ProductId, productName, conflict.CutoffAt);
     }
 
     public async Task<PurchaseRecord> CreateAsync(
@@ -123,8 +135,14 @@ public sealed class EfPurchaseStore : IPurchaseStore
         _db.Receipts.Add(purchase);
         await _db.SaveChangesAsync(cancellationToken);
         await AllocateSupplierOrderFulfillmentAsync(purchase, cancellationToken);
+        var physicalChanges = new Dictionary<long, int>();
         foreach (var item in purchase.Items)
-            _db.StockAdjustments.Add(CreatePurchaseMovement(item, purchase.PurchaseDate));
+        {
+            var movement = CreatePurchaseMovement(item, purchase.PurchaseDate);
+            _db.StockAdjustments.Add(movement);
+            AddPhysicalChange(physicalChanges, item.ProductId, movement.QuantityChange);
+        }
+        await StagePhysicalStockAsync(physicalChanges, cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
         await RebuildAffectedAsync(purchase.Items.Select(item => (item.ProductId, purchase.PurchaseDate)), cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
@@ -167,6 +185,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
         var requiresFulfillmentReconciliation = items is not null ||
             originalSupplierId != purchase.SupplierId || originalPurchaseDate != purchase.PurchaseDate;
         var affected = new Dictionary<long, DateTime>();
+        var physicalChanges = new Dictionary<long, int>();
 
         await using var transaction = await BeginTransactionAsync();
         if (requiresFulfillmentReconciliation)
@@ -214,7 +233,9 @@ public sealed class EfPurchaseStore : IPurchaseStore
                     ApplyItemClassification(item, requested.GstClassification);
                     if (movement is not null)
                     {
-                        movement.QuantityChange = PurchaseStockMovementPolicy.ToStockQuantity(requested.Quantity);
+                        var quantityChange = PurchaseStockMovementPolicy.ToStockQuantity(requested.Quantity);
+                        AddPhysicalChange(physicalChanges, movement.ProductId, quantityChange - movement.QuantityChange);
+                        movement.QuantityChange = quantityChange;
                         movement.UnitCost = requested.UnitCost;
                         movement.TotalCost = PurchaseStockMovementPolicy.TotalCost(requested.Quantity, requested.UnitCost);
                         movement.EffectiveAt = purchase.PurchaseDate;
@@ -246,14 +267,21 @@ public sealed class EfPurchaseStore : IPurchaseStore
                 AddAffected(affected, remaining.ProductId,
                     movementByPurchaseItem.TryGetValue(remaining.Id, out var movement) ? movement.EffectiveAt : originalPurchaseDate);
                 if (movement is not null)
+                {
+                    AddPhysicalChange(physicalChanges, movement.ProductId, -movement.QuantityChange);
                     _db.StockAdjustments.Remove(movement);
+                }
                 _db.ReceiptItems.Remove(remaining);
                 purchase.Items.Remove(remaining);
             }
 
             await _db.SaveChangesAsync(cancellationToken);
             foreach (var item in newItems)
-                _db.StockAdjustments.Add(CreatePurchaseMovement(item, purchase.PurchaseDate));
+            {
+                var movement = CreatePurchaseMovement(item, purchase.PurchaseDate);
+                _db.StockAdjustments.Add(movement);
+                AddPhysicalChange(physicalChanges, item.ProductId, movement.QuantityChange);
+            }
         }
         else if (purchase.PurchaseDate != originalPurchaseDate)
         {
@@ -274,6 +302,7 @@ public sealed class EfPurchaseStore : IPurchaseStore
             }
         }
 
+        await StagePhysicalStockAsync(physicalChanges, cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
         if (requiresFulfillmentReconciliation)
             await AllocateSupplierOrderFulfillmentAsync(purchase, cancellationToken);
@@ -295,10 +324,14 @@ public sealed class EfPurchaseStore : IPurchaseStore
             .ToListAsync(cancellationToken);
         await EnsureNoPreCutoffMovementsAsync(movements, cancellationToken);
         var affected = movements.Select(movement => (movement.ProductId, movement.EffectiveAt)).ToList();
+        var physicalChanges = new Dictionary<long, int>();
+        foreach (var movement in movements)
+            AddPhysicalChange(physicalChanges, movement.ProductId, -movement.QuantityChange);
 
         await using var transaction = await BeginTransactionAsync();
         await RemoveSupplierOrderFulfillmentAsync(purchase.Items.Select(item => item.Id), cancellationToken);
         _db.StockAdjustments.RemoveRange(movements);
+        await StagePhysicalStockAsync(physicalChanges, cancellationToken);
         _db.Receipts.Remove(purchase);
         await _db.SaveChangesAsync(cancellationToken);
         await RebuildAffectedAsync(affected, cancellationToken);
@@ -399,7 +432,8 @@ public sealed class EfPurchaseStore : IPurchaseStore
     {
         var conflict = await FindConflictingCostTransitionBaselineAsync(productIds, purchaseDate, cancellationToken);
         if (conflict is { } found)
-            throw new InvalidOperationException(PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(found.CutoffAt, found.ProductId));
+            throw new InvalidOperationException(
+                PurchaseCostTransitionPolicy.DateBeforeCutoffMessage(found.CutoffAt, found.ProductId, found.ProductName));
     }
 
     private async Task EnsureLegacyPurchaseMovementsArePreservedAsync(
@@ -451,6 +485,28 @@ public sealed class EfPurchaseStore : IPurchaseStore
         foreach (var product in affected.GroupBy(x => x.ProductId)
                      .Select(group => (ProductId: group.Key, ChangedAt: group.Min(x => x.ChangedAt))))
             await _rebuild.RebuildAsync(product.ProductId, product.ChangedAt, cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// Moves each product's stored physical stock by exactly what this write did to its purchase
+    /// movements, before the rebuild runs (issue #831). The other movement writers already stage the
+    /// new quantity with the movement (<c>IRecordInventoryMovement</c>); without this, the rebuild of
+    /// a product that has never been costed - no baseline, no costing quantity, no inventory value -
+    /// compared its pre-write quantity with a history that already held the new movement, and
+    /// refused a consistent product as <c>MissingOpening</c>. The guard itself is untouched: stock
+    /// that did not reconcile before the write is still out by the same amount after it, and is still
+    /// refused. For every other product the rebuild sets the replayed quantity anyway, so this changes
+    /// nothing there.
+    /// </summary>
+    private async Task StagePhysicalStockAsync(IReadOnlyDictionary<long, int> physicalChanges, CancellationToken cancellationToken)
+    {
+        foreach (var (productId, change) in physicalChanges)
+        {
+            if (change == 0) continue;
+            var product = await _db.Products.FirstOrDefaultAsync(candidate => candidate.Id == productId, cancellationToken)
+                ?? throw new InvalidOperationException($"Product {productId} does not exist.");
+            product.QuantityInStock = checked(product.QuantityInStock + change);
+        }
     }
 
     private async Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction?> BeginTransactionAsync()
@@ -526,6 +582,9 @@ public sealed class EfPurchaseStore : IPurchaseStore
             affected[productId] = changedAt;
     }
 
+    private static void AddPhysicalChange(Dictionary<long, int> physicalChanges, long productId, int change) =>
+        physicalChanges[productId] = checked(physicalChanges.GetValueOrDefault(productId) + change);
+
     private static StockAdjustment CreatePurchaseMovement(PurchaseItem item, DateTime purchaseDate) => new()
     {
         ProductId = item.ProductId,
@@ -561,7 +620,8 @@ public sealed class EfPurchaseStore : IPurchaseStore
         purchase.CreatedAt);
 
     private static PurchaseSupplierRecord ToSupplierRecord(Supplier supplier) => new(
-        supplier.Id, supplier.Name, supplier.ContactName, supplier.Phone, supplier.Email, supplier.Address);
+        supplier.Id, supplier.Name, supplier.ContactName, supplier.Phone, supplier.Email, supplier.Address,
+        supplier.Url);
 
     private static PurchaseItemRecord ToItemRecord(PurchaseItem item) => new(
         item.Id, item.ReceiptId, item.ProductId, item.Quantity, item.UnitCost,

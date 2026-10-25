@@ -21,6 +21,7 @@ import {
 } from 'rxjs';
 import { ConfigService } from '../services/config.service';
 import { Capability, CapabilitySet, capabilitySet } from './capabilities';
+import { OptionVisibility } from './option-visibility';
 import { activeAccountKey, signedInAccountMayHaveChanged } from './signed-in-account';
 
 /** The `GET /api/me/access` response body (issue #521). */
@@ -29,6 +30,12 @@ interface MeAccessResponse {
   capabilities: string[];
   businessName: string;
   timeZoneId: string;
+
+  /**
+   * The shared switchable option visibility (issue #873). Optional here deliberately: an API that
+   * does not report it is read as "not known", which hides nothing - see {@link OptionVisibility}.
+   */
+  historicalGstClassificationVisible?: boolean;
 }
 
 /** What the signed-in member may do, as `GET /api/me/access` reported it. */
@@ -43,6 +50,14 @@ export interface MemberAccess {
   readonly capabilities: CapabilitySet;
   readonly businessName: string;
   readonly timeZoneId: string;
+
+  /**
+   * Which switchable options the application offers (issue #873), or `undefined` when the API did
+   * not report it. It travels with the capabilities because the shell builds one menu from both,
+   * and it is **not** one of them: it says what is offered, never what this member may do. See
+   * {@link OptionVisibility}.
+   */
+  readonly optionVisibility?: OptionVisibility;
 }
 
 /**
@@ -298,7 +313,15 @@ export class AccessService implements OnDestroy {
               role: response.role ?? null,
               capabilities: capabilitySet(response.capabilities ?? []),
               businessName: response.businessName,
-              timeZoneId: response.timeZoneId
+              timeZoneId: response.timeZoneId,
+              // Read as reported, never defaulted here: an absent field means "not known", and
+              // what that means for the menu is the one rule on `OptionVisibility`.
+              optionVisibility:
+                response.historicalGstClassificationVisible === undefined
+                  ? undefined
+                  : {
+                      historicalGstClassificationVisible: response.historicalGstClassificationVisible
+                    }
             }
           })
         ),

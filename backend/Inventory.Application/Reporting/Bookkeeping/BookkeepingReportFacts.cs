@@ -15,6 +15,11 @@ public sealed record BookkeepingReportFacts(
     decimal CashSales,
     int CashTransactions,
     int UnknownTransactions,
+    // Completed (status 12) sales in the requested business, date range and machine scope - the
+    // same rows every amount above is derived from, counted once here rather than re-counted per
+    // payment method or re-queried by another report (issue #804). It is deliberately not derived
+    // from an amount: a period of refunded-to-zero sales still had transactions.
+    int TransactionCount,
     decimal PartialCostOfGoods,
     bool IsCogsComplete,
     int UncostedTransactionCount,

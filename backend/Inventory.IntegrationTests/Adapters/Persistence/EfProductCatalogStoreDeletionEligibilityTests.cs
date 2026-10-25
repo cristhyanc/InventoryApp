@@ -183,7 +183,8 @@ public class EfProductCatalogStoreDeletionEligibilityTests : IDisposable
 
         await using var db = TestAppDbContext.For(_options, BusinessA);
         var product = Assert.Single(
-            await new EfProductCatalogStore(db).ListUnorderedAsync(WholeCatalogue(), CancellationToken.None));
+            await new EfProductCatalogStore(db).ListUnorderedAsync(
+                WholeCatalogue(), resolveInventoryHistory: false, CancellationToken.None));
 
         Assert.Null(product.DeletionEligibility);
     }

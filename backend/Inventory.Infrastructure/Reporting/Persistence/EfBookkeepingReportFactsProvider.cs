@@ -93,6 +93,11 @@ public sealed class EfBookkeepingReportFactsProvider : IBookkeepingReportFactsPr
             CashSales: cash?.Sales ?? 0m,
             CashTransactions: cash?.Count ?? 0,
             UnknownTransactions: unknown?.Count ?? 0,
+            // The completed sales every amount here is summed from, counted from the rows already
+            // read above rather than with a second query (issue #804). It is not the card and cash
+            // counts added together: a completed sale whose payment method classifies as neither
+            // is still one of these rows and still in GrossSales.
+            TransactionCount: paymentRows.Count,
             PartialCostOfGoods: partialCost,
             IsCogsComplete: isCogsComplete,
             UncostedTransactionCount: uncosted.Count,

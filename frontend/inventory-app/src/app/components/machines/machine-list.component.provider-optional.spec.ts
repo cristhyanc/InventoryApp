@@ -10,6 +10,7 @@ import {
 } from '../../provider/provider-availability.spec-helpers';
 import { LocalMachineService } from '../../services/local-machine.service';
 import { MachineService } from '../../services/machine.service';
+import { ProviderMachineReviewService } from '../../services/provider-machine-review.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { MachineListComponent } from './machine-list.component';
 
@@ -39,6 +40,24 @@ async function render(
       provideRouter([]),
       { provide: MachineService, useValue: { getAll: fleetRead } },
       { provide: LocalMachineService, useValue: { getAll: () => of(options.locals ?? [localMachine(1, 'Atrium')]) } },
+      // The provider machine review composed beside the list since issue #742. It reads the fleet
+      // the moment the page shows it, so these tests give it an empty reading and stay about the
+      // page itself.
+      {
+        provide: ProviderMachineReviewService,
+        useValue: {
+          review: () =>
+            of({
+              reviewedAtUtc: '2026-10-21T02:00:00Z',
+              autoLinked: [],
+              awaitingReview: [],
+              linked: [],
+              awaitingReviewCount: 0,
+              linkedCount: 0
+            }),
+          apply: () => of({})
+        }
+      },
       { provide: SupportSessionService, useValue: { active$: of(false) } },
       { provide: AccessService, useValue: { allows: () => of(true) } },
       provideNayaxConnectionStatus(options.status ?? 'Ready')

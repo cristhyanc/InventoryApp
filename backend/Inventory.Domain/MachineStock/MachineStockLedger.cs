@@ -1,3 +1,5 @@
+using Inventory.Domain.Products;
+
 namespace Inventory.Domain.MachineStock;
 
 /// <summary>Where the expected machine stock of one product is counted from.</summary>
@@ -85,7 +87,9 @@ public sealed record MachineStockLedgerInputs(
 /// <see cref="BaselineAtUtc"/> when there is one, and over the whole history when there is not.
 /// <see cref="UnexplainedChangeAtLastCount"/> is the difference the most recent count absorbed -
 /// positive means units were missing - and is <c>null</c> when no count has been recorded or when
-/// nothing was expected to compare it against.
+/// nothing was expected to compare it against. <see cref="ProductName"/> (issue #834) is whatever the
+/// caller passed to <see cref="MachineStockLedger.Project"/>, used only to name the product in this
+/// product's data-quality messages; it is <c>null</c> when the caller did not supply one.
 /// </summary>
 public sealed record MachineStockProductLedger(
     long ProductId,
@@ -97,7 +101,8 @@ public sealed record MachineStockProductLedger(
     int ReturnedToStorageQuantity,
     int SoldQuantity,
     int? UnexplainedChangeAtLastCount,
-    IReadOnlyList<MachineStockDataQualityIssue> Issues);
+    IReadOnlyList<MachineStockDataQualityIssue> Issues,
+    string? ProductName = null);
 
 /// <summary>
 /// The machine-stock ledger projection (issue #56): the one authoritative derivation of what a
@@ -141,7 +146,8 @@ public static class MachineStockLedger
     /// but no movement is included (its expected stock is its baseline); a product with movements
     /// but no baseline is included too, with an unknown expected stock.
     /// </summary>
-    public static IReadOnlyList<MachineStockProductLedger> Project(MachineStockLedgerInputs inputs)
+    public static IReadOnlyList<MachineStockProductLedger> Project(
+        MachineStockLedgerInputs inputs, IReadOnlyDictionary<long, string>? productNames = null)
     {
         ArgumentNullException.ThrowIfNull(inputs);
 
@@ -160,7 +166,8 @@ public static class MachineStockLedger
             .Select(productId => ProjectProduct(
                 productId,
                 movements.Where(movement => movement.ProductId == productId),
-                baselinesByProduct.GetValueOrDefault(productId)))
+                baselinesByProduct.GetValueOrDefault(productId),
+                productNames?.GetValueOrDefault(productId)))
             .ToList();
     }
 
@@ -170,13 +177,14 @@ public static class MachineStockLedger
     /// assembled by hand, so a product the machine reports but the ledger has never seen reads
     /// exactly like every other unbaselined product.
     /// </summary>
-    public static MachineStockProductLedger NoRecordedHistory(long productId) =>
-        ProjectProduct(productId, [], openingBaseline: null);
+    public static MachineStockProductLedger NoRecordedHistory(long productId, string? productName = null) =>
+        ProjectProduct(productId, [], openingBaseline: null, productName);
 
     private static MachineStockProductLedger ProjectProduct(
         long productId,
         IEnumerable<MachineStockMovement> productMovements,
-        MachineStockOpeningBaselineFact? openingBaseline)
+        MachineStockOpeningBaselineFact? openingBaseline,
+        string? productName = null)
     {
         var issues = new List<MachineStockDataQualityIssue>();
         int? expected = openingBaseline?.StockQuantity;
@@ -238,18 +246,19 @@ public static class MachineStockLedger
         {
             issues.Add(new MachineStockDataQualityIssue(
                 MachineStockDataQualityIssueCodes.AwaitingOpeningCount,
-                $"Expected machine stock for product {productId} is unknown: no counted or transition "
-                    + "baseline exists for this machine, so the refills and sales since then cannot be "
-                    + "turned into a physical quantity. Record a count to start the ledger."));
+                $"Expected machine stock for {ProductLabel.Phrase(productId, productName)} is unknown: no "
+                    + "counted or transition baseline exists for this machine, so the refills and sales "
+                    + "since then cannot be turned into a physical quantity. Record a count to start the "
+                    + "ledger."));
         }
 
         if (expectedWentNegative)
         {
             issues.Add(new MachineStockDataQualityIssue(
                 MachineStockDataQualityIssueCodes.ExpectedStockNegative,
-                $"Expected machine stock for product {productId} went below zero while replaying this "
-                    + "machine's ledger, which a physical quantity cannot do: a refill is missing, or a "
-                    + "completed sale is attributed to this machine in error."));
+                $"Expected machine stock for {ProductLabel.Phrase(productId, productName)} went below zero "
+                    + "while replaying this machine's ledger, which a physical quantity cannot do: a "
+                    + "refill is missing, or a completed sale is attributed to this machine in error."));
         }
 
         return new MachineStockProductLedger(
@@ -262,7 +271,8 @@ public static class MachineStockLedger
             returned,
             sold,
             unexplainedAtLastCount,
-            issues);
+            issues,
+            productName);
     }
 
     /// <summary>The one replay ordering key: effective instant, then movement kind, then source id.</summary>

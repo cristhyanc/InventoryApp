@@ -1,0 +1,158 @@
+<!--
+  Provider machine linking (issue #742, parent #329 child G3). Nothing here decides a link: every
+  provider machine, its name and its number come from POST api/machine-link-review, and the apply
+  carries the operator's decisions and nothing else. The whole panel is withheld in a support view,
+  because both of its calls are writes the read-only session rule refuses.
+-->
+@if (!sessionActive && hasSomethingToReport) {
+  <section class="card">
+    <div class="card-header">
+      <h2 class="card-title">Machines from Nayax</h2>
+    </div>
+    <div class="card-body">
+      @if (failed) {
+        <p class="text-md-body text-md-danger-text" role="alert">
+          The Nayax machine list could not be read, so nothing was linked. Nothing about your machines
+          was changed.
+        </p>
+        <div class="mt-3">
+          <button type="button" class="btn btn-secondary" [disabled]="loading" (click)="check()">
+            Check Nayax again
+          </button>
+        </div>
+      } @else if (reviewing) {
+        <p class="text-md-body value-muted">Checking Nayax for machines&hellip;</p>
+      } @else if (review) {
+        @if (review.autoLinked.length > 0) {
+          <div class="alert alert-success" role="status">
+            <p>
+              Added {{ review.autoLinked.length }} machine(s) from Nayax to your machines, because you
+              had no machine of your own that one of them could already be:
+            </p>
+            <ul class="mt-1 list-disc pl-5">
+              @for (added of review.autoLinked; track added.providerMachineId) {
+                <li>{{ added.name }} (Nayax machine {{ added.providerMachineId }})</li>
+              }
+            </ul>
+          </div>
+        }
+
+        @if (awaitingReview.length > 0) {
+          <p class="text-md-body value-muted">
+            These Nayax machines are not linked to any of your machines yet. Link each one to a
+            machine you already have, or add it as a new machine. <strong>Nothing is matched by
+            name</strong>: a machine of yours called the same thing as a Nayax machine is a different
+            machine until you say otherwise.
+          </p>
+
+          @if (machinesFailed) {
+            <p class="mt-2 text-md-body text-md-danger-text" role="alert">
+              Your own machines could not be listed, so linking to one is unavailable. Reload the page
+              to try again.
+            </p>
+          }
+
+          <div class="mt-4 space-y-4">
+            @for (entry of awaitingReview; track entry.providerMachineId) {
+              <div class="rounded-md-card border border-md-gray-200 p-4">
+                <div class="font-semibold text-md-gray-800">{{ entry.name }}</div>
+                <div class="text-md-badge value-muted">
+                  Nayax machine {{ entry.providerMachineId }}@if (entry.providerMachineNumber) {
+                    <span> &middot; #{{ entry.providerMachineNumber }}</span>
+                  }
+                </div>
+
+                <fieldset class="mt-3">
+                  <legend class="field-label">What is this machine?</legend>
+                  <div class="mt-1 grid gap-1">
+                    <label class="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        [name]="'machine-action-' + entry.providerMachineId"
+                        class="h-4 w-4"
+                        [checked]="answer(entry.providerMachineId).action === actions.Defer"
+                        (change)="setAction(entry.providerMachineId, actions.Defer)" />
+                      <span>Skip for now</span>
+                    </label>
+                    <label class="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        [name]="'machine-action-' + entry.providerMachineId"
+                        class="h-4 w-4"
+                        [checked]="answer(entry.providerMachineId).action === actions.LinkExisting"
+                        (change)="setAction(entry.providerMachineId, actions.LinkExisting)" />
+                      <span>It is one of my machines</span>
+                    </label>
+                    <label class="flex items-center gap-2 text-sm">
+                      <input
+                        type="radio"
+                        [name]="'machine-action-' + entry.providerMachineId"
+                        class="h-4 w-4"
+                        [checked]="answer(entry.providerMachineId).action === actions.CreateNew"
+                        (change)="setAction(entry.providerMachineId, actions.CreateNew)" />
+                      <span>Add it as a new machine</span>
+                    </label>
+                  </div>
+                </fieldset>
+
+                @if (answer(entry.providerMachineId).action === actions.LinkExisting) {
+                  <div class="mt-3">
+                    <label class="field">
+                      <span class="field-label">Link to</span>
+                      <select
+                        [value]="answer(entry.providerMachineId).localMachineId ?? ''"
+                        (change)="setLocalMachine(entry.providerMachineId, $any($event.target).value)">
+                        <option value="">Choose one of my machines&hellip;</option>
+                        @for (candidate of candidates; track candidate.id) {
+                          <option [value]="candidate.id">
+                            {{ candidate.name }}@if (!candidate.isActive) {<span> (inactive)</span>}
+                          </option>
+                        }
+                      </select>
+                    </label>
+                  </div>
+                  @if (candidates.length === 0) {
+                    <p class="mt-1 text-sm value-muted">
+                      You have no machine left to link: a machine Nayax already names cannot be linked
+                      to a second Nayax machine.
+                    </p>
+                  }
+                  <p class="alert alert-warning mt-2">{{ linkNotice }}</p>
+                }
+
+                @if (answer(entry.providerMachineId).action === actions.CreateNew) {
+                  <p class="mt-2 text-sm value-muted">{{ createNotice }}</p>
+                }
+              </div>
+            }
+          </div>
+
+          <div class="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              class="btn btn-primary"
+              [disabled]="loading || decidedCount === 0"
+              (click)="applyDecisions()">
+              Apply {{ decidedCount }} decision(s)
+            </button>
+            <button type="button" class="btn btn-secondary" [disabled]="loading" (click)="check()">
+              Check Nayax again
+            </button>
+          </div>
+        } @else {
+          <!-- Nothing to decide. The panel is shown at all only because there is something to say:
+               a business whose provider reports no machine has no panel here (the live fleet
+               section below says that itself). -->
+          <p class="text-md-body value-muted">
+            All {{ review.linkedCount }} Nayax machine(s) are linked to your machines.
+          </p>
+          <div class="mt-3">
+            <button type="button" class="btn btn-secondary" [disabled]="loading" (click)="check()">
+              Check Nayax again
+            </button>
+          </div>
+        }
+      }
+    </div>
+  </section>
+}

@@ -8,8 +8,8 @@ namespace Inventory.Application.Machines;
 ///
 /// <para>It validates the submitted name - the one rule that needs no database - and leaves the
 /// insert to the store. The created machine never carries a provider id: a machine a person created
-/// is this business's own record, and only provider synchronization or the provider machine review
-/// (issue #742) may ever attach one.</para>
+/// is this business's own record, and the provider machine review (issue #742) is the one thing that
+/// ever attaches one, on a link somebody decided about.</para>
 /// </summary>
 public sealed class CreateLocalMachine
 {

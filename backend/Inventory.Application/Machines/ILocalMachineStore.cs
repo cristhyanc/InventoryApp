@@ -5,9 +5,9 @@ namespace Inventory.Application.Machines;
 /// Application layer.
 ///
 /// <para>Nothing here reads or writes a provider's machine id: it is set by the <c>AddMachines</c>
-/// backfill and, later, by provider synchronization and the provider machine review (issue #742).
-/// This port reports only <em>whether</em> a machine has one, because that is what a caller needs in
-/// order to say so.</para>
+/// backfill and, since issue #742, by the provider machine review through its own port,
+/// <see cref="IProviderMachineLinkStore"/>. This port reports only <em>whether</em> a machine has
+/// one, because that is what a caller needs in order to say so.</para>
 /// </summary>
 public interface ILocalMachineStore
 {
@@ -28,16 +28,18 @@ public interface ILocalMachineStore
         LocalMachineWriteFields fields, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Renames the machine. The read of the stored row and the write are one operation, and a
-    /// provider-named machine is renamed too: unlike a product's or a category's name, a machine's
-    /// name is the operator's own label - no import overwrites it, because nothing syncs it.
+    /// Renames the machine. The read of the stored row and the write are one operation, so a machine
+    /// the business's sales provider names - which is managed at the provider and is refused here -
+    /// is refused even when it was linked between a caller's read and this write.
     /// </summary>
     Task<LocalMachineWriteAttempt> RenameAsync(
         long id, LocalMachineWriteFields fields, CancellationToken cancellationToken);
 
     /// <summary>
     /// Takes the machine out of service or puts it back. Idempotent: setting the activation a
-    /// machine already has succeeds and changes nothing.
+    /// machine already has succeeds and changes nothing. Deactivating a machine the business's
+    /// sales provider names is refused, decided in the same operation as the write; reactivating
+    /// one is not.
     /// </summary>
     Task<LocalMachineWriteAttempt> SetActiveAsync(long id, bool isActive, CancellationToken cancellationToken);
 }

@@ -1,4 +1,4 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { PurchaseEditFormComponent } from './purchase-edit-form.component';
 import { PurchaseItemPayload, PurchaseUpdatePayload } from '../../../services/purchase.service';
 import {
@@ -376,7 +376,7 @@ describe('PurchaseEditFormComponent GST edit mapping (issue #431, moved by #475)
   });
 });
 
-describe('PurchaseEditFormComponent per-line price entry (issue #707)', () => {
+describe('PurchaseEditFormComponent per-line price entry (issues #707, #878)', () => {
   it('opens a stored line on the unit cost the purchase holds, with its line total calculated', () => {
     const stored = purchase({ items: [item({ id: 11, quantity: 20, unitCost: 1.625 })] });
     const { component } = createForm(stored);
@@ -384,7 +384,8 @@ describe('PurchaseEditFormComponent per-line price entry (issue #707)', () => {
     expect(component.editItems[0].priceEntryMode).toBe('unit');
     expect(component.editItems[0].unitCost).toBe(1.625);
     expect(component.editItems[0].lineTotal).toBe(32.5);
-    expect(component.derivedLineTotal(component.editItems[0])).toBe(32.5);
+    expect(component.unitPriceValue(component.editItems[0])).toBe(1.625);
+    expect(component.totalPriceValue(component.editItems[0])).toBe('32.50');
   });
 
   it('starts a line added during the edit on the total paid for it, like Add Purchase does', () => {
@@ -423,48 +424,77 @@ describe('PurchaseEditFormComponent per-line price entry (issue #707)', () => {
     expect(savedItems(saved)).toEqual([{ id: 11, productId: 10, quantity: 300, unitCost: 100 / 300 }]);
   });
 
-  it('keeps the stored unit cost through a change of entry mode, and shows the matching total', () => {
+  it('shows a stored line four-decimal unit price without re-costing it on open', () => {
     const stored = purchase({ items: [item({ id: 11, quantity: 300, unitCost: 100 / 300 })] });
     const { component, saved } = createForm(stored);
 
-    component.onLinePriceEntryModeChange(component.editItems[0], 'unit');
-    component.onLinePriceEntryModeChange(component.editItems[0], 'total');
+    // The recorded unit cost is the winning figure, so it is shown exactly as it is stored and the
+    // total beside it is the $100.00 the line saves at.
+    expect(component.unitPriceValue(component.editItems[0])).toBe(100 / 300);
+    expect(component.totalPriceValue(component.editItems[0])).toBe('100.00');
+
     component.submit();
 
     expect(savedItems(saved)).toEqual([{ id: 11, productId: 10, quantity: 300, unitCost: 100 / 300 }]);
   });
 
-  it('derives the unit cost when the operator switches to the total paid and enters it', () => {
+  it('derives the unit cost when the operator types a box price into the Total price field', () => {
     const stored = purchase({ items: [item({ id: 11, quantity: 2, unitCost: 1.1 })] });
     const { component, saved } = createForm(stored);
 
     component.onLineQuantityChange(component.editItems[0], 20);
-    component.onLinePriceEntryModeChange(component.editItems[0], 'total');
-    component.onLineAmountChange(component.editItems[0], 32.5);
+    component.onLineTotalChange(component.editItems[0], 32.5);
+
+    expect(component.editItems[0].priceEntryMode).toBe('total');
+
     component.submit();
 
     expect(savedItems(saved)).toEqual([{ id: 11, productId: 10, quantity: 20, unitCost: 1.625 }]);
   });
 
-  it('derives the line total when the operator enters a unit price', () => {
-    const stored = purchase({ items: [item({ id: 11, quantity: 2, unitCost: 1.1 })] });
+  it('hands the win back to the Unit price field when the operator types in it again', () => {
+    const stored = purchase({ items: [item({ id: 11, quantity: 20, unitCost: 1.1 })] });
     const { component, saved } = createForm(stored);
 
-    component.onLineQuantityChange(component.editItems[0], 24);
-    component.onLineAmountChange(component.editItems[0], 1.6625);
+    component.onLineTotalChange(component.editItems[0], 100);
 
-    expect(component.derivedLineTotal(component.editItems[0])).toBe(39.9);
+    expect(component.editItems[0].unitCost).toBe(5);
+
+    component.onLineUnitCostChange(component.editItems[0], 1.6625);
+    component.onLineQuantityChange(component.editItems[0], 24);
+
+    // The unit price won last, so the quantity change multiplies it rather than re-costing the line.
+    expect(component.editItems[0].unitCost).toBe(1.6625);
+    expect(component.editItems[0].lineTotal).toBe(39.9);
 
     component.submit();
 
     expect(savedItems(saved)).toEqual([{ id: 11, productId: 10, quantity: 24, unitCost: 1.6625 }]);
   });
 
-  it('refuses to save a line with no price entered, and says how many lines are wrong', () => {
+  it('derives the line total when the operator types a unit price', () => {
+    const stored = purchase({ items: [item({ id: 11, quantity: 2, unitCost: 1.1 })] });
+    const { component, saved } = createForm(stored);
+
+    component.onLineQuantityChange(component.editItems[0], 24);
+    component.onLineUnitCostChange(component.editItems[0], 1.6625);
+
+    expect(component.totalPriceValue(component.editItems[0])).toBe('39.90');
+
+    component.submit();
+
+    expect(savedItems(saved)).toEqual([{ id: 11, productId: 10, quantity: 24, unitCost: 1.6625 }]);
+  });
+
+  it('refuses to save a line whose winning field was cleared, and says how many lines are wrong', () => {
     const stored = purchase({ items: [item({ id: 11, quantity: 20, unitCost: 1.625 })] });
     const { component, saved } = createForm(stored);
 
-    component.onLineAmountChange(component.editItems[0], null);
+    component.onLineUnitCostChange(component.editItems[0], null);
+
+    expect(component.editItems[0].lineTotal).toBeNull();
+    expect(component.totalPriceValue(component.editItems[0])).toBeNull();
+
     component.submit();
 
     expect(saved).toHaveLength(0);
@@ -489,9 +519,9 @@ describe('PurchaseEditFormComponent per-line price entry (issue #707)', () => {
     const stored = purchase({ items: [item({ id: 11, quantity: 20, unitCost: 1.625 })] });
     const { component, saved } = createForm(stored);
 
-    component.onLineAmountChange(component.editItems[0], null);
+    component.onLineUnitCostChange(component.editItems[0], null);
     component.submit();
-    component.onLineAmountChange(component.editItems[0], 1.625);
+    component.onLineUnitCostChange(component.editItems[0], 1.625);
     component.submit();
 
     expect(component.lineError).toBe('');
@@ -515,6 +545,28 @@ describe('PurchaseEditFormComponent template (issue #475)', () => {
 
   afterEach(() => TestBed.resetTestingModule());
 
+  /** One of the line's rendered inputs. */
+  function priceInput(host: HTMLElement, testId: string): HTMLInputElement {
+    const input = host.querySelector(`[data-testid="${testId}"]`) as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    return input!;
+  }
+
+  /**
+   * Types into one of the line's inputs the way the operator does. `ngModel` writes the value it is
+   * given back to the view in a microtask, so the pending write of the freshly rendered input is
+   * awaited first and the one this edit triggers is awaited afterwards.
+   */
+  async function typeInto(
+    fixture: ComponentFixture<PurchaseEditFormComponent>, testId: string, value: string): Promise<void> {
+    await fixture.whenStable();
+    const input = priceInput(fixture.nativeElement as HTMLElement, testId);
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    await fixture.whenStable();
+  }
+
   it('offers no product picker for a stored line and explains the remove/add workflow instead', async () => {
     const { host } = await render(purchase({ items: [item({ id: 11, productId: 10 })] }));
 
@@ -535,23 +587,46 @@ describe('PurchaseEditFormComponent template (issue #475)', () => {
     expect(host.querySelectorAll('[data-testid="edit-purchase-item"]')).toHaveLength(2);
   });
 
-  it('offers the price entry selector per line and shows the calculated figure read-only (issue #707)', async () => {
+  it('offers both prices as editable inputs per line, with no selector or hint (issue #878)', async () => {
     const { fixture, host } = await render(purchase({ items: [item({ id: 11, quantity: 20, unitCost: 1.625 })] }));
+    await fixture.whenStable();
+
+    expect(host.querySelector('[data-testid="edit-purchase-item-price-mode"]')).toBeNull();
+    expect(host.querySelector('[data-testid="edit-purchase-item-derived-unit-cost"]')).toBeNull();
+    expect(host.querySelector('[data-testid="edit-purchase-item-derived-line-total"]')).toBeNull();
+    expect(host.textContent).not.toContain('Line total:');
+    expect(host.textContent).not.toContain('Unit cost:');
 
     // A stored line opens on its recorded unit cost, with its line amount calculated beside it.
-    expect(host.querySelector('[data-testid="edit-purchase-item-price-mode"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="edit-purchase-item-cost"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="edit-purchase-item-line-total"]')).toBeNull();
-    expect(host.querySelector('[data-testid="edit-purchase-item-derived-line-total"]')?.textContent)
-      .toContain('$32.50');
+    const unitPrice = priceInput(host, 'edit-purchase-item-cost');
+    const totalPrice = priceInput(host, 'edit-purchase-item-line-total');
 
-    fixture.componentInstance.onLinePriceEntryModeChange(fixture.componentInstance.editItems[0], 'total');
-    fixture.detectChanges();
+    expect(unitPrice.readOnly).toBe(false);
+    expect(totalPrice.readOnly).toBe(false);
+    expect(unitPrice.value).toBe('1.625');
+    expect(totalPrice.value).toBe('32.50');
+    expect(unitPrice.getAttribute('aria-label')).toBe('Unit price for item 1');
+    expect(totalPrice.getAttribute('aria-label')).toBe('Total price for item 1');
+  });
 
-    expect(host.querySelector('[data-testid="edit-purchase-item-cost"]')).toBeNull();
-    expect(host.querySelector('[data-testid="edit-purchase-item-line-total"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="edit-purchase-item-derived-unit-cost"]')?.textContent)
-      .toContain('$1.6250');
+  it('keeps a stored line at its recorded unit cost when its quantity is corrected (issue #878)', async () => {
+    const { fixture, host } = await render(purchase({ items: [item({ id: 11, quantity: 10, unitCost: 2 })] }));
+
+    await typeInto(fixture, 'edit-purchase-item-quantity', '4');
+
+    expect(fixture.componentInstance.editItems[0].unitCost).toBe(2);
+    expect(priceInput(host, 'edit-purchase-item-cost').value).toBe('2');
+    expect(priceInput(host, 'edit-purchase-item-line-total').value).toBe('8.00');
+  });
+
+  it('hands the win to the Total price field when the operator types a box price into it (issue #878)', async () => {
+    const { fixture, host } = await render(purchase({ items: [item({ id: 11, quantity: 300, unitCost: 1 })] }));
+
+    await typeInto(fixture, 'edit-purchase-item-line-total', '100');
+
+    expect(fixture.componentInstance.editItems[0].priceEntryMode).toBe('total');
+    expect(fixture.componentInstance.editItems[0].unitCost).toBe(100 / 300);
+    expect(priceInput(host, 'edit-purchase-item-cost').value).toBe('0.3333');
   });
 
   it('shows a charge GST picker only while that charge has a value', async () => {
@@ -622,7 +697,7 @@ describe('PurchaseEditFormComponent template (issue #475)', () => {
     const line = host.querySelector('[data-testid="edit-purchase-item"]');
     expect(line?.className).toContain('grid');
     expect(line?.className).toContain(
-      'md:grid-cols-[minmax(0,3fr)_minmax(6rem,1fr)_minmax(10rem,1fr)_minmax(9rem,1fr)_minmax(9rem,1fr)_auto]');
+      'md:grid-cols-[minmax(0,3fr)_minmax(6rem,1fr)_minmax(14rem,2fr)_minmax(9rem,1fr)_auto]');
   });
 
   it('labels every field it offers', async () => {

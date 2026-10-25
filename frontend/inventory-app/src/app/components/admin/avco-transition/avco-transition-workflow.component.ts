@@ -40,7 +40,7 @@ import { SupportSessionService } from '../../../support-session/support-session.
       <div class="card-body">
         <p class="text-sm value-muted">Start reliable perpetual AVCO from a controlled cutover without changing incomplete legacy movements or historical Nayax-costed sales.</p>
         <label class="mt-4 flex items-center gap-2 text-sm font-medium text-md-gray-800">
-          <input type="checkbox" [(ngModel)]="transitionAllProducts" (ngModelChange)="changeTransitionScope()" />
+          <input type="checkbox" class="h-4 w-4 shrink-0" [(ngModel)]="transitionAllProducts" (ngModelChange)="changeTransitionScope()" />
           Create baselines for all products that do not already have one
         </label>
         <div class="mt-4 grid gap-4 sm:grid-cols-3">

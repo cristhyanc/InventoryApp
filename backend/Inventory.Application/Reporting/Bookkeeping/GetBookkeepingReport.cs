@@ -3,13 +3,16 @@ using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting;
 using Inventory.Domain.Reporting.Availability;
 using Inventory.Domain.Reporting.Bookkeeping;
+using Inventory.Domain.Reporting.Dashboard;
 
 namespace Inventory.Application.Reporting.Bookkeeping;
 
 /// <summary>
 /// The bookkeeping report use case: resolves the requested date range/machine scope, retrieves
 /// report facts through the narrow <see cref="IBookkeepingReportFactsProvider"/> port, applies the
-/// Domain profit/margin/GST policy, and builds the authoritative <see cref="BookkeepingReportDto"/>
+/// Domain profit/margin/GST policy and the Domain
+/// <see cref="DashboardReimbursementPolicy"/> that decides the expected-versus-actual reimbursement
+/// comparison (issue #805), and builds the authoritative <see cref="BookkeepingReportDto"/>
 /// consumed by both the API response and the CSV/XLSX export.
 /// </summary>
 public sealed class GetBookkeepingReport : IGetBookkeepingReport
@@ -43,6 +46,18 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             OperatingExpensesTotal: facts.OperatingExpensesTotal,
             ImportedHasNetSettlement: facts.ImportedHasNetSettlement,
             ImportedNetSettlement: facts.ImportedNetSettlement));
+
+        // The expected-versus-actual reimbursement comparison (issue #805), from the same imported
+        // settlement facts this report already reads for its fees and net settlement. The policy is
+        // the Domain one the reporting dashboard introduced and still publishes - named for that
+        // feature, but a deterministic rule over already-aggregated facts, so this report reuses it
+        // rather than writing a second tolerance or status rule. The dependency direction is
+        // unchanged: the dashboard composes this report, and this report does not know it exists.
+        var reimbursement = DashboardReimbursementPolicy.Calculate(new DashboardReimbursementInputs(
+            CardSales: facts.CardSales,
+            FeesIncludingGst: facts.ProcessingFees.TotalFeeIncGst,
+            ActualReimbursement: facts.ImportedNetSettlement,
+            ImportedContainsRows: facts.ImportedContainsRows));
 
         var qualityNotes = new List<string>();
         if (facts.MissingStatusTransactionCount > 0)
@@ -103,6 +118,21 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
             facts.DeclinedOrCancelledTransactionCount, facts.UnknownStatusTransactionCount,
             facts.MissingStatusTransactionCount)
         {
+            // Sales volume and the average sale over it (issue #804), from the same completed sales
+            // every amount above is derived from, through the shared average formula the reporting
+            // dashboard already used - which answers 0 for a period with no completed transaction
+            // rather than dividing by zero. Both are provider-sourced and carry the sales state.
+            TransactionCount = facts.TransactionCount,
+            AverageSale = ReportingCalculations.Average(facts.GrossSales, facts.TransactionCount),
+            // The calculated expectation, the imported actual and the signed difference between
+            // them (issue #805). NetSettlement above keeps its own established meaning and is not
+            // one of these: it prefers the imported amount when the period has one.
+            ExpectedReimbursement = reimbursement.ExpectedReimbursement,
+            ActualReimbursement = reimbursement.ActualReimbursement,
+            ReimbursementDifference = reimbursement.Difference,
+            IsReconciled = reimbursement.IsReconciled,
+            ReconciliationStatus = reimbursement.Status,
+            ReconciliationTolerance = DashboardReimbursementPolicy.Tolerance,
             PartialCostOfGoods = facts.PartialCostOfGoods,
             IsCogsComplete = facts.IsCogsComplete,
             UncostedTransactionCount = facts.UncostedTransactionCount,
@@ -122,8 +152,10 @@ public sealed class GetBookkeepingReport : IGetBookkeepingReport
     /// them. Public because the dashboard report republishes this report's decided states beside the
     /// same figures and must name them the same way rather than inventing a second wording.
     /// </summary>
-    public const string SalesFigures = "Sales, the card/cash split, cost of goods and profit";
+    public const string SalesFigures =
+        "Sales, the card/cash split, the transaction count and average sale, cost of goods and profit";
 
     /// <summary>The settlement-sourced figures it shows, for the same reason.</summary>
-    public const string FeeFigures = "Nayax processing fees and the GST on them";
+    public const string FeeFigures =
+        "Nayax processing fees, the GST on them, the imported actual reimbursement and the reimbursement reconciliation";
 }

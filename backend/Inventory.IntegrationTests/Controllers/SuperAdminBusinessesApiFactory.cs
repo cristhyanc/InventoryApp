@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using Inventory.Domain.Nayax;
+using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
@@ -164,6 +165,10 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         await using var db = Database();
         db.BusinessNayaxConnections.RemoveRange(await db.BusinessNayaxConnections.ToListAsync());
         db.Products.RemoveRange(await db.Products.ToListAsync());
+        // The suppliers an approval copied from the platform presets (issue #849) go with the rest:
+        // they belong to the business the previous test approved, and the businesses themselves are
+        // deleted below.
+        db.Suppliers.RemoveRange(await db.Suppliers.ToListAsync());
         // Support sessions (issue #550) go with the rest: a session left behind by one test would
         // make the next one's "one active session per administrator" check refuse a start it should
         // have allowed.
@@ -353,6 +358,146 @@ public class SuperAdminBusinessesApiFactory : WebApplicationFactory<Program>
         db.SupportSessions.Add(session);
         await db.SaveChangesAsync();
         return session.Id;
+    }
+
+    /// <summary>
+    /// Puts the platform supplier presets back to exactly the four rows the <c>AddSupplierPresets</c>
+    /// migration inserts (issue #848), so each test starts from the same world rather than from
+    /// whatever its predecessor created, renamed or disabled.
+    ///
+    /// <para>It is deliberately <em>not</em> part of <see cref="ResetAsync"/>: presets are about no
+    /// business at all, so a test about businesses has no reason to touch them, and the migration's
+    /// own seed behaviour is proved by <c>AddSupplierPresetsMigrationTests</c> against a database
+    /// this helper never writes to.</para>
+    /// </summary>
+    public async Task ResetSupplierPresetsAsync()
+    {
+        await using var db = Database();
+        db.SupplierPresets.RemoveRange(await db.SupplierPresets.ToListAsync());
+        await db.SaveChangesAsync();
+
+        foreach (var name in ShippedSupplierPresetNames)
+        {
+            db.SupplierPresets.Add(new SupplierPreset
+            {
+                Name = name,
+                NormalisedName = SupplierPresetPolicy.NormalisedName(name),
+                IsEnabled = true,
+                CreatedAtUtc = CreatedAt,
+                UpdatedAtUtc = CreatedAt,
+            });
+        }
+
+        await db.SaveChangesAsync();
+        ClearLog();
+    }
+
+    /// <summary>The four suggestions the platform ships with (issue #848).</summary>
+    public static readonly string[] ShippedSupplierPresetNames =
+        ["Coles", "Woolworths", "Big W", "Costco"];
+
+    /// <summary>
+    /// Puts the switchable option visibility of issue #873 back to the shipped state - <em>no row at
+    /// all</em>, which is what makes every option offered - so a test about the default starts from
+    /// the default however a predecessor left it.
+    ///
+    /// <para>Like <see cref="ResetSupplierPresetsAsync"/> it is deliberately not part of
+    /// <see cref="ResetAsync"/>: the setting is about no business, so a test about businesses has no
+    /// reason to touch it.</para>
+    /// </summary>
+    public async Task ResetOptionVisibilityAsync()
+    {
+        await using var db = Database();
+        db.PlatformOptionVisibility.RemoveRange(await db.PlatformOptionVisibility.ToListAsync());
+        await db.SaveChangesAsync();
+        ClearLog();
+    }
+
+    /// <summary>
+    /// Every stored option-visibility row (issue #873). There is at most one, and the point of
+    /// reading them as a list is that a test can prove a second write did not add a second row.
+    /// </summary>
+    public async Task<IReadOnlyList<PlatformOptionVisibility>> OptionVisibilityRowsAsync()
+    {
+        await using var db = Database();
+        return await db.PlatformOptionVisibility.AsNoTracking().OrderBy(row => row.Id).ToListAsync();
+    }
+
+    /// <summary>Every stored supplier preset, oldest first (issue #848).</summary>
+    public async Task<IReadOnlyList<SupplierPreset>> SupplierPresetsAsync()
+    {
+        await using var db = Database();
+        return await db.SupplierPresets.AsNoTracking().OrderBy(preset => preset.Id).ToListAsync();
+    }
+
+    /// <summary>
+    /// Disables or re-enables one shipped preset by name, so a test can prove that only the enabled
+    /// ones are copied into a business being approved (issue #849).
+    /// </summary>
+    public async Task SetSupplierPresetEnabledAsync(string name, bool isEnabled)
+    {
+        await using var db = Database();
+        var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+        preset.IsEnabled = isEnabled;
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Records a website on one preset, or clears it, so a test can prove the website travels with
+    /// the name into the copy (issue #849).
+    /// </summary>
+    public async Task SetSupplierPresetUrlAsync(string name, string? url)
+    {
+        await using var db = Database();
+        var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+        preset.Url = url;
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Renames one preset, so a test can prove that editing a preset afterwards leaves an already
+    /// approved business's copy of it exactly as it was (issue #849).
+    /// </summary>
+    public async Task RenameSupplierPresetAsync(string name, string newName)
+    {
+        await using var db = Database();
+        var preset = await db.SupplierPresets.SingleAsync(candidate => candidate.Name == name);
+        preset.Name = newName;
+        preset.NormalisedName = SupplierPresetPolicy.NormalisedName(newName);
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Every supplier one business owns, oldest first (issue #849) - read outside the boundary, so a
+    /// test can see what landed in a business it is not a member of.
+    /// </summary>
+    public async Task<IReadOnlyList<Supplier>> SuppliersOfAsync(int businessId)
+    {
+        await using var db = Database();
+        return await db.Suppliers
+            .AsNoTracking()
+            .Where(supplier => supplier.BusinessId == businessId)
+            .OrderBy(supplier => supplier.Id)
+            .ToListAsync();
+    }
+
+    /// <summary>One more preset in whichever state a test needs (issue #848).</summary>
+    public async Task<int> SeedSupplierPresetAsync(string name, string? url = null, bool isEnabled = true)
+    {
+        await using var db = Database();
+        var preset = new SupplierPreset
+        {
+            Name = name,
+            NormalisedName = SupplierPresetPolicy.NormalisedName(name),
+            Url = url,
+            IsEnabled = isEnabled,
+            CreatedAtUtc = CreatedAt,
+            UpdatedAtUtc = CreatedAt,
+        };
+
+        db.SupplierPresets.Add(preset);
+        await db.SaveChangesAsync();
+        return preset.Id;
     }
 
     /// <summary>Every stored support session, oldest first (issue #550).</summary>

@@ -32,7 +32,7 @@ public sealed class FakeProductCatalogStore : IProductCatalogStore
     }
 
     public Task<IReadOnlyList<ProductRecord>> ListUnorderedAsync(
-        ProductCatalogFilter filter, CancellationToken cancellationToken)
+        ProductCatalogFilter filter, bool resolveInventoryHistory, CancellationToken cancellationToken)
     {
         ListUnorderedCalls++;
         LastFilter = filter;

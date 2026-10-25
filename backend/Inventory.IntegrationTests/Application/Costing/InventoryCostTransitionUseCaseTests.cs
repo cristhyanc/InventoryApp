@@ -396,7 +396,14 @@ public class InventoryCostTransitionUseCaseTests
         return db;
     }
 
-    /// <summary>Two Nayax machines stocking both products, with a switchable upstream failure.</summary>
+    /// <summary>
+    /// Two Nayax machines stocking both products, with a switchable upstream failure.
+    ///
+    /// <para>Only the <em>fresh</em> machine list is served. The cost transition preview and apply are
+    /// declared fresh-only callers (issue #840), because the opening machine stock they record becomes
+    /// a costing baseline, so reading the cached list here is refused outright rather than silently
+    /// answered with a list that may be ten minutes old.</para>
+    /// </summary>
     private sealed class NayaxStock
     {
         private readonly Mock<INayaxLynxClient> _mock = new();
@@ -404,6 +411,9 @@ public class InventoryCostTransitionUseCaseTests
         public NayaxStock()
         {
             _mock.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new NotSupportedException(
+                    "The cost transition must read the fresh machine list, never the cached one."));
+            _mock.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
                 .ReturnsAsync(() => Failing
                     ? throw new NayaxUpstreamException("GetMachinesAsync", HttpMethod.Get, "machines", HttpStatusCode.ServiceUnavailable)
                     : new List<NayaxMachine>
@@ -411,13 +421,16 @@ public class InventoryCostTransitionUseCaseTests
                         new() { MachineID = 2, MachineName = "Machine B" },
                         new() { MachineID = 1, MachineName = "Machine A" }
                     });
-            _mock.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+            _mock.Setup(x => x.GetMachineProductsAsync(It.IsAny<long>(), It.IsAny<CancellationToken>()))
+                .ThrowsAsync(new NotSupportedException(
+                    "The cost transition must read each machine's selections fresh, never the cached ones."));
+            _mock.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(() => new List<NayaxMachineProduct>
                 {
                     new() { NayaxProductID = 10, PAR = 10, MissingStockByMDB = MissingInMachineA },
                     new() { NayaxProductID = 20, PAR = 6, MissingStockByMDB = 1 }
                 });
-            _mock.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+            _mock.Setup(x => x.GetMachineProductsFreshAsync(2, It.IsAny<CancellationToken>()))
                 .ReturnsAsync(() => new List<NayaxMachineProduct> { new() { NayaxProductID = 10, PAR = 8, MissingStockByMDB = 3 } });
         }
 

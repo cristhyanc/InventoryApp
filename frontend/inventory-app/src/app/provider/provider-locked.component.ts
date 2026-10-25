@@ -39,7 +39,11 @@ interface LockedDestination {
  *
  * **It is never a dead end, and never claims the business has lost anything.** It links to the
  * Dashboard and says what still works without a provider: inventory, purchases, expenses, and the
- * reports over sales already imported, which are deliberately not locked (decision P5).
+ * two reports issue #868 deliberately leaves unlocked, Bookkeeping and GST. Since that issue the
+ * destination may be one of the five reports over stored provider records rather than a live Nayax
+ * page, so the sentence it leads with comes from `providerLockSentence`, which words a connection
+ * lock from what the destination actually needs; the sales those reports read are still stored and
+ * are reported again as soon as Nayax is connected.
  */
 @Component({
   selector: 'app-provider-locked',
@@ -71,8 +75,9 @@ interface LockedDestination {
             }
           } @else if (lock === 'connect') {
             <p class="text-md-body">
-              Nothing has been lost. Inventory, purchases and expenses work without a provider, and the reports over
-              sales that were already imported stay open and show what their figures are based on.
+              Nothing has been lost. Inventory, purchases and expenses work without a provider, the Bookkeeping and
+              GST reports stay open, and the sales already imported are still stored - the reports over them open
+              again, unchanged, as soon as Nayax is connected.
             </p>
           } @else {
             <p class="text-md-body">

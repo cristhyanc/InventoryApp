@@ -1,0 +1,91 @@
+name: Deploy Production (advanced recovery)
+
+# The advanced production entry point (issue #491), for recovery and bootstrap only: deploying an exact
+# earlier main commit, or recording the first baseline when no production release is recorded yet.
+# Normal releases use Deploy Production, which takes no inputs. This entry point runs the same release
+# (deploy-production-release.yml) with the same validation, migration preflight, environment
+# approvals and health checks; it is not a way around a failed check. A supplied baseline is accepted
+# only when no release is recorded, and a commit whose migrations are older than the recorded
+# baseline's is still rejected by the migration preflight; nothing rolls a database back.
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Full 40-character main commit SHA to deploy.
+        required: true
+        type: string
+      baseline_sha:
+        description: Only when no production release is recorded yet. Full SHA of the main commit production runs now.
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+# Shared with the other production entry point: one production deployment at a time across both,
+# and never cancel one that is already running.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Check the run can deploy
+    runs-on: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL == 'true' && fromJSON('["self-hosted","linux","x64","inventory-agent"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions: {}
+
+    steps:
+      - name: Report and validate runner mode
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_KIND: ${{ runner.environment }}
+        run: |
+          case "$RUNNER_MODE" in
+            true) selected=self-hosted ;;
+            ''|false) selected=github-hosted ;;
+            *) echo "::error::The repository variable INVENTORY_AGENT_SELF_HOSTED_ALL must be exactly true, false or unset. See docs/automation.md § Runner placement."; exit 1 ;;
+          esac
+          echo "Runner mode: INVENTORY_AGENT_SELF_HOSTED_ALL=${RUNNER_MODE:-<unset>} selects $selected runners."
+          echo "This job runs on $RUNNER_NAME ($RUNNER_KIND)."
+          if [ "$RUNNER_KIND" != "$selected" ]; then
+            echo "::error::This job runs on a $RUNNER_KIND runner, but INVENTORY_AGENT_SELF_HOSTED_ALL now selects $selected runners; the variable changed after the job was queued. Re-run the job. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+      - name: Refuse runs not started from main
+        if: github.ref != 'refs/heads/main'
+        env:
+          RUN_REF: ${{ github.ref }}
+        run: |
+          echo "::error::Deploy Production (advanced recovery) must be started from main; this run was started from $RUN_REF."
+          exit 1
+
+      - name: Require verified runner isolation for credentialed jobs
+        # Issue #645 review: the release job receives Azure OIDC and the Static Web Apps token, so it
+        # is skipped in self-hosted mode until a human confirms those runners are reset or ephemeral
+        # per job. This step makes that refusal a visible failure instead of a silent skip.
+        env:
+          RUNNER_MODE: ${{ vars.INVENTORY_AGENT_SELF_HOSTED_ALL }}
+          RUNNER_ISOLATION_VERIFIED: ${{ vars.INVENTORY_RUNNER_ISOLATION_VERIFIED }}
+        run: |
+          if [ "$RUNNER_MODE" = "true" ] && [ "$RUNNER_ISOLATION_VERIFIED" != "true" ]; then
+            echo "::error::Credentialed jobs are disabled in self-hosted mode (INVENTORY_AGENT_SELF_HOSTED_ALL is true) until a human sets the repository variable INVENTORY_RUNNER_ISOLATION_VERIFIED to true after provisioning reset or ephemeral self-hosted runners. See docs/automation.md § Runner placement."
+            exit 1
+          fi
+
+  release:
+    name: Release
+    needs: gate
+    if: (vars.INVENTORY_AGENT_SELF_HOSTED_ALL != 'true' || vars.INVENTORY_RUNNER_ISOLATION_VERIFIED == 'true')
+    # The union of what the release's jobs need; each of its jobs narrows this to its own permissions.
+    permissions:
+      contents: read
+      deployments: write
+      id-token: write
+    uses: ./.github/workflows/deploy-production-release.yml
+    with:
+      entry_point: recovery
+      sha: ${{ inputs.sha }}
+      baseline_sha: ${{ inputs.baseline_sha }}
+    secrets: inherit

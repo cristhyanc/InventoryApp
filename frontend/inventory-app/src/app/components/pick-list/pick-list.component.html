@@ -61,6 +61,7 @@
       [products]="allProducts"
       [catalogueState]="catalogueState"
       [catalogueRefreshFailed]="catalogueRefreshFailed"
+      [preselectedMachineId]="preselectedMachineId"
       (retryCatalogue)="loadProducts()"
       (refillRecorded)="refreshProductsAfterManualRefill()"
       (saveInFlightChange)="onManualSaveInFlightChange($event)"></app-manual-pick-list>

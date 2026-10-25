@@ -98,6 +98,42 @@ describe('AccessService capability cache (issue #528)', () => {
     expect([...state.access.capabilities]).toEqual(['Inventory.Operate']);
   });
 
+  /**
+   * The shared switchable option visibility (issue #873) travels with the capabilities, because the
+   * shell builds one menu from both. It is read as reported and never defaulted here: an API that
+   * does not report it leaves the answer unknown, which hides nothing.
+   */
+  it.each([true, false])(
+    'reports the switchable option visibility the API published, when it published %s',
+    async (visible) => {
+      const { service } = configure({
+        responses: [() => of({ ...OWNER_RESPONSE, historicalGstClassificationVisible: visible })]
+      });
+
+      const state = await firstValueFrom(service.access$);
+
+      expect(state.status).toBe('granted');
+      if (state.status !== 'granted') {
+        return;
+      }
+      expect(state.access.optionVisibility).toEqual({ historicalGstClassificationVisible: visible });
+      // And it is not a capability: the reported set is the role's, untouched.
+      expect([...state.access.capabilities]).toEqual([...CAPABILITIES]);
+    }
+  );
+
+  it('leaves the option visibility unknown when the API did not report it', async () => {
+    const { service } = configure({ responses: [() => of(OWNER_RESPONSE)] });
+
+    const state = await firstValueFrom(service.access$);
+
+    expect(state.status).toBe('granted');
+    if (state.status !== 'granted') {
+      return;
+    }
+    expect(state.access.optionVisibility).toBeUndefined();
+  });
+
   it('answers each capability from the reported set, granting nothing the role does not hold', async () => {
     const { service } = configure({ responses: [() => of(OPERATOR_RESPONSE)] });
 

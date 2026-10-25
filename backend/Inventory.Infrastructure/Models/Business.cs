@@ -130,6 +130,28 @@ public class Business
     public string? RejectionReason { get; set; }
 
     /// <summary>
+    /// When this business's own copies of the platform supplier presets were written, and <c>null</c>
+    /// when they never were (issue #849, child C of #835).
+    ///
+    /// It is the marker that makes the copy happen exactly once, and it is deliberately the only
+    /// thing that decides that: the copy is <em>not</em> judged by whether a supplier of the same
+    /// name already exists, because a business is free to rename, add and delete its own suppliers
+    /// the moment it starts trading, and a name is not an identity. Approving a
+    /// <see cref="BusinessStatus.Pending"/> application copies the enabled presets and stamps this
+    /// column with the decision instant, in that one transaction; every other path - a rejection, a
+    /// deactivation, a reactivation, a second approval attempt, <c>bootstrap-business</c> and the
+    /// E2E fixture - writes neither the suppliers nor this column.
+    ///
+    /// <c>null</c> for every business that existed before this column did, and nothing backfills
+    /// them: they already have the suppliers they use, and inventing four more would be a change to
+    /// a trading business's own data. An application that is still
+    /// <see cref="BusinessStatus.Pending"/> when this ships gets its copies when it is approved,
+    /// because it is a new business.
+    /// </summary>
+    [JsonIgnore]
+    public DateTime? SupplierPresetsCopiedAtUtc { get; set; }
+
+    /// <summary>
     /// The one external system this business's sales come from, or <c>null</c> when it has none
     /// (issue #759, parent #329 decision P1 as revised on 18 October 2026).
     ///

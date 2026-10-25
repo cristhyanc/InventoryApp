@@ -8,13 +8,23 @@ import { CategoryService } from '../../services/category.service';
 import { Category } from '../../models/models';
 import { ProductPriceHistoryComponent } from './product-price-history/product-price-history.component';
 import { ProductGstRuleComponent } from './product-gst-rule/product-gst-rule.component';
+import { ProductCreateGstRuleComponent } from './product-create-gst-rule/product-create-gst-rule.component';
+import { ProductCategoryPickerComponent } from './product-category-picker/product-category-picker.component';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { apiErrorMessage } from '../shared/api-error-message';
 
 @Component({
   selector: 'app-product-form',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterLink, ProductPriceHistoryComponent, ProductGstRuleComponent],
+  imports: [
+    CommonModule,
+    FormsModule,
+    RouterLink,
+    ProductPriceHistoryComponent,
+    ProductGstRuleComponent,
+    ProductCreateGstRuleComponent,
+    ProductCategoryPickerComponent
+  ],
   templateUrl: './product-form.component.html'
 })
 export class ProductFormComponent implements OnInit, OnDestroy {
@@ -37,6 +47,32 @@ export class ProductFormComponent implements OnInit, OnDestroy {
    * business maintains itself. See `Inventory.Domain.Providers.ProviderManagedCatalogueFields`.
    */
   providerManagedFields: string[] = [];
+
+  /**
+   * Why this product may not be deleted, for the notice under the page header (issue #825), or
+   * `null` when the loaded product may be deleted and on New Product.
+   *
+   * It is the server's own refusal, verbatim - `GET api/products/{id}`'s `deletionRefusal`, decided
+   * by the one `Inventory.Domain.Products.ProductDeletionPolicy` (issue #737) - so this page never
+   * words the deletion rule a second time. It is informational: it gates no field, no Save and no
+   * other control, and it is shown for an active and an inactive product alike and during a
+   * support session, because it explains the product rather than offering an action.
+   */
+  deletionNotice: string | null = null;
+
+  /**
+   * The id of the product this page created, while the rule chosen for it is still being stored
+   * (issue #829), or `null` while no product has been created on this page.
+   *
+   * Creating a product with a GST rule is two writes - `POST api/products`, then
+   * `PUT api/products/{id}/gst-rule` on the id it answered - because the rule is its own resource
+   * and the product payload is a pinned API contract (docs/architecture.md § Product and supplier
+   * GST rules). This page makes the first one and hands the id to
+   * `app-product-create-gst-rule`, which owns the second one, its failure and its retry. The id
+   * stays here because this page created the product: once it is set, the page offers no create
+   * control at all, which is what makes a duplicate product impossible.
+   */
+  createdProductId: number | null = null;
 
   private readonly sessionActiveSubscription: Subscription;
 
@@ -68,15 +104,25 @@ export class ProductFormComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
-    // No supplier list is loaded (issue #787, A1 of #786): nothing on this page needs one now that
-    // a product carries no supplier.
-    this.categoryService.getAll().subscribe((c) => (this.categories = c));
-
     const idParam = this.route.snapshot.paramMap.get('id');
     if (idParam) {
+      // The category list feeds the edit page's dropdown only: on New Product the searchable picker
+      // reads the options itself (issue #830), so the page makes no second read of the same list.
+      // No supplier list is loaded either (issue #787, A1 of #786): nothing on this page needs one
+      // now that a product carries no supplier.
+      this.categoryService.getAll().subscribe((c) => (this.categories = c));
+
       this.productId = Number(idParam);
       this.productService.get(this.productId).subscribe((p) => {
         this.providerManagedFields = p.providerManagedFields ?? [];
+        // Anything but a plain `true` means a delete would be refused: `false` says so, and a
+        // response that did not resolve the question is not permission either (issue #737).
+        const refusal = p.deletionRefusal?.trim();
+        if (p.canDelete === true) {
+          this.deletionNotice = null;
+        } else {
+          this.deletionNotice = refusal || 'This product cannot be deleted.';
+        }
         this.form = {
           name: p.name,
           sku: p.sku ?? '',
@@ -91,6 +137,24 @@ export class ProductFormComponent implements OnInit, OnDestroy {
         };
       });
     }
+  }
+
+  /**
+   * The selected category id for the New Product picker, which reports `null` rather than the
+   * form's empty-string "no category" (issue #830). The submitted payload is unchanged.
+   */
+  get selectedCategoryId(): number | null {
+    return this.form.categoryId === '' ? null : this.form.categoryId;
+  }
+
+  /**
+   * The category the picker reports - always an existing category's id, or `null` for no category.
+   * It is the only thing that control changes on this form: every other field, and the GST rule
+   * chosen beside it (issue #829), is left exactly as it is, whether a category was selected or
+   * created.
+   */
+  onCategorySelected(categoryId: number | null): void {
+    this.form.categoryId = categoryId ?? '';
   }
 
   /** Whether the provider names this product, so its name may not be edited here (issue #737). */
@@ -117,10 +181,30 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     return null;
   }
 
+  /** The label of the page's one submit control, which names the write it would actually make. */
+  get submitLabel(): string {
+    return this.productId ? 'Update Product' : 'Create Product';
+  }
+
+  /** Whether the page's one submit control is unavailable. */
+  get submitDisabled(): boolean {
+    if (this.saving || this.sessionActive) {
+      return true;
+    }
+
+    return this.form.restockTo < this.form.lowStockThreshold;
+  }
+
   save(): void {
     // Checked here as well as disabled in the template, so the write is actually unavailable
     // rather than merely inert - the endpoint refuses it either way.
     if (this.sessionActive) {
+      return;
+    }
+    // This page has already created its product (issue #829), so it has no write left to make:
+    // what is outstanding is the GST rule, which `app-product-create-gst-rule` owns and retries.
+    // Creating the product a second time is exactly the duplicate this guard prevents.
+    if (this.createdProductId !== null) {
       return;
     }
     if (!this.form.name.trim()) {
@@ -171,12 +255,35 @@ export class ProductFormComponent implements OnInit, OnDestroy {
         quantityInStock: this.form.quantityInStock,
         initialUnitCost: this.form.initialUnitCost
       }).subscribe({
-        next: () => this.router.navigate(['/products']),
+        next: (created) => {
+          // The product exists from here on. Its GST rule is `app-product-create-gst-rule`'s to
+          // store (issue #829), so the page stays in its saving state and finishes on that
+          // component's report rather than treating the create alone as the whole outcome.
+          this.createdProductId = created.id;
+        },
         error: (error: unknown) => {
           this.error = apiErrorMessage(error, 'Failed to create product.');
           this.saving = false;
         }
       });
     }
+  }
+
+  /**
+   * The created product's GST rule is stored, or needed no write because "no rule" is what a new
+   * product already carries (issue #829). Only now is the create finished.
+   */
+  onGstRulePersisted(): void {
+    this.saving = false;
+    this.router.navigate(['/products']);
+  }
+
+  /**
+   * The product was created and its GST rule was not stored (issue #829). The page stays open and
+   * does not navigate - a create whose rule was not stored is not a finished create - and says
+   * nothing further itself: the component that owns that write reports it and offers the retry.
+   */
+  onGstRuleFailed(): void {
+    this.saving = false;
   }
 }

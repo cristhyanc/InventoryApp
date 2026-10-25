@@ -315,6 +315,178 @@ public class SuperAdminBusinessesApiTests : IClassFixture<SuperAdminBusinessesAp
 
     #endregion
 
+    #region The approved business's own supplier copies (issue #849)
+
+    /// <summary>
+    /// The outcome the whole of issue #849 is about, asked of the real HTTP surface: a business that
+    /// has just been approved holds its own <c>Supplier</c> row per <em>enabled</em> preset, with the
+    /// name and website copied, and the copy marker stamped with the decision instant.
+    /// </summary>
+    [Fact]
+    public async Task Approving_copies_the_enabled_presets_into_the_approved_business()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+        await _factory.SetSupplierPresetEnabledAsync("Costco", isEnabled: false);
+        await _factory.SetSupplierPresetUrlAsync("Coles", "https://www.coles.com.au");
+
+        var response = await _factory.AsAdministrator().PostAsync(ApproveUrl(_factory.PendingBusinessId), null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var copies = await _factory.SuppliersOfAsync(_factory.PendingBusinessId);
+        Assert.Equal(["Big W", "Coles", "Woolworths"], copies.Select(supplier => supplier.Name).Order());
+        Assert.Equal(
+            "https://www.coles.com.au",
+            copies.Single(supplier => supplier.Name == "Coles").Url);
+
+        var business = await _factory.BusinessAsync(_factory.PendingBusinessId);
+        Assert.Equal(business.DecidedAtUtc, business.SupplierPresetsCopiedAtUtc);
+    }
+
+    /// <summary>
+    /// Zero enabled presets approves normally: the business trades with no suppliers, and the marker
+    /// is still stamped, so a later approval attempt could not copy a second time.
+    /// </summary>
+    [Fact]
+    public async Task Approving_with_no_enabled_preset_copies_nothing_and_still_records_the_copy()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+        foreach (var name in SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames)
+        {
+            await _factory.SetSupplierPresetEnabledAsync(name, isEnabled: false);
+        }
+
+        (await _factory.AsAdministrator().PostAsync(ApproveUrl(_factory.PendingBusinessId), null))
+            .EnsureSuccessStatusCode();
+
+        Assert.Empty(await _factory.SuppliersOfAsync(_factory.PendingBusinessId));
+        Assert.NotNull((await _factory.BusinessAsync(_factory.PendingBusinessId)).SupplierPresetsCopiedAtUtc);
+    }
+
+    /// <summary>
+    /// A rejection equips nothing: the business is not starting to trade, so it receives no supplier
+    /// and its marker stays <c>null</c>.
+    /// </summary>
+    [Fact]
+    public async Task Rejecting_copies_no_preset_at_all()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+
+        (await _factory.AsAdministrator()
+                .PostAsJsonAsync(RejectUrl(_factory.PendingBusinessId), new { reason = "Needs an ABN." }))
+            .EnsureSuccessStatusCode();
+
+        Assert.Empty(await _factory.SuppliersOfAsync(_factory.PendingBusinessId));
+        Assert.Null((await _factory.BusinessAsync(_factory.PendingBusinessId)).SupplierPresetsCopiedAtUtc);
+    }
+
+    /// <summary>
+    /// The other three paths that change a business's status copy nothing. A deactivation and a
+    /// reactivation of the approved business leave its one set of copies exactly as it is, and the
+    /// trading business - which was never approved through an application, exactly like one
+    /// <c>bootstrap-business</c> adopted - receives nothing from either, nor a marker.
+    /// </summary>
+    [Fact]
+    public async Task Deactivating_and_reactivating_copy_nothing()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+        var admin = _factory.AsAdministrator();
+
+        (await admin.PostAsync(ApproveUrl(_factory.PendingBusinessId), null)).EnsureSuccessStatusCode();
+        var copied = (await _factory.SuppliersOfAsync(_factory.PendingBusinessId))
+            .Select(supplier => supplier.Id)
+            .ToArray();
+        var copiedAt = (await _factory.BusinessAsync(_factory.PendingBusinessId)).SupplierPresetsCopiedAtUtc;
+
+        (await admin.PostAsync($"{ListUrl}/{_factory.PendingBusinessId}/deactivate", null))
+            .EnsureSuccessStatusCode();
+        (await admin.PostAsync($"{ListUrl}/{_factory.PendingBusinessId}/reactivate", null))
+            .EnsureSuccessStatusCode();
+
+        Assert.Equal(
+            copied,
+            (await _factory.SuppliersOfAsync(_factory.PendingBusinessId)).Select(supplier => supplier.Id));
+        Assert.Equal(
+            copiedAt,
+            (await _factory.BusinessAsync(_factory.PendingBusinessId)).SupplierPresetsCopiedAtUtc);
+
+        (await admin.PostAsync($"{ListUrl}/{_factory.TradingBusinessId}/deactivate", null))
+            .EnsureSuccessStatusCode();
+        (await admin.PostAsync($"{ListUrl}/{_factory.TradingBusinessId}/reactivate", null))
+            .EnsureSuccessStatusCode();
+
+        Assert.Empty(await _factory.SuppliersOfAsync(_factory.TradingBusinessId));
+        Assert.Null((await _factory.BusinessAsync(_factory.TradingBusinessId)).SupplierPresetsCopiedAtUtc);
+    }
+
+    /// <summary>
+    /// The copies are ordinary suppliers of that business from the moment it starts trading: its
+    /// Owner lists, edits and deletes them through the ordinary supplier endpoints, under the
+    /// ordinary supplier permission - and another business's Owner sees none of them.
+    /// </summary>
+    [Fact]
+    public async Task The_copies_are_ordinary_suppliers_of_the_approved_business_and_nobody_elses()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+
+        (await _factory.AsAdministrator().PostAsync(ApproveUrl(_factory.PendingBusinessId), null))
+            .EnsureSuccessStatusCode();
+
+        var owner = _factory.Authenticated(SuperAdminBusinessesApiFactory.ApplicantObjectId);
+        var listed = await ReadJsonAsync(await owner.GetAsync("/api/suppliers"));
+        var names = listed.RootElement.EnumerateArray()
+            .Select(supplier => supplier.GetProperty("name").GetString()!)
+            .Order()
+            .ToArray();
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
+            names);
+
+        var ids = listed.RootElement.EnumerateArray()
+            .Select(supplier => supplier.GetProperty("id").GetInt32())
+            .ToArray();
+
+        var renamed = await owner.PutAsJsonAsync($"/api/suppliers/{ids[0]}", new { name = "Renamed by the business" });
+        Assert.Equal(HttpStatusCode.NoContent, renamed.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await owner.DeleteAsync($"/api/suppliers/{ids[1]}")).StatusCode);
+
+        // The platform's own list is untouched by either: the copying goes one way.
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
+            (await _factory.SupplierPresetsAsync()).Select(preset => preset.Name).Order());
+
+        // And the trading business, which has its own suppliers and its own permissions, sees none
+        // of the approved business's rows.
+        var otherOwner = _factory.Authenticated(SuperAdminBusinessesApiFactory.TradingOwnerObjectId);
+        var otherList = await ReadJsonAsync(await otherOwner.GetAsync("/api/suppliers"));
+        Assert.Empty(otherList.RootElement.EnumerateArray());
+    }
+
+    /// <summary>
+    /// A preset edited or disabled after the approval changes no copy: what the business holds is its
+    /// own row, taken from the snapshot the approval read.
+    /// </summary>
+    [Fact]
+    public async Task Editing_a_preset_after_the_approval_leaves_the_copies_alone()
+    {
+        await _factory.ResetSupplierPresetsAsync();
+
+        (await _factory.AsAdministrator().PostAsync(ApproveUrl(_factory.PendingBusinessId), null))
+            .EnsureSuccessStatusCode();
+
+        await _factory.RenameSupplierPresetAsync("Coles", "Coles Group");
+        await _factory.SetSupplierPresetUrlAsync("Coles Group", "https://www.colesgroup.example");
+        await _factory.SetSupplierPresetEnabledAsync("Woolworths", isEnabled: false);
+
+        var copies = await _factory.SuppliersOfAsync(_factory.PendingBusinessId);
+        Assert.Equal(
+            SuperAdminBusinessesApiFactory.ShippedSupplierPresetNames.Order(),
+            copies.Select(supplier => supplier.Name).Order());
+        Assert.All(copies, supplier => Assert.Null(supplier.Url));
+    }
+
+    #endregion
+
     #region Refusing
 
     /// <summary>

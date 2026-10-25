@@ -15,12 +15,19 @@ import {
 import { ProductService } from '../../services/product.service';
 import { MachineService } from '../../services/machine.service';
 import { SiteService } from '../../services/site.service';
-import { NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
+import { NayaxSalesSyncResult, NayaxSalesSyncService } from '../../services/nayax-sales-sync.service';
 import { DashboardService } from '../../services/dashboard.service';
 import { ProductPurchaseCostService } from '../../services/product-purchase-cost.service';
 import { AccessService } from '../../access/access.service';
 import { BusinessSettingsService } from '../../services/business-settings.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+
+/**
+ * What the synchronization answers when it ran (issue #843): the `204` the service maps to a result
+ * carrying no instant of its own. The recent-sync skip and the Refresh control are
+ * `dashboard.component.sales-freshness.spec.ts`'s subject.
+ */
+const SYNC_RAN: NayaxSalesSyncResult = { wasRecentlySynced: false, lastSyncedAtUtc: null };
 
 /**
  * Declared on its own rather than inline, because `DashboardSummary.salesThisWeek` is optional
@@ -79,7 +86,7 @@ function machineAwareAlerts(products: Product[]): ReorderAlertListing {
 function createComponent(
   summary$: Observable<DashboardSummary>,
   overrides: {
-    syncLatest?: () => Observable<void>;
+    syncLatest?: () => Observable<NayaxSalesSyncResult>;
     getAllMachines?: () => Observable<Machine[]>;
     getAllSites?: () => Observable<Site[]>;
     getLowStock?: () => Observable<ReorderAlertListing>;
@@ -93,7 +100,7 @@ function createComponent(
   const machineService = { getAll: overrides.getAllMachines ?? (() => of([])) } as unknown as MachineService;
   const siteService = { getAll: overrides.getAllSites ?? (() => of([])) } as unknown as SiteService;
   const nayaxSalesSyncService = {
-    syncLatest: overrides.syncLatest ?? (() => of(undefined))
+    syncLatest: overrides.syncLatest ?? (() => of(SYNC_RAN))
   } as unknown as NayaxSalesSyncService;
   const dashboardService = { getSummary: () => summary$ } as unknown as DashboardService;
 
@@ -456,7 +463,7 @@ async function renderDashboard(
       { provide: ProductService, useValue: { getLowStock: () => of(machineAwareAlerts(overrides.products ?? [])) } },
       { provide: MachineService, useValue: { getAll: () => of(overrides.machines ?? []) } },
       { provide: SiteService, useValue: { getAll: () => of(overrides.sites ?? []) } },
-      { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(undefined) } },
+      { provide: NayaxSalesSyncService, useValue: { syncLatest: () => of(SYNC_RAN) } },
       { provide: SupportSessionService, useValue: { active$: overrides.sessionActive ?? of(false) } },
       { provide: DashboardService, useValue: { getSummary: () => overrides.summary$ ?? of(SUMMARY) } },
       { provide: ProductPurchaseCostService, useValue: { getSummaries: () => of([]) } },
@@ -541,7 +548,7 @@ describe('DashboardComponent template rendering', () => {
     const hrefs = cards.map((a) => a.getAttribute('href'));
 
     expect(cards).toHaveLength(4);
-    expect(hrefs[0]).toContain('/reports');
+    expect(hrefs[0]).toContain('/reports/bookkeeping');
     expect(hrefs[1]).toContain('/pick-list');
     expect(hrefs[2]).toContain('needs-ordering');
     expect(hrefs[3]).toContain('/products');
@@ -675,7 +682,7 @@ describe('DashboardComponent coordinated sales refresh', () => {
     const component = createComponent(of(SUMMARY), {
       syncLatest: () => {
         calls.push('sync');
-        return of(undefined);
+        return of(SYNC_RAN);
       },
       getAllMachines: () => {
         calls.push('machines');
@@ -700,7 +707,7 @@ describe('DashboardComponent coordinated sales refresh', () => {
     const component = createComponent(of(SUMMARY), {
       syncLatest: () => {
         syncCalls++;
-        return of(undefined);
+        return of(SYNC_RAN);
       }
     });
 
@@ -758,7 +765,7 @@ describe('DashboardComponent coordinated sales refresh', () => {
  */
 describe('DashboardComponent Nayax sales sync in a support session (issue #661)', () => {
   it('never calls the sync endpoint while a session is active', () => {
-    const syncLatest = jest.fn(() => of(undefined));
+    const syncLatest = jest.fn(() => of(SYNC_RAN));
     const component = createComponent(of(SUMMARY), { syncLatest, sessionActive: of(true) });
 
     component.ngOnInit();
@@ -768,7 +775,7 @@ describe('DashboardComponent Nayax sales sync in a support session (issue #661)'
 
   it('still loads the persisted machines and sites, and reports no sync failure it did not have', () => {
     const component = createComponent(of(SUMMARY), {
-      syncLatest: jest.fn(() => of(undefined)),
+      syncLatest: jest.fn(() => of(SYNC_RAN)),
       sessionActive: of(true),
       getAllMachines: () => of([MACHINE]),
       getAllSites: () => of([SITE])
@@ -790,7 +797,7 @@ describe('DashboardComponent Nayax sales sync in a support session (issue #661)'
   });
 
   it('still synchronizes, and shows neither notice, outside a session', async () => {
-    const syncLatest = jest.fn(() => of(undefined));
+    const syncLatest = jest.fn(() => of(SYNC_RAN));
     const component = createComponent(of(SUMMARY), { syncLatest, sessionActive: of(false) });
 
     component.ngOnInit();

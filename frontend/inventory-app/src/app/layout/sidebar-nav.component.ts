@@ -15,6 +15,7 @@ import {
 import { AccessService, MemberAccessState } from '../access/access.service';
 import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { CapabilitySet } from '../access/capabilities';
+import { OptionVisibility } from '../access/option-visibility';
 import { IconComponent } from '../components/shared/icon.component';
 import { ProviderAvailability, ProviderAvailabilityService } from '../provider/provider-availability.service';
 import { ProviderLock, providerLockSummary } from '../provider/provider-lock';
@@ -29,6 +30,7 @@ import {
   activeNavRoute,
   navLockOf,
   navigationFor,
+  optionSwitchedOff,
   superAdminNavGroup
 } from './navigation';
 
@@ -162,6 +164,7 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
     readonly capabilities: CapabilitySet | undefined;
     readonly diagnosticsOffered: boolean;
     readonly businessNavigation: BusinessNavigationVisibility;
+    readonly options: OptionVisibility | undefined;
   };
 
   constructor(
@@ -204,7 +207,8 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
         this.menuInputs = {
           capabilities: renderedCapabilities(access),
           diagnosticsOffered,
-          businessNavigation
+          businessNavigation,
+          options: renderedOptionVisibility(access)
         };
         this.renderNavigation();
 
@@ -299,6 +303,23 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
   }
 
   /**
+   * Whether this destination is the switchable one and the application has switched it off
+   * (issue #873), which is what the `Off` pill is rendered from.
+   *
+   * A member who is not the Super Admin is not offered the entry at all in that state, so a pill
+   * here is by construction a Super Admin's: it tells them, where they are looking, that what they
+   * can see is hidden from everybody else.
+   */
+  isOptionSwitchedOff(link: NavLink): boolean {
+    return optionSwitchedOff(link.route, this.menuInputs?.options);
+  }
+
+  /** The sentence a screen reader is given beside the `Off` pill. */
+  optionOffSummary(link: NavLink): string {
+    return `${link.label} is switched off and hidden from everybody but a Super Admin.`;
+  }
+
+  /**
    * A destination's tooltip: the lock sentence while it is locked, because that is what an operator
    * needs before clicking; otherwise the label the collapsed rail has no room to print.
    */
@@ -371,7 +392,8 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
       inputs.capabilities,
       inputs.diagnosticsOffered,
       inputs.businessNavigation,
-      this.provider
+      this.provider,
+      inputs.options
     );
     // A page opened by URL before the answers arrived becomes the active entry once its link
     // exists, so the owning group reflects where the operator actually is.
@@ -407,6 +429,16 @@ export class SidebarNavComponent implements OnInit, OnDestroy {
 }
 
 const NO_CAPABILITIES: CapabilitySet = new Set();
+
+/**
+ * The switchable-option answer to render the menu from (issue #873). Only a granted read carries
+ * one; `unread` and `unavailable` are both "not known", which hides nothing and shows no pill - the
+ * answer travels with the capabilities, and a menu must not take an entry away over a read that
+ * never answered.
+ */
+function renderedOptionVisibility(state: MemberAccessState): OptionVisibility | undefined {
+  return state.status === 'granted' ? state.access.optionVisibility : undefined;
+}
 
 /**
  * The capability set to render the menu from, for each of the three things the access read can

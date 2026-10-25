@@ -66,6 +66,30 @@ public class InventoryCostTransitionTests
         Assert.Equal("The opening average unit cost cannot be negative.", exception.Message);
     }
 
+    /// <summary>
+    /// Issue #833: the preview refuses incomplete Nayax slot data, and the refusal the operator
+    /// sees names the product rather than only its ID. The name comes from the product the preview
+    /// was asked for, which the builder already holds.
+    /// </summary>
+    [Fact]
+    public async Task Preview_rejecting_incomplete_machine_stock_names_the_product()
+    {
+        await using var db = CreateDb();
+        db.Products.Add(new Product { Id = 10, Name = "Snack", QuantityInStock = 19, AverageUnitCost = 1.25m });
+        await db.SaveChangesAsync();
+        var nayax = NayaxWithStock(10);
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 10, PAR = 10, MissingStockByMDB = null } });
+
+        var exception = await Assert.ThrowsAsync<DomainValidationException>(() =>
+            TestCostingUseCases.PreviewTransition(db, nayax.Object)
+                .Handle(new(10, 1.25m, DomainBaselineSource.ManualAuthoritative)));
+
+        Assert.Equal(
+            "Nayax stock is incomplete for product Snack (10) in machine Machine A: PAR and MissingStockByMDB are required.",
+            exception.Message);
+    }
+
     [Fact]
     public async Task Apply_without_confirmation_throws_a_domain_validation_exception()
     {
@@ -234,7 +258,7 @@ public class InventoryCostTransitionTests
         });
         await db.SaveChangesAsync();
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
@@ -248,7 +272,7 @@ public class InventoryCostTransitionTests
                     AuthorizationDateTimeGmt = cutoff.AddMinutes(30)
                 }
             });
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 10, ProductName = "Snack", PAR = 5, MissingStockByMDB = 1 }
@@ -277,9 +301,9 @@ public class InventoryCostTransitionTests
             new Product { Id = 20, Name = "Drink", QuantityInStock = 6, AverageUnitCost = 2.00m });
         await db.SaveChangesAsync();
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1, MachineName = "Machine A" } });
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = 10, PAR = 8, MissingStockByMDB = 3 },
@@ -326,7 +350,7 @@ public class InventoryCostTransitionTests
             });
         await db.SaveChangesAsync();
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine> { new() { MachineID = 1 } });
         nayax.Setup(x => x.GetMachineLastSalesAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxLastSalesReport>
@@ -383,18 +407,18 @@ public class InventoryCostTransitionTests
     private static Mock<INayaxLynxClient> NayaxWithStock(long productId)
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachinesAsync(It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachinesFreshAsync(It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachine>
             {
                 new() { MachineID = 1, MachineName = "Machine A" },
                 new() { MachineID = 2, MachineName = "Machine B" }
             });
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = productId, PAR = 10, MissingStockByMDB = 4 }
             });
-        nayax.Setup(x => x.GetMachineProductsAsync(2, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(2, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct>
             {
                 new() { NayaxProductID = productId, PAR = 8, MissingStockByMDB = 3 }

@@ -9,6 +9,7 @@ import { BehaviorSubject, NEVER, Observable, Subject, of, throwError } from 'rxj
 import { AccessService, MemberAccess, MemberAccessState } from '../access/access.service';
 import { BusinessNavigationVisibility } from '../access/business-navigation';
 import { CAPABILITIES, Capability, capabilitySet } from '../access/capabilities';
+import { OptionVisibility } from '../access/option-visibility';
 import { FORBIDDEN_INTERCEPTORS } from '../access/forbidden-interceptors';
 import { apiConfig, queuedReads, readingHttp, signedInIdentity } from '../access/identity-cache.spec-helpers';
 import { ICON_PATHS, OUTLINED_ICON_SHAPES } from '../components/shared/icon-paths';
@@ -37,12 +38,16 @@ import { NavGroup, navLinks, primaryNavigation } from './navigation';
 @Component({ standalone: true, template: '' })
 class BlankPageComponent {}
 
-function granted(capabilities: readonly Capability[]): MemberAccessState {
+function granted(
+  capabilities: readonly Capability[],
+  optionVisibility?: OptionVisibility
+): MemberAccessState {
   const access: MemberAccess = {
     role: 'Test',
     capabilities: capabilitySet([...capabilities]),
     businessName: 'Vending Co',
-    timeZoneId: 'Australia/Sydney'
+    timeZoneId: 'Australia/Sydney',
+    optionVisibility
   };
   return { status: 'granted', access };
 }
@@ -237,7 +242,7 @@ describe('SidebarNavComponent active route (issue #391)', () => {
 
     expect(link(host, '/reports/gst')?.getAttribute('aria-current')).toBe('page');
     expect(groupToggle(host, 'Reports').getAttribute('aria-expanded')).toBe('true');
-    expect(link(host, '/reports')?.getAttribute('aria-current')).toBeNull();
+    expect(link(host, '/reports/bookkeeping')?.getAttribute('aria-current')).toBeNull();
   });
 
   it('keeps the parent group heading active while one of its pages is open', async () => {
@@ -344,7 +349,7 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     expect(host.textContent).not.toContain('Super Admin');
   });
 
-  it('renders Platform Diagnostics and Businesses once the API confirms access', async () => {
+  it('renders Platform Diagnostics, Businesses and Supplier Presets once the API confirms access', async () => {
     const { fixture, host } = await render({ diagnosticsAccess: of(true) });
     expect(link(host, '/super-admin/diagnostics')).toBeNull();
 
@@ -358,6 +363,10 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     const businesses = link(host, '/super-admin/businesses');
     expect(businesses).not.toBeNull();
     expect(businesses?.textContent?.trim()).toBe('Businesses');
+
+    const presets = link(host, '/super-admin/supplier-presets');
+    expect(presets).not.toBeNull();
+    expect(presets?.textContent?.trim()).toBe('Supplier Presets');
   });
 
   it('marks the diagnostics page active and opens the Super Admin group for it', async () => {
@@ -367,7 +376,7 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     expect(link(host, '/super-admin/diagnostics')?.getAttribute('aria-current')).toBe('page');
   });
 
-  it('adds no other destination when access is confirmed, besides its own two children', async () => {
+  it('adds no other destination when access is confirmed, besides its own three children', async () => {
     const { component } = await render({ diagnosticsAccess: of(true) });
 
     expect(component.navigation.map((entry) => entry.label)).toEqual([
@@ -377,7 +386,8 @@ describe('SidebarNavComponent Super Admin group (issue #546)', () => {
     expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
       ...navLinks(primaryNavigation).map((entry) => entry.route),
       '/super-admin/diagnostics',
-      '/super-admin/businesses'
+      '/super-admin/businesses',
+      '/super-admin/supplier-presets'
     ]);
   });
 });
@@ -402,15 +412,15 @@ describe('SidebarNavComponent during a role preview (issue #721)', () => {
     expect(component.navigation.map((entry) => entry.label)).toEqual([
       'Dashboard',
       'Pick List',
+      'Sites',
       'Machines',
       'Inventory',
-      'Purchases',
-      'Needs Nayax',
-      'Sites'
+      'Purchases'
     ]);
     expect(navLinks(component.navigation).map((entry) => entry.route)).toEqual([
       '/',
       '/pick-list',
+      '/sites',
       '/machines',
       '/products',
       '/take-inventory',
@@ -418,8 +428,7 @@ describe('SidebarNavComponent during a role preview (issue #721)', () => {
       '/stock-history',
       '/purchases',
       '/purchases/orders',
-      '/suppliers',
-      '/sites'
+      '/suppliers'
     ]);
     expect(host.textContent).not.toContain('Super Admin');
     expect(link(host, '/super-admin/businesses')).toBeNull();
@@ -931,9 +940,11 @@ describe('SidebarNavComponent outlined icons (issue #456)', () => {
     }
     fixture.detectChanges();
 
-    // A section heading (issue #729) declares no icon: it is a heading over the entries after it.
+    // Every top-level entry carries an icon: since issue #868 removed the "Needs Nayax" heading,
+    // every one of them is a destination or a group, and the rail has nothing else to draw.
     const iconBearing = primaryNavigation.filter((item) => item.kind !== 'section');
     const declaredIcons = iconBearing.flatMap((item) => (item.icon === undefined ? [] : [item.icon]));
+    expect(iconBearing).toHaveLength(primaryNavigation.length);
     expect(declaredIcons).toHaveLength(iconBearing.length);
 
     for (const icon of declaredIcons) {
@@ -1213,22 +1224,81 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
     { check: 'MachineLastSales', status: 'Passed', failure: null }
   ];
 
+  /** The five reports issue #868 locks while the business has no Nayax connection at all. */
+  const PROVIDER_RECORD_REPORTS = [
+    '/reports/daily',
+    '/reports/transactions',
+    '/reports/reconciliation',
+    '/reports/machines',
+    '/reports/products'
+  ];
+
   function lockBadges(host: HTMLElement, route: string): string {
     return link(host, route)?.textContent ?? '';
   }
 
-  it('renders the live provider section heading, with the entries under it', async () => {
-    const { host } = await render();
-    const heading = Array.from(host.querySelectorAll('h2')).find((entry) =>
-      (entry.textContent ?? '').includes('Needs Nayax')
+  /**
+   * Issue #868 removed the "Needs Nayax" heading: nothing in the menu is grouped by what it needs
+   * from the provider any more, and `Sites` sits immediately above `Machines` as an ordinary
+   * top-level destination.
+   */
+  it('renders no provider section heading, with Sites immediately above Machines', async () => {
+    const { host, component } = await render();
+    const headings = Array.from(host.querySelectorAll('nav[aria-label="Primary"] h2')).map(
+      (entry) => entry.textContent ?? ''
     );
 
-    expect(heading).toBeDefined();
-    expect(heading?.tagName).toBe('H2');
+    expect(headings).toEqual([]);
+    expect(host.textContent).not.toContain('Needs Nayax');
     expect(link(host, '/sites')).not.toBeNull();
-    expect(link(host, '/reports/site-commissions')).not.toBeNull();
-    // Machines is in the top section since issue #740 and is rendered whatever the provider says.
     expect(link(host, '/machines')).not.toBeNull();
+    const labels = component.navigation.map((entry) => entry.label);
+    expect(labels.indexOf('Machines')).toBe(labels.indexOf('Sites') + 1);
+  });
+
+  /** Site Commissions is a Reports child again (issue #868), rendered once its group is open. */
+  it('renders Site Commissions inside the Reports group, not as a top-level entry', async () => {
+    const { fixture, host } = await render();
+
+    expect(link(host, '/reports/site-commissions')).toBeNull();
+
+    groupToggle(host, 'Reports').click();
+    fixture.detectChanges();
+
+    expect(link(host, '/reports/site-commissions')).not.toBeNull();
+  });
+
+  /**
+   * The order every role is shown, which is the same order for all of them: what each one is
+   * offered differs only by capability, never by where an entry sits.
+   */
+  it.each([
+    {
+      role: 'an Owner',
+      capabilities: CAPABILITIES,
+      expected: ['Dashboard', 'Pick List', 'Sites', 'Machines', 'Inventory', 'Purchases', 'Expenses', 'Reports', 'Admin']
+    },
+    {
+      role: 'a Manager',
+      capabilities: [
+        'Dashboard.View',
+        'Dashboard.ViewFinancials',
+        'PickList.View',
+        'Inventory.Operate',
+        'Purchasing.Operate',
+        'Suppliers.ManageGstDefaults',
+        'Expenses.Manage',
+        'Reports.View',
+        'Imports.Run',
+        'SiteCommissions.Manage'
+      ] as readonly Capability[],
+      expected: ['Dashboard', 'Pick List', 'Sites', 'Machines', 'Inventory', 'Purchases', 'Expenses', 'Reports', 'Admin']
+    },
+    { role: 'a Reports-only role', capabilities: ['Reports.View'] as readonly Capability[], expected: ['Reports'] }
+  ])('renders the menu in one order for $role', async ({ capabilities, expected }) => {
+    const { component } = await render({ access: of(granted(capabilities)), providerStatus: 'NotConfigured' });
+
+    expect(component.navigation.map((entry) => entry.label)).toEqual(expected);
   });
 
   it('renames the Products group Inventory, leaving the Products page its own name and URL', async () => {
@@ -1241,7 +1311,9 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
   });
 
   it('locks nothing on a usable connection', async () => {
-    const { host } = await render({ providerStatus: 'Ready' });
+    const { fixture, host } = await render({ providerStatus: 'Ready' });
+    groupToggle(host, 'Reports').click();
+    fixture.detectChanges();
 
     expect(lockBadges(host, '/machines')).not.toContain('Locked');
     expect(lockBadges(host, '/sites')).not.toContain('Locked');
@@ -1253,7 +1325,9 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
    * route's own `requireProvider` guard is what shows it. So it is marked, never disabled.
    */
   it('shows every live provider entry locked, and still linked, with no connection at all', async () => {
-    const { host } = await render({ providerStatus: 'NotConfigured' });
+    const { fixture, host } = await render({ providerStatus: 'NotConfigured' });
+    groupToggle(host, 'Reports').click();
+    fixture.detectChanges();
 
     for (const route of ['/sites', '/reports/site-commissions']) {
       const entry = link(host, route);
@@ -1311,24 +1385,85 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
   });
 
   /**
-   * **Historical reports stay accessible** (decision P5): with no provider at all they are in the
-   * Reports group, linked and unlocked, because they read stored data.
+   * The Reports group with no Nayax connection at all (issue #868): every report is still offered,
+   * the five over stored provider records are shown **locked** rather than hidden - clicking one is
+   * how an operator reaches the explanation - and Bookkeeping and GST are untouched.
    */
-  it('keeps every report over stored data in the Reports group, linked and unlocked', async () => {
+  it('locks the five stored-record reports with no connection, leaving Bookkeeping and GST open', async () => {
     const { fixture, host } = await render({ providerStatus: 'NotConfigured' });
     groupToggle(host, 'Reports').click();
     fixture.detectChanges();
 
-    for (const route of [
-      '/reports/bookkeeping',
-      '/reports/daily',
-      '/reports/transactions',
-      '/reports/reconciliation',
-      '/reports/machines'
-    ]) {
+    for (const route of PROVIDER_RECORD_REPORTS) {
+      const entry = link(host, route);
+      expect(entry).not.toBeNull();
+      expect(entry?.textContent).toContain('Locked');
+      expect(entry?.hasAttribute('aria-disabled')).toBe(false);
+      expect(entry?.getAttribute('title')).toContain('Nayax is not connected');
+    }
+
+    for (const route of ['/reports/bookkeeping', '/reports/gst']) {
       expect(link(host, route)).not.toBeNull();
       expect(lockBadges(host, route)).not.toContain('Locked');
+      expect(link(host, route)?.getAttribute('title')).toBeNull();
     }
+  });
+
+  /**
+   * Credentials that are stored and no longer work lock a live fleet destination and leave these
+   * five open: the sales they report on are stored, and the connection they need only has to
+   * exist. This is the state that proves `providerRecords` is not a synonym for a usable
+   * connection.
+   */
+  it('leaves the five stored-record reports unlocked for credentials that stopped working', async () => {
+    const { fixture, host } = await render({ providerStatus: 'NeedsAttention' });
+    groupToggle(host, 'Reports').click();
+    fixture.detectChanges();
+
+    for (const route of PROVIDER_RECORD_REPORTS) {
+      expect(lockBadges(host, route)).not.toContain('Locked');
+    }
+    // Beside them, the two destinations that do need a live read are locked.
+    expect(lockBadges(host, '/sites')).toContain('Locked');
+    expect(lockBadges(host, '/reports/site-commissions')).toContain('Locked');
+  });
+
+  it('leaves them unlocked on a usable connection whose fleet read Nayax refused', async () => {
+    const { fixture, host } = await render({ providerStatus: 'PendingPermissions', providerChecks: PERMISSION_REFUSED });
+    groupToggle(host, 'Reports').click();
+    fixture.detectChanges();
+
+    for (const route of PROVIDER_RECORD_REPORTS) {
+      expect(lockBadges(host, route)).not.toContain('Locked');
+    }
+    expect(link(host, '/reports/site-commissions')?.getAttribute('title')).toBe(
+      'Site Commissions is waiting for a Nayax permission.'
+    );
+  });
+
+  it.each(['Ready', 'unreadable'] as const)(
+    'leaves them unlocked on a connection that is %s with nothing refused',
+    async (providerStatus) => {
+      const { fixture, host } = await render({ providerStatus });
+      groupToggle(host, 'Reports').click();
+      fixture.detectChanges();
+
+      for (const route of PROVIDER_RECORD_REPORTS) {
+        expect(lockBadges(host, route)).not.toContain('Locked');
+        expect(link(host, route)?.getAttribute('title')).toBeNull();
+      }
+    }
+  );
+
+  /** A locked report says what would unlock it, to a screen reader as well as in the tooltip. */
+  it('gives a locked report the same sentence in its tooltip and for a screen reader', async () => {
+    const { fixture, host } = await render({ providerStatus: 'NotConfigured' });
+    groupToggle(host, 'Reports').click();
+    fixture.detectChanges();
+
+    const daily = link(host, '/reports/daily');
+    expect(daily?.getAttribute('title')).toBe('Daily is unavailable because Nayax is not connected.');
+    expect(daily?.querySelector('.sr-only')?.textContent).toBe('Daily is unavailable because Nayax is not connected.');
   });
 
   it('hides the Nayax imports and the sale timestamp repair until the connection is usable', async () => {
@@ -1353,13 +1488,113 @@ describe('SidebarNavComponent provider-locked destinations (issue #729)', () => 
     expect(link(host, '/admin/nayax-sale-timestamp-repair')).not.toBeNull();
   });
 
+  /**
+   * The two Admin destinations issue #869 locks. They are locked exactly as Site Commissions is -
+   * marked, still linked, with the sentence that says what would unlock them - and never hidden,
+   * which is what keeps them apart from the two provider tools above.
+   */
+  describe('the two locked Admin destinations (issue #869)', () => {
+    const LOCKED_ADMIN = ['/admin/site-commission-agreements', '/admin/avco-transition'];
+
+    async function openAdmin(providerStatus: SpecConnectionStatus, providerChecks?: readonly NayaxConnectionCheckLine[]) {
+      const rendered = await render({ providerStatus, providerChecks });
+      groupToggle(rendered.host, 'Admin').click();
+      rendered.fixture.detectChanges();
+      return rendered;
+    }
+
+    it('shows both locked, and still linked, with no connection at all', async () => {
+      const { host } = await openAdmin('NotConfigured');
+
+      for (const route of LOCKED_ADMIN) {
+        const entry = link(host, route);
+        expect(entry).not.toBeNull();
+        expect(entry?.textContent).toContain('Locked');
+        expect(entry?.hasAttribute('aria-disabled')).toBe(false);
+        expect(entry?.getAttribute('title')).toContain('Nayax is not connected');
+      }
+    });
+
+    it('locks both for credentials that are stored and known not to work', async () => {
+      const { host } = await openAdmin('NeedsAttention');
+
+      for (const route of LOCKED_ADMIN) {
+        expect(link(host, route)?.textContent).toContain('Locked');
+      }
+    });
+
+    /** A refused fleet read is the other lock, and it reads as a Nayax permission, not a connection. */
+    it('locks both as a Nayax permission when that read was refused', async () => {
+      const { host } = await openAdmin('PendingPermissions', PERMISSION_REFUSED);
+
+      for (const route of LOCKED_ADMIN) {
+        expect(link(host, route)?.getAttribute('title')).toContain('waiting for a Nayax permission');
+      }
+    });
+
+    it.each(['Ready', 'PendingPermissions', 'unreadable'] as const)(
+      'leaves both unlocked on a connection that is %s with nothing refused',
+      async (providerStatus) => {
+        const { host } = await openAdmin(providerStatus);
+
+        for (const route of LOCKED_ADMIN) {
+          expect(link(host, route)?.textContent).not.toContain('Locked');
+        }
+      }
+    );
+
+    /**
+     * Nayax Historical Cost Recovery is never locked (the user's decision of 24 October 2026): it
+     * reads the Nayax cost already stored on imported sales and makes no Nayax call, so a
+     * disconnected business with imported history can still recover those costs.
+     */
+    it.each(['NotConfigured', 'NeedsAttention'] as const)(
+      'never locks Nayax Historical Cost Recovery beside them, on a %s connection',
+      async (providerStatus) => {
+        const { host } = await openAdmin(providerStatus);
+        const recovery = link(host, '/admin/historical-cost-recovery');
+
+        expect(recovery).not.toBeNull();
+        expect(recovery?.textContent).not.toContain('Locked');
+        expect(recovery?.getAttribute('title')).toBeNull();
+      }
+    );
+
+    /** Capability rules apply first: a Manager sees the agreements page, locked, and no AVCO entry. */
+    it('offers a Manager the locked agreements page and no AVCO Transition entry at all', async () => {
+      const manager = granted([
+        'Dashboard.View',
+        'Dashboard.ViewFinancials',
+        'PickList.View',
+        'Inventory.Operate',
+        'Purchasing.Operate',
+        'Expenses.Manage',
+        'Reports.View',
+        'Imports.Run',
+        'SiteCommissions.Manage'
+      ]);
+      const { fixture, host } = await render({ access: of(manager), providerStatus: 'NotConfigured' });
+      groupToggle(host, 'Admin').click();
+      fixture.detectChanges();
+
+      expect(link(host, '/admin/site-commission-agreements')?.textContent).toContain('Locked');
+      expect(link(host, '/admin/avco-transition')).toBeNull();
+    });
+  });
+
   /** Capability rules apply first: an entry the role cannot see stays hidden, never locked. */
   it('hides a live provider entry the role may not see rather than locking it', async () => {
     const operator = granted(['Dashboard.View', 'PickList.View', 'Inventory.Operate', 'Purchasing.Operate']);
-    const { host } = await render({ access: of(operator), providerStatus: 'NotConfigured' });
+    const { component, host } = await render({ access: of(operator), providerStatus: 'NotConfigured' });
 
     expect(lockBadges(host, '/sites')).toContain('Locked');
-    expect(link(host, '/reports/site-commissions')).toBeNull();
+    // The whole Reports group is withheld from an Operator, so none of the locked reports - or the
+    // site commission report - is offered as a locked entry either.
+    expect(component.navigation.map((entry) => entry.label)).not.toContain('Reports');
+    expect(navLinks(component.navigation).map((entry) => entry.route)).not.toContain('/reports/site-commissions');
+    for (const route of PROVIDER_RECORD_REPORTS) {
+      expect(navLinks(component.navigation).map((entry) => entry.route)).not.toContain(route);
+    }
   });
 
   it('reads the connection status once however many entries depend on it', async () => {
@@ -1434,14 +1669,16 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
   it('unlocks the live entries and offers the provider tools when a connection is saved', async () => {
     const { fixture, host } = await render({ providerStatus: 'NotConfigured' });
     groupToggle(host, 'Admin').click();
+    groupToggle(host, 'Reports').click();
     fixture.detectChanges();
     expect(lockText(host, '/sites')).toContain('Locked');
+    expect(lockText(host, '/reports/daily')).toContain('Locked');
     expect(link(host, '/admin/imports')).toBeNull();
 
     availability().accept(connected('Ready'));
     fixture.detectChanges();
 
-    for (const route of ['/sites', '/reports/site-commissions']) {
+    for (const route of ['/sites', '/reports/site-commissions', '/reports/daily']) {
       expect(lockText(host, route)).not.toContain('Locked');
       expect(link(host, route)?.getAttribute('title')).toBeNull();
     }
@@ -1452,6 +1689,7 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
   it('locks them again, and withdraws the provider tools, when the credentials stop working', async () => {
     const { fixture, host } = await render({ providerStatus: 'Ready' });
     groupToggle(host, 'Admin').click();
+    groupToggle(host, 'Reports').click();
     fixture.detectChanges();
     expect(lockText(host, '/sites')).not.toContain('Locked');
     expect(link(host, '/admin/imports')).not.toBeNull();
@@ -1463,6 +1701,37 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
     expect(link(host, '/sites')?.getAttribute('title')).toBe('Sites is unavailable because Nayax is not connected.');
     expect(link(host, '/admin/imports')).toBeNull();
     expect(link(host, '/admin/nayax-sale-timestamp-repair')).toBeNull();
+    // The reports over stored provider records stay open: the connection still exists (issue #868).
+    expect(lockText(host, '/reports/daily')).not.toContain('Locked');
+    expect(lockText(host, '/reports/products')).not.toContain('Locked');
+  });
+
+  /**
+   * And the state those five do lock in, reached without the sidebar ever being recreated: the
+   * business's connection is removed, so the menu locks them there and then and agrees with
+   * `requireProvider`, which asks again on the next navigation.
+   */
+  it('locks the five stored-record reports when the connection is removed', async () => {
+    const answers: NayaxConnectionStatusName[] = ['Ready', 'NotConfigured'];
+    const connections = {
+      status: jest.fn(() => of(connected(answers.shift() ?? 'NotConfigured')))
+    } as unknown as NayaxConnectionService;
+    const { fixture, host } = await mount([
+      provideRouter([{ path: '**', component: BlankPageComponent }]),
+      { provide: NayaxConnectionService, useValue: connections }
+    ]);
+    groupToggle(host, 'Reports').click();
+    fixture.detectChanges();
+    expect(lockText(host, '/reports/daily')).not.toContain('Locked');
+
+    availability().reset();
+    fixture.detectChanges();
+
+    expect(lockText(host, '/reports/daily')).toContain('Locked');
+    expect(link(host, '/reports/daily')?.getAttribute('title')).toBe(
+      'Daily is unavailable because Nayax is not connected.'
+    );
+    expect(lockText(host, '/reports/bookkeeping')).not.toContain('Locked');
   });
 
   /**
@@ -1536,5 +1805,105 @@ describe('SidebarNavComponent provider changes while it stays mounted (issue #72
     fixture.detectChanges();
     expect(router.url).toBe('/sites');
     expect(lockText(host, '/sites')).not.toContain('Locked');
+  });
+});
+
+/**
+ * The one switchable Admin option in the menu (issue #873): a Super Admin may stop
+ * `Historical GST Classification` being offered to everybody else, and keeps it themselves with an
+ * `Off` pill beside its name.
+ *
+ * The answer comes from the capability read - the sidebar decides nothing here either - and it is
+ * applied after the capability rules, so it can only ever take away an entry the role already had.
+ */
+describe('SidebarNavComponent switchable option visibility (issue #873)', () => {
+  const ROUTE = '/admin/historical-gst-classification';
+  const OFF: OptionVisibility = { historicalGstClassificationVisible: false };
+  const ON: OptionVisibility = { historicalGstClassificationVisible: true };
+
+  async function openAdmin(
+    optionVisibility: OptionVisibility | undefined,
+    options: { diagnosticsAccess?: boolean; rolePreviewActive?: boolean } = {}
+  ) {
+    const rendered = await render({
+      access: of(granted(CAPABILITIES, optionVisibility)),
+      diagnosticsAccess: of(options.diagnosticsAccess ?? false),
+      rolePreviewActive: options.rolePreviewActive
+    });
+    groupToggle(rendered.host, 'Admin').click();
+    rendered.fixture.detectChanges();
+    return rendered;
+  }
+
+  it('leaves the entry out for an eligible member while the option is off', async () => {
+    const { host } = await openAdmin(OFF);
+
+    expect(link(host, ROUTE)).toBeNull();
+    // The rest of the Admin group is untouched: this is one option, not a section.
+    expect(link(host, '/admin/costing-repair')).not.toBeNull();
+    expect(link(host, '/admin/imports')).not.toBeNull();
+  });
+
+  it('offers it, with no pill, while the option is on', async () => {
+    const { host } = await openAdmin(ON);
+
+    expect(link(host, ROUTE)).not.toBeNull();
+    expect(link(host, ROUTE)?.textContent).not.toContain('Off');
+  });
+
+  it('offers it, with no pill, while the setting has not been reported', async () => {
+    const { host } = await openAdmin(undefined);
+
+    expect(link(host, ROUTE)).not.toBeNull();
+    expect(link(host, ROUTE)?.textContent).not.toContain('Off');
+  });
+
+  it('keeps it for a super admin while the option is off, marked Off and still linked', async () => {
+    const { host } = await openAdmin(OFF, { diagnosticsAccess: true });
+
+    const entry = link(host, ROUTE);
+    expect(entry).not.toBeNull();
+    expect(entry?.querySelector('.badge')?.textContent?.trim()).toBe('Off');
+    expect(entry?.textContent).toContain('hidden from everybody but a Super Admin');
+    expect(entry?.hasAttribute('aria-disabled')).toBe(false);
+  });
+
+  it('marks nothing Off for a super admin while the option is on', async () => {
+    const { host } = await openAdmin(ON, { diagnosticsAccess: true });
+
+    expect(link(host, ROUTE)?.textContent).not.toContain('Off');
+  });
+
+  /**
+   * A role preview withholds the administrator's own treatment here exactly as it withholds the
+   * `Super Admin` group (issue #721): what the preview shows is what the previewed role sees.
+   */
+  it('withholds the entry inside a role preview, as it does the Super Admin group', async () => {
+    const { host } = await openAdmin(OFF, { diagnosticsAccess: true, rolePreviewActive: true });
+
+    expect(link(host, ROUTE)).toBeNull();
+  });
+
+  it('never offers it to a role without Data.Repair, whichever state it is in', async () => {
+    const manager = [
+      'Dashboard.View',
+      'Dashboard.ViewFinancials',
+      'PickList.View',
+      'Inventory.Operate',
+      'Purchasing.Operate',
+      'Expenses.Manage',
+      'Reports.View',
+      'Imports.Run',
+      'SiteCommissions.Manage'
+    ] as const;
+
+    const { host, fixture } = await render({
+      access: of(granted(manager, ON)),
+      diagnosticsAccess: of(true)
+    });
+    groupToggle(host, 'Admin').click();
+    fixture.detectChanges();
+
+    expect(link(host, ROUTE)).toBeNull();
   });
 });

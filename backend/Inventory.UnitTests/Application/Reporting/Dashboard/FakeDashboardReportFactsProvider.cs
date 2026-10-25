@@ -20,13 +20,10 @@ public sealed class FakeDashboardReportFactsProvider : IDashboardReportFactsProv
         return Task.FromResult(_facts);
     }
 
-    public static DashboardReportFacts Complete(int transactionCount = 10, int machineCount = 2, int productCount = 3,
-        bool importedContainsRows = true, decimal importedNetSettlement = 74m, bool commissionIsComplete = true) => new(
-        TransactionCount: transactionCount,
+    public static DashboardReportFacts Complete(int machineCount = 2, int productCount = 3,
+        bool commissionIsComplete = true) => new(
         MachineCount: machineCount,
         ProductCount: productCount,
-        ImportedContainsRows: importedContainsRows,
-        ImportedNetSettlement: importedNetSettlement,
         CommissionIsComplete: commissionIsComplete,
         CommissionWarnings: Array.Empty<string>());
 }

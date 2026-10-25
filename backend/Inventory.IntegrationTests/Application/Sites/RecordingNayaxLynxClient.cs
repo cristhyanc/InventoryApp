@@ -14,6 +14,12 @@ namespace InventoryApi.Tests.Application.Sites;
 /// When <c>expectedConcurrentMachineProductCalls</c> is set, each machine-product call waits until that
 /// many calls have started (bounded by a timeout, so a serialized caller fails the assertion instead of
 /// hanging the suite).
+///
+/// <para>It also counts the calls themselves (issue #841), because the light site list's acceptance
+/// criterion is a call count: exactly one fleet read and no per-machine read. A
+/// <c>machineListFailure</c> makes the fleet read fail, which is how the Nayax unavailability
+/// states - not connected, permission not granted - are exercised over a use case that makes that
+/// one call.</para>
 /// </summary>
 public sealed class RecordingNayaxLynxClient : INayaxLynxClient
 {
@@ -23,35 +29,65 @@ public sealed class RecordingNayaxLynxClient : INayaxLynxClient
     private readonly IReadOnlyDictionary<long, List<NayaxMachineProduct>> _productsByMachine;
     private readonly int _expectedConcurrentMachineProductCalls;
     private readonly long? _failingMachineId;
+    private readonly Exception? _machineListFailure;
     private readonly TaskCompletionSource _allStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _started;
     private int _inFlight;
+    private int _maxInFlight;
+    private int _machineListCalls;
 
     public RecordingNayaxLynxClient(
         IEnumerable<NayaxMachine> machines,
         IReadOnlyDictionary<long, List<NayaxMachineProduct>>? productsByMachine = null,
         int expectedConcurrentMachineProductCalls = 0,
-        long? failingMachineId = null)
+        long? failingMachineId = null,
+        Exception? machineListFailure = null)
     {
         _machines = machines.ToList();
         _productsByMachine = productsByMachine ?? new Dictionary<long, List<NayaxMachineProduct>>();
         _expectedConcurrentMachineProductCalls = expectedConcurrentMachineProductCalls;
         _failingMachineId = failingMachineId;
+        _machineListFailure = machineListFailure;
     }
 
-    public int MaxConcurrentMachineProductCalls { get; private set; }
+    /// <summary>
+    /// The highest number of machine-product requests ever in flight at once. Maintained with
+    /// interlocked operations rather than a plain read-modify-write, because a bounded fan-out
+    /// (issue #845) has several requests updating it simultaneously and a lost update would under-report
+    /// the concurrency a test is asserting on.
+    /// </summary>
+    public int MaxConcurrentMachineProductCalls => Volatile.Read(ref _maxInFlight);
 
-    public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default) =>
+    /// <summary>How many machine-product requests were made in total, however many ran at once.</summary>
+    public int MachineProductCallCount => Volatile.Read(ref _started);
+
+    /// <summary>
+    /// How many fleet reads were made, which is what issue #841's light site list is measured by:
+    /// exactly one, with <see cref="MachineProductCallCount"/> at zero.
+    /// </summary>
+    public int MachineListCalls => _machineListCalls;
+
+    public Task<List<NayaxMachine>> GetMachinesAsync(CancellationToken ct = default)
+    {
+        Interlocked.Increment(ref _machineListCalls);
+        return _machineListFailure is null
+            ? Task.FromResult(_machines)
+            : Task.FromException<List<NayaxMachine>>(_machineListFailure);
+    }
+
+    // This double caches nothing, so both reads answer with the same fleet (issue #840).
+    public Task<List<NayaxMachine>> GetMachinesFreshAsync(CancellationToken ct = default) =>
         Task.FromResult(_machines);
 
     public async Task<List<NayaxMachineProduct>> GetMachineProductsAsync(long machineId, CancellationToken ct = default)
     {
+        var started = Interlocked.Increment(ref _started);
         var inFlight = Interlocked.Increment(ref _inFlight);
-        MaxConcurrentMachineProductCalls = Math.Max(MaxConcurrentMachineProductCalls, inFlight);
+        InterlockedMax(ref _maxInFlight, inFlight);
 
         if (_expectedConcurrentMachineProductCalls > 0)
         {
-            if (Interlocked.Increment(ref _started) >= _expectedConcurrentMachineProductCalls)
+            if (started >= _expectedConcurrentMachineProductCalls)
                 _allStarted.TrySetResult();
 
             await Task.WhenAny(_allStarted.Task, Task.Delay(FanOutWait, ct));
@@ -67,6 +103,26 @@ public sealed class RecordingNayaxLynxClient : INayaxLynxClient
             throw new InvalidOperationException($"Nayax machine {machineId} is unavailable");
 
         return _productsByMachine.TryGetValue(machineId, out var products) ? products : [];
+    }
+
+    /// <summary>
+    /// The fresh selections read of issue #842, which the Sites use cases must not make: both are
+    /// declared cached callers, so a test that reached this member would be proving the opposite of
+    /// what they promise.
+    /// </summary>
+    public Task<List<NayaxMachineProduct>> GetMachineProductsFreshAsync(
+        long machineId, CancellationToken ct = default) =>
+        throw new NotSupportedException(
+            "This fake serves the cached machine products only: the Sites reads must not read fresh.");
+
+    private static void InterlockedMax(ref int location, int value)
+    {
+        int initial;
+        do
+        {
+            initial = Volatile.Read(ref location);
+            if (value <= initial) return;
+        } while (Interlocked.CompareExchange(ref location, value, initial) != initial);
     }
 
     public Task<List<NayaxDevice>> GetDevicesAsync(CancellationToken ct = default) => throw new NotSupportedException();

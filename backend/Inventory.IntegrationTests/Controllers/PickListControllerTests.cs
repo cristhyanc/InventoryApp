@@ -65,7 +65,7 @@ public class PickListControllerTests
     public async Task Get_ReturnsThePickListProjection_ForTheSelectedMachines()
     {
         var nayax = new Mock<INayaxLynxClient>();
-        nayax.Setup(x => x.GetMachineProductsAsync(1, It.IsAny<CancellationToken>()))
+        nayax.Setup(x => x.GetMachineProductsFreshAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<NayaxMachineProduct> { new() { NayaxProductID = 100, MDBCode = 12, PAR = 10, MissingStockByMDB = 4 } });
         var storage = new Mock<IPickListStorageStockStore>();
         storage.Setup(x => x.GetStorageProductsAsync(It.IsAny<IReadOnlyCollection<long>>(), It.IsAny<CancellationToken>()))

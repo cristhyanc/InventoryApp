@@ -3,6 +3,14 @@
     <h1 class="page-title">{{ productId ? 'Edit Product' : 'New Product' }}</h1>
   </header>
 
+  <!-- Why this product may not be deleted, in the server's own words (issue #825). Informational
+       only: it explains the product and changes nothing about the form below it. -->
+  @if (deletionNotice) {
+    <div class="alert alert-danger">
+      <p class="alert-title">{{ deletionNotice }}</p>
+    </div>
+  }
+
   <div class="card w-full">
     <div class="card-body">
       @if (error) {
@@ -38,15 +46,31 @@
             <textarea [(ngModel)]="form.description" name="description" rows="2"></textarea>
           </label>
 
-          <label class="field">
-            <span class="field-label">Category</span>
-            <select [(ngModel)]="form.categoryId" name="categoryId" [disabled]="categoryLocked">
-              <option value="">None</option>
-              @for (c of categories; track c.id) {
-                <option [ngValue]="c.id">{{ c.name }}</option>
-              }
-            </select>
-          </label>
+          @if (productId) {
+            <!-- The edit page keeps its dropdown unchanged (issue #830): a provider-managed category
+                 is locked here, and that restriction is exactly what this enhancement must not
+                 touch. -->
+            <label class="field">
+              <span class="field-label">Category</span>
+              <select [(ngModel)]="form.categoryId" name="categoryId" [disabled]="categoryLocked">
+                <option value="">None</option>
+                @for (c of categories; track c.id) {
+                  <option [ngValue]="c.id">{{ c.name }}</option>
+                }
+              </select>
+            </label>
+          } @else {
+            <!-- New Product (issue #830): searching the existing categories and creating a missing
+                 one is a workflow of its own - its own option read, its own `POST api/categories`
+                 and that write's pending, refusal and retry states - so a dedicated feature
+                 component owns it (the page composition boundary). The page keeps only the id to
+                 submit, which is why neither a pending nor a refused category create can touch a
+                 field on this form. -->
+            <app-product-category-picker
+              [categoryId]="selectedCategoryId"
+              (categoryIdChange)="onCategorySelected($event)"
+            ></app-product-category-picker>
+          }
 
           <!-- `self-end` keeps this label-less control's box on the same baseline as the inputs beside it. -->
           <label class="flex items-center gap-2 self-end rounded-md-control border border-md-gray-200 bg-md-gray-100 px-3 py-2">
@@ -89,7 +113,12 @@
         </div>
 
         <div class="flex flex-wrap gap-3 pt-2">
-          <button type="submit" class="btn btn-primary" [disabled]="saving || form.restockTo < form.lowStockThreshold || sessionActive">{{ productId ? 'Update Product' : 'Create Product' }}</button>
+          <!-- Gone once this page has created its product (issue #829): the product exists, these
+               fields are no longer being sent, and the only outstanding write is the GST rule,
+               which the panel below owns and retries. No create control, no second product. -->
+          @if (createdProductId === null) {
+            <button type="submit" class="btn btn-primary" [disabled]="submitDisabled">{{ submitLabel }}</button>
+          }
           <a routerLink="/products" class="btn btn-secondary">Cancel</a>
         </div>
       </form>
@@ -97,6 +126,17 @@
       @if (productId) {
         <app-product-gst-rule [productId]="productId"></app-product-gst-rule>
         <app-product-price-history [productId]="productId"></app-product-price-history>
+      } @else {
+        <!-- New Product (issue #829): a dedicated feature component owns the rule of the product
+             being created - the choice, the write to the product's own GST resource once the create
+             has answered an id, its failure and its retry (the page composition boundary). This page
+             only says which product now exists and finishes on what that component reports. There
+             is no price history to show for a product that does not exist yet. -->
+        <app-product-create-gst-rule
+          [createdProductId]="createdProductId"
+          (persisted)="onGstRulePersisted()"
+          (failed)="onGstRuleFailed()"
+        ></app-product-create-gst-rule>
       }
     </div>
   </div>

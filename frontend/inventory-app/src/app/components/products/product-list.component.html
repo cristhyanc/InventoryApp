@@ -1,4 +1,9 @@
-<div class="card">
+<!--
+  `mb-6` is the spacing between this toolbar card and the table card below it (issue #825): the
+  routed page is one flex child of the shell's `.page`, so the page's own 1.5rem gap falls between
+  the header and this component, never between the two cards inside it.
+-->
+<div class="card mb-6">
   <div class="card-body flex flex-wrap gap-4">
     <input class="max-w-[220px]" [ngModel]="search" (ngModelChange)="onSearchChange($event)" placeholder="Search name or SKU" />
 
@@ -11,13 +16,36 @@
 
     <label class="flex items-center gap-2 self-center">
       <span>Status</span>
-      <select class="max-w-[180px]" [(ngModel)]="statusFilter" (ngModelChange)="applyFilters()" name="statusFilter">
+      <select class="max-w-[180px]" [ngModel]="statusFilter" (ngModelChange)="onStatusFilterChange($event)" name="statusFilter">
         <option value="active">Only active</option>
         <option value="all">All</option>
       </select>
     </label>
 
     <button type="button" class="btn btn-secondary" (click)="resetFilters()">Reset</button>
+
+    <!--
+      Import products and New Product (issues #875 and #825), last in the DOM so they are last in
+      the keyboard order. The wrapper carries `sm:ml-auto` so the pair sits at the right edge from
+      `sm` up, and its own `flex-wrap` keeps both reachable without a horizontal scroll on a narrow
+      screen, where they simply wrap onto the next line with the controls before them.
+      New Product is hidden rather than disabled while a support session is active (issue #554): a
+      session grants InventoryOperate, so this write would otherwise still render. Import products
+      is withheld on the same `showImportProducts` answer for the same reason - it also requires
+      `Imports.Run` and a provider the catalogue review can actually read.
+    -->
+    <div class="flex flex-wrap items-center gap-2 self-center sm:ml-auto">
+      @if (showImportProducts) {
+        <a
+          data-testid="import-products-link"
+          routerLink="/admin/imports"
+          [queryParams]="{ review: 'catalogue' }"
+          class="btn btn-secondary">Import products</a>
+      }
+      @if (!sessionActive) {
+        <a routerLink="/products/new" class="btn btn-primary">New Product</a>
+      }
+    </div>
   </div>
 </div>
 
@@ -39,8 +67,8 @@
     } @else if (loadState.loaded) {
       <!--
         The Actions column is pinned to the right edge of this scroll area (rather than the whole
-        table) so Edit/Stock/Delete stay visible and usable without scrolling to discover them when
-        long product names or a populated Category/Stock/Status set of columns push
+        table) so Stock/Deactivate/Delete stay visible and usable without scrolling to discover them
+        when long product names or a populated Category/Stock/Status set of columns push
         the table wider than the viewport. Each sticky cell carries its own opaque #410 token
         background, because a transparent cell would let scrolled columns show through underneath it.
       -->
@@ -57,9 +85,11 @@
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('stock')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('stock')">{{ sortLabel('Stock', 'stock') }}</button>
               </th>
-              <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('status')">
-                <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('status')">{{ sortLabel('Status', 'status') }}</button>
-              </th>
+              @if (statusFilter === 'all') {
+                <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('status')">
+                  <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('status')">{{ sortLabel('Status', 'status') }}</button>
+                </th>
+              }
               <th scope="col" class="table-cell" [attr.aria-sort]="ariaSort('averageCost')">
                 <button type="button" class="font-bold uppercase hover:underline" (click)="sortBy('averageCost')">{{ sortLabel('Average cost', 'averageCost') }}</button>
               </th>
@@ -89,17 +119,19 @@
                     {{ p.quantityInStock }} {{ p.unit }}
                   </span>
                 </td>
-                <td class="table-cell">
-                  <button
-                    type="button"
-                    class="badge"
-                    [ngClass]="p.isActive ? 'badge-success' : 'badge-neutral'"
-                    [disabled]="sessionActive"
-                    (click)="toggleActive(p)"
-                  >
-                    {{ p.isActive ? 'Active' : 'Inactive' }}
-                  </button>
-                </td>
+                @if (statusFilter === 'all') {
+                  <td class="table-cell">
+                    <button
+                      type="button"
+                      class="badge"
+                      [ngClass]="p.isActive ? 'badge-success' : 'badge-neutral'"
+                      [disabled]="sessionActive"
+                      (click)="toggleActive(p)"
+                    >
+                      {{ p.isActive ? 'Active' : 'Inactive' }}
+                    </button>
+                  </td>
+                }
                 <td class="table-cell">{{ averageCostDisplay(p) }}</td>
                 @if (canViewFinancials) {
                   <td class="table-cell">
@@ -116,19 +148,37 @@
                   </td>
                 }
                 <td class="table-cell sticky right-0 z-10 bg-white">
-                  <div class="flex flex-wrap gap-2 max-w-[140px] sm:max-w-none">
-                    <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
+                  <!--
+                    Three fixed-width slots, always in the order Stock, Deactivate, Delete (issue
+                    #876), so each action lines up under itself down the table instead of shifting
+                    with how many buttons a given row has. A slot whose action does not apply to
+                    this row stays empty (keeping its width) rather than disappearing.
+                  -->
+                  <div class="flex flex-nowrap items-center gap-2">
+                    <div class="w-20 shrink-0">
+                      <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary w-full">Stock</a>
+                    </div>
                     <!-- Hidden rather than disabled while a support session is active (issue #554): a
-                         session grants InventoryOperate, so this write would otherwise still render. -->
+                         session grants InventoryOperate, so these writes would otherwise still render.
+                         Both slots are skipped entirely during a session, not left empty, because the
+                         column must not reserve width for actions a session can never show. -->
                     @if (!sessionActive) {
-                      @if (canDelete(p)) {
-                        <button type="button" class="btn btn-sm btn-danger" (click)="confirmDelete(p)">Delete</button>
-                      } @else {
-                        <!-- Delete is offered only where the API says it is allowed (issue #737). For every
-                             other product the row carries the server's own refusal and names the
-                             Deactivate/Reactivate control instead of offering an action that must fail. -->
-                        <p class="text-xs value-muted">{{ deleteRefusalNote(p) }}</p>
-                      }
+                      <div class="w-32 shrink-0">
+                        <!-- Deactivate is the action that is always available for an active product,
+                             whether or not it may be deleted (issue #825). An inactive product has
+                             nothing to deactivate; the Status toggle reactivates it in one click. -->
+                        @if (p.isActive) {
+                          <button type="button" class="btn btn-sm btn-secondary w-full" (click)="confirmDeactivate(p)">Deactivate</button>
+                        }
+                      </div>
+                      <div class="w-24 shrink-0">
+                        <!-- Delete is offered only where the API says it is allowed (issue #737); for
+                             every other product the row simply does not offer an action that must
+                             fail, and the reason is on the product's Edit page (issue #825). -->
+                        @if (canDelete(p)) {
+                          <button type="button" class="btn btn-sm btn-danger w-full" (click)="confirmDelete(p)">Delete</button>
+                        }
+                      </div>
                     }
                   </div>
                 </td>
@@ -149,3 +199,12 @@
   [message]="`Delete product '${confirmingProduct.name}'?`"
   (confirmed)="deleteConfirmed()"
   (canceled)="cancelDelete()"></app-confirmation-dialog>
+
+<app-confirmation-dialog
+  confirmLabel="Deactivate"
+  cancelLabel="Cancel"
+  *ngIf="confirmingDeactivation"
+  title="Confirm deactivate"
+  [message]="deactivationMessage(confirmingDeactivation)"
+  (confirmed)="deactivateConfirmed()"
+  (canceled)="cancelDeactivate()"></app-confirmation-dialog>

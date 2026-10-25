@@ -1,6 +1,6 @@
 import { nayaxConnectionAreaLabel } from './nayax-read-areas';
 import { ProviderConnection, ProviderFeatureAvailability, providerFeatureOffered } from './provider-availability.service';
-import { PROVIDER_FEATURE_CHECKS, ProviderFeature } from './provider-feature-permissions';
+import { PROVIDER_FEATURE_CHECKS, ProviderFeature, providerFeatureNeedsLiveRead } from './provider-feature-permissions';
 
 /**
  * What the shared provider-availability signal (issue #728) means for one **destination** - a menu
@@ -102,11 +102,20 @@ export function providerLockSummary(lock: ProviderLock, destination: string): st
  * it. A permission lock names the refused read, because that read and its endpoint are what a
  * support request to Nayax has to ask for; a connection lock names none, because none of them was
  * refused - nothing was asked.
+ *
+ * A connection lock is worded from what the destination actually needs (issue #868). A live
+ * provider destination reads Nayax as the page opens; one that only needs `providerRecords` -
+ * Daily, Transactions, Reconciliation, Machines and Products - reports on sales already recorded
+ * through Nayax and makes no live read, so telling an operator it reads live data would be untrue
+ * and would suggest their stored history had gone with the connection. Both locks ask for the same
+ * thing, a Nayax connection, so the page's layout, heading and Connect action are unchanged.
  */
 export function providerLockSentence(lock: ProviderLock, destination: string, feature: ProviderFeature): string {
   const summary = providerLockSummary(lock, destination);
   if (lock === 'connect') {
-    return `${summary} It reads live data from Nayax, so it stays locked until this business has a Nayax connection this application can use.`;
+    return providerFeatureNeedsLiveRead(feature)
+      ? `${summary} It reads live data from Nayax, so it stays locked until this business has a Nayax connection this application can use.`
+      : `${summary} It reports on sales recorded through Nayax. Nothing stored has been removed: it opens again, with the same history, once this business has a Nayax connection this application can use.`;
   }
   if (lock !== 'permission') {
     return summary;

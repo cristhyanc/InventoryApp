@@ -129,7 +129,8 @@ public sealed class GetDashboardSummary
             ? await _salesFacts.GetSalesFactsAsync(
                 window.CurrentWeek, window.PreviousComparableWeek, cancellationToken)
             : null;
-        var products = await _catalog.ListUnorderedAsync(ProductCatalogFilter.None, cancellationToken);
+        var products = await _catalog.ListUnorderedAsync(
+            ProductCatalogFilter.None, resolveInventoryHistory: true, cancellationToken);
 
         // Everything above is a read of the business's own database, so a support request makes it
         // exactly as a member's does. The fleet read below is the one Nayax-backed read behind this
@@ -284,10 +285,26 @@ public sealed class GetDashboardSummary
             products.Count,
             ReorderModes.Code(reorderNeeds.Mode));
 
+    /// <summary>
+    /// One catalogue product as the valuation sees it (issue #861): its persisted inventory position
+    /// together with whether anything records inventory ever having been in it.
+    ///
+    /// <para>An unresolved <see cref="ProductRecord.HasInventoryHistory"/> is read as
+    /// <see langword="true"/>, which is the safe direction: a read path that did not look for the
+    /// evidence has not proved its absence, so the product keeps blocking the total exactly as it
+    /// did before this rule existed, rather than being dropped from it.</para>
+    /// </summary>
+    private static ProductInventoryValuationFact ValuationFact(ProductRecord product) =>
+        new(
+            product.InventoryValue,
+            product.CostingQuantity,
+            product.QuantityInStock,
+            product.HasInventoryHistory ?? true);
+
     private static DashboardInventorySummaryDto Inventory(IReadOnlyList<ProductRecord> products)
     {
         var valuation = InventoryValuationPolicy.Summarize(
-            products.Select(product => product.InventoryValue).ToList());
+            products.Select(ValuationFact).ToList());
 
         return new DashboardInventorySummaryDto(
             valuation.TotalInventoryValue,
@@ -308,7 +325,7 @@ public sealed class GetDashboardSummary
         IReadOnlyList<ProductRecord> products)
     {
         var valuation = InventoryValuationPolicy.Summarize(
-            products.Select(product => product.InventoryValue).ToList());
+            products.Select(ValuationFact).ToList());
 
         return new RedactedDashboardInventorySummaryDto(
             valuation.IsComplete,

@@ -1,11 +1,15 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { BehaviorSubject, Observable, Subject, of, throwError } from 'rxjs';
-import { Category, PickListRefillRequest, PickListRefillResponse, Product } from '../../models/models';
+import { Category, LocalMachine, PickListRefillRequest, PickListRefillResponse, Product } from '../../models/models';
+import { LocalMachineService } from '../../services/local-machine.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import {
   INVALID_TAKEN_QUANTITY_MESSAGE,
+  MACHINE_ATTRIBUTION_FAILED_MESSAGE,
+  MACHINE_RESOLUTION_PENDING_MESSAGE,
+  MACHINES_LOAD_FAILED_MESSAGE,
   REFILL_CONFLICT_MESSAGE,
   REFILL_FORBIDDEN_MESSAGE,
   REFILL_RECORDED_MESSAGE,
@@ -19,6 +23,10 @@ function supportSessionStub(active: Observable<boolean>): SupportSessionService 
 
 function category(id: number, name: string): Category {
   return { id, name };
+}
+
+function localMachine(overrides: Partial<LocalMachine>): LocalMachine {
+  return { id: 1, name: 'Machine', isActive: true, isProviderNamed: false, ...overrides };
 }
 
 function product(overrides: Partial<Product>): Product {
@@ -66,20 +74,31 @@ interface Harness {
   component: ManualPickListComponent;
   recordRefill: jest.Mock;
   toast: { success: jest.Mock; error: jest.Mock; warning: jest.Mock; info: jest.Mock };
+  getAllMachines: jest.Mock;
 }
 
 function createHarness(
   products: Product[] = [product({ id: 1, name: 'Coke', quantityInStock: 20 }), product({ id: 2, name: 'Chips', quantityInStock: 5 })],
   recordRefill: jest.Mock = jest.fn((request: PickListRefillRequest) => of(recordedResponse(request))),
-  sessionActive: Observable<boolean> = of(false)
+  sessionActive: Observable<boolean> = of(false),
+  getAllMachines: jest.Mock = jest.fn(() => of([])),
+  preselectedMachineId: number | null = null
 ): Harness {
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
   const pickListService = { recordRefill } as unknown as PickListService;
+  const localMachineService = { getAll: getAllMachines } as unknown as LocalMachineService;
 
-  const component = new ManualPickListComponent(pickListService, toast as unknown as ToastService, supportSessionStub(sessionActive));
+  const component = new ManualPickListComponent(
+    pickListService,
+    toast as unknown as ToastService,
+    supportSessionStub(sessionActive),
+    localMachineService
+  );
   component.products = products;
+  component.preselectedMachineId = preselectedMachineId;
+  component.ngOnInit();
 
-  return { component, recordRefill, toast };
+  return { component, recordRefill, toast, getAllMachines };
 }
 
 describe('ManualPickListComponent filtering', () => {
@@ -114,6 +133,220 @@ describe('ManualPickListComponent filtering', () => {
     component.categoryId = 1;
 
     expect(component.visibleProducts().map((p) => p.id)).toEqual([2]);
+  });
+});
+
+describe('ManualPickListComponent machine selector (issue #794)', () => {
+  it('shows the selector and submits the chosen machine as the local machineId when active local machines exist', () => {
+    const getAllMachines = jest.fn(() => of([localMachine({ id: 5, name: 'Front Lobby' })]));
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines);
+
+    expect(component.machineSelectorShown).toBe(true);
+    expect(component.activeMachines.map((m) => m.id)).toEqual([5]);
+
+    component.selectedMachineId = 5;
+    component.onTakenChange(1, '3');
+    component.save();
+
+    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(request.machineId).toBe(5);
+  });
+
+  it('hides the selector and submits no machineId when the business has no active local machines', () => {
+    const getAllMachines = jest.fn(() => of([]));
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines);
+
+    expect(component.machineSelectorShown).toBe(false);
+
+    component.onTakenChange(1, '3');
+    component.save();
+
+    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(request.machineId).toBeUndefined();
+  });
+
+  it('does not offer a deactivated machine in the selector', () => {
+    const getAllMachines = jest.fn(() =>
+      of([localMachine({ id: 5, name: 'Front Lobby', isActive: true }), localMachine({ id: 6, name: 'Back Room', isActive: false })])
+    );
+    const { component } = createHarness(undefined, undefined, undefined, getAllMachines);
+
+    expect(component.machineSelectorShown).toBe(true);
+    expect(component.activeMachines.map((m) => m.id)).toEqual([5]);
+  });
+
+  it('shows an explicit message and still allows saving without a machine when the local machine read fails', () => {
+    const getAllMachines = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })));
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines);
+
+    expect(component.machinesLoadFailed).toBe(true);
+    expect(component.machineSelectorShown).toBe(false);
+    expect(component.machinesLoadFailedMessage).toBe(MACHINES_LOAD_FAILED_MESSAGE);
+
+    component.onTakenChange(1, '3');
+    expect(component.canSave).toBe(true);
+    component.save();
+
+    expect(recordRefill).toHaveBeenCalledTimes(1);
+    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(request.machineId).toBeUndefined();
+  });
+
+  it('gives a changed machine choice a new idempotency key, and an unchanged retry reuses both the key and the machine', () => {
+    const getAllMachines = jest.fn(() =>
+      of([localMachine({ id: 5, name: 'Front Lobby' }), localMachine({ id: 6, name: 'Back Room' })])
+    );
+    const recordRefill = jest.fn((_request: PickListRefillRequest) => throwError(() => new HttpErrorResponse({ status: 0 })));
+    const { component } = createHarness(undefined, recordRefill, undefined, getAllMachines);
+    component.onTakenChange(1, '3');
+    component.selectedMachineId = 5;
+
+    component.save();
+    const firstRequest: PickListRefillRequest = recordRefill.mock.calls[0][0];
+
+    component.save();
+    const secondRequest: PickListRefillRequest = recordRefill.mock.calls[1][0];
+    expect(secondRequest.idempotencyKey).toBe(firstRequest.idempotencyKey);
+    expect(secondRequest.machineId).toBe(5);
+
+    component.selectedMachineId = 6;
+    component.save();
+    const thirdRequest: PickListRefillRequest = recordRefill.mock.calls[2][0];
+    expect(thirdRequest.idempotencyKey).not.toBe(firstRequest.idempotencyKey);
+    expect(thirdRequest.machineId).toBe(6);
+  });
+});
+
+describe('ManualPickListComponent machine preselection from a link (issue #744 machine-page consolidation)', () => {
+  it('selects the local machine the link named, once it is confirmed active', () => {
+    const getAllMachines = jest.fn(() => of([localMachine({ id: 5, name: 'Front Lobby' })]));
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
+
+    expect(component.selectedMachineId).toBe(5);
+    expect(component.machineAttributionFailed).toBe(false);
+
+    component.onTakenChange(1, '3');
+    component.save();
+
+    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(request.machineId).toBe(5);
+  });
+
+  it('reports attribution as failed, and leaves the selection at "No machine", when the linked machine is not an active local machine', () => {
+    const getAllMachines = jest.fn(() => of([localMachine({ id: 6, name: 'Back Room' })]));
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
+
+    expect(component.selectedMachineId).toBeNull();
+    expect(component.machineAttributionFailed).toBe(true);
+    expect(component.machineAttributionFailedMessage).toBe(MACHINE_ATTRIBUTION_FAILED_MESSAGE);
+
+    // Not silent: the dropdown still reflects the true, unattributed selection and a save against
+    // it is an explicit "No machine" choice, not one disguised as the linked machine.
+    component.onTakenChange(1, '3');
+    component.save();
+    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(request.machineId).toBeUndefined();
+  });
+
+  it('reports attribution as failed when the local machine list itself could not be read', () => {
+    const getAllMachines = jest.fn(() => throwError(() => new HttpErrorResponse({ status: 500 })));
+    const { component } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
+
+    expect(component.machineAttributionFailed).toBe(true);
+    expect(component.selectedMachineId).toBeNull();
+  });
+
+  it('does not report a failure when no machine was linked at all', () => {
+    const getAllMachines = jest.fn(() => of([localMachine({ id: 5, name: 'Front Lobby' })]));
+    const { component } = createHarness(undefined, undefined, undefined, getAllMachines, null);
+
+    expect(component.machineAttributionFailed).toBe(false);
+    expect(component.selectedMachineId).toBeNull();
+  });
+
+  it('refuses Save while the linked machine is still being resolved, and attributes the refill once the read answers', () => {
+    // The catalogue is the page's own already-fetched list, so it can be ready long before this
+    // component's machine read answers. Without the pending check the worker could type quantities
+    // and save an unattributed refill in that window.
+    const machines = new Subject<LocalMachine[]>();
+    const getAllMachines = jest.fn(() => machines.asObservable());
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 42);
+
+    component.onTakenChange(1, '3');
+    expect(component.machineResolutionPending).toBe(true);
+    expect(component.machineResolutionPendingMessage).toBe(MACHINE_RESOLUTION_PENDING_MESSAGE);
+    expect(component.canSave).toBe(false);
+
+    component.save();
+    expect(recordRefill).not.toHaveBeenCalled();
+
+    machines.next([localMachine({ id: 42, name: 'Front Lobby' })]);
+    machines.complete();
+
+    expect(component.machineResolutionPending).toBe(false);
+    expect(component.selectedMachineId).toBe(42);
+    expect(component.canSave).toBe(true);
+
+    component.save();
+    expect(recordRefill).toHaveBeenCalledTimes(1);
+    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(request.machineId).toBe(42);
+  });
+
+  it('never waits on the machine read for ordinary entry with no linked machine', () => {
+    const machines = new Subject<LocalMachine[]>();
+    const getAllMachines = jest.fn(() => machines.asObservable());
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines, null);
+
+    component.onTakenChange(1, '3');
+    expect(component.machineResolutionPending).toBe(false);
+    expect(component.canSave).toBe(true);
+
+    component.save();
+    expect(recordRefill).toHaveBeenCalledTimes(1);
+    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(request.machineId).toBeUndefined();
+  });
+
+  it('cannot let a late machine answer turn an uncertain attempt into a second deduction', () => {
+    const machines = new Subject<LocalMachine[]>();
+    const getAllMachines = jest.fn(() => machines.asObservable());
+    const recordRefill = jest.fn((_request: PickListRefillRequest) => throwError(() => new HttpErrorResponse({ status: 503 })));
+    const { component } = createHarness(undefined, recordRefill, undefined, getAllMachines, 42);
+
+    // No request may leave while the attribution is unresolved, so there is no uncertain attempt
+    // for a late answer to change underneath.
+    component.onTakenChange(1, '3');
+    component.save();
+    expect(recordRefill).not.toHaveBeenCalled();
+
+    machines.next([localMachine({ id: 42, name: 'Front Lobby' })]);
+    machines.complete();
+
+    component.save();
+    expect(recordRefill).toHaveBeenCalledTimes(1);
+    expect(component.unresolvedSubmission).toBe(true);
+    const first: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(first.machineId).toBe(42);
+
+    // The unchanged retry is the identical request: the same key, machine and rows, so a first
+    // attempt that did commit is replayed rather than deducting storage again.
+    component.save();
+    expect(recordRefill).toHaveBeenCalledTimes(2);
+    const retry: PickListRefillRequest = recordRefill.mock.calls[1][0];
+    expect(retry.idempotencyKey).toBe(first.idempotencyKey);
+    expect(retry.machineId).toBe(42);
+    expect(retry.rows).toEqual(first.rows);
+  });
+
+  it('treats a deactivated machine named by the link the same as one that no longer exists', () => {
+    const getAllMachines = jest.fn(() =>
+      of([localMachine({ id: 5, name: 'Front Lobby', isActive: false })])
+    );
+    const { component } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
+
+    expect(component.selectedMachineId).toBeNull();
+    expect(component.machineAttributionFailed).toBe(true);
   });
 });
 

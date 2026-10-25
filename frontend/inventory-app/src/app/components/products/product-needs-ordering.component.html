@@ -10,15 +10,19 @@
     </select>
 
     <button type="button" class="btn btn-secondary" (click)="resetFilters()">Reset</button>
-  </div>
-</div>
 
-<div class="flex justify-end">
-  <!-- Hidden rather than disabled while a support session is active (issue #661): it opens a
-       dialog whose only purpose is creating a supplier order, so there is nothing to read in it. -->
-  @if (!sessionActive) {
-    <button type="button" class="btn btn-primary" [disabled]="selectedProductIds.size === 0" (click)="openOrderForm()">Mark as ordered</button>
-  }
+    <!--
+      Mark as ordered (issue #832), last in the DOM so it is last in the keyboard order, and
+      pushed to the right edge from `sm` up, matching the Products toolbar's New Product button
+      (issue #825). On a narrow screen it wraps onto the next line with the controls before it
+      instead of forcing the toolbar wider than the viewport.
+      Hidden rather than disabled while a support session is active (issue #661): it opens a
+      dialog whose only purpose is creating a supplier order, so there is nothing to read in it.
+    -->
+    @if (!sessionActive) {
+      <button type="button" class="btn btn-primary self-center sm:ml-auto" [disabled]="selectedProductIds.size === 0" (click)="openOrderForm()">Mark as ordered</button>
+    }
+  </div>
 </div>
 
 <div class="card">

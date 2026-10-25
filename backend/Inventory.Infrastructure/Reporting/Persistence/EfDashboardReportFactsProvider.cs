@@ -10,11 +10,18 @@ namespace Inventory.Infrastructure.Reporting.Persistence;
 /// Inventory.Infrastructure for the same reason <see cref="EfBookkeepingReportFactsProvider"/> does:
 /// it depends on <see cref="AppDbContext"/>, which moved here in issue #307 ahead of this adapter
 /// family (issue #308, Persistence 7/8 of #153), and it composes the Application-owned
-/// <see cref="IGetSiteCommissionReport"/> use case. Its completed-sale query,
-/// imported-reimbursement summary, and site-commission resolution are shared with the other
-/// migrated report facts providers through <see cref="EfReportingSharedQueries"/> rather than
-/// duplicated a further time; only the distinct machine/product counts unique to the dashboard
-/// summary are computed locally, since no already-migrated adapter needs that projection.
+/// <see cref="IGetSiteCommissionReport"/> use case. Its completed-sale query and site-commission
+/// resolution are shared with the other migrated report facts providers through
+/// <see cref="EfReportingSharedQueries"/> rather than duplicated a further time; only the distinct
+/// machine/product counts unique to the dashboard summary are computed locally, since no
+/// already-migrated adapter needs that projection.
+///
+/// <para>It counted the period's completed transactions too until issue #804, which moved that
+/// count onto <see cref="EfBookkeepingReportFactsProvider"/>'s own completed-sale read - the same
+/// rows, already in memory there - so one definition feeds both reports. Issue #805 did the same
+/// for its imported-reimbursement summary: that adapter already reads the identical
+/// <see cref="EfReportingSharedQueries.ImportedSummaryAsync"/> result for the same period and
+/// machine scope, so this one no longer queries it at all.</para>
 /// </summary>
 public sealed class EfDashboardReportFactsProvider : IDashboardReportFactsProvider
 {
@@ -35,7 +42,6 @@ public sealed class EfDashboardReportFactsProvider : IDashboardReportFactsProvid
             .GroupBy(_ => 1)
             .Select(g => new
             {
-                Transactions = g.Count(),
                 Machines = g.Select(x => x.MachineID).Distinct().Count(),
                 // Distinct *local* products the period's sales are attributed to (issue #758).
                 // A sale with no association counts toward no product, as an unmatched one already
@@ -44,16 +50,12 @@ public sealed class EfDashboardReportFactsProvider : IDashboardReportFactsProvid
             })
             .SingleOrDefaultAsync(cancellationToken);
 
-        var imported = await EfReportingSharedQueries.ImportedSummaryAsync(_db, from, endExclusive, machineId, cancellationToken);
         var commissions = await EfReportingSharedQueries.GetMachineCommissionsAsync(
             _db, _siteCommissions, from, to, endExclusive, machineId, cancellationToken);
 
         return new DashboardReportFacts(
-            TransactionCount: summary?.Transactions ?? 0,
             MachineCount: summary?.Machines ?? 0,
             ProductCount: summary?.Products ?? 0,
-            ImportedContainsRows: imported.ContainsRows,
-            ImportedNetSettlement: imported.NetSettlement,
             CommissionIsComplete: commissions.IsComplete,
             CommissionWarnings: commissions.Warnings);
     }

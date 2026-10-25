@@ -2,7 +2,6 @@ using Inventory.Application.Reporting.Bookkeeping;
 using Inventory.Application.Reporting.ProductProfitability;
 using Inventory.Application.Reporting.Shared;
 using Inventory.Domain.Reporting;
-using Inventory.Domain.Reporting.Dashboard;
 
 namespace Inventory.Application.Reporting.Dashboard;
 
@@ -12,10 +11,14 @@ namespace Inventory.Application.Reporting.Dashboard;
 /// <see cref="IGetProductProfitabilityReport"/> for every sales/profit/fee/commission/operating
 /// expense figure they already compute (rather than re-deriving profit or product figures a second
 /// way), retrieves the narrow set of facts unique to the dashboard summary through
-/// <see cref="IDashboardReportFactsProvider"/>, applies the Domain
-/// <see cref="DashboardReimbursementPolicy"/> for the expected-versus-actual reimbursement
-/// figures/status, and builds the authoritative <see cref="DashboardReportDto"/> consumed by both
-/// the API response and the CSV/XLSX export.
+/// <see cref="IDashboardReportFactsProvider"/>, and builds the authoritative
+/// <see cref="DashboardReportDto"/> consumed by both the API response and the CSV/XLSX export.
+///
+/// <para>The expected-versus-actual reimbursement figures and status were decided here, by the
+/// Domain <c>DashboardReimbursementPolicy</c>, until issue #805 moved that comparison into the
+/// bookkeeping report this summary already composes. It now republishes those figures for the same
+/// reason it republishes the transaction count (issue #804): one period cannot have two
+/// reconciliation answers.</para>
 /// </summary>
 public sealed class GetDashboardReport
 {
@@ -39,12 +42,6 @@ public sealed class GetDashboardReport
         var bookkeeping = await _getBookkeepingReport.Handle(filter, cancellationToken);
         var productReport = await _getProductProfitabilityReport.Handle(filter, cancellationToken);
         var facts = await _facts.GetFactsAsync(bookkeeping.From, bookkeeping.To, machineId, cancellationToken);
-
-        var reimbursement = DashboardReimbursementPolicy.Calculate(new DashboardReimbursementInputs(
-            CardSales: bookkeeping.CardSales,
-            FeesIncludingGst: bookkeeping.NayaxFeesIncludingGst,
-            ActualReimbursement: facts.ImportedNetSettlement,
-            ImportedContainsRows: facts.ImportedContainsRows));
 
         var qualityNotes = new List<string>(productReport.DataQuality.Notes ?? []);
         if (!bookkeeping.IsCogsComplete)
@@ -76,10 +73,14 @@ public sealed class GetDashboardReport
             ? ReportingCalculations.MarginPercent(bookkeeping.Sales, bookkeeping.PartialCostOfGoods)
             : (decimal?)null;
 
+        // The completed-transaction count is the bookkeeping report's own since issue #804, which
+        // relocated it there rather than letting two reports count the same rows separately. This
+        // summary reports it, and the average sale over it, exactly as that report decided them.
+        // Issue #805 did the same for the expected-versus-actual reimbursement comparison below.
         return new DashboardReportDto(bookkeeping.From, bookkeeping.To, bookkeeping.Sales, bookkeeping.GrossProfit,
-            facts.TransactionCount, facts.TransactionCount, facts.MachineCount, facts.ProductCount,
+            bookkeeping.TransactionCount, bookkeeping.TransactionCount, facts.MachineCount, facts.ProductCount,
             productReport.Rows.Count(x => x.IsUnmapped), quality, bookkeeping.NayaxFeesIncludingGst,
-            reimbursement.ActualReimbursement, bookkeeping.SiteCommission, bookkeeping.NetProfit, bookkeeping.NetMarginPercent,
+            bookkeeping.ActualReimbursement, bookkeeping.SiteCommission, bookkeeping.NetProfit, bookkeeping.NetMarginPercent,
             bookkeeping.NayaxFeesExGst, bookkeeping.DeliveryCosts, bookkeeping.PackageCosts, bookkeeping.OtherOperatingExpenses,
             bookkeeping.CardSales, bookkeeping.CashSales, bookkeeping.CardTransactionCount, bookkeeping.CashTransactionCount)
         {
@@ -89,16 +90,16 @@ public sealed class GetDashboardReport
             IsCogsComplete = bookkeeping.IsCogsComplete,
             UncostedTransactionCount = bookkeeping.UncostedTransactionCount,
             UncostedSalesAmount = bookkeeping.UncostedSalesAmount,
-            AverageSale = ReportingCalculations.Average(bookkeeping.Sales, facts.TransactionCount),
+            AverageSale = bookkeeping.AverageSale,
             GrossMarginPercent = grossMarginPercent,
             NayaxFeesIncludingGst = bookkeeping.NayaxFeesIncludingGst,
             OtherOperatingExpenses = bookkeeping.OtherOperatingExpenses,
-            ExpectedReimbursement = reimbursement.ExpectedReimbursement,
-            ActualReimbursement = reimbursement.ActualReimbursement,
-            ReimbursementDifference = reimbursement.Difference,
-            IsReconciled = reimbursement.IsReconciled,
-            ReconciliationStatus = reimbursement.Status,
-            ReconciliationTolerance = DashboardReimbursementPolicy.Tolerance,
+            ExpectedReimbursement = bookkeeping.ExpectedReimbursement,
+            ActualReimbursement = bookkeeping.ActualReimbursement,
+            ReimbursementDifference = bookkeeping.ReimbursementDifference,
+            IsReconciled = bookkeeping.IsReconciled,
+            ReconciliationStatus = bookkeeping.ReconciliationStatus,
+            ReconciliationTolerance = bookkeeping.ReconciliationTolerance,
             AdjustmentsSupported = false,
             DirectProfit = bookkeeping.DirectProfit,
             DirectMarginPercent = bookkeeping.DirectMarginPercent,

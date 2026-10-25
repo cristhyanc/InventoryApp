@@ -16,8 +16,17 @@
   <app-nayax-status-banner></app-nayax-status-banner>
 
   <!-- The business's own machine records (issue #740). Always shown: they need no provider, and
-       they are the whole page for a business that has none. -->
+       they are the whole page for a business that has none. Linked provider machines are in this
+       one list beside them, marked "From Nayax" (issue #742). -->
   <app-local-machine-list></app-local-machine-list>
+
+  <!-- Provider machine linking (issue #742). Rendered only once the shared availability signal has
+       said the fleet read can be served, because the panel reads that fleet the moment it appears:
+       withholding it is how a business with no usable provider is left alone rather than shown a
+       refusal. A link changes the list above, so the panel asks the page to reload it. -->
+  @if (loadState.loaded && fleetShown && !fleetError) {
+    <app-provider-machine-review (linked)="reloadLocalMachines()"></app-provider-machine-review>
+  }
 
   <!-- The live Nayax fleet: revenue, profit and the links into each machine's stock and Sync
        Restock workflow. Withheld entirely while the provider cannot serve the fleet read, rather

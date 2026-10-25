@@ -1,9 +1,10 @@
 import { CommonModule } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
-import { Component, EventEmitter, Input, OnDestroy, Output } from '@angular/core';
+import { Component, EventEmitter, Input, OnDestroy, OnInit, Output } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
-import { Category, PickListRefillRowRequest, Product } from '../../models/models';
+import { Category, LocalMachine, PickListRefillRequest, PickListRefillRowRequest, Product } from '../../models/models';
+import { LocalMachineService } from '../../services/local-machine.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -29,6 +30,15 @@ export const CATALOGUE_LOAD_FAILED_MESSAGE = 'The product list could not be load
 
 export const CATALOGUE_REFRESH_FAILED_MESSAGE =
   'Storage quantities could not be refreshed after the last save, so the numbers shown may be out of date.';
+
+export const MACHINES_LOAD_FAILED_MESSAGE =
+  'The machine list could not be loaded, so this refill cannot be attributed to a machine.';
+
+export const MACHINE_ATTRIBUTION_FAILED_MESSAGE =
+  'The machine this entry was opened for could not be selected automatically - it may have been deactivated or removed. Choose it below if it is still listed, or save without a machine.';
+
+export const MACHINE_RESOLUTION_PENDING_MESSAGE =
+  'Confirming the machine this entry was opened for. Quantities can be typed now and saved once it is confirmed.';
 
 /**
  * Where the page's read of the active catalogue stands. Only `'loaded'` means {@link
@@ -62,19 +72,45 @@ function parseTakenQuantity(raw: string): number | null {
  * dropdown uses), passed in rather than fetched a second time; `refillRecorded` tells the page a
  * save just reduced storage quantities, so it can refresh that list.
  *
- * **No machine selector.** #746 (the local machine selector) has not shipped, so every submission
- * from this screen omits `machineId` - a business may pick before its machines are recorded, and
- * the batch refill contract already allows that.
+ * **An optional machine selector** (issue #794, parent #329 child G2b) is read from
+ * `LocalMachineService.getAll()` and offers only the business's **active** local machines, labelled
+ * by {@link LocalMachine.name}, plus a "No machine" choice that is the default; it is shown at all
+ * only once that read succeeds with at least one active machine - a business with none, or whose
+ * read is still outstanding, behaves exactly as before this issue. A failed read ({@link
+ * machinesLoadFailed}) is reported in the selector's place rather than silently hiding it, but still
+ * lets the worker save without a machine, exactly as a business with none recorded would. The chosen
+ * machine is sent as the optional local `machineId` on the submitted refill and is part of what
+ * {@link lastSubmission} compares for idempotency, so changing it - like changing a row - mints a
+ * new key; see `save`. It is never sent to `PickListService.get`, the calculated list's own machine
+ * read, which keeps using provider machine ids untouched by this selector.
+ *
+ * **A machine can also arrive preselected, from the machine-details page's "Record refill" link**
+ * (issue #744's machine-page consolidation). `PickListComponent` reads the link's `machineId` query
+ * parameter - already the local machine id `MachineDetailComponent` resolved for that page, never
+ * the raw Nayax number - and hands it in as {@link preselectedMachineId}. Once the machine read
+ * settles, it is accepted only if it names one of this business's own **active** machines; if it
+ * does, {@link selectedMachineId} is set to it exactly as if the operator had chosen it from the
+ * dropdown. If it does not - the machine was deactivated or removed after the link was opened, or
+ * the machine read itself failed - {@link machineAttributionFailed} is set instead of silently
+ * leaving the selection at "No machine": the link promised this refill would be attributed to that
+ * machine, so failing to do so has to be visible rather than indistinguishable from an operator who
+ * deliberately chose "No machine". **Until that read settles, Save is refused** ({@link
+ * machineResolutionPending}): the catalogue can answer first, so an operator could otherwise type
+ * quantities and submit an unattributed refill while the link's own machine was still being
+ * confirmed - and a late answer arriving afterwards would change the kept submission's machine, so
+ * retrying an uncertain attempt would mint a new key and could deduct storage a second time. An
+ * entry with no linked machine at all never waits.
  *
  * **Idempotency.** Each save keeps the rows the operator currently has typed into an exact submitted
- * row set - the products with a positive "Taken" value, in catalogue order - and compares it with
- * the last attempt. An unchanged resubmission (a retry after an uncertain failure, or simply
- * clicking Save again before changing anything) reuses the same key and the exact same row set a
- * changed one - any edited quantity, added or removed row - gets a new key, because it is a
- * different pick. Nothing here guesses which case a failure was: a `400` names what was wrong with
- * a row and nothing was recorded, a `409` means the key is spent on a different request and must
- * never be reused, and anything else (a network failure, a `5xx`) is uncertain, so the exact same
- * request is kept ready to retry rather than quietly replaced.
+ * row set - the products with a positive "Taken" value, in catalogue order - and compares it, together
+ * with the chosen machine, with the last attempt. An unchanged resubmission (a retry after an
+ * uncertain failure, or simply clicking Save again before changing anything) reuses the same key and
+ * the exact same row set and machine; changing either - an edited quantity, an added or removed row,
+ * or a different machine choice - gets a new key, because it is a different pick. Nothing here
+ * guesses which case a failure was: a `400` names what was wrong with a row and nothing was recorded,
+ * a `409` means the key is spent on a different request and must never be reused, and anything else
+ * (a network failure, a `5xx`) is uncertain, so the exact same request is kept ready to retry rather
+ * than quietly replaced.
  *
  * **An uncertain attempt is visible until it is resolved, and this instance is what holds it.** The
  * kept rows and key only protect against a double deduction while they still exist, so an uncertain
@@ -103,7 +139,7 @@ function parseTakenQuantity(raw: string): number | null {
   imports: [CommonModule, FormsModule],
   templateUrl: './manual-pick-list.component.html'
 })
-export class ManualPickListComponent implements OnDestroy {
+export class ManualPickListComponent implements OnInit, OnDestroy {
   @Input() products: Product[] = [];
 
   /** Whether {@link products} is a real answer yet; see {@link ManualPickListCatalogueState}. */
@@ -111,6 +147,13 @@ export class ManualPickListComponent implements OnDestroy {
 
   /** Set when the catalogue refresh after a recorded refill failed, so the storage quantities shown may be stale. */
   @Input() catalogueRefreshFailed = false;
+
+  /**
+   * The local machine id a "Record refill" link named, or `null` for ordinary pick-list entry
+   * (issue #744's machine-page consolidation). Resolved once, against the machine read this
+   * component already makes; see {@link machineAttributionFailed} and the class doc.
+   */
+  @Input() preselectedMachineId: number | null = null;
 
   /** Emitted when the operator asks to read the catalogue again after a failed load or refresh. */
   @Output() readonly retryCatalogue = new EventEmitter<void>();
@@ -147,28 +190,92 @@ export class ManualPickListComponent implements OnDestroy {
   /** Refusals about the request as a whole from the last save attempt. */
   requestErrors: string[] = [];
 
+  /** Every machine `LocalMachineService.getAll()` returned, active and inactive alike; see {@link activeMachines}. */
+  machines: LocalMachine[] = [];
+
+  /** Set when the local machine list could not be read; the selector is replaced by an explicit message, but saving without a machine still works. */
+  machinesLoadFailed = false;
+
+  /** The chosen machine's id, or `null` for the default "No machine" choice. */
+  selectedMachineId: number | null = null;
+
+  /**
+   * Set when {@link preselectedMachineId} named a machine that, once the machine read settled, was
+   * not one of this business's own active machines - deactivated, removed, or the read itself
+   * failed. Reported on screen rather than left to a silent "No machine" default, because the link
+   * that opened this entry promised attribution the save would otherwise quietly not deliver.
+   */
+  machineAttributionFailed = false;
+
+  readonly machineAttributionFailedMessage = MACHINE_ATTRIBUTION_FAILED_MESSAGE;
+
+  readonly machineResolutionPendingMessage = MACHINE_RESOLUTION_PENDING_MESSAGE;
+
+  /** Whether the local machine read has answered, either way; see {@link machineResolutionPending}. */
+  private machineReadSettled = false;
+
   /** The raw text typed into each product's "Taken" box, keyed by product id. */
   private readonly takenById = new Map<number, string>();
 
-  /** The exact rows and key of the last attempted save, kept so an unchanged retry reuses both. */
-  private lastSubmission: { key: string; rows: PickListRefillRowRequest[] } | null = null;
+  /** The exact rows, machine and key of the last attempted save, kept so an unchanged retry reuses all three. */
+  private lastSubmission: { key: string; rows: PickListRefillRowRequest[]; machineId: number | null } | null = null;
 
   readonly supportSessionMessage = SUPPORT_SESSION_READ_ONLY_MESSAGE;
   readonly catalogueLoadFailedMessage = CATALOGUE_LOAD_FAILED_MESSAGE;
   readonly catalogueRefreshFailedMessage = CATALOGUE_REFRESH_FAILED_MESSAGE;
+  readonly machinesLoadFailedMessage = MACHINES_LOAD_FAILED_MESSAGE;
 
   private readonly sessionActiveSubscription: Subscription;
 
   constructor(
     private readonly pickListService: PickListService,
     private readonly toastService: ToastService,
-    supportSession: SupportSessionService
+    supportSession: SupportSessionService,
+    private readonly localMachineService: LocalMachineService
   ) {
     this.sessionActiveSubscription = supportSession.active$.subscribe((active) => (this.sessionActive = active));
   }
 
+  ngOnInit(): void {
+    this.localMachineService.getAll().subscribe({
+      next: (machines) => {
+        this.machines = machines;
+        this.machinesLoadFailed = false;
+        this.machineReadSettled = true;
+        this.resolvePreselectedMachine();
+      },
+      error: () => {
+        this.machines = [];
+        this.machinesLoadFailed = true;
+        this.machineReadSettled = true;
+        this.resolvePreselectedMachine();
+      }
+    });
+  }
+
   ngOnDestroy(): void {
     this.sessionActiveSubscription.unsubscribe();
+  }
+
+  /** The business's active local machines, in the order the service returned them. */
+  get activeMachines(): LocalMachine[] {
+    return this.machines.filter((machine) => machine.isActive);
+  }
+
+  /** Whether the machine selector is offered at all; see the class doc. */
+  get machineSelectorShown(): boolean {
+    return !this.machinesLoadFailed && this.activeMachines.length > 0;
+  }
+
+  /**
+   * Whether a linked machine's resolution is still outstanding, which only happens while a
+   * "Record refill" link named one and the machine read has not answered yet. Save is refused
+   * while it is, so a refill is never submitted with an attribution that is neither the linked
+   * machine nor a deliberate "No machine", and a kept submission's machine can never change
+   * underneath an unresolved retry; see the class doc.
+   */
+  get machineResolutionPending(): boolean {
+    return this.preselectedMachineId !== null && !this.machineReadSettled;
   }
 
   categories(): Category[] {
@@ -210,7 +317,7 @@ export class ManualPickListComponent implements OnDestroy {
   }
 
   get canSave(): boolean {
-    if (this.saving || this.sessionActive) {
+    if (this.saving || this.sessionActive || this.machineResolutionPending) {
       return false;
     }
     const rows = this.buildRows();
@@ -220,15 +327,22 @@ export class ManualPickListComponent implements OnDestroy {
   save(): void {
     const rows = this.buildRows();
     // Checked here as well as hidden in the template, so the write is actually unavailable during a
-    // support session rather than merely invisible - the endpoint refuses it either way.
-    if (this.saving || this.sessionActive || rows === null || rows.length === 0) {
+    // support session rather than merely invisible - the endpoint refuses it either way. The
+    // pending-resolution check is here for the same reason, and because the machine the link named
+    // must not be able to arrive after this request was built: see machineResolutionPending.
+    if (this.saving || this.sessionActive || this.machineResolutionPending || rows === null || rows.length === 0) {
       return;
     }
 
-    const reuse = this.lastSubmission !== null && pickListRefillRowsEqual(this.lastSubmission.rows, rows);
+    const machineId = this.selectedMachineId;
+    const reuse =
+      this.lastSubmission !== null &&
+      pickListRefillRowsEqual(this.lastSubmission.rows, rows) &&
+      this.lastSubmission.machineId === machineId;
     const key = reuse ? this.lastSubmission!.key : generateIdempotencyKey();
     const submittedRows = reuse ? this.lastSubmission!.rows : rows;
-    this.lastSubmission = { key, rows: submittedRows };
+    const submittedMachineId = reuse ? this.lastSubmission!.machineId : machineId;
+    this.lastSubmission = { key, rows: submittedRows, machineId: submittedMachineId };
 
     this.saving = true;
     this.unresolvedSubmission = false;
@@ -236,7 +350,12 @@ export class ManualPickListComponent implements OnDestroy {
     this.rowErrors.clear();
     this.saveInFlightChange.emit(true);
 
-    this.pickListService.recordRefill({ idempotencyKey: key, rows: submittedRows }).subscribe({
+    const request: PickListRefillRequest = { idempotencyKey: key, rows: submittedRows };
+    if (submittedMachineId !== null) {
+      request.machineId = submittedMachineId;
+    }
+
+    this.pickListService.recordRefill(request).subscribe({
       next: () => {
         this.saving = false;
         this.lastSubmission = null;
@@ -251,6 +370,24 @@ export class ManualPickListComponent implements OnDestroy {
         this.handleSaveError(error, submittedRows);
       }
     });
+  }
+
+  /**
+   * Accepts {@link preselectedMachineId} as the real selection only if it names one of the machines
+   * the read just answered with and that machine is active; otherwise raises
+   * {@link machineAttributionFailed} instead of leaving the failure unreported. Does nothing when no
+   * machine was linked at all.
+   */
+  private resolvePreselectedMachine(): void {
+    if (this.preselectedMachineId === null) {
+      return;
+    }
+    const match = this.activeMachines.find((machine) => machine.id === this.preselectedMachineId);
+    if (match) {
+      this.selectedMachineId = match.id;
+    } else {
+      this.machineAttributionFailed = true;
+    }
   }
 
   /** Every row with a positive, well-formed quantity, in catalogue order; `null` while any typed entry is malformed. */

@@ -1,5 +1,7 @@
 using Inventory.Application.Machines;
 using Inventory.Domain.Machines;
+using Inventory.Domain.Providers;
+using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
@@ -123,14 +125,14 @@ public class EfLocalMachineStoreTests
     }
 
     [Fact]
-    public async Task RenameAsync_writes_the_new_name_and_leaves_the_provider_id_alone()
+    public async Task RenameAsync_writes_the_new_name_of_a_machine_the_provider_does_not_name()
     {
         using var connection = new SqliteConnection("Data Source=:memory:");
         var options = await CreateSqliteAsync(connection);
         long id;
         await using (var seed = TestAppDbContext.For(options, BusinessA))
         {
-            var machine = new LocalMachine { Name = "Machine 7", ExternalMachineId = "7" };
+            var machine = new LocalMachine { Name = "Atrium" };
             seed.Machines.Add(machine);
             await seed.SaveChangesAsync();
             id = machine.Id;
@@ -139,16 +141,114 @@ public class EfLocalMachineStoreTests
         await using var db = TestAppDbContext.For(options, BusinessA);
         var store = new EfLocalMachineStore(db);
 
-        var attempt = await store.RenameAsync(id, Named("Lobby level 1"), CancellationToken.None);
+        var attempt = await store.RenameAsync(id, Named("  Lobby level 1 "), CancellationToken.None);
 
         Assert.Equal(LocalMachineWriteOutcome.Succeeded, attempt.Outcome);
 
         await using var verify = TestAppDbContext.Unrestricted(options);
         var stored = await verify.Machines.SingleAsync();
-        // A provider-named machine is renamed like any other: nothing syncs a machine's name, so no
-        // import can overwrite the operator's own label.
         Assert.Equal("Lobby level 1", stored.Name);
-        Assert.Equal("7", stored.ExternalMachineId);
+        Assert.Null(stored.ExternalMachineId);
+    }
+
+    /// <summary>
+    /// A machine the business's sales provider names is managed at the provider: renaming it here is
+    /// refused with a sentence naming the provider, and the stored name and provider id are untouched.
+    /// </summary>
+    [Fact]
+    public async Task RenameAsync_refuses_a_machine_the_provider_names_and_writes_nothing()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
+        var id = await SeedNayaxMachineAsync(options, isActive: true);
+
+        await using var db = TestAppDbContext.For(options, BusinessA);
+        var store = new EfLocalMachineStore(db);
+
+        var attempt = await store.RenameAsync(id, Named("Lobby level 1"), CancellationToken.None);
+
+        Assert.Equal(LocalMachineWriteOutcome.Refused, attempt.Outcome);
+        Assert.Equal(MachineCataloguePolicy.ProviderMachineRenameRefusal(ExternalProvider.Nayax), attempt.Refusal);
+        Assert.Equal(
+            "This machine comes from Nayax and cannot be renamed here. Nothing was saved.",
+            attempt.Refusal);
+
+        await using var verify = TestAppDbContext.Unrestricted(options);
+        var stored = await verify.Machines.SingleAsync();
+        Assert.Equal(("Machine 7", "7"), (stored.Name, stored.ExternalMachineId));
+    }
+
+    /// <summary>
+    /// A machine the provider names is taken out of service at the provider, so deactivating it here
+    /// is refused and it stays active.
+    /// </summary>
+    [Fact]
+    public async Task SetActiveAsync_refuses_to_deactivate_a_machine_the_provider_names()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
+        var id = await SeedNayaxMachineAsync(options, isActive: true);
+
+        await using var db = TestAppDbContext.For(options, BusinessA);
+        var store = new EfLocalMachineStore(db);
+
+        var attempt = await store.SetActiveAsync(id, false, CancellationToken.None);
+
+        Assert.Equal(LocalMachineWriteOutcome.Refused, attempt.Outcome);
+        Assert.Equal(
+            "This machine comes from Nayax and cannot be deactivated here. Nothing was saved.",
+            attempt.Refusal);
+
+        await using var verify = TestAppDbContext.Unrestricted(options);
+        Assert.True(await verify.Machines.Select(stored => stored.IsActive).SingleAsync());
+    }
+
+    /// <summary>
+    /// Reactivation is never refused: a provider machine deactivated before the refusal existed can
+    /// still be put back in service.
+    /// </summary>
+    [Fact]
+    public async Task SetActiveAsync_reactivates_a_machine_the_provider_names()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
+        var id = await SeedNayaxMachineAsync(options, isActive: false);
+
+        await using var db = TestAppDbContext.For(options, BusinessA);
+        var store = new EfLocalMachineStore(db);
+
+        var attempt = await store.SetActiveAsync(id, true, CancellationToken.None);
+
+        Assert.Equal(LocalMachineWriteOutcome.Succeeded, attempt.Outcome);
+
+        await using var verify = TestAppDbContext.Unrestricted(options);
+        Assert.True(await verify.Machines.Select(stored => stored.IsActive).SingleAsync());
+    }
+
+    /// <summary>
+    /// A Nayax business with one machine the provider names, "Machine 7" with provider id "7".
+    /// </summary>
+    private static async Task<long> SeedNayaxMachineAsync(DbContextOptions<AppDbContext> options, bool isActive)
+    {
+        await using var seed = TestAppDbContext.Unrestricted(options);
+        seed.Businesses.Add(new Business
+        {
+            Id = BusinessA,
+            Name = "Vending A",
+            Status = BusinessStatus.Active,
+            SalesProvider = ExternalProvider.Nayax,
+            CreatedAtUtc = DateTime.UtcNow,
+        });
+        var machine = new LocalMachine
+        {
+            BusinessId = BusinessA,
+            Name = "Machine 7",
+            ExternalMachineId = "7",
+            IsActive = isActive,
+        };
+        seed.Machines.Add(machine);
+        await seed.SaveChangesAsync();
+        return machine.Id;
     }
 
     [Fact]

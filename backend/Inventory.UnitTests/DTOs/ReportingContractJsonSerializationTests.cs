@@ -51,6 +51,14 @@ public class ReportingContractJsonSerializationTests
                 "cardSales", "cashSales", "cardTransactionCount", "cashTransactionCount", "nayaxProcessingRate",
                 "pendingTransactionCount", "refundedTransactionCount", "declinedOrCancelledTransactionCount",
                 "unknownStatusTransactionCount", "missingStatusTransactionCount",
+                // Added by issue #804, additively: the completed-transaction count behind the
+                // sales total and the average sale over it.
+                "transactionCount", "averageSale",
+                // Added by issue #805, additively: the calculated expectation, the imported actual,
+                // the signed difference between them and the status/tolerance they were decided
+                // with. `netSettlement` above keeps its own name, type and meaning.
+                "expectedReimbursement", "actualReimbursement", "reimbursementDifference",
+                "isReconciled", "reconciliationStatus", "reconciliationTolerance",
                 "partialCostOfGoods", "isCogsComplete", "uncostedTransactionCount",
                 "uncostedSalesAmount", "structuredOperatingExpenses", "operatingExpenseGst",
                 "operatingExpensesByCategory", "directProfit", "directMarginPercent", "nayaxProcessingFees",

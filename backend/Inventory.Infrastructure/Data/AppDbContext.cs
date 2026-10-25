@@ -1,8 +1,10 @@
 using System.Linq.Expressions;
+using Inventory.Application.Suppliers;
 using Inventory.Application.Tenancy;
 using Inventory.Domain.MachineStock;
 using Inventory.Domain.Providers;
 using Inventory.Domain.Stock;
+using Inventory.Domain.Suppliers;
 using Inventory.Domain.Tenancy;
 using Microsoft.EntityFrameworkCore;
 using Inventory.Infrastructure.Models;
@@ -52,6 +54,96 @@ public class AppDbContext : DbContext
     /// needs the same answer this context filters reads by.
     /// </summary>
     internal IBusinessScope BusinessScope => _businessScope;
+
+    /// <summary>
+    /// The business a <see cref="BeginSupplierProvisioning"/> lease is currently open for, and
+    /// <c>null</c> - which is every other moment of this context's life - when none is (issue #849).
+    ///
+    /// <para>Read by <see cref="BusinessOwnershipEnforcer"/>, and only in the branch it takes for a
+    /// <em>denied</em> scope, where its answer today is "no tenant-owned write at all". It is not
+    /// read by <see cref="CurrentBusinessId"/> or <see cref="TenantFilteringEnabled"/> on purpose: a
+    /// lease grants the ownership stamp for new rows of one business and grants no <em>read</em>,
+    /// so while one is open every tenant-owned query still matches nothing, exactly as it does for
+    /// the rest of the request.</para>
+    /// </summary>
+    internal int? SupplierProvisioningBusinessId { get; private set; }
+
+    /// <summary>
+    /// Opens the one provisioning window in this application: until the returned lease is disposed,
+    /// <see cref="BusinessOwnershipEnforcer"/> accepts <em>new <see cref="Supplier"/> rows of
+    /// <paramref name="businessId"/> and nothing else</em> on an otherwise denied scope (issue #849,
+    /// child C of #835).
+    ///
+    /// <para><strong>Why a window exists at all.</strong> Approving a business application runs as
+    /// the platform administrator, who is a member of no business, so the request carries a denied
+    /// <see cref="BusinessScope"/> and the enforcer refuses every tenant-owned write - which is what
+    /// makes the platform-admin surface unable to touch a business's own data. The new business's own
+    /// copies of the enabled supplier presets are nevertheless tenant-owned rows that have to be
+    /// written in that same transaction, because a business that was approved but did not get them
+    /// would be a half-finished tenant. This is the narrow, reviewed exception rather than a
+    /// relaxation of the rule: see docs/architecture.md § Supplier presets copied into an approved
+    /// business.</para>
+    ///
+    /// <para><strong>What keeps it narrow.</strong> It is <c>internal</c>, so only this assembly can
+    /// take one, and the only caller is <c>EfBusinessSupplierProvisioningStore</c>, which takes it
+    /// around one <c>SaveChanges</c>; the business id is the key of the row the approval's own write
+    /// transaction read, never a value a request supplied; a lease may be taken only while this
+    /// context's own scope is <see cref="BusinessScopeState.Denied"/>, so neither an ordinary
+    /// member's request nor a support session can open one; only one may be open at a time; and the
+    /// enforcer still refuses every update, every delete and every other entity type while it is
+    /// open.</para>
+    /// </summary>
+    /// <param name="businessId">The business whose new supplier rows may be stamped.</param>
+    /// <returns>The lease. Disposing it closes the window; it is never left open across a request.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// This context has a resolved, support-session or unscoped scope, or a lease is already open.
+    /// </exception>
+    internal IDisposable BeginSupplierProvisioning(int businessId)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(businessId, 0);
+
+        if (_businessScope.State != BusinessScopeState.Denied)
+        {
+            throw new InvalidOperationException(
+                "Supplier provisioning is only available to a request that resolved no business of "
+                    + "its own - the platform administrator approving an application. A scope that "
+                    + "already names a business must write through the ordinary tenant path.");
+        }
+
+        if (SupplierProvisioningBusinessId is not null)
+        {
+            throw new InvalidOperationException(
+                "A supplier provisioning lease is already open on this context.");
+        }
+
+        SupplierProvisioningBusinessId = businessId;
+        return new SupplierProvisioningLease(this);
+    }
+
+    /// <summary>
+    /// Closes the provisioning window of <see cref="BeginSupplierProvisioning"/>. A struct would be
+    /// copied by the <c>using</c> statement, so this is a sealed class with one field.
+    /// </summary>
+    private sealed class SupplierProvisioningLease : IDisposable
+    {
+        private AppDbContext? _context;
+
+        public SupplierProvisioningLease(AppDbContext context)
+        {
+            _context = context;
+        }
+
+        public void Dispose()
+        {
+            if (_context is null)
+            {
+                return;
+            }
+
+            _context.SupplierProvisioningBusinessId = null;
+            _context = null;
+        }
+    }
 
     public DbSet<Business> Businesses => Set<Business>();
 
@@ -205,6 +297,24 @@ public class AppDbContext : DbContext
         Set<ProviderCatalogueFieldDecision>();
 
     /// <summary>
+    /// The platform-wide suggested suppliers a Super Admin keeps (issue #848). The one
+    /// <em>platform</em> table in this schema: it belongs to no business and carries no business key
+    /// at all, which is a different classification from the five structurally non-tenant-owned
+    /// tables above; see <see cref="SupplierPreset"/>.
+    /// </summary>
+    public DbSet<SupplierPreset> SupplierPresets => Set<SupplierPreset>();
+
+    /// <summary>
+    /// The single shared row that says whether the one switchable Admin option is offered to anybody
+    /// but a Super Admin (issue #873). The second <em>platform</em> table, on the same terms as
+    /// <see cref="SupplierPresets"/> above: about no business, so no business key, no index on one
+    /// and no query filter. No row at all means every option is offered; see
+    /// <see cref="PlatformOptionVisibility"/>.
+    /// </summary>
+    public DbSet<Models.PlatformOptionVisibility> PlatformOptionVisibility =>
+        Set<Models.PlatformOptionVisibility>();
+
+    /// <summary>
     /// Both save paths funnel through <see cref="BusinessOwnershipEnforcer"/> so tenant
     /// ownership is applied to every write, whichever overload a service happens to call. This
     /// is why services do not, and must not, add their own business filters or stamping.
@@ -254,6 +364,8 @@ public class AppDbContext : DbContext
         ConfigureTenancy(modelBuilder);
         ConfigureMemberInvites(modelBuilder);
         ConfigureSupportSessions(modelBuilder);
+        ConfigureSupplierPresets(modelBuilder);
+        ConfigurePlatformOptionVisibility(modelBuilder);
         ConfigureProviderLinks(modelBuilder);
         ConfigureProviderIdentityColumns(modelBuilder);
         ConfigureMachines(modelBuilder);
@@ -723,6 +835,10 @@ public class AppDbContext : DbContext
 
         modelBuilder.Entity<Category>().HasIndex(c => c.Name);
         modelBuilder.Entity<Supplier>().HasIndex(s => s.Name);
+        // The supplier's optional website (issue #847). Configured here rather than with a
+        // [MaxLength] attribute on the entity, which Swashbuckle would publish as a maxLength
+        // keyword on the legacy Supplier component the API pins.
+        modelBuilder.Entity<Supplier>().Property(s => s.Url).HasMaxLength(SupplierUrlPolicy.MaxLength);
         modelBuilder.Entity<Product>().HasIndex(p => p.Sku);
         modelBuilder.Entity<SupplierOrder>().HasIndex(order => new { order.SupplierId, order.Status, order.OrderDate });
         modelBuilder.Entity<SupplierOrderLine>().HasIndex(line => new { line.ProductId, line.SupplierOrderId });
@@ -1052,6 +1168,76 @@ public class AppDbContext : DbContext
             fromProvider => fromProvider.HasValue
                 ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
                 : fromProvider);
+    }
+
+    /// <summary>
+    /// Maps the platform supplier presets of issue #848.
+    ///
+    /// <para>This is the one <em>platform</em> table in the schema: it is about no business, so it
+    /// has no business key, no <c>BusinessId</c> index and no query filter - not as an exemption from
+    /// tenant ownership, but because there is no owner for one to compare against. Everything a
+    /// business ends up with is its own ordinary tenant-owned <see cref="Supplier"/> row that issue
+    /// #835 child C copies; nothing reads back the other way.</para>
+    /// </summary>
+    private static void ConfigureSupplierPresets(ModelBuilder modelBuilder)
+    {
+        var preset = modelBuilder.Entity<SupplierPreset>();
+
+        // The displayed name, bounded in the schema as well as in SupplierPresetPolicy.
+        preset.Property(x => x.Name).IsRequired().HasMaxLength(SupplierPresetPolicy.MaxNameLength);
+
+        // The comparison key, and the reason it is a column at all: name uniqueness ignoring case has
+        // to be the database's rule rather than a read-then-insert, which two concurrent creates can
+        // both pass. It is a stored ToUpperInvariant() rather than a NOCASE collation because NOCASE
+        // folds ASCII only, so "Café"/"CAFÉ" would be two rows under one and one row under the other.
+        preset.Property(x => x.NormalisedName)
+            .IsRequired()
+            .HasMaxLength(SupplierPresetPolicy.MaxNameLength);
+        preset.HasIndex(x => x.NormalisedName).IsUnique();
+
+        // The optional website. Bounded here at the one supplier-website rule's limit - issue #847's
+        // Inventory.Application.Suppliers.SupplierUrlPolicy, the same rule and the same column
+        // length a business's own Suppliers.Url carries; the shape is that policy's too, which a
+        // column constraint cannot express.
+        preset.Property(x => x.Url).HasMaxLength(SupplierUrlPolicy.MaxLength);
+
+        // Both instants are persisted UTC and both are reported by this feature's API, so each is
+        // marked UTC on the way out - see the StockAdjustment.CreatedAt comment below for why the
+        // SQLite provider makes that necessary.
+        preset.Property(x => x.CreatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+        preset.Property(x => x.UpdatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
+    }
+
+    /// <summary>
+    /// Maps the single shared option-visibility row (issue #873).
+    ///
+    /// <para><strong>The key is not generated.</strong> The setting is one answer for the whole
+    /// application, so its row key is the constant
+    /// <see cref="Models.PlatformOptionVisibility.SingletonId"/> and the database assigns nothing:
+    /// two writes that both find no row then collide on the primary key, which the adapter resolves
+    /// into the update it should have been, instead of inserting a second row that a later read
+    /// would have to choose between.</para>
+    ///
+    /// <para>The second <em>platform</em> table, on the terms
+    /// <see cref="ConfigureSupplierPresets"/> states: about no business, so no business key, no index
+    /// on one and no query filter. It is also deliberately not seeded - the absence of the row is the
+    /// shipped "everything is offered" state.</para>
+    /// </summary>
+    private static void ConfigurePlatformOptionVisibility(ModelBuilder modelBuilder)
+    {
+        var visibility = modelBuilder.Entity<Models.PlatformOptionVisibility>();
+
+        visibility.Property(x => x.Id).ValueGeneratedNever();
+
+        // Persisted UTC, and marked UTC on the way out for the reason the preset instants are: the
+        // SQLite provider returns an unspecified kind otherwise.
+        visibility.Property(x => x.UpdatedAtUtc).HasConversion(
+            toProvider => toProvider,
+            fromProvider => DateTime.SpecifyKind(fromProvider, DateTimeKind.Utc));
     }
 
     /// <summary>
