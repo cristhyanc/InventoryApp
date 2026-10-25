@@ -250,7 +250,7 @@ describe('the customer identity journeys end to end (issue #714)', () => {
 
       await service.signIn('externalId');
 
-      expect(started[started.length - 1].request.redirectStartPage).toBeUndefined();
+      expect(started[started.length - 1].request.redirectStartPage).toBe('/');
       expect(sessionStorage.getItem(INTENDED_DESTINATION_KEY)).toBeNull();
     }
   });

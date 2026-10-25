@@ -31,6 +31,9 @@ export const AUTHORITY_CLIENT_FACTORY = new InjectionToken<AuthorityClientFactor
  * `user_cancelled` for an interaction the browser abandoned, and the hosted customer-identity user
  * flows add their own `AADB2C90091` for the Cancel button on a sign-up or sign-in page.
  */
+/** Where a sign-in returns when no page the visitor asked for is held. */
+const HOME_PAGE = '/';
+
 const CANCELLED_CODES = new Set(['access_denied', 'user_cancelled', 'aadb2c90091']);
 
 /**
@@ -73,15 +76,19 @@ export class SignInService {
    * page pressing an action again, and that attempt has to return them to the page they asked for
    * rather than to the application's home page. It is cleared by the callback that completes
    * (`AppComponent`), and reusing it never extends its own 15-minute window.
+   *
+   * **With no page held, the redirect returns to the home page.** MSAL otherwise returns to the
+   * page the redirect started from, which is the sign-in page itself, so a successful sign-in
+   * landed the person back on the chooser. No page is held whenever nobody was turned away first -
+   * which, with no customer identity tenant configured, is every sign-in started from this page.
    */
   async signIn(authority: AuthorityId): Promise<void> {
     this.failure = null;
     rememberSelectedAuthority(authority);
 
-    const destination = peekIntendedDestination();
     const request: RedirectRequest = {
       ...loginRequestFor(authority),
-      ...(destination === null ? {} : { redirectStartPage: destination })
+      redirectStartPage: peekIntendedDestination() ?? HOME_PAGE
     };
 
     const client = await this.clientFor(authority);

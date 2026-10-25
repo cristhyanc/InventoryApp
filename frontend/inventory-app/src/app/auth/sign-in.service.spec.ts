@@ -145,12 +145,25 @@ describe('SignInService (issue #711)', () => {
     expect(sessionStorage.getItem(INTENDED_DESTINATION_KEY)).not.toBeNull();
   });
 
-  it('starts a redirect with no start page when nothing was asked for', async () => {
+  /**
+   * With nothing asked for, MSAL would otherwise return to the page the redirect started from,
+   * which is the sign-in page itself: a successful sign-in would land the person back on the
+   * chooser instead of the application.
+   */
+  it('starts a redirect back to the home page when nothing was asked for', async () => {
     const { service, customerIdentityLoginRedirect } = createHarness();
 
     await service.signIn('externalId');
 
-    expect(customerIdentityLoginRedirect.mock.calls[0][0].redirectStartPage).toBeUndefined();
+    expect(customerIdentityLoginRedirect.mock.calls[0][0].redirectStartPage).toBe('/');
+  });
+
+  it('starts a workforce redirect back to the home page when nothing was asked for', async () => {
+    const { service, bootstrappedLoginRedirect } = createHarness();
+
+    await service.signIn('workforce');
+
+    expect(bootstrappedLoginRedirect.mock.calls[0][0].redirectStartPage).toBe('/');
   });
 
   /**

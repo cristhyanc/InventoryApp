@@ -12,6 +12,7 @@ import { WelcomeComponent } from './access/welcome.component';
 import { ApplicationPendingComponent } from './access/application-pending.component';
 import { ApplicationRejectedComponent } from './access/application-rejected.component';
 import { routes } from './app.routes';
+import { signInPageGuard } from './auth/sign-in-page.guard';
 import { SignInComponent } from './auth/sign-in.component';
 import { PROVIDER_LOCKED_PATH } from './provider/provider-lock';
 import { ProviderLockedComponent } from './provider/provider-locked.component';
@@ -512,9 +513,9 @@ describe('provider-locked Admin routes (issue #869)', () => {
  * like the `/auth` callback, and for the same reason.
  */
 describe('sign-in routing (issue #711)', () => {
-  it('serves the sign-in page publicly, with no guard at all', () => {
+  it('serves the sign-in page publicly, guarded only against a visitor who is already signed in', () => {
     expect(route('sign-in').component).toBe(SignInComponent);
-    expect(route('sign-in').canActivate).toBeUndefined();
+    expect(route('sign-in').canActivate).toEqual([signInPageGuard]);
     expect(route('sign-in').canMatch).toBeUndefined();
   });
 
