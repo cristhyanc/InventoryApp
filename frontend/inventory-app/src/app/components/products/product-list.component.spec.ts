@@ -164,7 +164,8 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
 
     expect(host.textContent).toContain('Widget');
     expect(host.textContent).toContain('Snacks');
-    expect(host.textContent).toContain('8 ea');
+    expect(host.textContent).toContain('8');
+    expect(host.textContent).not.toContain('8 ea');
     expect(host.textContent).toContain('Active');
   });
 
@@ -866,6 +867,124 @@ describe('ProductListComponent Status filter (issue #791)', () => {
     expect(
       Array.from(host.querySelectorAll('thead th')).map((header) => header.textContent?.trim())
     ).toEqual(['Name', 'Category', 'Stock', 'Status', 'Average cost', 'Last purchase', 'Cheapest purchase', '']);
+  });
+});
+
+/**
+ * The Stock column displays only the quantity, not the unit label (issue #893). The product's
+ * unit field remains stored and editable; it is just not shown in this column.
+ */
+describe('ProductListComponent Stock column rendering (issue #893)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(products: Product[]) {
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll: () => of(products) } },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: { success: jest.fn(), error: jest.fn() } },
+        { provide: SupportSessionService, useValue: { active$: of(false) } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement };
+  }
+
+  it('renders only the quantity in the Stock cell, without the unit label, for a positive quantity', async () => {
+    const { host } = await render([
+      product({
+        id: 1,
+        name: 'Widget',
+        quantityInStock: 12,
+        unit: 'cans',
+        isActive: true,
+        isLowStock: false
+      })
+    ]);
+
+    const stockCell = host.querySelector('tbody tr td:nth-child(3)') as HTMLTableCellElement;
+    expect(stockCell.textContent?.trim()).toBe('12');
+    expect(stockCell.textContent).not.toContain('cans');
+  });
+
+  it('renders zero quantity without a unit label in the Stock cell', async () => {
+    const { host } = await render([
+      product({
+        id: 1,
+        name: 'Widget',
+        quantityInStock: 0,
+        unit: 'ea',
+        isActive: true,
+        isLowStock: false
+      })
+    ]);
+
+    const stockCell = host.querySelector('tbody tr td:nth-child(3)') as HTMLTableCellElement;
+    expect(stockCell.textContent?.trim()).toBe('0');
+    expect(stockCell.textContent).not.toContain('ea');
+  });
+
+  it('renders negative quantity without a unit label in the Stock cell', async () => {
+    const { host } = await render([
+      product({
+        id: 1,
+        name: 'Widget',
+        quantityInStock: -5,
+        unit: 'bag',
+        isActive: true,
+        isLowStock: false
+      })
+    ]);
+
+    const stockCell = host.querySelector('tbody tr td:nth-child(3)') as HTMLTableCellElement;
+    expect(stockCell.textContent?.trim()).toBe('-5');
+    expect(stockCell.textContent).not.toContain('bag');
+  });
+
+  it('preserves badge color classes based on active/low-stock state, independent of the unit removal', async () => {
+    const { host } = await render([
+      product({
+        id: 1,
+        name: 'Active-HighStock',
+        quantityInStock: 20,
+        unit: 'ea',
+        isActive: true,
+        isLowStock: false
+      }),
+      product({
+        id: 2,
+        name: 'Active-LowStock',
+        quantityInStock: 2,
+        unit: 'unit',
+        isActive: true,
+        isLowStock: true
+      }),
+      product({
+        id: 3,
+        name: 'Inactive',
+        quantityInStock: 10,
+        unit: 'box',
+        isActive: false,
+        isLowStock: false
+      })
+    ]);
+
+    const rows = Array.from(host.querySelectorAll('tbody tr'));
+    const badges = rows.map((row) => row.querySelector('span.badge') as HTMLElement);
+
+    // Active, not low stock: badge-success
+    expect(Array.from(badges[0].classList)).toContain('badge-success');
+    // Active and low stock: badge-danger
+    expect(Array.from(badges[1].classList)).toContain('badge-danger');
+    // Inactive: badge-neutral
+    expect(Array.from(badges[2].classList)).toContain('badge-neutral');
   });
 });
 
