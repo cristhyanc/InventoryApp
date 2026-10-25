@@ -6,17 +6,18 @@
   business this reminder does not apply to, or one whose machines are all synced and clear - which
   is why the failed case says so out loud instead of quietly rendering nothing.
 
-  `role="status"` rather than `alert`: this is a standing condition an operator acts on when they
-  get to it, not an interruption, and the Dashboard renders it on every load while the work is
-  outstanding.
+  `<output>` rather than `alert`: this is a standing condition an operator acts on when they get to
+  it, not an interruption, and the Dashboard renders it on every load while the work is outstanding.
+  `<output>`'s implicit role is already `status`, which is why it is used in place of a `div` with
+  an explicit `role="status"` attribute.
 -->
 @if (state === 'failed') {
-  <div class="alert alert-warning mb-4" role="status" data-testid="restock-sync-reminder-unavailable">
+  <output class="alert alert-warning mb-4" data-testid="restock-sync-reminder-unavailable">
     <p class="alert-title">Machine restock sync status is unavailable.</p>
     <p class="mt-1">{{ unavailableMessage }}</p>
-  </div>
+  </output>
 } @else if (isShown && reminder) {
-  <div class="alert alert-warning mb-4" role="status" data-testid="restock-sync-reminder">
+  <output class="alert alert-warning mb-4" data-testid="restock-sync-reminder">
     <p class="alert-title">Machine restock sync needs attention.</p>
     <p class="mt-1">
       Review restocks to keep storage inventory accurate. A machine is listed here when its last
@@ -65,5 +66,5 @@
         </li>
       }
     </ul>
-  </div>
+  </output>
 }
