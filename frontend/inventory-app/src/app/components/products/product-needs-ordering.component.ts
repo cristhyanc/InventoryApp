@@ -57,7 +57,22 @@ type PurchaseCostState = 'idle' | 'loading' | 'loaded' | 'unavailable';
   selector: 'app-product-needs-ordering',
   standalone: true,
   imports: [CommonModule, FormsModule, RouterLink],
-  templateUrl: './product-needs-ordering.component.html'
+  templateUrl: './product-needs-ordering.component.html',
+  styles: [
+    `
+      /*
+       * The "Mark products as ordered" panel's own max-height (issue #906), set here rather than
+       * with a Tailwind arbitrary-value max-height utility because the dvh-then-vh-fallback trick
+       * needs both declarations to land on the same property in this exact order, which only a
+       * literal CSS rule guarantees - a build tool is free to reorder utility classes. Matches
+       * \`machine-restock-sync\`'s \`.sync-modal\` (issue #183).
+       */
+      .needs-order-dialog-panel {
+        max-height: calc(100vh - 2rem);
+        max-height: calc(100dvh - 2rem);
+      }
+    `
+  ]
 })
 export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
   products: Product[] = [];
@@ -332,6 +347,20 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
 
   selectedProducts(): Product[] {
     return this.products.filter((product) => this.selectedProductIds.has(product.id));
+  }
+
+  /**
+   * Drops a product from the order being built, without cancelling the dialog (issue #906). The
+   * dialog's rows are {@link selectedProducts}, which reads live from `selectedProductIds` - the
+   * same set the page's checkboxes are bound to - so this is also what unticks the product on the
+   * Needs ordering list, and leaves every other row's entered quantity and the order's own fields
+   * untouched. Refused below the last remaining row, because an order needs at least one line.
+   */
+  removeProduct(productId: number): void {
+    if (this.selectedProductIds.size <= 1) {
+      return;
+    }
+    this.selectedProductIds.delete(productId);
   }
 
   saveOrder(): void {

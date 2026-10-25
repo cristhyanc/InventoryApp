@@ -466,6 +466,127 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     ]);
   });
 
+  /**
+   * The dialog panel bounds itself to the viewport and lets its content scroll instead of
+   * clipping past the screen's edge, and Remove lets a product be dropped from the order without
+   * cancelling the dialog (issue #906).
+   */
+  describe('Mark products as ordered dialog: scroll and Remove (issue #906)', () => {
+    it('bounds the dialog panel to the viewport height, with a scrollable body between the fixed heading and buttons', async () => {
+      const { fixture, host } = await render([product({ id: 1, name: 'Banana', needToOrder: 4 })]);
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      const panel = host.querySelector('form.needs-order-dialog-panel') as HTMLFormElement;
+      expect(panel).not.toBeNull();
+      expect(Array.from(panel.classList)).toEqual(expect.arrayContaining(['flex', 'flex-col', 'needs-order-dialog-panel']));
+
+      const [header, body, footer] = Array.from(panel.children) as HTMLElement[];
+      expect(header.querySelector('h2')?.textContent).toContain('Mark products as ordered');
+      expect(Array.from(body.classList)).toEqual(expect.arrayContaining(['overflow-y-auto', 'min-h-0', 'flex-1']));
+      expect(body.contains(host.querySelector('[name="orderSupplier"]'))).toBe(true);
+      expect(body.contains(panel.querySelector('table'))).toBe(true);
+      expect(footer.textContent).toContain('Cancel');
+      expect(footer.textContent).toContain('Create order');
+    });
+
+    it('removes a product from the dialog, unticks it on the page, and keeps the order fields and the other rows as entered', async () => {
+      const { fixture, host } = await render([
+        product({ id: 1, name: 'Banana', needToOrder: 4 }),
+        product({ id: 2, name: 'Apple', needToOrder: 2 }),
+        product({ id: 3, name: 'Cherry', needToOrder: 1 })
+      ]);
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.toggleSelection(2, true);
+      component.toggleSelection(3, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      component.orderForm.supplierId = 3;
+      component.orderQuantities[1] = 9;
+      component.orderQuantities[3] = 5;
+      fixture.detectChanges();
+
+      const removeApple = host.querySelector('[aria-label="Remove Apple from order"]') as HTMLButtonElement;
+      expect(removeApple).not.toBeNull();
+      removeApple.click();
+      fixture.detectChanges();
+
+      expect(component.selectedProductIds.has(2)).toBe(false);
+      expect(component.selectedProducts().map((p) => p.name)).toEqual(['Banana', 'Cherry']);
+      expect(host.querySelector('[aria-label="Remove Apple from order"]')).toBeNull();
+
+      const appleCheckbox = Array.from(host.querySelectorAll<HTMLInputElement>('tbody input[type="checkbox"]')).find(
+        (checkbox) => checkbox.getAttribute('aria-label') === 'Select Apple'
+      );
+      expect(appleCheckbox?.checked).toBe(false);
+
+      expect(component.orderForm.supplierId).toBe(3);
+      expect(component.orderQuantities[1]).toBe(9);
+      expect(component.orderQuantities[3]).toBe(5);
+    });
+
+    it('disables Remove once only one product is left, while Cancel stays usable', async () => {
+      const { fixture, host } = await render([
+        product({ id: 1, name: 'Banana', needToOrder: 4 }),
+        product({ id: 2, name: 'Apple', needToOrder: 2 })
+      ]);
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.toggleSelection(2, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      const removeBanana = host.querySelector('[aria-label="Remove Banana from order"]') as HTMLButtonElement;
+      expect(removeBanana.disabled).toBe(false);
+      removeBanana.click();
+      fixture.detectChanges();
+
+      const removeApple = host.querySelector('[aria-label="Remove Apple from order"]') as HTMLButtonElement;
+      expect(removeApple.disabled).toBe(true);
+
+      // Refused even if clicked anyway (the guard is in the component, not just the attribute).
+      removeApple.click();
+      fixture.detectChanges();
+      expect(component.selectedProducts().map((p) => p.name)).toEqual(['Apple']);
+
+      const cancelButton = Array.from(host.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Cancel') as HTMLButtonElement;
+      expect(cancelButton.disabled).toBe(false);
+      cancelButton.click();
+      fixture.detectChanges();
+      expect(component.showOrderForm).toBe(false);
+    });
+
+    it('sends exactly the still-listed products with their entered quantities after a Remove', async () => {
+      const create = jest.fn(() => of(undefined));
+      const { fixture } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 }), product({ id: 2, name: 'Apple', needToOrder: 2 })],
+        { suppliers: [{ id: 3, name: 'Acme' }], create }
+      );
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.toggleSelection(2, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      component.orderForm.supplierId = 3;
+      component.orderQuantities[1] = 7;
+      component.removeProduct(2);
+      fixture.detectChanges();
+
+      component.saveOrder();
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lines: [{ productId: 1, quantityOrdered: 7 }]
+        })
+      );
+    });
+  });
+
   describe('in a support session (issue #661)', () => {
     const markAsOrdered = (host: HTMLElement) =>
       Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
