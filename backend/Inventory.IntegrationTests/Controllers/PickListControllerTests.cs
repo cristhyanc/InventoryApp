@@ -23,6 +23,7 @@ public class PickListControllerTests
 
     private const string Key = "b1b4a3d2-55f5-4c2f-9b86-0a7e2f4c1d55";
     private const long MachineId = 9;
+    private const long SecondMachineId = 10;
 
     private static Mock<IPickListStorageStockStore> EmptyStorage() => StorageWith();
 
@@ -40,8 +41,11 @@ public class PickListControllerTests
         return store;
     }
 
-    private static PickListController ControllerWith(GetPickList read, RecordPickListRefill refill) =>
-        new(read, refill);
+    private static PickListController ControllerWith(
+        GetPickList read,
+        RecordPickListRefill refill,
+        RecordMultiMachinePickListRefill? multiMachineRefill = null) =>
+        new(read, refill, multiMachineRefill ?? NoMultiMachineRefill());
 
     private static GetPickList NoPickList() =>
         new(new Mock<INayaxLynxClient>(MockBehavior.Strict).Object,
@@ -236,6 +240,219 @@ public class PickListControllerTests
 
         var conflict = await Assert.ThrowsAsync<DomainConflictException>(
             () => controller.RecordRefill(Request(rows: [(100, 4)]), CancellationToken.None));
+
+        Assert.Equal(PickListRefillPolicy.IdempotencyKeyReusedMessage, conflict.Message);
+    }
+
+    #endregion
+
+    #region POST api/pick-list/multi-machine-refills (issue #897)
+
+    private static RecordMultiMachinePickListRefill NoMultiMachineRefill() =>
+        MultiMachineRefillWith(new FakeMultiMachinePickListRefillStore());
+
+    private static RecordMultiMachinePickListRefill MultiMachineRefillWith(
+        FakeMultiMachinePickListRefillStore store,
+        Mock<IPickListStorageStockStore>? storage = null) =>
+        new(
+            store,
+            (storage ?? StorageWith((100, 10))).Object,
+            new FakeLocalMachineStore(
+            [
+                new LocalMachineRecord(MachineId, "Machine A", IsActive: true),
+                new LocalMachineRecord(SecondMachineId, "Machine B", IsActive: true),
+            ]),
+            new FakeClock(RecordedAt));
+
+    private static MultiMachinePickListRefillRequest MultiMachineRequest(
+        string? key = Key, params (long? MachineId, long ProductId, int Quantity)[] allocations) =>
+        new(
+            key,
+            Notes: null,
+            [.. allocations.Select(allocation => new MultiMachineRefillAllocationRequest(
+                allocation.MachineId, allocation.ProductId, allocation.Quantity))]);
+
+    /// <summary>
+    /// The success contract: <c>200</c> with each allocation's machine, product, quantity and movement
+    /// id, and <c>replayed</c> false because this request is what recorded them.
+    /// </summary>
+    [Fact]
+    public async Task RecordMultiMachineRefill_ReturnsTheRecordedBatch()
+    {
+        var controller = ControllerWith(
+            NoPickList(),
+            NoRefill(),
+            MultiMachineRefillWith(new FakeMultiMachinePickListRefillStore()));
+
+        var result = await controller.RecordMultiMachineRefill(
+            MultiMachineRequest(allocations: [(MachineId, 100, 3), (SecondMachineId, 100, 2)]),
+            CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        var body = Assert.IsType<MultiMachinePickListRefillResponse>(ok.Value);
+        Assert.Equal(Key, body.IdempotencyKey);
+        Assert.False(body.Replayed);
+        Assert.Equal(RecordedAt, body.RecordedAtUtc);
+        Assert.Equal(
+            [(MachineId, 100L, 3), (SecondMachineId, 100L, 2)],
+            body.Allocations.Select(
+                allocation => (allocation.MachineId, allocation.ProductId, allocation.QuantityTaken)));
+        Assert.All(body.Allocations, allocation => Assert.True(allocation.StockAdjustmentId > 0));
+    }
+
+    [Fact]
+    public async Task RecordMultiMachineRefill_ReportsAReplayedBatch()
+    {
+        var controller = ControllerWith(
+            NoPickList(),
+            NoRefill(),
+            MultiMachineRefillWith(new FakeMultiMachinePickListRefillStore()));
+        var request = MultiMachineRequest(allocations: [(MachineId, 100, 3)]);
+
+        await controller.RecordMultiMachineRefill(request, CancellationToken.None);
+        var result = await controller.RecordMultiMachineRefill(request, CancellationToken.None);
+
+        var body = Assert.IsType<MultiMachinePickListRefillResponse>(
+            Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.True(body.Replayed);
+    }
+
+    /// <summary>
+    /// A product whose allocations together exceed storage is reported on <em>each</em> of the lines
+    /// that combined, which is what lets the entry screen show an operator the combination to correct
+    /// rather than one arbitrary line of it.
+    /// </summary>
+    [Fact]
+    public async Task RecordMultiMachineRefill_ReportsTheAggregateStorageRefusalOnEveryContributingLine()
+    {
+        var store = new FakeMultiMachinePickListRefillStore();
+        var controller = ControllerWith(
+            NoPickList(), NoRefill(), MultiMachineRefillWith(store, StorageWith((100, 10))));
+
+        var result = await controller.RecordMultiMachineRefill(
+            MultiMachineRequest(allocations: [(MachineId, 100, 6), (SecondMachineId, 100, 6)]),
+            CancellationToken.None);
+
+        var problem = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+        Assert.Contains("application/problem+json", problem.ContentTypes);
+
+        var details = Assert.IsType<ValidationProblemDetails>(problem.Value);
+        var expected = MultiMachinePickListRefillPolicy.NotEnoughStockForTotalMessage(12, 10);
+        Assert.Equal(
+            expected,
+            Assert.Single(details.Errors[MultiMachinePickListRefillResponseMapper.AllocationKey(0)]));
+        Assert.Equal(
+            expected,
+            Assert.Single(details.Errors[MultiMachinePickListRefillResponseMapper.AllocationKey(1)]));
+        Assert.Empty(store.Committed);
+    }
+
+    [Fact]
+    public async Task RecordMultiMachineRefill_ReportsEveryRefusalAgainstThePartOfTheRequestItIsAbout()
+    {
+        var controller = ControllerWith(
+            NoPickList(),
+            NoRefill(),
+            MultiMachineRefillWith(new FakeMultiMachinePickListRefillStore(), StorageWith((100, 10))));
+
+        // Both halves of this request are judged before anything is read, so the key and the line are
+        // reported together - the whole-request refusal under its own field name and the line's under
+        // its index.
+        var result = await controller.RecordMultiMachineRefill(
+            MultiMachineRequest(key: null, allocations: [(MachineId, 100, 1), (SecondMachineId, 100, 0)]),
+            CancellationToken.None);
+
+        var details = Assert.IsType<ValidationProblemDetails>(
+            Assert.IsType<ObjectResult>(result.Result).Value);
+        Assert.Equal(
+            PickListRefillPolicy.IdempotencyKeyRequiredMessage,
+            Assert.Single(details.Errors["idempotencyKey"]));
+        Assert.Equal(
+            PickListRefillPolicy.QuantityMustBePositiveMessage,
+            Assert.Single(details.Errors[MultiMachinePickListRefillResponseMapper.AllocationKey(1)]));
+        Assert.DoesNotContain(
+            MultiMachinePickListRefillResponseMapper.AllocationKey(0), details.Errors.Keys);
+    }
+
+    /// <summary>
+    /// An allocation the caller sent as a missing value is refused on its own line, not dereferenced,
+    /// and the valid allocation beside it is not written: one refusal refuses the whole batch.
+    /// </summary>
+    [Fact]
+    public async Task RecordMultiMachineRefill_RefusesAMissingAllocationRatherThanReadingIt()
+    {
+        var store = new FakeMultiMachinePickListRefillStore();
+        var controller = ControllerWith(NoPickList(), NoRefill(), MultiMachineRefillWith(store));
+
+        var result = await controller.RecordMultiMachineRefill(
+            new MultiMachinePickListRefillRequest(
+                Key, null, [new MultiMachineRefillAllocationRequest(MachineId, 100, 3), null]),
+            CancellationToken.None);
+
+        var details = Assert.IsType<ValidationProblemDetails>(
+            Assert.IsType<ObjectResult>(result.Result).Value);
+        Assert.Equal(
+            MultiMachinePickListRefillPolicy.MissingAllocationMessage,
+            Assert.Single(details.Errors[MultiMachinePickListRefillResponseMapper.AllocationKey(1)]));
+        Assert.DoesNotContain(
+            MultiMachinePickListRefillResponseMapper.AllocationKey(0), details.Errors.Keys);
+
+        Assert.Equal(0, store.TransactionsOpened);
+        Assert.Equal(0, store.ApplyCalls);
+        Assert.Empty(store.Committed);
+    }
+
+    /// <summary>
+    /// An allocation that names no machine is refused on its own line rather than bound to machine
+    /// <c>0</c> and reported as an unknown machine.
+    /// </summary>
+    [Fact]
+    public async Task RecordMultiMachineRefill_RefusesAnAllocationWithNoMachine()
+    {
+        var controller = ControllerWith(
+            NoPickList(),
+            NoRefill(),
+            MultiMachineRefillWith(new FakeMultiMachinePickListRefillStore()));
+
+        var result = await controller.RecordMultiMachineRefill(
+            MultiMachineRequest(allocations: [(null, 100, 3)]), CancellationToken.None);
+
+        var details = Assert.IsType<ValidationProblemDetails>(
+            Assert.IsType<ObjectResult>(result.Result).Value);
+        Assert.Equal(
+            MultiMachinePickListRefillPolicy.MachineRequiredMessage,
+            Assert.Single(details.Errors[MultiMachinePickListRefillResponseMapper.AllocationKey(0)]));
+    }
+
+    [Fact]
+    public async Task RecordMultiMachineRefill_ReportsAMissingBodyAsARefusalRatherThanThrowing()
+    {
+        var controller = ControllerWith(
+            NoPickList(),
+            NoRefill(),
+            MultiMachineRefillWith(new FakeMultiMachinePickListRefillStore()));
+
+        var result = await controller.RecordMultiMachineRefill(null!, CancellationToken.None);
+
+        var problem = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+    }
+
+    [Fact]
+    public async Task RecordMultiMachineRefill_LetsAReusedKeyPropagateAsAConflict()
+    {
+        var controller = ControllerWith(
+            NoPickList(),
+            NoRefill(),
+            MultiMachineRefillWith(new FakeMultiMachinePickListRefillStore()));
+
+        await controller.RecordMultiMachineRefill(
+            MultiMachineRequest(allocations: [(MachineId, 100, 3)]), CancellationToken.None);
+
+        var conflict = await Assert.ThrowsAsync<DomainConflictException>(
+            () => controller.RecordMultiMachineRefill(
+                MultiMachineRequest(allocations: [(MachineId, 100, 4)]), CancellationToken.None));
 
         Assert.Equal(PickListRefillPolicy.IdempotencyKeyReusedMessage, conflict.Message);
     }

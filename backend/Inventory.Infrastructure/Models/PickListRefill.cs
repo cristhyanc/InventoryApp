@@ -43,10 +43,16 @@ public class PickListRefill : IBusinessOwned
     public string RequestFingerprint { get; set; } = string.Empty;
 
     /// <summary>
-    /// The machine the pick was for, or <c>null</c> when the refill named none: a local machine,
+    /// The machine the whole pick was for, or <c>null</c> when the refill named none: a local machine,
     /// <c>Machines.Id</c> (issue #741), never the provider's machine number. The pair
     /// <c>(BusinessId, MachineId)</c> is a foreign key on the machines' <c>(BusinessId, Id)</c> key,
     /// restricted on delete, the same as the movement's own machine reference.
+    ///
+    /// <para>It is also <c>null</c> for a multi-machine batch (issue #897), which attributes each of
+    /// its lines to its own machine through <see cref="PickListRefillLine.MachineId"/> instead. What
+    /// tells the two apart is never this column: it is the stored
+    /// <see cref="RequestFingerprint"/>, whose rendering carries the contract that produced it, so a
+    /// key spent on one kind of refill can only ever be refused as reused by the other.</para>
     /// </summary>
     public long? MachineId { get; set; }
 
@@ -90,6 +96,20 @@ public class PickListRefillLine : IBusinessOwned
     public virtual PickListRefill? Refill { get; set; }
 
     public long ProductId { get; set; }
+
+    /// <summary>
+    /// The machine this one allocation was for, when the batch attributed its lines to machines
+    /// individually (issue #897), or <c>null</c> when the batch carried one machine - or none - on
+    /// <see cref="PickListRefill.MachineId"/> instead. A local machine, <c>Machines.Id</c> (issue
+    /// #741), never the provider's machine number; the pair <c>(BusinessId, MachineId)</c> is a
+    /// foreign key on the machines' <c>(BusinessId, Id)</c> key, restricted on delete, the same as
+    /// the batch's own machine reference and the movement's.
+    ///
+    /// <para>Additive, and <c>null</c> on every row recorded before it existed: a single-machine
+    /// refill's machine is on the batch and is not copied down here, because the two endpoints record
+    /// what their own caller submitted and nothing reinterprets one as the other.</para>
+    /// </summary>
+    public long? MachineId { get; set; }
 
     /// <summary>The units taken out of storage, always positive: the movement itself is negative.</summary>
     public int QuantityTaken { get; set; }
