@@ -394,6 +394,24 @@ export interface LocalMachine {
   name: string;
   isActive: boolean;
   isProviderNamed: boolean;
+  /**
+   * Whether `DELETE /api/local-machines/{id}` would allow this machine to be deleted (issue #896),
+   * from the machine list and the single-machine read. `false` means the server would refuse it and
+   * {@link deletionRefusal} says why; **absent** means the read never resolved the question and is
+   * not permission - a screen that offers Delete only on `true` never offers one that must fail.
+   *
+   * It is advisory: the delete counts the machine's references again inside its own transaction, so
+   * a refusal can still come back for a machine this said was deletable, and that refusal must
+   * still be shown.
+   */
+  canDelete?: boolean;
+  /**
+   * Why this machine may not be deleted, in the server's own words - the message the delete would
+   * answer `400` with, naming what refers to the machine or which provider manages it. Absent when
+   * the machine may be deleted, and when the read did not resolve the question. It never carries the
+   * provider's identifier for the machine, only the provider's name.
+   */
+  deletionRefusal?: string | null;
 }
 
 /**
