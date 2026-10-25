@@ -148,10 +148,11 @@
                 }
                 <td class="table-cell sticky right-0 z-10 bg-white">
                   <!--
-                    Three fixed-width slots, always in the order Stock, Deactivate, Delete (issue
-                    #876), so each action lines up under itself down the table instead of shifting
-                    with how many buttons a given row has. A slot whose action does not apply to
-                    this row stays empty (keeping its width) rather than disappearing.
+                    Three fixed-width slots, always in the order Stock, Deactivate/Reactivate, Delete
+                    (issues #876, #900), so each action lines up under itself down the table instead
+                    of shifting with how many buttons a given row has. The middle slot always shows
+                    one of Deactivate or Reactivate; the Delete slot stays empty (keeping its width)
+                    rather than disappearing on a row the API refuses to delete.
                   -->
                   <div class="flex flex-nowrap items-center gap-2">
                     <div class="w-20 shrink-0">
@@ -163,11 +164,14 @@
                          column must not reserve width for actions a session can never show. -->
                     @if (!sessionActive) {
                       <div class="w-32 shrink-0">
-                        <!-- Deactivate is the action that is always available for an active product,
-                             whether or not it may be deleted (issue #825). An inactive product has
-                             nothing to deactivate; the Status toggle reactivates it in one click. -->
+                        <!-- Deactivate is always available for an active product, whether or not it
+                             may be deleted (issue #825); Reactivate is always available for an
+                             inactive one (issue #900), sharing the Status badge's own immediate
+                             activation write, `toggleActive`. Exactly one of the two shows here. -->
                         @if (p.isActive) {
                           <button type="button" class="btn btn-sm btn-secondary w-full" (click)="confirmDeactivate(p)">Deactivate</button>
+                        } @else {
+                          <button type="button" class="btn btn-sm btn-secondary w-full" (click)="toggleActive(p)">Reactivate</button>
                         }
                       </div>
                       <div class="w-24 shrink-0">
