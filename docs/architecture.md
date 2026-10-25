@@ -9605,9 +9605,9 @@ with the matrix data, `pickedCells`, and the snapshot timestamp.
 
 **Matrix table layout.** The matrix lives in one bounded scroll area (`max-h-[70vh] overflow-auto`),
 so a long product list scrolls vertically inside the card while many machine columns still scroll
-horizontally in the same area. Every header cell - Product, MDB Code, Total to Pick and each applied
-machine column (issue #496 added MDB Code) - is individually `sticky top-0` with an opaque background
-and a z-index above the body cells,
+horizontally in the same area. Every header cell - Product, MDB Code, Storage Qty, Total to Pick and
+each applied machine column (issue #496 added MDB Code; issue #885 added Storage Qty) - is
+individually `sticky top-0` with an opaque background and a z-index above the body cells,
 so the whole header row stays visible while rows scroll under it without showing through. The
 `<thead>` element itself, the filter panel and the Selected Machines card are deliberately not
 sticky. Sticky positioning does not participate in table column sizing, so header and body keep
@@ -9635,8 +9635,8 @@ Products filter, and leaves `pickedCells`, totals and progress figures unchanged
 `sortDirection` live only on the component instance - the same as every other piece of page state
 here - so the chosen sort survives Apply (including a machine-selection refetch) and chip removal,
 but Reset clears it back to no active column, and the next loaded pick list appears in backend order.
-No other column (Total to Pick, the per-machine columns) is sortable, and sorting never calls an
-endpoint or introduces a query parameter.
+No other column (Storage Qty, Total to Pick, the per-machine columns) is sortable, and sorting never
+calls an endpoint or introduces a query parameter.
 
 #### Manual pick-list entry and mode selection (issue #744)
 

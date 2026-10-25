@@ -775,7 +775,8 @@ describe('PickListComponent rendered structure', () => {
     const headers = Array.from(host.querySelectorAll('thead th')).map((th) => th.textContent?.trim());
     expect(headers[0]).toBe('Product');
     expect(headers[1]).toBe('MDB Code');
-    expect(headers[2]).toBe('Total to Pick');
+    expect(headers[2]).toBe('Storage Qty');
+    expect(headers[3]).toBe('Total to Pick');
     expect(headers).toContain('Machine A');
     expect(headers).toContain('Machine B');
     expect(host.textContent).toContain('Selected Machines (2)');
@@ -785,6 +786,40 @@ describe('PickListComponent rendered structure', () => {
     expect(rows[0].textContent).toContain('Coke');
     expect(rows[0].textContent).toContain('Pick: 4');
     expect(rows[0].textContent).toContain('Current: 6 of 10');
+  });
+
+  it('shows the Storage Qty column between MDB Code and Total to Pick, with each row matching storageQuantityInStock', async () => {
+    const pickList = jest.fn(() => of(pickListResult()));
+    const { host, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+
+    // Fixture: Coke has storageQuantityInStock 50, Chips has storageQuantityInStock 2.
+    const storageQtyCells = Array.from(host.querySelectorAll('[data-testid="pick-list-storage-qty"]')).map((td) => td.textContent?.trim());
+    expect(storageQtyCells).toEqual(['50', '2']);
+
+    const storageQtyCell = host.querySelector('[data-testid="pick-list-storage-qty"]');
+    expect(Array.from(storageQtyCell?.classList ?? [])).toEqual(expect.arrayContaining(['table-num']));
+  });
+
+  it('shows a zero or negative storage quantity exactly as returned, without clamping or a dash', async () => {
+    const pickList = jest.fn(() => of(pickListResult({
+      products: [{
+        productId: 1, productName: 'Coke', mdbCode: 2, storageQuantityInStock: 0, totalQuantityToPick: 4, storageShortageQuantity: 4,
+        machineQuantities: [{ machineId: 10, mdbCode: 2, currentQuantity: 0, targetQuantity: 10, quantityToPick: 4 }]
+      }, {
+        productId: 2, productName: 'Chips', mdbCode: 10, storageQuantityInStock: -3, totalQuantityToPick: 5, storageShortageQuantity: 8,
+        machineQuantities: [{ machineId: 10, mdbCode: 10, currentQuantity: 0, targetQuantity: 5, quantityToPick: 5 }]
+      }]
+    })));
+    const { host, openDropdown, checkOption, applyFilters } = await render(undefined, undefined, pickList);
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+
+    const storageQtyCells = Array.from(host.querySelectorAll('[data-testid="pick-list-storage-qty"]')).map((td) => td.textContent?.trim());
+    expect(storageQtyCells).toEqual(['0', '-3']);
   });
 
   it('shows the MDB code column, default-sorted so the lower code renders first, and per-machine codes inside each cell', async () => {
@@ -835,7 +870,7 @@ describe('PickListComponent rendered structure', () => {
     expect(Array.from(scrollArea.classList)).toEqual(expect.arrayContaining(['max-h-[70vh]', 'overflow-auto']));
 
     const headers = Array.from(host.querySelectorAll<HTMLTableCellElement>('thead th'));
-    expect(headers.map((th) => th.textContent?.trim())).toEqual(['Product', 'MDB Code', 'Total to Pick', 'Machine A', 'Machine B']);
+    expect(headers.map((th) => th.textContent?.trim())).toEqual(['Product', 'MDB Code', 'Storage Qty', 'Total to Pick', 'Machine A', 'Machine B']);
     for (const th of headers) {
       // Every header cell, not just the first two, is pinned and opaque so rows cannot show through.
       expect(Array.from(th.classList)).toEqual(expect.arrayContaining(['sticky', 'top-0', 'z-10', 'bg-md-gray-100']));
@@ -977,6 +1012,18 @@ describe('PickListComponent rendered structure', () => {
     const { host } = await render(undefined, undefined, undefined, 'Ready');
 
     expect(host.querySelector('[data-testid="nayax-status-banner"]')).toBeNull();
+  });
+
+  it('does not make the Storage Qty header sortable', async () => {
+    const { host, openDropdown, checkOption, applyFilters } = await render();
+    openDropdown('Machines');
+    checkOption('Machine A');
+    applyFilters();
+
+    const headers = Array.from(host.querySelectorAll('thead th'));
+    const storageQtyHeader = headers.find((th) => th.textContent?.trim() === 'Storage Qty');
+    expect(storageQtyHeader?.querySelector('button')).toBeNull();
+    expect(storageQtyHeader?.hasAttribute('aria-sort')).toBe(false);
   });
 
   it('reports aria-sort none on both sortable headers until one is clicked', async () => {
