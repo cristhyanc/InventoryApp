@@ -11250,7 +11250,7 @@ machines it refills.
 | `Id` | this application's own key, **assigned by the database** (#735's rule, decision A4). Nothing assigns it, and a local id equal to a Nayax machine id is a coincidence |
 | `BusinessId` | the owning business. Ordinary tenant-owned data: the central query filters and `BusinessOwnershipEnforcer` scope every read and stamp every write, and no adapter writes a `BusinessId` predicate of its own |
 | `Name` | required, and otherwise unconstrained. Deliberately **not** unique per business: two machines in one corridor may legitimately be called "Level 3", and nothing resolves a machine by its name |
-| `IsActive` | whether the machine is in service. There is no delete |
+| `IsActive` | whether the machine is in service. A machine with history is deactivated rather than deleted; a machine nothing refers to can be deleted (issue #896, below) |
 | `ExternalMachineId` | the business's sales provider's own id for the machine, as **opaque text** bounded by `ExternalId.MaxLength`, or `null` when the provider names none. For Nayax it is written only through `Inventory.Domain.Providers.NayaxExternalId` |
 
 `(BusinessId, ExternalMachineId)` carries a **filtered** unique index, `WHERE "ExternalMachineId" IS
@@ -11292,21 +11292,20 @@ half applied. Both refusals are raised the way #759's copy raises its own, throu
 and a SQLite trigger, and the scratch table is dropped again.
 
 **The API.** `/api/local-machines` — `GET` (the list, active and inactive, ordered by name), `GET
-{id}`, `POST` (create), `PUT {id}` (rename), `POST {id}/deactivate`, `POST {id}/reactivate` — behind
-`Inventory.Operate`, the capability the fleet reads and the rest of day-to-day stock keeping already
-declare. It is a **separate resource from `/api/machines`**, which is the live Nayax fleet and needs
-working credentials for every one of its reads; nothing on this one touches the provider, so it works
-identically for a business that has never connected one.
+{id}`, `POST` (create), `PUT {id}` (rename), `POST {id}/deactivate`, `POST {id}/reactivate`, `DELETE
+{id}` (issue #896, below) — behind `Inventory.Operate`, the capability the fleet reads and the rest of
+day-to-day stock keeping already declare. It is a **separate resource from `/api/machines`**, which is
+the live Nayax fleet and needs working credentials for every one of its reads; nothing on this one
+touches the provider, so it works identically for a business that has never connected one.
 
-Three things it deliberately does not do. It **never writes `ExternalMachineId`**: no request field
+Two things it deliberately does not do. It **never writes `ExternalMachineId`**: no request field
 corresponds to it, a created machine has none, a rename leaves it alone, and the [provider machine
 review](#provider-machine-linking-automatic-or-reviewed-issue-742) (issue #742) is the one thing that
-attaches one. It **publishes no
-provider identifier** either — the response carries `isProviderNamed`, the fact and not the id. And
-it offers **no delete**: stored sales, refills, counts and expenses refer to a machine, so a machine
-that stops trading is deactivated and stays listed. Because the capability is `Inventory.Operate`,
-which a support session grants, every write here is refused in a read-only support session by the one
-central rule that allows it only `GET` and `HEAD` (issue #551) — there is no per-action check for it.
+attaches one. And it **publishes no provider identifier** either — the response carries
+`isProviderNamed`, the fact and not the id, and the deletion refusal below names the *provider*, never
+its id for the machine. Because the capability is `Inventory.Operate`, which a support session grants,
+every write here is refused in a read-only support session by the one central rule that allows it only
+`GET` and `HEAD` (issue #551) — there is no per-action check for it.
 
 **A provider-named machine is not renamed or deactivated here.** #740 originally allowed both;
 the owner reversed that, because a machine the provider names is managed at the provider.
@@ -11321,6 +11320,56 @@ Rename and Deactivate on a row whose `isProviderNamed` is true, and refuses both
 Nothing synchronises a machine's name, so a provider machine keeps the name it was recorded or
 linked with even after a rename at the provider.
 
+#### Deleting a machine added by mistake (issue #896)
+
+`DELETE /api/local-machines/{id}` removes a machine **only while nothing refers to it and no provider
+names it**. A machine added by mistake is a mistake an operator has to be able to undo; a machine with
+history is not, and gets deactivation instead. `204` on success, `404` for a machine that is not this
+business's (the central tenant query filters, so another business's id is simply not a machine the
+caller named), `400` with the reason otherwise — the same shape every other refusal on this resource
+uses.
+
+**The four protected references.** Exactly four tables hold `Machines.Id`, each as a composite
+`(BusinessId, MachineId)` foreign key on the `(BusinessId, Id)` key of `Machines`, restricted on
+delete: `MachineStockCount.MachineId` and `StockAdjustment.MachineId` (issue #741),
+`PickListRefill.MachineId` (issue #743) and `OperatingExpense.MachineId` (issue #780). Any row in any
+of them refuses the delete, with the kinds and counts named — "2 machine stock counts, 1 operating
+expense" — so an operator knows where to look. **Nothing is cascaded, nulled, reassigned or
+compensated for**: every stored count, movement, refill and expense stays exactly where it is, which
+is what refusing is for. The provider's own stored data (`NayaxSales.MachineID`,
+`NayaxMachineStockEvent`, `NayaxSaleTimestampRepair`, `InventoryCostTransitionMachineStock`, the
+report filters and the calculated pick list) names the *provider's* machine number and is not a
+reference to this row at all — which is why a machine carrying `ExternalMachineId` is refused outright
+rather than counted: it is managed at the provider, exactly as its rename and deactivation are, and
+its provider id is what every later lookup resolves that machine's sales through. No inventory,
+costing or report total changes either way, and the delete makes no provider request at all.
+
+**One rule, published and enforced from the same place.**
+`Inventory.Domain.Machines.MachineDeletionPolicy` decides the refusal, and
+`LocalMachineDeletionEligibility` is a projection of that same call — the shape a product's deletion
+established in [Manual catalogue: who owns a product's
+fields](#manual-catalogue-who-owns-a-products-fields-issue-736) (issues #737 and #825). Both machine
+reads publish it as `canDelete`/`deletionRefusal`, so the page offers **Delete** only where the API
+allows it and explains every other machine in the server's own words; `LocalMachineListComponent`
+offers it only on a plain `true` (an absent answer is not permission), hides it during a support
+session, opens the shared confirmation dialog naming the machine, sends one request, and reloads only
+on success so a refusal leaves the row it is about on screen. The eligibility is **advisory**: it
+describes rows as they were read.
+
+**The check and the delete are one operation, under the link's own write lock.** `EfLocalMachineStore.DeleteAsync`
+reads the machine, counts the four tables and removes the row inside one `BEGIN IMMEDIATE`
+transaction (`SqliteWriteLockTransaction`, the shape issues #522, #537 and #743 each use), and
+`EfProviderMachineLinkStore` takes **that same** lock. That is the race the foreign keys cannot stop:
+linking is a write to the machine row itself, not a reference to it, so a deferred transaction would
+let a delete and an apply both read a machine with no provider id and SQLite could then only answer
+one of them with a lock error. With the write lock taken when the transaction opens, the loser waits
+and reads the winner's committed state, so the two coherent outcomes are the only ones — the machine
+is gone and nothing was linked, or the machine carries the provider id and the delete is refused as a
+provider machine. The restricted foreign keys remain the **database's own backstop** under the count:
+a reference that lands inside the delete's transaction makes SQLite refuse the statement, and that
+violation is translated into `MachineDeletionPolicy.ReferencedWhileDeletingRefusal` — the same kind of
+`400` an operator can act on, never an unhandled `500`.
+
 **The page, and why it stopped being provider-locked.** The Machines menu entry came off the
 provider signal - out of the "Needs Nayax" section issue #868 has since removed altogether - and
 `/machines` carries no `requireProvider` guard any more
@@ -11328,7 +11377,7 @@ provider signal - out of the "Needs Nayax" section issue #868 has since removed 
 something to show, so it is never locked. It is two lists. `LocalMachineListComponent` — the
 dedicated feature component the [page composition
 boundary](#page-composition-boundary-issue-191) requires, holding the list, its load state, the add
-and rename drafts, the refusal message and every write — is always shown. The live Nayax fleet below
+and rename drafts, the delete confirmation, the refusal message and every write — is always shown. The live Nayax fleet below
 it (revenue, profit, and the links into each machine's stock and Sync Restock workflow) is shown only
 while the shared availability signal says the fleet read can be served, through the one shared path
 `loadProviderList` (issue #728): an unavailable provider withholds that section entirely rather than
