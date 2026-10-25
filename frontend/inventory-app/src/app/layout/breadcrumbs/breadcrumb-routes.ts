@@ -59,6 +59,7 @@ const SUPER_ADMIN: BreadcrumbParent = { label: 'Super Admin' };
  */
 export const breadcrumbRoutes: readonly BreadcrumbRouteEntry[] = [
   { pattern: '/products/:id/edit', label: 'Edit product', parent: PRODUCTS },
+  { pattern: '/products/import', label: 'Import products', parent: PRODUCTS },
   { pattern: '/machines/:id', label: 'Machine details', parent: MACHINES, dynamic: true },
   { pattern: '/sites/:id/products', label: 'Site products', parent: SITES },
   { pattern: '/purchases/new', label: 'Add purchase', parent: PURCHASES },

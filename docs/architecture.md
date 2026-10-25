@@ -1635,7 +1635,8 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
 | Expenses | `api/operating-expenses` (list, create, read, update, delete, attachment download) | `Expenses.Manage` | ✘ | ✔ | ✔ |
 | Reports (all of them, and their CSV/XLSX exports) | `api/reports/*`, `GET api/reports/{report}/export` | `Reports.View` | ✘ | ✔ | ✔ |
-| Admin → Imports | `api/imports/nayax-sales`, `api/imports/pending-xml`, and the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
+| Admin → Imports | `api/imports/nayax-sales`, `api/imports/pending-xml` | `Imports.Run` | ✘ | ✔ | ✔ |
+| Products → Import products (`/products/import`, issue #888) | the catalogue import, which is `POST api/catalogue-review` and `POST api/catalogue-review/apply` since issue #739 | `Imports.Run` | ✘ | ✔ | ✔ |
 | Reports → Site Commissions, Admin → Site Commission Agreements | `api/site-commissions` (report, agreements, payments) | `SiteCommissions.Manage` | ✘ | ✔ | ✔ |
 | Admin → Integrations (called Nayax Settings until issue #729) | `api/settings/nayax-processing-fee-rates` (read and save) | `Integration.Manage` | ✘ | ✘ | ✔ |
 | Business Settings (the page is issue #549) | `GET`/`PUT api/business/settings` (issue #548) | `Business.Manage` | ✘ | ✘ | ✔ |
@@ -4782,10 +4783,13 @@ session before this slice. The same reasoning covers `Imports.Run` on Admin → 
 
 **What changed, page by page.**
 
-- `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file, Import
-  products and Import XML files, and `onSalesSelected`, `importProducts` and `importXml` each
-  return before calling `ImportService`. Download template stays enabled: it builds a CSV in the
-  browser and calls no API.
+- `AdminImportsComponent` (`admin/imports`, `Imports.Run`) disables Choose sales file and Import
+  XML files, and `onSalesSelected` and `importXml` each return before calling `ImportService`.
+  Download template stays enabled: it builds a CSV in the browser and calls no API. Its Import
+  products card is a link to `/products/import` since issue #888 and is left in place, because it
+  starts nothing; `ProductImportPageComponent` applies this same rule at the destination, rendering
+  a short "imports are unavailable during a support session" notice instead of the catalogue review
+  — withheld rather than disabled, because the review reads the catalogue as soon as it renders.
 - `HistoricalGstClassificationWorkflowComponent`, `AvcoTransitionWorkflowComponent`,
   `CostingRepairComponent`, `HistoricalCostRecoveryWorkflowComponent` and
   `NayaxSaleTimestampRepairWorkflowComponent` (all `Data.Repair`) disable both their preview and
@@ -6448,7 +6452,8 @@ out of the `Reports` group (issue #729) and moving it back into it (issue #868) 
 
 Locking rather than hiding is the point for the first: a page an operator could have used, and could
 use again by connecting Nayax, has to stay visible and explain itself. Hiding is right for the
-second — Admin → `Imports` (the Nayax sales and settlement imports) and Admin → `Nayax Sale
+second — Admin → `Imports` (the Nayax sales and settlement imports), Inventory → `Import products`
+(the catalogue review's own page, issue #888) and Admin → `Nayax Sale
 Timestamp Repair` — because with no provider there is nothing of the provider's to import or repair,
 so a locked entry would offer a tool for data that does not exist. `Integrations` carries neither: it
 is where a connection is made, so it can never depend on one. Costing Repair, Historical GST
@@ -6819,9 +6824,9 @@ unchanged fee-rate editor — see
 [The Nayax connection wizard](#the-nayax-connection-wizard-issue-538).
 
 **Admin Imports (issue #389, Admin split 2/3).** `/admin/imports` (`AdminImportsComponent`) is the
-authenticated UI entry point for the three supported import workflows, moved out of
-`AdminComponent`: the Nayax sales file upload (`.xlsx`, `.xls`, `.csv`) with its CSV template
-download, the product catalogue import, and the pending reimbursement XML import. The page is an
+authenticated UI entry point for the Nayax import workflows, moved out of `AdminComponent`: the
+Nayax sales file upload (`.xlsx`, `.xls`, `.csv`) with its CSV template download, and the pending
+reimbursement XML import. The page is an
 entry point only — it calls the same `ImportService` methods (`POST api/imports/nayax-sales`,
 `POST api/imports/pending-xml`) with the same request shapes, keeps
 the same client-side extension validation, template columns/sample row, success and failure
@@ -6833,11 +6838,20 @@ exactly where they were (see [Uploaded transaction export import (issue
 reconciliation](#reimbursement-import-and-reconciliation)). `Imports` is one entry in the sidebar's
 `Admin` group (issue #391).
 
-**Import products opens the catalogue review** (issue #739, parent #329 decision C2), and no longer
-calls a catalogue import of its own: `POST api/imports/products` does not exist any more. The button
-renders `CatalogueReviewComponent`, a dedicated feature component the page composes rather than
-grows inside itself (see [Page composition boundary](#page-composition-boundary-issue-191)) — see
-[The catalogue review screen](#the-catalogue-review-screen-issue-739).
+**Import products is a link to its own page** (issue #888). The product catalogue import is the
+catalogue review (issue #739, parent #329 decision C2) and no catalogue import of its own exists:
+`POST api/imports/products` does not exist any more. The review used to be a panel this page
+rendered below its cards when a local `reviewing` flag was set — by its own button or, since issue
+#875, by a `?review=catalogue` query parameter — and it now has a dedicated page of its own, so this
+page keeps the Import products card with its title and description and the card's control is a
+`routerLink` to `/products/import`. The page reads no `review` query parameter any more and renders
+no review; see [The dedicated Import products page](#the-dedicated-import-products-page-issue-888)
+and [The catalogue review screen](#the-catalogue-review-screen-issue-739). The link is deliberately
+neither hidden nor disabled during a support session: it starts nothing, and the destination
+withholds the review and shows its own notice (see
+[Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551) for
+the rule both pages apply). The Admin hub's `Imports` card description names where the catalogue
+import went rather than implying it still runs here.
 
 **Admin costing and maintenance pages (issue #390, Admin split 3/3).** The three remaining
 maintenance workflows now have their own authenticated routes, which completes the decomposition:
@@ -12484,7 +12498,8 @@ a review, decided per entry, and then applied as one transaction.** **Issue #739
 made it the catalogue import**: it built the screen, pointed Admin → Imports → Import products at
 it, and removed the direct import — the endpoint, the use case, its port, its EF adapter and #736's
 refusal — for every business. There is one catalogue writer now, and every row it writes is a row
-somebody decided about.
+somebody decided about. (Issue #888 moved where the screen is reached from: it is the dedicated
+`/products/import` page rather than a panel on Admin → Imports. The writer is unchanged.)
 
 **Three endpoints, two capabilities.** `InventoryApi.Controllers.CatalogueReviewController`:
 
@@ -12648,13 +12663,54 @@ table is tenant-owned in the ordinary way, so two businesses may review and link
 ids and neither can read, apply or resolve anything of the other's
 (`EfCatalogueReviewStoreTenancyTests`).
 
+### The dedicated Import products page (issue #888)
+
+`/products/import` (`frontend/inventory-app/src/app/components/products/ProductImportPageComponent`)
+is the one place the product catalogue import is reached from. Until issue #888 the review had no
+page of its own: it was a panel `AdminImportsComponent` rendered below its import cards when a local
+`reviewing` flag was set, either by that page's own button or by the `?review=catalogue` query
+parameter issue #875's All Products button sent — so closing the review left the operator on
+Admin → Imports rather than where they came from. That parameter never reached `main`, and nothing
+reads it now.
+
+- **A top-level route, declared above the `products` shell**, carrying `MsalGuard`,
+  `accountStateGuard` and `requireCapability('Imports.Run')` — exactly the three guards
+  `/admin/imports` carries, because it is the same import behind the same capability. Inside the
+  shell it would have inherited an `Inventory.Operate` requirement on top of that; being a
+  two-segment path, exact matching also keeps it clear of the three-segment `products/:id/…` routes
+  whatever the declaration order. It takes **no provider route guard**: a connection that cannot
+  serve the catalogue is answered by the review's own unavailable/error handling, which is where
+  that answer has always been given, and nothing here bypasses a backend check.
+- **It renders `<app-catalogue-review>` straight away**, so the review starts reading the Nayax
+  catalogue on load exactly as it did when the button opened it, and the review's `closed` output
+  navigates to `/products` rather than only taking a panel off screen. The page composes the review
+  from where it still lives (`components/admin/imports/catalogue-review/`) and owns nothing of its
+  workflow — see [Page composition boundary](#page-composition-boundary-issue-191).
+- **A support session withholds the review and the page says so.** The page keeps the rule Admin →
+  Imports applied (issue #661): a session grants `Imports.Run`, so the review would otherwise render
+  fully and be refused only by the backend's read-only method rule. It is withheld rather than
+  disabled because the review reads the catalogue the moment it renders.
+- **Three entry points, one destination.** The sidebar's `Inventory` group carries `Import products`
+  directly under `Products` as `providerToolLink('Import products', '/products/import',
+  'Imports.Run')`, so it is left out without a usable provider and for a member without
+  `Imports.Run`, like the Admin `Imports` entry (see
+  [Provider-locked navigation](#provider-locked-navigation-issue-729) for what that answer is).
+  All Products' own **Import products** button keeps issue #875's visibility rules and links
+  here with no query parameter, and Admin → Imports' card is a link here too. The breadcrumb reads
+  **Products > Import products** (`layout/breadcrumbs/breadcrumb-routes.ts`, parent `PRODUCTS`).
+
+Nothing about the review itself changed with the move: same API calls, same two steps, same
+decisions, same applied result.
+
 ### The catalogue review screen (issue #739)
 
 `frontend/inventory-app/src/app/components/admin/imports/catalogue-review/CatalogueReviewComponent`
-is what **Admin → Imports → Import products** opens, and it is the whole of the product catalogue
-import now: there is no direct import behind the button any more (decision C2). The page composes it
-and owns nothing of its workflow, because it is a distinct workflow with its own two-step state, its
-own actions and its own loading and error lifecycle — see
+is what **Products → Import products** (`/products/import`) opens, and it is the whole of the
+product catalogue import now: there is no direct import behind it any more (decision C2). Issue #888
+gave it that page of its own — it was a panel Admin → Imports opened until then (see
+[The dedicated Import products page](#the-dedicated-import-products-page-issue-888)). The page
+composes it and owns nothing of its workflow, because it is a distinct workflow with its own two-step
+state, its own actions and its own loading and error lifecycle — see
 [Page composition boundary](#page-composition-boundary-issue-191).
 
 **Two ordered steps, categories first, and the order is a data rule rather than a layout choice.** A

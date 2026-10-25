@@ -1661,9 +1661,13 @@ describe('ProductListComponent Import products in the toolbar (issue #875)', () 
     expect(importLink(host)).toBeNull();
   });
 
-  it('navigates to /admin/imports?review=catalogue', async () => {
+  /**
+   * The dedicated Import products page (issue #888) replaced the `?review=catalogue` parameter this
+   * button used to send Admin → Imports: it is one destination now, with no query parameter.
+   */
+  it('navigates to /products/import', async () => {
     const { host } = await render({ status: 'Ready' });
 
-    expect(importLink(host)!.getAttribute('href')).toBe('/admin/imports?review=catalogue');
+    expect(importLink(host)!.getAttribute('href')).toBe('/products/import');
   });
 });
