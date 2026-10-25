@@ -879,11 +879,11 @@ describe('ProductFormComponent New Product layout (issue #892)', () => {
     expect(headings(host)).toEqual(['Product details', 'Opening inventory', 'Reordering', 'GST rule']);
 
     // One GST choice, mounted once, and one action row - after it.
-    expect(host.querySelectorAll('app-product-create-gst-rule').length).toBe(1);
-    expect(host.querySelectorAll('app-product-gst-rule').length).toBe(1);
+    expect(host.querySelectorAll('app-product-create-gst-rule')).toHaveLength(1);
+    expect(host.querySelectorAll('app-product-gst-rule')).toHaveLength(1);
 
     const actions = host.querySelectorAll('[data-testid="product-form-actions"]');
-    expect(actions.length).toBe(1);
+    expect(actions).toHaveLength(1);
     const gstPanel = host.querySelector('app-product-create-gst-rule')!;
     expect(gstPanel.compareDocumentPosition(actions[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(Array.from(actions[0].querySelectorAll('button, a')).map((control) => control.textContent?.trim())).toEqual([
@@ -966,7 +966,7 @@ describe('ProductFormComponent New Product layout (issue #892)', () => {
     expect(form.contains(submit)).toBe(false);
     // The GST choice owns controls, so it stays out of the product form rather than nesting one.
     expect(form.querySelector('app-product-create-gst-rule')).toBeNull();
-    expect(host.querySelectorAll('form').length).toBe(1);
+    expect(host.querySelectorAll('form')).toHaveLength(1);
 
     component.form.name = 'New Snack';
     fixture.detectChanges();
