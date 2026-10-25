@@ -24,17 +24,35 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
     }
 
     /// <summary>
-    /// The monotonic conditional write (issue #891): one <c>UPDATE</c> whose <c>WHERE</c> clause
-    /// <em>is</em> the comparison, so two concurrent syncs cannot read, judge and overwrite the
-    /// stored coverage in a way that loses the newer of them.
+    /// The monotonic, credential-fenced conditional write (issue #891): one <c>UPDATE</c> whose
+    /// <c>WHERE</c> clause <em>is</em> both comparisons, so two concurrent syncs cannot read, judge
+    /// and overwrite the stored coverage in a way that loses the newer of them, and no run can
+    /// record coverage against credentials it cannot have used.
     ///
-    /// <para>Coverage is ordered by <c>(credential revision, started instant)</c> and only a
+    /// <para><strong>The credential fence.</strong> The statement's first condition is that the
+    /// business's stored connection <em>still</em> holds exactly
+    /// <paramref name="credentialRevision"/> - the revision the caller read before its first Nayax
+    /// call. <c>BusinessNayaxConnection.CredentialRevision</c> only ever increases
+    /// (<c>EfNayaxConnectionStore.SaveCredentialAsync</c> increments it in the database, nothing
+    /// lowers it and there is no path that deletes the row), so a stored revision equal to the
+    /// offered one proves that no credential save landed between that read and this statement.
+    /// That, and not the caller's read on its own, is what makes the claim's provenance verified:
+    /// every Nayax request the operation made in between therefore resolved its credentials from
+    /// that same revision. A save that landed anywhere in that window - including after the caller
+    /// read the revision but before the request captured the credentials it authenticated with -
+    /// moves the stored revision past the offered one, matches no row, and leaves the coverage
+    /// unrecorded rather than misattributed. It is a fence rather than a separate check precisely
+    /// because the comparison and the write are one statement: a save committed while this
+    /// statement runs cannot slip between them.</para>
+    ///
+    /// <para>Coverage is then ordered by <c>(credential revision, started instant)</c> and only a
     /// strictly greater pair wins. A row with no coverage at all is below every pair, so the first
     /// success always lands; a higher revision always wins, because a credential save supersedes
     /// everything the previous token proved; at the same revision only a later start instant wins,
     /// so the sync that started earlier can never move the timestamp backwards; and a lower revision
-    /// never wins, which is what stops a run that began before a credential save from marking the
-    /// new credentials fresh.</para>
+    /// never wins, which refuses an old-revision completion even in the one case the fence cannot
+    /// speak about - a run whose own revision is still the stored one while stored coverage is
+    /// newer.</para>
     ///
     /// <para>It is deliberately the same shape as
     /// <c>EfNayaxConnectionStore.TryApplyStatusResultAsync</c>, including the set-based read-only
@@ -43,6 +61,10 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
     /// explicitly (issue #681). A support session cannot reach this method today - it resolves no
     /// Nayax credentials, so the sync this follows cannot run at all - and the guard is what keeps
     /// that true without depending on it.</para>
+    ///
+    /// <para>Both halves are scoped by the central tenant query filters, the connection subquery
+    /// included: the fence reads the <em>caller's own</em> business's connection, and a caller whose
+    /// business could not be resolved matches no connection and no machine.</para>
     /// </summary>
     public async Task<bool> TryRecordSuccessfulSyncAsync(
         long localMachineId, DateTime startedAtUtc, int credentialRevision, CancellationToken cancellationToken)
@@ -51,6 +73,8 @@ public sealed class EfMachineRestockSyncCoverageStore : IMachineRestockSyncCover
 
         var updated = await _db.Machines
             .Where(machine => machine.Id == localMachineId
+                && _db.BusinessNayaxConnections.Any(
+                    connection => connection.CredentialRevision == credentialRevision)
                 && (machine.LastSuccessfulRestockSyncCredentialRevision == null
                     || machine.LastSuccessfulRestockSyncCredentialRevision < credentialRevision
                     || (machine.LastSuccessfulRestockSyncCredentialRevision == credentialRevision

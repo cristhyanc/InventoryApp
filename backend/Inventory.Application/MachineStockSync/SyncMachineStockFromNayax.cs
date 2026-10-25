@@ -29,9 +29,21 @@ namespace Inventory.Application.MachineStockSync;
 /// existed when it began - and it is bound to the Nayax credential revision the operation
 /// authenticated under. A fetch that threw, imported partially or never built a preview records
 /// nothing at all, and a successful fetch that found no alert records coverage exactly as one that
-/// found ten does: an empty answer from Nayax is an answer.
+/// found ten does: an empty answer from Nayax is an answer.</para>
 ///
-/// It is never a claim of complete historical coverage. The Lynx contract for
+/// <para>The binding to the credentials is <em>verified</em> rather than assumed. This use case
+/// does not resolve the credentials its Nayax calls authenticate with - the
+/// <c>INayaxRequestCredentialProvider</c> behind <see cref="INayaxLynxClient"/> does, per call - so
+/// the revision read here before the first of those calls is a candidate, not evidence. What makes
+/// it evidence is the fence inside
+/// <see cref="IMachineRestockSyncCoverageStore.TryRecordSuccessfulSyncAsync"/>: that write lands
+/// only while the stored connection still holds exactly this revision, and a credential revision
+/// only ever increases, so the equality proves no save landed between the read below and the write -
+/// and therefore that every Nayax request in between resolved that same revision. A save anywhere in
+/// that window, including one that landed before the request captured its credentials, leaves the
+/// coverage unrecorded.</para>
+///
+/// <para>It is never a claim of complete historical coverage. The Lynx contract for
 /// <c>GET /v1/machines/{MachineID}/lastAlerts</c> is "the most recent alerts" and declares neither a
 /// range nor a completeness guarantee (Nayax developer portal, Get Machine Last Alerts), so what is
 /// recorded is when this workflow last succeeded and nothing more.</para>
@@ -83,13 +95,15 @@ public sealed class SyncMachineStockFromNayax
 
         // Both taken before the first Nayax call (issue #891). The instant is what the coverage
         // claim is stamped with, because this fetch can only account for alerts that already
-        // existed when it began. The revision is the credentials this operation is about to run
-        // under: reading it afterwards would let a save that landed mid-operation be recorded as if
-        // this run had proved the new token, and the conditional write refuses a stale revision
-        // rather than guessing - so a credential replaced while the sync ran simply leaves the
-        // coverage unrecorded.
+        // existed when it began. The revision is the candidate the coverage write is fenced on: it
+        // is not the snapshot the credential provider will resolve for each Nayax call below, and is
+        // never treated as one. What binds the two together is the fence inside that write, which
+        // accepts the claim only while the stored revision is still this one - so a credential saved
+        // at any point while the sync ran, before or after a request captured its credentials,
+        // leaves the coverage unrecorded instead of misattributed. Reading it here rather than
+        // afterwards is what gives the fence a window to close.
         var startedAtUtc = _clock.UtcNow;
-        var credentialRevision = (await _connections.FindAsync(cancellationToken))?.CredentialRevision;
+        var candidateCredentialRevision = (await _connections.FindAsync(cancellationToken))?.CredentialRevision;
 
         var machineId = machine.RequiredNayaxMachineId;
         var alerts = await _nayax.GetMachineLastAlertsAsync(machineId, cancellationToken);
@@ -137,7 +151,7 @@ public sealed class SyncMachineStockFromNayax
             machine, newAlerts.Count, fromDateGmt, includeReconciled, cancellationToken);
 
         await RecordSuccessfulFetchAsync(
-            machine.LocalMachineId, startedAtUtc, credentialRevision, cancellationToken);
+            machine.LocalMachineId, startedAtUtc, candidateCredentialRevision, cancellationToken);
 
         return preview;
     }
@@ -155,11 +169,19 @@ public sealed class SyncMachineStockFromNayax
     ///
     /// <para>A run with no credential revision read nothing from a stored connection, so there are
     /// no credentials to bind a claim to and nothing is recorded.</para>
+    ///
+    /// <para>The write itself decides whether the claim is really this operation's to make: it is
+    /// fenced on <paramref name="candidateCredentialRevision"/> still being the stored one, and a
+    /// refusal is reported as <see langword="false"/> rather than as a failure, because coverage
+    /// that is left unrecorded is the safe answer.</para>
     /// </summary>
     private async Task RecordSuccessfulFetchAsync(
-        long localMachineId, DateTime startedAtUtc, int? credentialRevision, CancellationToken cancellationToken)
+        long localMachineId,
+        DateTime startedAtUtc,
+        int? candidateCredentialRevision,
+        CancellationToken cancellationToken)
     {
-        if (credentialRevision is not { } revision)
+        if (candidateCredentialRevision is not { } revision)
         {
             return;
         }

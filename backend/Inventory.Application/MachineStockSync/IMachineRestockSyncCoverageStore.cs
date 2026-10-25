@@ -60,16 +60,29 @@ public interface IMachineRestockSyncCoverageStore
     /// <paramref name="localMachineId"/> fully succeeded, but only while that is really newer
     /// coverage than what is stored.
     ///
-    /// <para><strong>The comparison and the write are one statement.</strong> Coverage is ordered by
-    /// <c>(credential revision, started instant)</c> and the stored row is advanced only when the
-    /// offered pair is strictly greater:</para>
+    /// <para><strong>The comparisons and the write are one statement</strong>, and there are two of
+    /// them.</para>
+    ///
+    /// <para>The first is the <strong>credential fence</strong>: the claim is accepted only while
+    /// the business's stored Nayax connection still holds exactly
+    /// <paramref name="credentialRevision"/>. A credential revision only ever increases, so that
+    /// equality is what <em>proves</em> no credential save landed between the caller's read of that
+    /// revision - taken before its first Nayax call - and this write, and therefore that every Nayax
+    /// request of the operation authenticated under the revision being recorded. An implementation
+    /// must not take the caller's word for the provenance: a save that landed anywhere in that
+    /// window, including before the request captured the credentials it actually used, leaves the
+    /// coverage unrecorded rather than misattributed.</para>
+    ///
+    /// <para>The second orders coverage by <c>(credential revision, started instant)</c>, and the
+    /// stored row is advanced only when the offered pair is strictly greater:</para>
     /// <list type="bullet">
     ///   <item>a higher <paramref name="credentialRevision"/> than the stored one always wins - the
     ///   credentials were replaced and this is the first success under the new ones;</item>
     ///   <item>at the same revision, a later <paramref name="startedAtUtc"/> wins, so two
     ///   concurrent syncs cannot let the one that started earlier move the timestamp backwards;</item>
-    ///   <item>a <em>lower</em> revision never wins, which is what stops an operation that began
-    ///   before a credential save from marking the new credentials fresh.</item>
+    ///   <item>a <em>lower</em> revision never wins, which refuses an old-revision completion in the
+    ///   one case the fence cannot speak about - stored coverage that is already newer than what
+    ///   this operation can claim.</item>
     /// </list>
     ///
     /// <para>It records nothing else: no event, no inventory quantity, no cost and no connection
@@ -81,13 +94,15 @@ public interface IMachineRestockSyncCoverageStore
     /// The instant the operation started, taken before its first Nayax call.
     /// </param>
     /// <param name="credentialRevision">
-    /// The Nayax credential revision the operation authenticated under.
+    /// The Nayax credential revision read before the operation's first Nayax call, which the fence
+    /// above verifies is still the stored one.
     /// </param>
     /// <param name="cancellationToken">The request's cancellation token.</param>
     /// <returns>
     /// <see langword="true"/> when the stored coverage was advanced, and <see langword="false"/>
-    /// when it was left alone - because the machine is not the caller's business's, or because what
-    /// is stored is already the same or newer.
+    /// when it was left alone - because the machine is not the caller's business's, because the
+    /// credentials have been replaced since the operation read their revision, or because what is
+    /// stored is already the same or newer.
     /// </returns>
     Task<bool> TryRecordSuccessfulSyncAsync(
         long localMachineId, DateTime startedAtUtc, int credentialRevision, CancellationToken cancellationToken);

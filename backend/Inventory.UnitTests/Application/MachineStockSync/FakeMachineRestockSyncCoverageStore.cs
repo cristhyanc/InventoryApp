@@ -11,6 +11,14 @@ namespace InventoryApi.Tests.Application.MachineStockSync;
 /// real <c>UPDATE ... WHERE</c> behaves identically lives in the integration tests; this keeps the
 /// unit tests honest about which pair they offer.</para>
 ///
+/// <para>It deliberately does <strong>not</strong> reproduce the adapter's credential fence - the
+/// condition that the business's stored connection still holds the offered revision - because there
+/// is no stored connection here to fence on, and a fake that answered that question from a field of
+/// its own would be proving its own arithmetic. That part of the contract is established only
+/// relationally, against the real connection row and the real conditional statement, in
+/// <c>MachineRestockSyncCoverageTests</c>; nothing that passes against this double may be read as
+/// evidence about it.</para>
+///
 /// <para>It records every attempt in <see cref="Attempts"/>, including the refused ones, because
 /// several of the properties under test are about a write that must <em>not</em> happen: a failed
 /// fetch records nothing at all, and an operation that completed under replaced credentials must not

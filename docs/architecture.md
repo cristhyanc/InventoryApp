@@ -13148,32 +13148,57 @@ when this workflow last succeeded and nothing more. A machine with nothing recor
 **"No recorded sync"**, not as "never synced": machines restocked before this metadata existed have
 no record of syncs that really happened, and every machine starts there.
 
-**Where it is stored, and the monotonic conditional write.** Two additive nullable columns on
-`Machines` (`AddMachineRestockSyncCoverage`): `LastSuccessfulRestockSyncStartedAtUtc`, the instant
-the operation *started* — a fetch can only have accounted for alerts that already existed when it
-began — and `LastSuccessfulRestockSyncCredentialRevision`, the
-`BusinessNayaxConnection.CredentialRevision` it authenticated under. They sit on the machine row
-rather than in a table of their own precisely so the write can be one statement:
+**Where it is stored, and the monotonic, credential-fenced conditional write.** Two additive
+nullable columns on `Machines` (`AddMachineRestockSyncCoverage`):
+`LastSuccessfulRestockSyncStartedAtUtc`, the instant the operation *started* — a fetch can only have
+accounted for alerts that already existed when it began — and
+`LastSuccessfulRestockSyncCredentialRevision`, the `BusinessNayaxConnection.CredentialRevision` it
+authenticated under. They sit on the machine row rather than in a table of their own precisely so the
+write can be one statement:
 `Inventory.Infrastructure.Persistence.EfMachineRestockSyncCoverageStore.TryRecordSuccessfulSyncAsync`
-is a single conditional `UPDATE ... WHERE` whose predicate *is* the comparison, the same shape
+is a single conditional `UPDATE ... WHERE` whose predicate *is* both comparisons, the same shape
 `EfNayaxConnectionStore.TryApplyStatusResultAsync` already uses, with
 `SetBasedWriteEnforcer.RequireWritableScope` applied because an `ExecuteUpdate` never reaches
-`BusinessOwnershipEnforcer` (issue #681). Coverage is ordered by `(revision, started instant)` and
-only a strictly greater pair wins:
+`BusinessOwnershipEnforcer` (issue #681).
+
+The first condition is the **credential fence**: the business's stored connection must *still* hold
+exactly the revision being recorded. `CredentialRevision` only ever increases — the save increments
+it in the database, nothing lowers it and nothing deletes the row — so that equality is what
+*proves* no credential save landed between the use case's revision read and this write, and
+therefore that every Nayax request of the operation resolved its credentials from that same
+revision.
+
+The second orders coverage by `(revision, started instant)`, and only a strictly greater pair wins:
 
 - a higher revision always wins — the credentials were replaced and this is the first success under
   the new ones;
 - at the same revision, only a later start instant wins, so two concurrent syncs cannot let the one
   that started earlier move the timestamp backwards;
-- a *lower* revision never wins, which is what stops a run that began before a credential save from
-  marking the new credentials fresh.
+- a *lower* revision never wins, which refuses an old-revision completion in the one case the fence
+  cannot speak about — stored coverage already newer than what the operation can claim.
 
-The revision the use case binds its claim to is read **before** its first Nayax call, from
-`INayaxConnectionStore.FindAsync` (the status and revision, never the token). So a credential saved
-while a sync runs leaves that sync's coverage simply unrecorded rather than wrongly advanced, and
-the reminder keeps warning — the safe direction. Reading side, the same rule applies through
-`MachineRestockSyncReminderPolicy.IsCoverageCurrent`: coverage stamped with any revision other than
-the connection's current one is read as no recorded sync at all.
+**Why the fence and not the read.** `SyncMachineStockFromNayax` reads the revision before its first
+Nayax call, from `INayaxConnectionStore.FindAsync` (the status and revision, never the token) — but
+that read is *not* the credential snapshot the operation authenticates with. The credentials of each
+ordinary Nayax call are resolved per call by `INayaxRequestCredentialProvider`
+([Per-business Nayax credentials](#per-business-nayax-credentials-issue-520)), inside the call, so a
+save landing after the use case's read and before the request captured its credentials would have the
+request running under revision R+1 while the use case still held R. The use case cannot see that, and
+the pre-read on its own is therefore a *candidate* revision rather than provenance evidence. The
+fence is what turns it into evidence: a save anywhere in that window — before or after the request
+authenticated — moves the stored revision past the candidate, matches no row, and leaves the coverage
+unrecorded rather than misattributed. The reminder keeps warning, which is the safe direction.
+Reading side, the same rule applies through `MachineRestockSyncReminderPolicy.IsCoverageCurrent`:
+coverage stamped with any revision other than the connection's current one is read as no recorded
+sync at all.
+
+Both interleavings are pinned relationally in
+`backend/Inventory.IntegrationTests/Application/MachineStockSync/MachineRestockSyncCoverageTests.cs`,
+with the credentials replaced by the real connection store and the request's own revision resolved by
+the real credential provider at the moment the request happens, and with no coverage pre-seeded — so
+the refusal can only be the fence. The earlier/later completion cases are exercised there as
+genuinely overlapping operations held at barriers inside their own Nayax request, across two
+businesses whose machines share one provider number.
 
 **Recording the claim can fail without costing the operator their reconciliation.** The coverage
 write is the last thing `SyncMachineStockFromNayax` does, and a failure of it is swallowed: the
