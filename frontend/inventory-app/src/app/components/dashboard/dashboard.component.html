@@ -36,6 +36,13 @@
   <app-legacy-business-settings-prompt></app-legacy-business-settings-prompt>
 
   <!--
+    The machine restock-sync reminder (issue #891). It owns its own capability decision, request
+    and lifecycle, so this page only places it: a failure inside it leaves every local section
+    below usable, which is the whole reason it is not part of the summary read.
+  -->
+  <app-machine-restock-sync-reminder></app-machine-restock-sync-reminder>
+
+  <!--
     Two different statements, never both (issue #661): in a support view the synchronization is
     deliberately not attempted, so saying it failed would describe an attempt that never happened.
   -->

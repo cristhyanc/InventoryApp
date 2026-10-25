@@ -85,8 +85,13 @@ public class RepointOperatingExpenseMachinesMigrationTests
         // The machine each expense now names, read back through its local machine's provider number:
         // every expense is on the same machine it was recorded against, business 2's machine 7 is
         // its own machine and not business 1's, and the whole-business expense is still whole-business.
-        var machines = await after.Machines.ToDictionaryAsync(
-            machine => machine.Id, machine => (machine.BusinessId, machine.ExternalMachineId));
+        // Projected rather than materialised whole: this context is pinned to an older migration,
+        // so selecting every column of the entity would read columns a later migration added
+        // (issue #891's restock-sync coverage, for one) and fail on a schema that is correct for
+        // the point in history under test.
+        var machines = await after.Machines
+            .Select(machine => new { machine.Id, machine.BusinessId, machine.ExternalMachineId })
+            .ToDictionaryAsync(machine => machine.Id, machine => (machine.BusinessId, machine.ExternalMachineId));
         var expenses = await after.OperatingExpenses
             .OrderBy(expense => expense.Id)
             .Select(expense => new { expense.BusinessId, expense.Description, expense.MachineId })

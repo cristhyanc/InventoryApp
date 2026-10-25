@@ -13,6 +13,7 @@ using InventoryApi.DTOs;
 using InventoryApi.Tests.Application.Access;
 using InventoryApi.Tests.Application.Gst;
 using InventoryApi.Tests.Application.Machines;
+using InventoryApi.Tests.Application.MachineStockSync;
 using InventoryApi.Tests.Application.Nayax;
 using InventoryApi.Tests.Application.SupportSessions;
 using InventoryApi.Tests.Application.Time;
@@ -88,7 +89,12 @@ public class MachinesControllerTests
                 new ResolveMachineProductPricing(NoAgreementSiteFacts(), Time.Calendar)),
             new GetMachineLatestSales(nayaxClient),
             new SyncMachineStockFromNayax(
-                nayaxClient, store, FakeNayaxProductLinkStore.EveryIdLinkedToItself()),
+                nayaxClient,
+                store,
+                FakeNayaxProductLinkStore.EveryIdLinkedToItself(),
+                Time.Clock,
+                new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
+                new FakeMachineRestockSyncCoverageStore()),
             new ApplyMachineStockSync(store),
             new ResolveMachineStockDuplicate(store),
             new ResolveMachineStockEventsAsAlreadyRecorded(store),

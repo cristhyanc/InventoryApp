@@ -6,6 +6,8 @@ using Inventory.Domain.Nayax;
 using Inventory.Infrastructure.Persistence;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using InventoryApi.Tests.Application.Nayax;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -77,7 +79,12 @@ public class SyncRestockTimestampContractTests
         await using var db = Context(connection);
         var store = new EfMachineStockEventStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db));
         var useCase = new SyncMachineStockFromNayax(
-            NoNewAlertsClient().Object, store, new EfNayaxProductLinkStore(db));
+            NoNewAlertsClient().Object,
+            store,
+            new EfNayaxProductLinkStore(db),
+            new FakeClock(new DateTime(2026, 9, 2, 0, 0, 0, DateTimeKind.Utc)),
+            new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
+            new FakeMachineRestockSyncCoverageStore());
 
         var preview = await useCase.Handle(new MachineIdentity(LocalMachineId: 31, NayaxMachineId: MachineId), CancellationToken.None);
         var evt = Assert.Single(preview.Events);

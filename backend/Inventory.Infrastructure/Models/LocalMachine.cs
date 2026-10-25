@@ -72,4 +72,42 @@ public class LocalMachine : IBusinessOwned
     /// </summary>
     [JsonIgnore]
     public string? ExternalMachineId { get; set; }
+
+    /// <summary>
+    /// When the last fully successful <em>Sync Restock</em> operation for this machine
+    /// <strong>started</strong>, or <c>null</c> when none is recorded (issue #891).
+    ///
+    /// <para>The start instant rather than the completion instant, because a fetch can only have
+    /// accounted for alerts that already existed when it began. It is written by
+    /// <c>SyncMachineStockFromNayax</c> alone, only after that workflow's alert read, import and
+    /// preview construction have all succeeded, and only ever forwards - see
+    /// <c>IMachineRestockSyncCoverageStore.TryRecordSuccessfulSyncAsync</c> for the monotonic
+    /// conditional write.</para>
+    ///
+    /// <para><strong><c>null</c> is "no recorded sync", not "never synced".</strong> Every machine
+    /// that existed when this column was added starts null, including machines whose restocks were
+    /// being synced perfectly well; nothing backfills it, and nothing infers it from an event's
+    /// <c>CreatedAt</c>/<c>ProcessedAt</c>, from a latest-sales or catalogue sync, or from a machine
+    /// stock count. It is also never a claim of complete historical coverage: Nayax's last-alerts
+    /// read is an upstream rolling window, so this says when the workflow last succeeded and nothing
+    /// more.</para>
+    ///
+    /// <para>Integration state, like <see cref="ExternalMachineId"/>: deliberately off the machine
+    /// wire contract, and never a value a request chooses.</para>
+    /// </summary>
+    [JsonIgnore]
+    public DateTime? LastSuccessfulRestockSyncStartedAtUtc { get; set; }
+
+    /// <summary>
+    /// The <c>BusinessNayaxConnection.CredentialRevision</c> that successful fetch authenticated
+    /// under, or <c>null</c> when none is recorded (issue #891).
+    ///
+    /// <para>A credential save supersedes everything the previous token proved, so coverage stamped
+    /// with an older revision is read as no recorded sync at all - that is what stops an operation
+    /// that completed under replaced credentials from marking the new ones fresh. The pair
+    /// <c>(revision, started instant)</c> is also the ordering the conditional write advances
+    /// along.</para>
+    /// </summary>
+    [JsonIgnore]
+    public int? LastSuccessfulRestockSyncCredentialRevision { get; set; }
 }

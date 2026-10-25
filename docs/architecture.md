@@ -1628,6 +1628,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | --- | --- | --- | --- | --- | --- |
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` **and** `Inventory.Operate` (issue #681) | ✔ | ✔ | ✔ |
+| Home Dashboard → machine restock-sync reminder (issue #891) | `GET api/machine-restock-sync/reminder` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
 | Pick List → record a refill (issue #743) | `POST api/pick-list/refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/local-machines` (the business's own machine records, issue #740: list, read, create, rename, deactivate, reactivate), `api/sites`, `GET api/sites/list` (the light site list the site pickers fill from, issue #841) | `Inventory.Operate` | ✔ | ✔ | ✔ |
@@ -7988,6 +7989,15 @@ credentials and those two cards are the only part of this summary the live fleet
 read is not attempted at all in that state, and every other section is the real local figure. See
 [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
 
+**The machine restock-sync reminder is deliberately not part of this contract** (issue #891). The
+Dashboard's reminder banner reads `GET /api/machine-restock-sync/reminder`, its own endpoint with
+its own capability, because it answers a different question from a different source: it is a purely
+local aggregate over the business's machines and their imported restock events, it needs
+`Inventory.Operate` rather than `Dashboard.View`, and its failure must leave every card below it
+usable. Adding it to this summary would have coupled a local read to the live fleet read, and
+widened who sees restock work to every role that may open the Dashboard. See
+[Dashboard reminder for overdue machine restock sync](#dashboard-reminder-for-overdue-machine-restock-sync-issue-891).
+
 Since issue #726, `needsRefill` is additionally withheld - and `needsOrdering` is counted over
 storage alone and says so - for a business whose Nayax connection is unusable or whose Nayax account
 has not granted the fleet reads. The summary is answered rather than refused in that state. See
@@ -11252,6 +11262,8 @@ machines it refills.
 | `Name` | required, and otherwise unconstrained. Deliberately **not** unique per business: two machines in one corridor may legitimately be called "Level 3", and nothing resolves a machine by its name |
 | `IsActive` | whether the machine is in service. A machine with history is deactivated rather than deleted; a machine nothing refers to can be deleted (issue #896, below) |
 | `ExternalMachineId` | the business's sales provider's own id for the machine, as **opaque text** bounded by `ExternalId.MaxLength`, or `null` when the provider names none. For Nayax it is written only through `Inventory.Domain.Providers.NayaxExternalId` |
+| `LastSuccessfulRestockSyncStartedAtUtc` | when the last fully successful **Sync Restock** for this machine *started*, or `null` for "no recorded sync" (issue #891). Integration state like `ExternalMachineId`: off the machine wire contract, never a value a request chooses, and written only by the monotonic conditional update described in [Dashboard reminder for overdue machine restock sync](#dashboard-reminder-for-overdue-machine-restock-sync-issue-891) |
+| `LastSuccessfulRestockSyncCredentialRevision` | the `BusinessNayaxConnection.CredentialRevision` that fetch authenticated under, or `null` (issue #891). Coverage stamped with a superseded revision is read as no recorded sync at all |
 
 `(BusinessId, ExternalMachineId)` carries a **filtered** unique index, `WHERE "ExternalMachineId" IS
 NOT NULL`, for the two reasons the product and category columns do: "this machine has no provider id"
@@ -13210,7 +13222,172 @@ removed (issue #306).
 
 Scheduling this sync automatically, writing to Nayax, auto-creating purchases/receipts to cover an
 insufficient-storage shortfall, and auto-deciding the accounting/tax treatment of a negative
-discrepancy are all explicitly out of scope for this feature.
+discrepancy are all explicitly out of scope for this feature. Issue #891 adds a Dashboard
+**reminder** that this sync is overdue, which is not a schedule: it only tells an operator that the
+explicit action above is waiting for them.
+
+### Dashboard reminder for overdue machine restock sync (issue #891)
+
+Sync Restock above is explicit: nothing imports a machine's stock-adjustment alerts until an
+operator opens that machine and asks. Forgetting it is therefore silent, and the storage inventory
+drifts in exactly the way that looks like missing product rather than missing bookkeeping — an
+inventory count found restocks that had not been synced for a week. This feature is the reminder,
+and only the reminder: it never syncs, applies an event, resolves a duplicate or changes an
+inventory quantity, and opening the Dashboard, following one of its links or opening a preview
+acknowledges nothing.
+
+**What makes a machine overdue: three business calendar days, not 72 hours.**
+`Inventory.Domain.Nayax.MachineRestockSyncReminderPolicy` owns every rule here, and it compares
+business calendar *dates* in the current business's own IANA timezone (issue #499), derived through
+`IBusinessCalendar`. A daylight-saving transition that makes a day 23 or 25 hours long therefore
+cannot move the boundary, and an operator who syncs each morning is never warned because the clocks
+changed. `OverdueAfterDays` is `3`, which is also the Sync Restock dialog's own From-date default
+window, so the reminder and the dialog describe one window rather than two.
+
+**Successful coverage is recorded, never inferred.** `SyncMachineStockFromNayax` records that a run
+succeeded only after its alert read, its import and its preview construction have *all* completed.
+A run that threw, imported partially or never built a preview records nothing at all; a run that
+succeeded and found no alert records coverage exactly as one that found ten, because an empty
+answer from Nayax is an answer. Nothing else writes it: it is never derived from a
+`NayaxMachineStockEvent`'s `CreatedAt`/`ProcessedAt`, from the latest-sales or catalogue sync, or
+from a machine stock count, and no migration backfills it. **It is also never a claim of complete
+historical coverage** — the Lynx contract for `GET /v1/machines/{MachineID}/lastAlerts` is "the most
+recent alerts" and declares neither a range nor a completeness guarantee, so what is recorded is
+when this workflow last succeeded and nothing more. A machine with nothing recorded is published as
+**"No recorded sync"**, not as "never synced": machines restocked before this metadata existed have
+no record of syncs that really happened, and every machine starts there.
+
+**Where it is stored, and the monotonic, credential-fenced conditional write.** Two additive
+nullable columns on `Machines` (`AddMachineRestockSyncCoverage`):
+`LastSuccessfulRestockSyncStartedAtUtc`, the instant the operation *started* — a fetch can only have
+accounted for alerts that already existed when it began — and
+`LastSuccessfulRestockSyncCredentialRevision`, the `BusinessNayaxConnection.CredentialRevision` it
+authenticated under. They sit on the machine row rather than in a table of their own precisely so the
+write can be one statement:
+`Inventory.Infrastructure.Persistence.EfMachineRestockSyncCoverageStore.TryRecordSuccessfulSyncAsync`
+is a single conditional `UPDATE ... WHERE` whose predicate *is* both comparisons, the same shape
+`EfNayaxConnectionStore.TryApplyStatusResultAsync` already uses, with
+`SetBasedWriteEnforcer.RequireWritableScope` applied because an `ExecuteUpdate` never reaches
+`BusinessOwnershipEnforcer` (issue #681).
+
+The first condition is the **credential fence**: the business's stored connection must *still* hold
+exactly the revision being recorded. `CredentialRevision` only ever increases — the save increments
+it in the database, nothing lowers it and nothing deletes the row — so that equality is what
+*proves* no credential save landed between the use case's revision read and this write, and
+therefore that every Nayax request of the operation resolved its credentials from that same
+revision.
+
+The second orders coverage by `(revision, started instant)`, and only a strictly greater pair wins:
+
+- a higher revision always wins — the credentials were replaced and this is the first success under
+  the new ones;
+- at the same revision, only a later start instant wins, so two concurrent syncs cannot let the one
+  that started earlier move the timestamp backwards;
+- a *lower* revision never wins, which refuses an old-revision completion in the one case the fence
+  cannot speak about — stored coverage already newer than what the operation can claim.
+
+**Why the fence and not the read.** `SyncMachineStockFromNayax` reads the revision before its first
+Nayax call, from `INayaxConnectionStore.FindAsync` (the status and revision, never the token) — but
+that read is *not* the credential snapshot the operation authenticates with. The credentials of each
+ordinary Nayax call are resolved per call by `INayaxRequestCredentialProvider`
+([Per-business Nayax credentials](#per-business-nayax-credentials-issue-520)), inside the call, so a
+save landing after the use case's read and before the request captured its credentials would have the
+request running under revision R+1 while the use case still held R. The use case cannot see that, and
+the pre-read on its own is therefore a *candidate* revision rather than provenance evidence. The
+fence is what turns it into evidence: a save anywhere in that window — before or after the request
+authenticated — moves the stored revision past the candidate, matches no row, and leaves the coverage
+unrecorded rather than misattributed. The reminder keeps warning, which is the safe direction.
+Reading side, the same rule applies through `MachineRestockSyncReminderPolicy.IsCoverageCurrent`:
+coverage stamped with any revision other than the connection's current one is read as no recorded
+sync at all.
+
+Both interleavings are pinned relationally in
+`backend/Inventory.IntegrationTests/Application/MachineStockSync/MachineRestockSyncCoverageTests.cs`,
+with the credentials replaced by the real connection store and the request's own revision resolved by
+the real credential provider at the moment the request happens, and with no coverage pre-seeded — so
+the refusal can only be the fence. The earlier/later completion cases are exercised there as
+genuinely overlapping operations held at barriers inside their own Nayax request, across two
+businesses whose machines share one provider number.
+
+**Recording the claim can fail without costing the operator their reconciliation.** The coverage
+write is the last thing `SyncMachineStockFromNayax` does, and a failure of it is swallowed: the
+alerts are already imported and the preview is the operator's working list. The unrecorded coverage
+leaves the Dashboard warning that the machine is overdue, which is a reminder too many rather than a
+machine quietly presented as fresh.
+
+**What counts as pending work.** Exactly what the Sync Restock working list already treats as
+outstanding: an imported event that is still `Unprocessed` and not explicitly reconciled as already
+recorded manually. A needs-review event, an insufficient-storage event and an unresolved
+possible-duplicate event therefore all count — each is work an operator still has to do — while an
+applied event and one reconciled as already recorded manually do not. **There is no date bound**: an
+event that ages out of the three-day window is still unresolved work, and letting the window clear it
+is the silent disappearance this reminder exists to prevent. Because that is also wider than the
+dialog's default From date, a machine with pending work older than that date is flagged
+`hasPendingWorkBeforeDefaultFrom`, and the banner tells the operator to clear the From date or move
+it back to the oldest pending date — otherwise the work would stay hidden inside the dialog they
+were just sent to. The counts describe **persisted** facts only: a zero says nothing about alerts
+Nayax holds that nobody has fetched, which is why an overdue fetch and pending events are reported as
+two separate conditions and either one alone puts a machine on the banner.
+
+**The Dashboard read is local, and it is read-only.**
+`Inventory.Application.MachineStockSync.GetMachineRestockSyncReminder` makes exactly two local
+reads — the business's own connection record without its token, and one aggregate query over the
+machines and their imported events (`IMachineRestockSyncCoverageStore.GetProviderMachineCoverageAsync`)
+— and no Nayax request at all. It decrypts no credential, calls no per-machine endpoint, never
+invokes the mutation-capable preview endpoint, and writes nothing. The aggregate is two statements
+rather than a join, because the two sides are keyed differently: a machine by `Machines.Id`, an
+event by the provider's machine number, with `Inventory.Domain.Providers.NayaxExternalId` as the one
+translation (see [Local machines and external machine ids](#local-machines-and-external-machine-ids-issue-740)).
+Both halves are scoped by the central tenant query filters, so two businesses whose machines
+legitimately share provider number 900 never see one another's coverage or counts.
+
+**Three businesses are shown nothing at all, each with its own stable reason.** The response is a
+union — `MachineRestockSyncReminderDto`, or `HiddenMachineRestockSyncReminderDto` with
+`applicable: false` and a `reason` code — rather than a reminder with an empty machine list, for the
+same reason `UnavailableDashboardSectionDto` is a union: an empty list reads as "every machine is up
+to date", and that is a claim about machines.
+
+- `SupportView` — a support session resolves no Nayax credentials and may take no action
+  (issue #551), so a reminder to go and sync would name work its reader cannot do. The decision is
+  taken from `IBusinessScope.State`, the very state `NayaxRequestCredentialProvider` refuses in, and
+  it is made before anything is read.
+- `NayaxNotConnected` — the business has no credentials `NayaxConnectionStatusGate` allows. Nayax is
+  an optional add-on, so this is an ordinary property of a working business, not an error.
+- `NoProviderMachines` — the business's sales provider names none of its machines. A machine an
+  operator created themselves carries no `ExternalMachineId` and so has no provider restock sync to
+  be overdue for; such machines are absent from the aggregate entirely.
+
+**Whether Sync Restock will actually work is reported honestly, from local state alone.** Whether
+the Lynx machine-alerts permission is granted can only be settled by a Nayax call, and this reminder
+makes none; what is stored is the connection status and whether the last completed check left the
+machine-scoped checks unverified (issue #537). So `syncAvailability` has exactly two values:
+`Confirmed` for a `Ready` connection whose machine checks were verified, and `NotConfirmed` for
+everything else the gate allows — `PendingPermissions`, or `Ready` with the machine checks still
+pending. With `NotConfirmed` the banner says Sync Restock may be unavailable and points at the Nayax
+connection (as a link for a member with `Integration.Manage`, as "ask a business Owner" otherwise)
+instead of presenting a working action.
+
+**Authorization.** `InventoryApi.Controllers.MachineRestockSyncRemindersController` is a thin
+binding over the use case and declares `Inventory.Operate` (class 1 of issue #525) — the capability
+Sync Restock itself requires, because a role that may not reconcile restocks has nothing to do with
+a reminder to go and reconcile them. It takes no business, machine or site identifier from the
+caller. It is its own controller rather than an action on `DashboardController` for exactly the
+reason `ProductPurchaseCostsController` is: a controller declares one capability for all its
+actions, and putting this on the Dashboard's controller would have widened it to `Dashboard.View`.
+
+**Frontend.** `components/dashboard/machine-restock-sync-reminder/MachineRestockSyncReminderComponent`
+is a focused child component the Dashboard composes with
+`<app-machine-restock-sync-reminder></app-machine-restock-sync-reminder>`; it owns its capability
+decision, its one request, its loading/hidden/failed lifecycle and its own wording, and the page
+only places it. Like `LegacyBusinessSettingsPromptComponent` — and unlike `NayaxStatusBannerComponent`'s
+fail-open default — it fetches nothing while `Inventory.Operate` is not affirmatively granted, and it
+asks for nothing at all while a support session is active. **A failed read is visible**: it renders
+"Machine restock sync status is unavailable … unknown rather than up to date", because rendering
+nothing would read as "no machine needs attention", which is the one thing a failed read cannot say.
+Each row links to `/machines/{localMachineId}` and names the **Sync Restock** action there; the
+banner itself offers no action, and the component derives no date, threshold or count of its own -
+the three-day rule, the business dates, the day counts and the pending definition are all the
+server's.
 
 ### Machine latest sales (issue #768)
 
