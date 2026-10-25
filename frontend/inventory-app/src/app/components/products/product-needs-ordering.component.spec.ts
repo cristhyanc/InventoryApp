@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { Observable, of } from 'rxjs';
+import { Observable, Subject, of } from 'rxjs';
 import { ProductNeedsOrderingComponent } from './product-needs-ordering.component';
 import { AccessService } from '../../access/access.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -585,6 +585,75 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
         })
       );
     });
+
+    /**
+     * Remove while the order is in flight. Once `saveOrder()` has sent its lines, the order being
+     * created is fixed, so dropping a row would leave the dialog and the page's ticks showing an
+     * order that disagrees with the one the backend is creating - and, if the request then fails,
+     * would have silently changed the draft the user is about to retry. A `Subject` that is never
+     * completed holds the response open so the save is genuinely outstanding while Remove is
+     * attempted; a definitive failure ends the save and hands the draft back.
+     */
+    it('refuses Remove while the order is being saved, and allows it again once the save has definitively failed', async () => {
+      const response$ = new Subject<void>();
+      const create = jest.fn(() => response$.asObservable());
+      const { fixture, host } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 }), product({ id: 2, name: 'Apple', needToOrder: 2 })],
+        { suppliers: [{ id: 3, name: 'Acme' }], create }
+      );
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.toggleSelection(2, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      component.orderForm.supplierId = 3;
+      component.orderQuantities[1] = 7;
+      component.orderQuantities[2] = 5;
+      component.orderForm.reference = 'PO-42';
+      component.saveOrder();
+      fixture.detectChanges();
+
+      expect(component.savingOrder).toBe(true);
+      const removeApple = () => host.querySelector('[aria-label="Remove Apple from order"]') as HTMLButtonElement;
+      expect(removeApple().disabled).toBe(true);
+
+      // Clicked anyway, and called directly the way a stale view would reach the handler: the
+      // guard is in the component, not only in the disabled attribute.
+      removeApple().click();
+      component.removeProduct(2);
+      fixture.detectChanges();
+
+      // The draft and the page's selection still hold both products...
+      expect(component.selectedProductIds.has(2)).toBe(true);
+      expect(component.selectedProducts().map((p) => p.name)).toEqual(['Banana', 'Apple']);
+      expect(removeApple()).not.toBeNull();
+      expect(component.orderQuantities[1]).toBe(7);
+      expect(component.orderQuantities[2]).toBe(5);
+      expect(component.orderForm.reference).toBe('PO-42');
+
+      // ...and the one request sent is still exactly the order the dialog shows.
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lines: [
+            { productId: 1, quantityOrdered: 7 },
+            { productId: 2, quantityOrdered: 5 }
+          ]
+        })
+      );
+
+      // A definitive failure ends the save, so the draft is the user's to edit again.
+      response$.error(new Error('create failed'));
+      fixture.detectChanges();
+
+      expect(component.savingOrder).toBe(false);
+      expect(removeApple().disabled).toBe(false);
+      removeApple().click();
+      fixture.detectChanges();
+      expect(component.selectedProducts().map((p) => p.name)).toEqual(['Banana']);
+      expect(create).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('in a support session (issue #661)', () => {
@@ -625,6 +694,25 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
 
       expect(create).not.toHaveBeenCalled();
       expect(component.savingOrder).toBe(false);
+    });
+
+    /**
+     * Remove is one of the order dialog's edits, so it carries the same session guard as the
+     * dialog itself and `saveOrder()` (issue #906's review). The dialog cannot be opened during a
+     * session at all, which is why this reaches the handler directly.
+     */
+    it('removes no product from the order being built while a session is active', async () => {
+      const { fixture } = await render(
+        [product({ id: 9, name: 'Widget' }), product({ id: 10, name: 'Gadget' })],
+        { sessionActive: of(true) }
+      );
+
+      const component = fixture.componentInstance;
+      component.selectedProductIds.add(9);
+      component.selectedProductIds.add(10);
+      component.removeProduct(10);
+
+      expect(component.selectedProducts().map((p) => p.name)).toEqual(['Widget', 'Gadget']);
     });
 
     it('does not open the order dialog while a session is active', async () => {

@@ -355,9 +355,16 @@ export class ProductNeedsOrderingComponent implements OnInit, OnDestroy {
    * same set the page's checkboxes are bound to - so this is also what unticks the product on the
    * Needs ordering list, and leaves every other row's entered quantity and the order's own fields
    * untouched. Refused below the last remaining row, because an order needs at least one line.
+   *
+   * Refused as well while an order is in flight (`savingOrder`) or during a support session. Once
+   * {@link saveOrder} has sent its lines, the order being created is fixed: dropping a row then
+   * would leave the dialog and the page's ticks showing an order that disagrees with the one the
+   * backend is creating, and - if the request fails - would have silently changed the draft the
+   * user is about to retry. The session guard matches {@link openOrderForm} and {@link saveOrder}:
+   * a session grants `InventoryOperate`, so the page refuses its writes itself (issue #661).
    */
   removeProduct(productId: number): void {
-    if (this.selectedProductIds.size <= 1) {
+    if (this.savingOrder || this.sessionActive || this.selectedProductIds.size <= 1) {
       return;
     }
     this.selectedProductIds.delete(productId);

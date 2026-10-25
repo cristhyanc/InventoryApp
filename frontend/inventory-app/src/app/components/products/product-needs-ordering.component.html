@@ -245,11 +245,15 @@
                   <td class="table-cell table-num">{{ product.onOrderQuantity }}</td>
                   <td class="table-cell table-num"><input class="max-w-24" type="number" min="1" step="1" [name]="'quantity-' + product.id" [attr.aria-label]="'Order quantity for ' + product.name" [(ngModel)]="orderQuantities[product.id]" /></td>
                   <td class="table-cell">
-                    <!-- Disabled on the last remaining row (issue #906): an order needs at least one line, and Cancel is still how to abandon the whole order. -->
+                    <!--
+                      Disabled on the last remaining row (issue #906): an order needs at least one line, and Cancel is still how to
+                      abandon the whole order. Also disabled while an order is in flight, like Create order beside it: the request
+                      already carries its lines, so removing a row then would show an order that disagrees with the one being created.
+                    -->
                     <button
                       type="button"
                       class="btn btn-sm btn-secondary"
-                      [disabled]="selectedProducts().length <= 1"
+                      [disabled]="savingOrder || sessionActive || selectedProducts().length <= 1"
                       [attr.aria-label]="'Remove ' + product.name + ' from order'"
                       (click)="removeProduct(product.id)"
                     >Remove</button>
