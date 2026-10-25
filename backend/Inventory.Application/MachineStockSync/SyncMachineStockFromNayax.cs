@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Inventory.Application.Machines;
 using Inventory.Application.Nayax;
+using Inventory.Application.Time;
 using Inventory.Domain.Nayax;
 
 namespace Inventory.Application.MachineStockSync;
@@ -19,19 +20,45 @@ namespace Inventory.Application.MachineStockSync;
 /// position whose Nayax product this business holds no link for resolves to no local product, which
 /// is the state <c>NayaxMachineStockMatchPolicy</c> already reports as Needs Review ("no local
 /// product is mapped to Nayax product ..."), so such an event still never moves inventory.
+///
+/// <para><strong>A run that fully succeeds records that it did</strong> (issue #891), so the
+/// Dashboard can say when this machine's restock alerts were last really fetched instead of guessing
+/// it from an event's timestamps. The claim is deliberately narrow: it is recorded only after the
+/// alert read, the import and the preview construction have all completed, it is stamped with the
+/// instant the operation <em>started</em> - a fetch can only have accounted for alerts that already
+/// existed when it began - and it is bound to the Nayax credential revision the operation
+/// authenticated under. A fetch that threw, imported partially or never built a preview records
+/// nothing at all, and a successful fetch that found no alert records coverage exactly as one that
+/// found ten does: an empty answer from Nayax is an answer.
+///
+/// It is never a claim of complete historical coverage. The Lynx contract for
+/// <c>GET /v1/machines/{MachineID}/lastAlerts</c> is "the most recent alerts" and declares neither a
+/// range nor a completeness guarantee (Nayax developer portal, Get Machine Last Alerts), so what is
+/// recorded is when this workflow last succeeded and nothing more.</para>
 /// </summary>
 public sealed class SyncMachineStockFromNayax
 {
     private readonly INayaxLynxClient _nayax;
     private readonly IMachineStockEventStore _store;
     private readonly INayaxProductLinkStore _productLinks;
+    private readonly IClock _clock;
+    private readonly INayaxConnectionStore _connections;
+    private readonly IMachineRestockSyncCoverageStore _coverage;
 
     public SyncMachineStockFromNayax(
-        INayaxLynxClient nayax, IMachineStockEventStore store, INayaxProductLinkStore productLinks)
+        INayaxLynxClient nayax,
+        IMachineStockEventStore store,
+        INayaxProductLinkStore productLinks,
+        IClock clock,
+        INayaxConnectionStore connections,
+        IMachineRestockSyncCoverageStore coverage)
     {
         _nayax = nayax;
         _store = store;
         _productLinks = productLinks;
+        _clock = clock;
+        _connections = connections;
+        _coverage = coverage;
     }
 
     /// <summary>
@@ -53,6 +80,16 @@ public sealed class SyncMachineStockFromNayax
         bool includeReconciled = false)
     {
         ArgumentNullException.ThrowIfNull(machine);
+
+        // Both taken before the first Nayax call (issue #891). The instant is what the coverage
+        // claim is stamped with, because this fetch can only account for alerts that already
+        // existed when it began. The revision is the credentials this operation is about to run
+        // under: reading it afterwards would let a save that landed mid-operation be recorded as if
+        // this run had proved the new token, and the conditional write refuses a stale revision
+        // rather than guessing - so a credential replaced while the sync ran simply leaves the
+        // coverage unrecorded.
+        var startedAtUtc = _clock.UtcNow;
+        var credentialRevision = (await _connections.FindAsync(cancellationToken))?.CredentialRevision;
 
         var machineId = machine.RequiredNayaxMachineId;
         var alerts = await _nayax.GetMachineLastAlertsAsync(machineId, cancellationToken);
@@ -96,7 +133,51 @@ public sealed class SyncMachineStockFromNayax
                 cancellationToken);
         }
 
-        return await BuildPreviewAsync(machine, newAlerts.Count, fromDateGmt, includeReconciled, cancellationToken);
+        var preview = await BuildPreviewAsync(
+            machine, newAlerts.Count, fromDateGmt, includeReconciled, cancellationToken);
+
+        await RecordSuccessfulFetchAsync(
+            machine.LocalMachineId, startedAtUtc, credentialRevision, cancellationToken);
+
+        return preview;
+    }
+
+    /// <summary>
+    /// Records the coverage of a run that fully succeeded (issue #891), after the import and the
+    /// preview and never before either.
+    ///
+    /// <para>It is the last thing this use case does, and a failure of it does not fail the
+    /// operation: the alerts are already imported and the preview the caller is about to be handed
+    /// is the operator's working list, so losing the reconciliation to a reminder's bookkeeping
+    /// would be the wrong trade. Leaving the coverage unrecorded errs in the safe direction - the
+    /// Dashboard keeps warning that this machine is overdue, which is a reminder too many rather
+    /// than a machine quietly presented as fresh.</para>
+    ///
+    /// <para>A run with no credential revision read nothing from a stored connection, so there are
+    /// no credentials to bind a claim to and nothing is recorded.</para>
+    /// </summary>
+    private async Task RecordSuccessfulFetchAsync(
+        long localMachineId, DateTime startedAtUtc, int? credentialRevision, CancellationToken cancellationToken)
+    {
+        if (credentialRevision is not { } revision)
+        {
+            return;
+        }
+
+        try
+        {
+            await _coverage.TryRecordSuccessfulSyncAsync(
+                localMachineId, startedAtUtc, revision, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Deliberately swallowed; see the remarks above. The caller keeps its preview and the
+            // reminder keeps its warning.
+        }
     }
 
     private static MachineStockEventImport ToImport(

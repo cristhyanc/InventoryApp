@@ -1340,6 +1340,20 @@ public class AppDbContext : DbContext
             .HasFilter(@"""ExternalMachineId"" IS NOT NULL");
 
         machine.HasAlternateKey(x => new { x.BusinessId, x.Id });
+
+        // The Sync Restock coverage of issue #891. The SQLite provider does not round-trip
+        // DateTimeKind - see the StockAdjustment.CreatedAt comment for the complete explanation -
+        // and this instant is published by the Dashboard reminder, so it is marked UTC on every
+        // read. Without it the reminder's lastSuccessfulSyncAtUtc serialises with no "Z" and the
+        // frontend's BusinessDateTimePipe would read it as browser-local time, which is exactly how
+        // "synced 3 days ago" becomes the wrong number for an operator in another zone.
+        machine
+            .Property(x => x.LastSuccessfulRestockSyncStartedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => fromProvider.HasValue
+                    ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                    : fromProvider);
     }
 
     /// <summary>

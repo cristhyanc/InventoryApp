@@ -688,6 +688,73 @@ export interface NayaxMachineStockSyncPreview {
   message: string | null;
 }
 
+/**
+ * One machine on the Dashboard's restock-sync reminder (issue #891), exactly as
+ * `GET /api/machine-restock-sync/reminder` published it. Nothing here is derived in the browser:
+ * the three-day rule, the business dates and the pending definition are all the backend's.
+ *
+ * `lastSuccessfulSyncAtUtc` is `null` for "No recorded sync", which includes coverage recorded
+ * under Nayax credentials that have since been replaced. It is never read as "never synced":
+ * machines restocked before this metadata existed have no record of syncs that really happened.
+ *
+ * `knownPendingEventCount` counts **persisted** imported events that are still unresolved. A zero
+ * says nothing about alerts Nayax holds that nobody has fetched - that is what `isFetchOverdue`
+ * is for - and the two conditions are deliberately reported separately.
+ */
+export interface MachineRestockSyncReminderMachine {
+  localMachineId: number;
+  machineName: string;
+  lastSuccessfulSyncAtUtc: string | null;
+  lastSuccessfulSyncBusinessDate: string | null;
+  daysSinceLastSuccessfulSync: number | null;
+  isFetchOverdue: boolean;
+  knownPendingEventCount: number;
+  oldestKnownPendingEventAtUtc: string | null;
+  /** Some of that pending work predates the Sync Restock dialog's default From date. */
+  hasPendingWorkBeforeDefaultFrom: boolean;
+}
+
+/**
+ * Whether a completed Nayax connection check confirmed the machine alerts read behind Sync
+ * Restock (`MachineRestockSyncAvailability`, issue #891). A stable code, never a sentence: with
+ * `NotConfirmed` the reminder says the sync may be unavailable instead of presenting it as a
+ * working action.
+ */
+export type MachineRestockSyncAvailability = 'Confirmed' | 'NotConfirmed';
+
+/** The reminder itself: the provider-named machines whose Sync Restock needs attention. */
+export interface MachineRestockSyncReminder {
+  applicable: true;
+  asOfUtc: string;
+  businessDate: string;
+  overdueAfterDays: number;
+  /** The From date the Sync Restock dialog will default to, in the business's own timezone. */
+  defaultFromBusinessDate: string;
+  syncAvailability: MachineRestockSyncAvailability;
+  machines: MachineRestockSyncReminderMachine[];
+}
+
+/**
+ * The reminder as it is withheld (issue #891), for a support session, a business with no usable
+ * Nayax connection, or one whose provider names none of its machines. `reason` is a stable code
+ * for branching, never a sentence to display.
+ */
+export interface HiddenMachineRestockSyncReminder {
+  applicable: false;
+  reason: string;
+}
+
+export type MachineRestockSyncReminderResponse =
+  | MachineRestockSyncReminder
+  | HiddenMachineRestockSyncReminder;
+
+/** Whether the response is the reminder rather than the withheld shape. */
+export function isMachineRestockSyncReminderApplicable(
+  response: MachineRestockSyncReminderResponse
+): response is MachineRestockSyncReminder {
+  return response.applicable === true;
+}
+
 export enum NayaxStockEventApplyOutcome {
   Applied = 0,
   InsufficientStock = 1,

@@ -7,6 +7,8 @@ using Inventory.Domain.Tenancy;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Inventory.Infrastructure.Persistence;
+using InventoryApi.Tests.Application.Nayax;
+using InventoryApi.Tests.Application.Time;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -93,7 +95,10 @@ public class MachineStockSyncNayaxLinkTests
         return new SyncMachineStockFromNayax(
             nayax.Object,
             new EfMachineStockEventStore(db, TestCostingUseCases.RecordMovement(db), TestCostingUseCases.Rebuild(db)),
-            new EfNayaxProductLinkStore(db));
+            new EfNayaxProductLinkStore(db),
+            new FakeClock(EventTime),
+            new FakeNayaxConnectionStore("op", "token", NayaxConnectionStatus.Ready),
+            new FakeMachineRestockSyncCoverageStore());
     }
 
     [Fact]

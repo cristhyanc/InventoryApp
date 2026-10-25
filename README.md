@@ -8,6 +8,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Nayax is an optional add-on: inventory, purchasing, expenses and the Bookkeeping and GST reports work without it, while the features that depend on it — the live Nayax pages, and the five sales reports that need a Nayax connection to exist at all — are shown locked until a provider is connected, with no stored sales removed (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
+- A **home dashboard reminder when machine restock sync is behind** (see [Machine restock sync reminder](#machine-restock-sync-reminder)): Sync Restock is something an operator asks for, so the dashboard says which Nayax-linked machines have not had a successful restock sync in the last three business days, or still have restock events waiting to be reviewed.
 - Nayax product and transaction imports with explicit payment/status handling.
 - Owner-driven Nayax connection setup: test a token, see which permissions it carries, save it and re-test it later (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)).
 - Historical weighted-average inventory costing and persisted COGS provenance.
@@ -1390,6 +1391,46 @@ need** column is gone; it was only the stock figure minus the machine-need figur
   reloading the page never shows one product set's costs against another's.
 - **The two columns need the same permission as the dashboard's money figures.** An Operator does not
   see them at all, and nothing is requested on their behalf; a Manager or an Owner sees both.
+
+## Machine restock sync reminder
+
+**Sync Restock never runs by itself.** You open a machine and ask for it, which means forgetting it
+is silent: the storage figures drift, and what you see looks like missing product rather than
+missing bookkeeping. The home dashboard therefore shows a reminder when that work is waiting.
+
+- **A machine is listed for either of two reasons.** Its last fully successful restock sync is three
+  or more business days old — counted as calendar days in your own business time zone, so a
+  daylight-saving change never moves the line — or it still has imported restock events nobody has
+  resolved. Either one alone is enough, and both are shown: a recent sync clears only the first.
+- **"No recorded sync" means exactly that, not "never synced".** A successful sync has been recorded
+  since this feature was added; machines you were already syncing before then start with nothing
+  recorded, and nothing guesses a date for them from an event, a sales sync or a stock count. The
+  first time you run Sync Restock for a machine, it fills in.
+- **A fetch only counts when the whole thing worked.** A sync that failed, or that imported only part
+  of what it read, records nothing at all — and one that succeeded and found no new alert counts as
+  a success, because an empty answer is an answer. A successful sync is never a promise that all of
+  your history has been fetched: Nayax's last-alerts list is a rolling window of recent events.
+- **Pending counts are what has been imported.** They include events needing review, events you have
+  not got enough storage stock for, and possible duplicates you have not resolved; they exclude ones
+  you have applied or marked as already recorded manually. A count of zero means nothing imported is
+  outstanding — it cannot promise that Nayax is holding no alert nobody has fetched yet, which is why
+  the overdue-sync warning is reported separately.
+- **Old work never disappears quietly.** The Sync Restock dialog opens on the last three days by
+  default, so when a machine has pending events older than that, the reminder says so and tells you
+  to clear the From date or move it back to the oldest pending date.
+- **It reminds, and does nothing else.** Each row links to the machine and names the **Sync Restock**
+  action there. Opening the dashboard, following a link or opening a preview applies nothing,
+  resolves no duplicate, changes no inventory and does not mark anything as seen — after you apply or
+  reconcile, reloading the dashboard shows what is left. The dashboard read is entirely local: it
+  makes no Nayax request, so it costs nothing and cannot fail because Nayax is slow.
+- **When it is not shown.** A business with no usable Nayax connection, and machines you created
+  yourself rather than ones Nayax names, have no provider restock sync to be behind on. It is hidden
+  inside a [support session](#super-admin-support-sessions) too, which is read-only and cannot sync.
+  If the reminder itself cannot be loaded it says so — unknown, rather than up to date — and the rest
+  of the dashboard keeps working.
+- **Who sees it.** The same permission as Sync Restock itself, which every role holds (Operator,
+  Manager and Owner). If your Nayax connection has not been confirmed for machine alerts, the
+  reminder says the sync may be unavailable instead of sending you to an action that will refuse you.
 
 ## Product and supplier GST rules
 

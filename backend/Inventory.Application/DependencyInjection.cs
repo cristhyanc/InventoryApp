@@ -264,6 +264,11 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<ResolveMachineStockDuplicate>();
         services.AddScoped<ResolveMachineStockEventsAsAlreadyRecorded>();
 
+        // The Dashboard's restock-sync reminder (issue #891). Scoped like every other use case: it
+        // reads the caller's resolved business's own connection record and machines through the
+        // request's AppDbContext, and makes no Nayax call at all.
+        services.AddScoped<GetMachineRestockSyncReminder>();
+
         // The machine-stock ledger (issue #56). Scoped like every other use case: the reconciliation
         // reads one caller's resolved business through the request's own AppDbContext, and a recorded
         // count is written through that same context.
