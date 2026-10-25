@@ -1218,7 +1218,11 @@ does not manage.
   and the reorder alerts, keeps its history, stock and costs, and can be reactivated at any time.") and
   then writes the ordinary product update with `isActive: false`. The **Status** badge deactivates
   through that same confirmation; reactivating a deactivated product stays one click, and a
-  deactivated product offers no Deactivate. That `canDelete` answer is **advisory**: it is as
+  deactivated product's row offers **Reactivate** in that same slot instead of Deactivate (issue
+  #900), reusing the Status badge's own one-click activation write rather than a new endpoint. A
+  failed reactivation leaves the product deactivated and shows the server's own refusal, the same
+  way a failed deactivation does - the two controls share the one write and its error reporting.
+  That `canDelete` answer is **advisory**: it is as
   fresh as the last fetch, the delete counts again inside its own transaction, and a refusal for a
   product the screen had offered is still shown as the server worded it. A **category** has no such
   answer published and no retirement flag at all, so **Categories** attempts every delete and shows

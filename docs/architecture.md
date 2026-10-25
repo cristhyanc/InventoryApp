@@ -4505,8 +4505,8 @@ withholds entirely, happens to hide itself this way already. `SupportSessionServ
 `distinctUntilChanged` projection of the banner's own `state$` - is the one flag every other write
 control reads instead: presentation only, exactly as a capability-gated control already is, and the
 backend's read-only enforcement is still what would refuse the write if this page failed to hide or
-disable it. `ProductListComponent` (Delete and, since issue #825, Deactivate and New Product, hidden; the
-Active/Inactive toggle, disabled) and
+disable it. `ProductListComponent` (Delete and, since issue #825, Deactivate and New Product, hidden, and since
+issue #900, Reactivate the same way; the Active/Inactive toggle, disabled) and
 `ProductFormComponent` (Save, disabled) are this slice's representative pages; rolling the same
 `active$` subscription out to every remaining write control across the application is tracked as
 follow-up under #513 - issues #659, #658, #660 and #657 extend this to expenses and site
@@ -12133,11 +12133,15 @@ naming the product and what deactivation keeps, and on confirmation writes the o
 activation update - `ProductService.update` with `isActive: false` and every other field as it was
 fetched. The Status badge routes a *deactivation* through that same confirmation, so the two
 controls cannot come to mean different things, while a *reactivation* stays the single immediate
-write it always was; an inactive product offers no Deactivate at all. `confirmDeactivate` refuses a
-support session and an already-inactive product in code as well as in the template, the same
-belt-and-suspenders shape `confirmDelete` uses, and a refused deactivation surfaces the API's own
-message through `apiErrorMessage` with the row left as it was fetched. The deletion rule itself is
-untouched: this is presentation, and `ProductDeletionPolicy` stays the one authority.
+write it always was. Since issue #900 an **inactive** product gets **Reactivate** in that same
+fixed-width slot instead of leaving it empty, calling the same `toggleActive` method the Status
+badge uses for its own one-click reactivation - no second endpoint or payload. `confirmDeactivate`
+refuses a support session and an already-inactive product in code as well as in the template, the
+same belt-and-suspenders shape `confirmDelete` uses; `toggleActive` itself refuses a support session
+the same way, hiding Reactivate alongside Deactivate and Delete. A refused deactivation or
+reactivation surfaces the API's own message through `apiErrorMessage` with the row left as it was
+fetched - both controls share that reporting because they share `toggleActive`. The deletion rule
+itself is untouched: this is presentation, and `ProductDeletionPolicy` stays the one authority.
 
 Three things keep that honest:
 

@@ -421,9 +421,11 @@ export class ProductListComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * The Status badge. Deactivating goes through the same confirmation the Deactivate button opens
+   * The activation write shared by the Status badge and, since issue #900, the Actions column's
+   * Reactivate button. Deactivating goes through the same confirmation the Deactivate button opens
    * (issue #825), so the two controls cannot mean different things; reactivating writes straight
-   * away, as it always has.
+   * away, as it always has, and a refusal is shown the same way deactivation's is - the server's
+   * own message through `apiErrorMessage`, falling back to this generic sentence when there is none.
    */
   toggleActive(product: Product): void {
     if (this.sessionActive) {
@@ -436,7 +438,7 @@ export class ProductListComponent implements OnInit, OnDestroy {
 
     this.writeActive(product, true).subscribe({
       next: () => this.applyFilters(),
-      error: () => this.toastService.error('Failed to update product status.')
+      error: (error) => this.toastService.error(apiErrorMessage(error, 'Failed to update product status.'))
     });
   }
 

@@ -181,11 +181,12 @@ describe('ProductListComponent Actions column layout (issue #451)', () => {
 });
 
 /**
- * Three fixed slots, always in the order Stock, Deactivate, Delete (issue #876), so an action lines
- * up under itself down the table regardless of which actions a given row offers. A slot whose
- * action does not apply keeps its width empty rather than disappearing - except during a support
- * session (issue #554), where the Deactivate/Delete slots are skipped entirely because no row can
- * ever show them.
+ * Three fixed slots, always in the order Stock, Deactivate/Reactivate, Delete (issues #876, #900),
+ * so an action lines up under itself down the table regardless of which actions a given row
+ * offers. The middle slot always shows one of Deactivate or Reactivate - never both, never neither
+ * - while the Delete slot keeps its width empty rather than disappearing on a row the API refuses
+ * to delete; both are skipped entirely during a support session (issue #554), where neither can
+ * ever be shown.
  */
 describe('ProductListComponent Actions fixed slots (issue #876)', () => {
   afterEach(() => TestBed.resetTestingModule());
@@ -239,17 +240,26 @@ describe('ProductListComponent Actions fixed slots (issue #876)', () => {
     expect(slots[2].querySelector('button')).toBeNull();
   });
 
-  it('keeps the Deactivate slot present but empty for an inactive product, with Delete still in its own slot', async () => {
+  it('shows Reactivate in the Deactivate slot for an inactive product, with Delete still in its own slot', async () => {
     const { host } = await render([product({ id: 1, name: 'Widget', isActive: false, canDelete: true })]);
 
     const slots = slotsOf(host);
     expect(slots).toHaveLength(3);
-    expect(slots[1].querySelector('button')).toBeNull();
+    expect(slots[1].querySelector('button')?.textContent?.trim()).toBe('Reactivate');
     expect(slots[2].querySelector('button')?.textContent?.trim()).toBe('Delete');
   });
 
   it('renders only the Stock slot during a support session, reserving no width for actions the session can never show', async () => {
     const { host } = await render([product({ id: 1, name: 'Widget', isActive: true, canDelete: true })], of(true));
+
+    const slots = slotsOf(host);
+    expect(slots).toHaveLength(1);
+    expect(slots[0].querySelector('a')?.textContent?.trim()).toBe('Stock');
+    expect(host.querySelector('tbody')?.querySelector('button')).toBeNull();
+  });
+
+  it('renders only the Stock slot for an inactive product during a support session, hiding Reactivate the same way', async () => {
+    const { host } = await render([product({ id: 1, name: 'Widget', isActive: false, canDelete: true })], of(true));
 
     const slots = slotsOf(host);
     expect(slots).toHaveLength(1);
@@ -1657,6 +1667,161 @@ describe('ProductListComponent Deactivate (issue #825)', () => {
 
     expect(fixture.componentInstance.confirmingDeactivation).toBeNull();
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Reactivate, in the same fixed-width Actions slot Deactivate uses for an active product (issue
+ * #900). It calls the existing `toggleActive` path - the same write and success refresh the Status
+ * badge already made for an inactive product - rather than a new endpoint, and writes with no
+ * confirmation, matching the Status badge's own immediate-reactivation behaviour. Because Reactivate
+ * and the Status badge share `toggleActive`, a failed reactivation now reports the server's own
+ * refusal through `apiErrorMessage` on either control, the same way a failed deactivation already
+ * does, rather than only the generic "Failed to update product status." toast.
+ */
+describe('ProductListComponent Reactivate (issue #900)', () => {
+  afterEach(() => TestBed.resetTestingModule());
+
+  async function render(products: Product[], options: { update?: jest.Mock; sessionActive?: Observable<boolean> } = {}) {
+    const update = options.update ?? jest.fn(() => of(undefined));
+    const getAll = jest.fn(() => of(products));
+    const toastService = { success: jest.fn(), error: jest.fn() };
+    await TestBed.configureTestingModule({
+      imports: [ProductListComponent],
+      providers: [
+        provideRouter([]),
+        { provide: ProductService, useValue: { getAll, update, delete: jest.fn(() => of(undefined)) } },
+        { provide: CategoryService, useValue: { getAll: () => of([]) } },
+        { provide: ToastService, useValue: toastService },
+        { provide: SupportSessionService, useValue: { active$: options.sessionActive ?? of(false) } },
+        { provide: AccessService, useValue: accessServiceStub() },
+        NOT_CONNECTED,
+        { provide: ProductPurchaseCostService, useValue: purchaseCostServiceStub() }
+      ]
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(ProductListComponent);
+    fixture.detectChanges();
+    return { fixture, host: fixture.nativeElement as HTMLElement, update, getAll, toastService };
+  }
+
+  function rowButton(host: HTMLElement, label: string): HTMLButtonElement | undefined {
+    return Array.from(host.querySelectorAll('tbody button')).find((b) => b.textContent?.trim() === label) as
+      | HTMLButtonElement
+      | undefined;
+  }
+
+  it('offers Reactivate for an inactive product and no Deactivate, with no confirmation dialog in the DOM', async () => {
+    const { host } = await render([product({ id: 1, name: 'Widget', isActive: false })]);
+
+    expect(rowButton(host, 'Reactivate')).toBeDefined();
+    expect(rowButton(host, 'Deactivate')).toBeUndefined();
+    expect(host.querySelector('.confirm-modal')).toBeNull();
+  });
+
+  it('writes isActive: true through the existing update flow on click, with no confirmation, and refreshes the list', async () => {
+    const { fixture, host, update, getAll } = await render([
+      product({
+        id: 42,
+        name: 'Widget',
+        isActive: false,
+        sku: 'SKU-1',
+        description: 'A widget',
+        lowStockThreshold: 3,
+        restockTo: 9,
+        unit: 'bag',
+        categoryId: 2
+      })
+    ]);
+
+    rowButton(host, 'Reactivate')!.click();
+    fixture.detectChanges();
+
+    expect(update).toHaveBeenCalledWith(42, {
+      name: 'Widget',
+      sku: 'SKU-1',
+      description: 'A widget',
+      lowStockThreshold: 3,
+      restockTo: 9,
+      unit: 'bag',
+      categoryId: 2,
+      isActive: true
+    });
+    expect(host.querySelector('.confirm-modal')).toBeNull();
+    // The initial load, then the refresh after the write succeeds.
+    expect(getAll).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows the API error and leaves the product inactive when reactivation is refused, matching how deactivation reports errors', async () => {
+    const update = jest.fn(() =>
+      throwError(() => new HttpErrorResponse({ status: 400, error: 'The selected category does not exist.' }))
+    );
+    const inactive = product({ id: 1, name: 'Widget', isActive: false });
+    const { fixture, host, toastService, getAll } = await render([inactive], { update });
+
+    rowButton(host, 'Reactivate')!.click();
+    fixture.detectChanges();
+
+    expect(toastService.error).toHaveBeenCalledWith('The selected category does not exist.');
+    expect(getAll).toHaveBeenCalledTimes(1);
+    expect(rowButton(host, 'Reactivate')).toBeDefined();
+    expect(rowButton(host, 'Deactivate')).toBeUndefined();
+  });
+
+  it('falls back to "Failed to update product status." when a failed reactivation carries no API error', async () => {
+    const update = jest.fn(() => throwError(() => new Error('boom')));
+    const { fixture, host, toastService } = await render([product({ id: 1, name: 'Widget', isActive: false })], { update });
+
+    rowButton(host, 'Reactivate')!.click();
+    fixture.detectChanges();
+
+    expect(toastService.error).toHaveBeenCalledWith('Failed to update product status.');
+  });
+
+  it('reports the same server refusal through the Status badge, since it shares toggleActive with Reactivate', async () => {
+    const update = jest.fn(() =>
+      throwError(() => new HttpErrorResponse({ status: 400, error: 'The selected category does not exist.' }))
+    );
+    const { fixture, host, toastService } = await render([product({ id: 1, name: 'Widget', isActive: false })], { update });
+    // Status is shown only under "All" (issue #828).
+    fixture.componentInstance.statusFilter = 'all';
+    fixture.detectChanges();
+
+    (
+      Array.from(host.querySelectorAll('tbody button')).find((b) => b.textContent?.trim() === 'Inactive') as HTMLButtonElement
+    ).click();
+    fixture.detectChanges();
+
+    expect(toastService.error).toHaveBeenCalledWith('The selected category does not exist.');
+  });
+
+  it('hides Reactivate while a support session is active, and refuses to write from code as well', async () => {
+    const inactive = product({ id: 1, name: 'Widget', isActive: false });
+    const { fixture, host, update } = await render([inactive], { sessionActive: of(true) });
+
+    expect(rowButton(host, 'Reactivate')).toBeUndefined();
+
+    fixture.componentInstance.toggleActive(inactive);
+    fixture.detectChanges();
+
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('preserves the selected filter, sort and search on the refresh after a successful reactivation', async () => {
+    const inactive = product({ id: 1, name: 'Widget', isActive: false, category: { id: 2, name: 'Snacks' } });
+    const { fixture, host, getAll } = await render([inactive]);
+    fixture.componentInstance.statusFilter = 'all';
+    fixture.componentInstance.categoryId = 2;
+    fixture.componentInstance.onSearchChange('wid');
+    fixture.componentInstance.sortBy('name');
+    fixture.detectChanges();
+
+    rowButton(host, 'Reactivate')!.click();
+    fixture.detectChanges();
+
+    expect(getAll).toHaveBeenLastCalledWith({ search: 'wid', categoryId: 2, includeRetired: true });
+    expect(fixture.componentInstance.statusFilter).toBe('all');
+    expect(fixture.componentInstance.sortColumn).toBe('name');
   });
 });
 
