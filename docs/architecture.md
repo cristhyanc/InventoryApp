@@ -1630,6 +1630,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` **and** `Inventory.Operate` (issue #681) | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
 | Pick List → record a refill (issue #743) | `POST api/pick-list/refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
+| Pick List → record a multi-machine run (issue #897) | `POST api/pick-list/multi-machine-refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Products, Take Inventory, Categories, Stock History, Machines, Sites | `api/products`, `api/categories`, `api/products/{id}/inventory-count/*`, `api/products/{id}/stock`, `api/stock-history`, `api/machines` (dashboard, products, Sync Restock, and the machine stock ledger of issue #56: `GET api/machines/{id}/stock-ledger`, `POST api/machines/{id}/stock-ledger/counts`), `api/local-machines` (the business's own machine records, issue #740: list, read, create, rename, deactivate, reactivate), `api/sites`, `GET api/sites/list` (the light site list the site pickers fill from, issue #841) | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Purchases, Supplier Orders, Suppliers | `api/purchases`, `api/supplierorders`, `api/suppliers` | `Purchasing.Operate` | ✔ | ✔ | ✔ |
 | Suppliers → GST defaults (edit) | `PUT api/suppliers/{id}/gst-defaults` | `Suppliers.ManageGstDefaults` | ✘ | ✔ | ✔ |
@@ -1769,6 +1770,7 @@ Issue #527 above is the pattern; issue #697 is the same decision applied to the 
 | `Dashboard.View` + `Inventory.Operate` | `POST api/nayax-sales-sync` | none — `204`, `200` with the last-synced instant (issue #843), or `429` with `Retry-After` | Already safe |
 | `PickList.View` | `GET api/pick-list` | none — storage quantity, target, quantity to pick and MDB codes | Already safe |
 | `PickList.View` + `Inventory.Operate` | `POST api/pick-list/refills` (issue #743) | none — the submitted quantities, the recorded movement ids and the per-row refusal sentences | Already safe |
+| `PickList.View` + `Inventory.Operate` | `POST api/pick-list/multi-machine-refills` (issue #897) | none — the submitted quantities, the machines and products they name, the recorded movement ids and the per-allocation refusal sentences (whose only figure is a storage quantity `GET api/pick-list` already serves) | Already safe |
 | `Inventory.Operate` | `GET api/products`, `GET api/products/{id}`, `GET api/products/alerts/low-stock`, `GET api/machines/{id}/products`, `POST api/products` (issue #736, which answers the created product in the same shape) | `inventoryValue`; and, nested in `stockAdjustments`, each movement's `inventoryValueAfter` | `inventoryValue` withheld by [#698](#machine-and-product-financial-redaction-issue-698); `inventoryValueAfter` **redacted here** |
 | `Inventory.Operate` | `GET api/machines`, `GET api/machines/{id}` | six periods' gross revenue, six direct-profit figures, `profitabilityStatus` | Withheld by [#698](#machine-and-product-financial-redaction-issue-698) |
 | `Inventory.Operate` | `GET api/sites`, `GET api/sites/{id}/products` | `todayRevenue`, `currentWeekRevenue`, `previousComparableWeekRevenue`; `estimatedCardProfit` | Withheld by [#697](#site-financial-redaction-issue-697) |
@@ -9387,7 +9389,8 @@ clamped-to-zero `MissingStockByMDB` value, so a machine already at or above its 
 contributes zero). Executing the query performs no EF/database mutation and creates no
 `MachineRefill`, costing, or inventory movement; recording what was actually taken is the separate
 write action of [Batch refill from the pick list](#batch-refill-from-the-pick-list-issue-743) below
-(before issue #743 it was the per-product stock action alone), and Nayax remains the read-only source
+(before issue #743 it was the per-product stock action alone), or, for a run across several machines,
+[Multi-machine refill batch](#multi-machine-refill-batch-issue-897), and Nayax remains the read-only source
 for the machine-stock facts this projection reuses. The Pick List Angular page, its machine
 chips/filter controls, and any persisted picked/unpicked completion state are out of scope for this
 projection and remain frontend-phase work.
@@ -9502,7 +9505,10 @@ mapping).
 
 **What it persists, and what it does not.** Two additive tables. `PickListRefills` holds the key, the
 fingerprint, the machine, the note and the recorded instant; `PickListRefillLines` holds each row's
-product, its submitted quantity and the `StockAdjustment` it created. Neither is a second stock ledger
+product, its submitted quantity and the `StockAdjustment` it created (and, since
+[the multi-machine batch](#multi-machine-refill-batch-issue-897) below, a nullable per-line machine
+that this endpoint never writes: a single-machine refill's machine is on the batch row and its lines
+carry none). Neither is a second stock ledger
 — nothing reads them to decide a quantity, a cost or a machine-stock level. They are the *request's*
 identity, which is the one fact `StockAdjustments` cannot carry: which submission recorded which
 movements. The row's submitted quantity is stored rather than derived because the row is the recorded
@@ -9543,6 +9549,140 @@ over the real pipeline, where a body is JSON rather than objects a compiler buil
 beside a valid row answered `400` on `rows[1]` with nothing written, and a body with every row present
 recorded as one `MachineRefill` movement — the control that makes "nothing written" a fact about the
 refusal).
+
+#### Multi-machine refill batch (issue #897)
+
+`POST /api/pick-list/multi-machine-refills` records **a whole pick run across several machines in one
+request**, as one `MachineRefill` stock movement per allocation, in one transaction: every allocation
+or none. It is additive: the single-machine endpoint above, its request, its response and the refills
+it has already recorded are unchanged, and the entry screen that calls this one is a separate issue.
+
+**The problem it replaces.** The refill above carries one machine for the whole batch, so a run that
+visited three machines had to be sent as three requests, each with its own idempotency key. Three
+requests are three chances to half-save a run, and — the part a client cannot fix for itself — **each
+request's storage check passes on its own**. A shelf of 10 satisfies "6 for machine A" and then "6 for
+machine B" only because the two were never weighed together; the second request is refused, but by then
+the first has already been recorded, so the operator is left with a run that is partly saved and a shelf
+that no longer matches the paper.
+
+**The contract.** The request carries a client-chosen `idempotencyKey`, an optional `notes`, and
+`allocations` of `(machineId, productId, quantityTaken)`. `machineId` is a local machine of the caller's
+business (`Machines.Id`, see [Stock machine references](#stock-machine-references-issue-741) — never a
+provider machine number) and is **required** on every allocation: a refill for no machine at all is
+still the endpoint above, which is why that one is not deprecated. There is no request-level machine, no
+business id and no instant in either direction. The response is the recorded batch — the key, the note,
+the server's instant and, per allocation, the machine, the product, the quantity and the id of the
+`StockAdjustment` that recorded it — plus `replayed`, which is `true` when the key had already recorded
+it and nothing new was written.
+
+**It records exactly the movement the single-product action records**, through the same
+`IRecordInventoryMovement`/`IRebuildProductCost` pair (issue #296), with reason `MachineRefill`, source
+`Manual` and **that allocation's own machine** on the movement. So a multi-machine run is
+indistinguishable in the audit trail from the same run entered one machine at a time, which is what lets
+the [machine stock ledger](#machine-stock-ledger-and-shrinkage-reconciliation-issue-56), the costing
+replay and Sync Restock work without learning about this endpoint at all. Costing is unchanged and
+unchangeable here: a refill is an internal transfer from storage to a machine, so it reduces
+`QuantityInStock` and leaves `CostingQuantity`, `InventoryValue`, `AverageUnitCost` and COGS exactly as
+they were, and no second machine-stock movement is written (AGENTS.md § Inventory and historical costing
+invariants).
+
+**The storage check is over each product's total, inside the write lock.** That is the whole reason this
+is one request rather than several. `Inventory.Domain.Stock.MultiMachinePickListRefillPolicy` sums a
+product's allocations and compares the **sum** with its storage quantity, so storage 10 with allocations
+of 6 and 6 is refused and saves nothing even though each allocation fits on its own, and the refusal is
+reported on *every* allocation that contributed to the sum — the combination is what has to change, and
+an operator cannot see which lines combined from a refusal on one of them. The message is
+`NotEnoughStockForTotalMessage`, which states the total, deliberately not the single-line
+not-enough-stock sentence: repeating "available stock: 10" on an allocation of 6 would read as wrong. A
+product the business does not have, or has retired, is refused as that and no stock statement is made
+about it.
+
+**The machines, the quantities and the key claim are all read inside one write-locked transaction.**
+`Inventory.Application.PickList.RecordMultiMachinePickListRefill` runs the whole request inside the
+transaction `Inventory.Infrastructure.Persistence.PickListRefillWriteLock` opens, which on SQLite is
+`BEGIN IMMEDIATE` — the write lock is held before anything is read. That lock is **shared with the
+single-machine endpoint**, because both write the same tables and take from the same shelves: a batch and
+a single-machine refill that together exceed storage leave exactly one of them recorded, exactly as two
+batches do. Under the lock a losing request waits (within `Default Timeout`), re-reads the committed
+quantities and is refused having written nothing; a machine deactivated in the meantime is refused too,
+because the fleet is read in there as well — the deactivation either commits before this transaction
+opens and is seen, or after it and comes second. The fleet is read in one statement
+(`ILocalMachineStore.ListOrderedByNameAsync`) rather than one machine at a time: a business's machines
+are few, and several round trips inside a lock every other picker waits on would cost more than the rows
+do.
+
+**One key namespace, and no refill is ever reinterpreted.** The key is still unique per business on
+`PickListRefills`, shared by both endpoints, because a key identifies a *submission* and a submission is
+either a single-machine refill or a multi-machine batch.
+`Inventory.Domain.Stock.MultiMachinePickListRefillFingerprint` renders the note and the allocations in
+machine-then-product order — so the same run entered machine by machine or product by product is one
+submission and a retry in any order replays it — behind its own version tag, `mm1`, where the
+single-machine rendering's is `v1`. The two therefore cannot produce the same fingerprint, so a key
+already spent on one kind of refill is **refused as reused** by the other rather than answered with a
+refill it did not record. The adapter states the same thing structurally: a stored refill that is not of
+this shape (a machine on the batch row, or a line without one) is reported as one this contract cannot
+answer with, and the use case fails closed on it whatever the fingerprint says. Everything else is the
+behaviour of the endpoint above: same key and same allocations replays, same key and a different batch is
+`409 Conflict` with `PickListRefillPolicy.IdempotencyKeyReusedMessage`, two copies of one submission
+record it once, and the unique index's violation is translated into the same `409`.
+
+**The refusals.** `ValidateRequestShape` judges the request alone — the key is present and bounded, the
+note is bounded, there is at least one allocation and at most `MaximumAllocations` (500), every
+allocation is **present** and **names a machine**, every quantity is a whole number greater than zero,
+and no machine/product pair appears twice — and runs **before** the transaction is opened, so a malformed
+request does not make every other picker wait on it. A pair submitted twice is refused rather than
+summed: two allocations for one machine and one product are two statements about one slot, and adding
+them up would invent a quantity nobody typed; the same product on *another* machine is a different
+allocation and is the point of the endpoint. An allocation that is not present (`"allocations": [null]`)
+and one that omits `machineId` are both refusals on their own line rather than a `500` or a silent bind
+to machine `0`, which is why `machineId` is nullable all the way from the DTO to the policy.
+`ValidateAgainstState` then judges the machines, the catalogue and the totals. Every refusal refuses the
+whole batch and every refusal is reported, so `400` carries a `ValidationProblemDetails` whose keys are
+`idempotencyKey`, `notes`, `allocations` and `allocations[i]` — the index the caller sent.
+
+**What it persists.** One additive column: `PickListRefillLines.MachineId`, nullable, with the same
+composite `(BusinessId, MachineId)` foreign key on the machines' `(BusinessId, Id)` key, restricted on
+delete, that every other column naming a local machine carries — so any future rule about deleting a
+machine (issue #896) has to count this column too. A batch stores no machine on `PickListRefills` and one
+machine on each of its lines; a single-machine refill is the other way round, and nothing copies one into
+the other. The migration `AddPickListRefillLineMachine` rebuilds `PickListRefillLines` — SQLite cannot
+add a foreign key to an existing table — and backfills nothing: a line recorded before it keeps `NULL`,
+because its refill's machine belongs to the refill and filling it down would rewrite what that submission
+recorded. Production applies migrations at startup, and the code already running there writes that table
+without naming the new column, which a nullable column accepts.
+
+**Authorization.** The action declares `Inventory.Operate` beside `PickListController`'s own
+`PickList.View`, exactly as the single-machine refill does, and being a write it is refused in a
+read-only support session by the central `GET`/`HEAD` rule of issue #551, with no rule of its own. The
+business comes from the caller's membership; nothing in the request names one.
+
+**Not in this slice.** The multi-machine entry screen (a separate issue), automatic allocation, the
+calculated pick list, any Nayax sync or event, and any update or delete of a recorded batch: a correction
+is its own movement.
+
+**What proves it.** `MultiMachinePickListRefillPolicyTests` and
+`MultiMachinePickListRefillFingerprintTests` (the rules and the canonical rendering, including the
+reordered-allocation retry, the aggregate total, and that a comparable single-machine request renders
+differently), `RecordMultiMachinePickListRefillTests` (the orchestration over a fake store: the claim,
+the fleet and the stock read inside the transaction, nothing committed on any refusal, a key that
+recorded a single-machine refill refused, the index violation becoming the same conflict, and another
+database failure not becoming one), `EfMultiMachinePickListRefillStoreTests` (the whole use case over
+SQLite: one product across two machines, costing untouched, the aggregate refusal leaving the first
+allocation unwritten, the per-line machine, a reordered retry, both directions of the cross-endpoint key
+conflict, the single-machine endpoint still recording its own shape, and two businesses sharing one key),
+`MultiMachinePickListRefillConcurrencyTests` (a real SQLite file, independent connections and a barrier:
+one key submitted twice recording once, two batches that together exceed stock leaving exactly one, a
+batch racing a single-machine refill leaving exactly one, and a competing machine deactivation never
+leaving a half-recorded batch), `AddPickListRefillLineMachineMigrationTests` (the rebuilt table, the
+restricting foreign key, the existing refills, lines and keys preserved with no machine, and the
+inventory tables byte-identical before and after), `PickListControllerTests` (the `200`, the replayed
+`200`, the aggregate refusal on every contributing line, a missing allocation and a machine-less
+allocation refused rather than read, and the key conflict propagating) and
+`MultiMachinePickListRefillApiTests` (the endpoint over the real pipeline, where a body is JSON rather
+than objects a compiler built: `[null]`, an omitted `machineId`, and the aggregate refusal all answered
+`400` with nothing written, beside the recorded run that makes "nothing written" a fact about the
+refusal — and the backward-compatibility checks that `POST /api/pick-list/refills` still answers its own
+contract, with and without a machine).
 
 #### Pick List frontend page (issue #222)
 
