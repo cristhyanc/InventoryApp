@@ -1,4 +1,5 @@
 using System.Globalization;
+using Inventory.Domain.Providers;
 
 namespace Inventory.Domain.Machines;
 
@@ -18,6 +19,12 @@ namespace Inventory.Domain.Machines;
 /// only ever referenced by stored rows that carried no name. The <c>AddMachines</c> migration writes
 /// exactly this shape in SQL (<c>'Machine ' || "MachineId"</c>) because a migration cannot call into
 /// the Domain; this is where that shape is stated, and the migration test compares the two.</para>
+///
+/// <para><strong>A machine the provider names is the provider's to rename and retire.</strong> Its
+/// name and whether it is in service are decided where the machine is managed - the provider's own
+/// portal - so a local rename or deactivation of one is refused (reversing issue #740's original
+/// rule, which allowed both). Reactivation stays allowed, so a provider machine deactivated before
+/// the refusal existed can be put back in service.</para>
 ///
 /// <para>Deterministic: every answer is a function of its arguments, so the use case, the adapter
 /// and a test decide identically.</para>
@@ -49,4 +56,23 @@ public static class MachineCataloguePolicy
         ArgumentNullException.ThrowIfNull(externalMachineId);
         return string.Create(CultureInfo.InvariantCulture, $"Machine {externalMachineId}");
     }
+
+    /// <summary>
+    /// Why a machine the business's sales provider names may not be renamed here. It names the
+    /// provider, so the operator knows where the machine is managed.
+    /// </summary>
+    public static string ProviderMachineRenameRefusal(ExternalProvider? provider) =>
+        $"This machine comes from {ProviderName(provider)} and cannot be renamed here. Nothing was saved.";
+
+    /// <summary>Why a machine the business's sales provider names may not be deactivated here.</summary>
+    public static string ProviderMachineDeactivationRefusal(ExternalProvider? provider) =>
+        $"This machine comes from {ProviderName(provider)} and cannot be deactivated here. Nothing was saved.";
+
+    /// <summary>
+    /// The provider to name in a refusal, on the terms of the catalogue refusals of issue #736: a row
+    /// carrying an external id always belongs to a business whose <c>SalesProvider</c> is set, so the
+    /// fallback describes a state this application cannot reach rather than guessing a name.
+    /// </summary>
+    private static string ProviderName(ExternalProvider? provider) =>
+        provider?.ToString() ?? "this business's sales provider";
 }

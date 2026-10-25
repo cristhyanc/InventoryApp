@@ -6,7 +6,8 @@
     <p class="text-md-body value-muted">
       The machines this business operates. A machine is kept here whether or not a provider knows
       about it, and one that stops trading is deactivated rather than deleted, because recorded
-      transactions, refills and counts refer to it.
+      transactions, refills and counts refer to it. A machine from Nayax is renamed and deactivated
+      in Nayax, not here.
     </p>
 
     @if (!sessionActive) {
@@ -76,14 +77,21 @@
                           </button>
                           <button type="button" class="btn btn-sm btn-secondary" (click)="cancelRename()">Cancel</button>
                         } @else {
-                          <button type="button" class="btn btn-sm btn-secondary" (click)="startRename(machine)">
-                            <app-icon name="edit" [size]="16" />
-                            Rename
-                          </button>
-                          @if (machine.isActive) {
-                            <button type="button" class="btn btn-sm btn-secondary" [disabled]="saving" (click)="deactivate(machine)">
-                              Deactivate
+                          <!-- A machine from Nayax is renamed and taken out of service in Nayax, and
+                               the API refuses both; Reactivate stays so one deactivated earlier can
+                               be put back in service. -->
+                          @if (!machine.isProviderNamed) {
+                            <button type="button" class="btn btn-sm btn-secondary" (click)="startRename(machine)">
+                              <app-icon name="edit" [size]="16" />
+                              Rename
                             </button>
+                          }
+                          @if (machine.isActive) {
+                            @if (!machine.isProviderNamed) {
+                              <button type="button" class="btn btn-sm btn-secondary" [disabled]="saving" (click)="deactivate(machine)">
+                                Deactivate
+                              </button>
+                            }
                           } @else {
                             <button type="button" class="btn btn-sm btn-secondary" [disabled]="saving" (click)="reactivate(machine)">
                               Reactivate

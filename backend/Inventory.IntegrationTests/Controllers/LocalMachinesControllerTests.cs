@@ -109,6 +109,32 @@ public class LocalMachinesControllerTests
         Assert.True((await store.FindByIdAsync(1, CancellationToken.None))!.IsActive);
     }
 
+    /// <summary>
+    /// A rename or deactivation the store refuses - a machine the provider names - is a 400 carrying
+    /// the store's own sentence, which the page shows as it is.
+    /// </summary>
+    [Fact]
+    public async Task Rename_and_deactivate_return_bad_request_with_the_stores_refusal()
+    {
+        const string refusal = "This machine comes from Nayax and cannot be renamed here. Nothing was saved.";
+        var store = new FakeLocalMachineStore(
+            [new LocalMachineRecord(1, "Machine 7", IsActive: true, IsProviderNamed: true)])
+        {
+            RefusalToReturn = refusal,
+        };
+        var controller = CreateController(store);
+
+        var renamed = Assert.IsType<BadRequestObjectResult>(
+            await controller.Rename(1, new LocalMachineDto("Lobby level 1"), CancellationToken.None));
+        Assert.Equal(refusal, renamed.Value);
+        var deactivated = Assert.IsType<BadRequestObjectResult>(
+            await controller.Deactivate(1, CancellationToken.None));
+        Assert.Equal(refusal, deactivated.Value);
+
+        var unchanged = (await store.FindByIdAsync(1, CancellationToken.None))!;
+        Assert.Equal(("Machine 7", true), (unchanged.Name, unchanged.IsActive));
+    }
+
     [Fact]
     public async Task Deactivate_and_reactivate_return_not_found_for_a_machine_of_another_business()
     {

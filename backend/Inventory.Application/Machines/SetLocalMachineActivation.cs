@@ -7,6 +7,11 @@ namespace Inventory.Application.Machines;
 /// expenses refer to a machine, so a machine that stops trading is history rather than a mistake:
 /// there is no delete, and nothing here touches a quantity, a cost or any stored movement.</para>
 ///
+/// <para><strong>A provider machine is not deactivated here.</strong> A machine the business's sales
+/// provider names is taken out of service at the provider, so the store refuses its deactivation
+/// against the stored row. Reactivation is never refused, so a provider machine deactivated before
+/// that refusal existed can be put back in service.</para>
+///
 /// <para>One use case for both directions, because they are the same write with the opposite value:
 /// the two endpoints that call it are what make the intent explicit at the HTTP boundary.</para>
 /// </summary>

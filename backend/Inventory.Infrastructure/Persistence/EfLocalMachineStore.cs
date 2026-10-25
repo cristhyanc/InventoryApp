@@ -1,5 +1,6 @@
 using Inventory.Application.Machines;
 using Inventory.Domain.Machines;
+using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
 using Microsoft.EntityFrameworkCore;
@@ -20,9 +21,12 @@ namespace Inventory.Infrastructure.Persistence;
 /// machine of another business is invisible to a read and unreachable to a write, and a created
 /// machine is stamped with the caller's business rather than told which one to belong to.</para>
 ///
-/// <para><strong>Nothing here reads or writes <see cref="LocalMachine.ExternalMachineId"/>.</strong>
-/// A created machine has none, a rename leaves it alone, and the records this adapter returns carry
-/// only whether one is present. The column is written by the <c>AddMachines</c> backfill and, since
+/// <para><strong>Nothing here writes <see cref="LocalMachine.ExternalMachineId"/>.</strong>
+/// A created machine has none, and the records this adapter returns carry only whether one is
+/// present. Whether one is present is also what refuses a rename or a deactivation: a machine the
+/// provider names is renamed and retired at the provider, and that refusal is decided against the
+/// stored row inside the write's own transaction, so a machine linked between a caller's read and
+/// this write is still refused. The column is written by the <c>AddMachines</c> backfill and, since
 /// issue #742, by <see cref="EfProviderMachineLinkStore"/> - the provider machine review's own
 /// adapter, which is where a link is decided against the stored rows inside its own
 /// transaction.</para>
@@ -89,20 +93,33 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
         return await WriteAsync(
             id,
             machine => machine.Name = MachineCataloguePolicy.Normalize(fields.Name!),
+            MachineCataloguePolicy.ProviderMachineRenameRefusal,
             cancellationToken);
     }
 
+    /// <summary>
+    /// Reactivation is never refused, so a provider machine deactivated before the refusal existed
+    /// can be put back in service.
+    /// </summary>
     public Task<LocalMachineWriteAttempt> SetActiveAsync(
         long id, bool isActive, CancellationToken cancellationToken) =>
-        WriteAsync(id, machine => machine.IsActive = isActive, cancellationToken);
+        WriteAsync(
+            id,
+            machine => machine.IsActive = isActive,
+            isActive ? null : MachineCataloguePolicy.ProviderMachineDeactivationRefusal,
+            cancellationToken);
 
     /// <summary>
     /// Reads the machine and applies <paramref name="change"/> to it in one transaction, so the
     /// existence check and the write it depends on cannot be separated by another request deleting
-    /// or replacing the row.
+    /// or replacing the row. <paramref name="providerMachineRefusal"/>, when given, refuses the write
+    /// for a machine the provider names, worded with the business's provider.
     /// </summary>
     private async Task<LocalMachineWriteAttempt> WriteAsync(
-        long id, Action<LocalMachine> change, CancellationToken cancellationToken)
+        long id,
+        Action<LocalMachine> change,
+        Func<ExternalProvider?, string>? providerMachineRefusal,
+        CancellationToken cancellationToken)
     {
         await using var transaction = _db.Database.IsRelational()
             ? await _db.Database.BeginTransactionAsync(cancellationToken)
@@ -111,6 +128,13 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
         var machine = await _db.Machines.FirstOrDefaultAsync(
             candidate => candidate.Id == id, cancellationToken);
         if (machine is null) return LocalMachineWriteAttempt.NotFound();
+
+        // Returned without committing: nothing was written, and the transaction's disposal ends it.
+        if (providerMachineRefusal is not null && machine.ExternalMachineId is not null)
+        {
+            return LocalMachineWriteAttempt.Refused(providerMachineRefusal(
+                await EfSalesProviderQueries.CurrentBusinessSalesProviderAsync(_db, cancellationToken)));
+        }
 
         change(machine);
         await _db.SaveChangesAsync(cancellationToken);
