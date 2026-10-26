@@ -84,7 +84,9 @@ export class ProductFormComponent implements OnInit, OnDestroy {
     initialUnitCost: null as number | null,
     lowStockThreshold: 5,
     restockTo: 5,
-    unit: 'unit',
+    // Empty on New Product: the label is required (issue #895), so the operator types the one the
+    // product is counted in rather than saving a "unit" nobody chose.
+    unit: '',
     categoryId: '' as number | '',
     isActive: true
   };

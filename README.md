@@ -1139,8 +1139,8 @@ does not manage.
   bag, a can, a bottle — and every product you create or edit by hand has one. **Products → New
   Product** and **Products → Edit Product** mark the field with `*`, refuse to save while it is
   empty or only spaces, and say "Unit label is required." beside it; what is saved is the label
-  trimmed. New Product still starts with `unit` filled in, so you only change it when the product is
-  counted in something else. **A product from before this rule, with no label stored, opens Edit
+  trimmed. New Product starts with the field **empty** (it used to say `unit`), so you type the
+  label the product is counted in; saving without one is refused. **A product from before this rule, with no label stored, opens Edit
   Product with the field empty** rather than with `unit` filled in for you: you choose the label it
   should have, and nothing was changed or filled in behind you. `POST /api/products` refuses a
   missing label with `400` and that same sentence, and saves nothing. `PUT /api/products/{id}`

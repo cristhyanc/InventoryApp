@@ -12304,8 +12304,9 @@ The unit label is required **asymmetrically**, and that is the rule rather than 
 
 `ProductFormComponent` matches the server rather than wording a second rule: **New Product** and
 **Edit Product** label the field `Unit Label *`, mark the input `required`, show
-"Unit label is required." beside it and disable Save while it is blank, submit the trimmed value, and
-keep the `"unit"` default on New Product. Editing a product whose stored label is null or blank opens
+"Unit label is required." beside it and disable Save while it is blank, and submit the trimmed value.
+**New Product opens the field empty** (no `"unit"` prefill, removed after #895 at the owner's
+request), so an untouched field is refused rather than saving a label nobody chose. Editing a product whose stored label is null or blank opens
 the field **empty** — the `p.unit ?? 'unit'` prefill is gone — so the operator chooses the label
 instead of having one substituted and silently saved.
 

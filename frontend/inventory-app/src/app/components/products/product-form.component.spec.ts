@@ -365,6 +365,7 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     const { component, create, submit, navigate } = await render({ routeParams: {} });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     component.form.categoryId = 2;
     component.form.quantityInStock = 10;
     component.form.initialUnitCost = 1.1;
@@ -378,7 +379,7 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
       description: null,
       lowStockThreshold: 2,
       restockTo: 8,
-      unit: 'unit',
+      unit: 'bag',
       categoryId: 2,
       isActive: true,
       quantityInStock: 10,
@@ -401,6 +402,7 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     const { component, create } = await render({ routeParams: {} });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     component.form.initialUnitCost = -1;
     component.save();
 
@@ -413,6 +415,7 @@ describe('ProductFormComponent creating a product (issue #737)', () => {
     const { component, navigate } = await render({ routeParams: {}, create });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     component.save();
 
     expect(component.error).toBe('Product name is required.');
@@ -454,6 +457,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
     });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     typeCategory('sn');
     clickCategoryOption(categoryOption('Snacks')!);
     submit();
@@ -465,6 +469,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
     const { component, create, submit } = await render({ routeParams: {} });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     submit();
 
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ categoryId: null }));
@@ -476,6 +481,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
     });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     typeCategory('dri');
     clickCategoryOption(categoryOption('Drinks')!);
     typeCategory('');
@@ -494,6 +500,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
       await render({ routeParams: {}, create: jest.fn(() => of(product({ id: 55 }))) });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     component.form.sku = 'SNK-900';
     component.form.quantityInStock = 12;
     component.form.initialUnitCost = 1.25;
@@ -520,7 +527,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
       description: null,
       lowStockThreshold: 3,
       restockTo: 9,
-      unit: 'unit',
+      unit: 'bag',
       categoryId: 9,
       isActive: true,
       quantityInStock: 12,
@@ -535,6 +542,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
       await render({ routeParams: {}, create: jest.fn(() => of(product({ id: 55 }))) });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     typeCategory('Chocolate');
     clickCategoryOption(createCategoryOption()!);
     chooseGstRule('GST-free');
@@ -556,6 +564,7 @@ describe('ProductFormComponent category on New Product (issue #830)', () => {
     });
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     component.form.sku = 'SNK-900';
     typeCategory('Chocolate');
     clickCategoryOption(createCategoryOption()!);
@@ -593,6 +602,7 @@ describe('ProductFormComponent GST rule on New Product (issue #829)', () => {
   /** Fills in the one field the create validation requires. */
   function named(component: ProductFormComponent): ProductFormComponent {
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     return component;
   }
 
@@ -969,6 +979,7 @@ describe('ProductFormComponent New Product layout (issue #892)', () => {
     expect(host.querySelectorAll('form')).toHaveLength(1);
 
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     fixture.detectChanges();
     submit.click();
     fixture.detectChanges();
@@ -1007,6 +1018,7 @@ describe('ProductFormComponent New Product layout (issue #892)', () => {
 
     chooseGstRule('Taxable');
     component.form.name = 'New Snack';
+    component.form.unit = 'bag';
     submit();
 
     // The one outstanding write is the rule, and its retry is the only control left offered.
@@ -1200,14 +1212,24 @@ describe('ProductFormComponent requiring a Unit Label (issue #895)', () => {
     expect(navigate).toHaveBeenCalledWith(['/products']);
   });
 
-  it('keeps the "unit" default on New Product and marks it required', async () => {
-    const { component, host } = await render({ routeParams: {} });
+  /**
+   * New Product opens with Unit Label empty rather than prefilled with "unit", so a product is never
+   * created with a label the operator did not choose: an untouched field is refused, not saved.
+   */
+  it('opens Unit Label empty on New Product, marks it required and refuses it untouched', async () => {
+    const { component, host, create } = await render({ routeParams: {} });
 
-    expect(component.form.unit).toBe('unit');
-    expect(unitInput(host).value).toBe('unit');
+    expect(component.form.unit).toBe('');
+    expect(unitInput(host).value).toBe('');
+    expect(unitInput(host).placeholder).toBe('e.g. bag, can, bottle');
     expect(unitInput(host).required).toBe(true);
     expect(unitLabelText(host)).toBe('Unit Label *');
-    expect(errors(host)).not.toContain('Unit label is required.');
+
+    component.form.name = 'New Snack';
+    component.save();
+
+    expect(create).not.toHaveBeenCalled();
+    expect(component.error).toBe('Unit label is required.');
   });
 
   it('refuses to create a product with no Unit Label', async () => {
