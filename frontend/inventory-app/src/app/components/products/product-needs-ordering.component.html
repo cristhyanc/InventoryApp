@@ -100,14 +100,13 @@
           </thead>
           <tbody>
             @for (p of sortedProducts; track p.id) {
-              <tr class="table-row table-row-link" (click)="onRowActivate(p, $event)" (keydown.enter)="onRowActivate(p, $event)">
+              <!--
+                The row is not a link: clicking it does nothing, so ticking and reading the list never
+                leaves the page. This page deliberately offers no route to the product editor.
+              -->
+              <tr class="table-row">
                 <td class="table-cell"><input type="checkbox" [attr.aria-label]="'Select ' + p.name" [checked]="selectedProductIds.has(p.id)" (change)="toggleSelection(p.id, $any($event.target).checked)" /></td>
-                <!--
-                  The name looks the product up on Google in a new tab (issue #790, D of #786).
-                  The row's own click handler treats an anchor as the row's control and defers to
-                  it, so this never also opens the editor in the current tab; clicking anywhere
-                  else on the row still does.
-                -->
+                <!-- The name looks the product up on Google in a new tab (issue #790, D of #786). -->
                 <td class="table-cell">
                   <a
                     class="table-row-anchor"
@@ -165,19 +164,10 @@
                     }
                   </td>
                 }
-                <!--
-                  Stock, and the row's own link to the product editor. The editor used to be
-                  reachable through the Name anchor; issue #790 pointed that anchor at Google, which
-                  left the row click as the only way in - and a row click is not something a
-                  keyboard can perform, because the `<tr>` takes no focus and `onRowActivate`
-                  defers to every focusable child. This anchor is that focusable child: it gives
-                  the editor keyboard focus, Enter activation and ctrl/cmd/middle-click natively,
-                  the same way the Products list's Name anchor does.
-                -->
+                <!-- Stock is the row's only action; there is no Edit here. -->
                 <td class="table-cell">
                   <div class="flex flex-wrap gap-2">
                     <a [routerLink]="['/products', p.id, 'stock']" class="btn btn-sm btn-primary">Stock</a>
-                    <a [routerLink]="['/products', p.id, 'edit']" class="btn btn-sm btn-secondary" [attr.aria-label]="'Edit product ' + p.name">Edit</a>
                   </div>
                 </td>
               </tr>
