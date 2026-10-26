@@ -83,9 +83,14 @@
               <p class="field-error md:col-span-2 xl:col-span-3">Restock To must be greater than or equal to the Low Stock Threshold.</p>
             }
 
+            <!-- Required since issue #895. A product whose stored label was missing opens this
+                 field empty, so the message below is what asks the operator to choose one. -->
             <label class="field">
-              <span class="field-label">Unit Label</span>
-              <input [(ngModel)]="form.unit" name="unit" placeholder="e.g. bag, can, bottle" />
+              <span class="field-label">Unit Label *</span>
+              <input [(ngModel)]="form.unit" name="unit" required placeholder="e.g. bag, can, bottle" />
+              @if (unitMissing) {
+                <span class="field-error">Unit label is required.</span>
+              }
             </label>
           </div>
 
@@ -141,9 +146,13 @@
                 (categoryIdChange)="onCategorySelected($event)"
               ></app-product-category-picker>
 
+              <!-- Required since issue #895, and still defaulted to "unit" for a new product. -->
               <label class="field">
-                <span class="field-label">Unit Label</span>
-                <input [(ngModel)]="form.unit" name="unit" placeholder="e.g. bag, can, bottle" />
+                <span class="field-label">Unit Label *</span>
+                <input [(ngModel)]="form.unit" name="unit" required placeholder="e.g. bag, can, bottle" />
+                @if (unitMissing) {
+                  <span class="field-error">Unit label is required.</span>
+                }
               </label>
 
               <label class="field md:col-span-2">

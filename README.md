@@ -1130,10 +1130,26 @@ maintains every product and category itself, and a business with one keeps the f
 does not manage.
 
 - **Create a product** with `POST /api/products`, and a **category** with `POST /api/categories`.
-  Both answer the created record with its new id. A product needs a name; a category needs a name,
+  Both answer the created record with its new id. A product needs a name and a **unit label**; a
+  category needs a name,
   unique within the business (compared without case, so
   "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
   the initial restock movement it always did, at the optional initial unit **cost**.
+- **Unit Label is required** (issue #895). It is what a quantity of this product is counted in — a
+  bag, a can, a bottle — and every product you create or edit by hand has one. **Products → New
+  Product** and **Products → Edit Product** mark the field with `*`, refuse to save while it is
+  empty or only spaces, and say "Unit label is required." beside it; what is saved is the label
+  trimmed. New Product still starts with `unit` filled in, so you only change it when the product is
+  counted in something else. **A product from before this rule, with no label stored, opens Edit
+  Product with the field empty** rather than with `unit` filled in for you: you choose the label it
+  should have, and nothing was changed or filled in behind you. `POST /api/products` refuses a
+  missing label with `400` and that same sentence, and saves nothing. `PUT /api/products/{id}`
+  refuses one **only when the product's stored label is not blank** — no request can erase a label —
+  while a product whose stored label is already blank is still accepted with none, so the Products
+  list's **Deactivate** and **Reactivate** (which send the whole product back) keep working for
+  those older products. Imported products are unaffected: the catalogue import gives a product it
+  creates the `unit` default and leaves a linked product's own label alone, and no label is
+  backfilled anywhere.
 - **New Product is read down in titled sections** (issue #892). **Products → New Product** groups
   its fields under **Product details** — Name beside SKU, Category beside Unit Label, Description
   across the row below them, and then the compact **Active product** checkbox — **Opening
@@ -1185,7 +1201,8 @@ does not manage.
   manages is locked there.
 - **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name and
   category** as well as the SKU, description, unit, low-stock threshold, restock target
-  and active flag. There is no supplier among them — see
+  and active flag. The unit label may not be blanked — see **Unit Label is required** above for the
+  one case a blank one is still accepted. There is no supplier among them — see
   [A product carries no supplier](#a-product-carries-no-supplier) — and no selling price either —
   see [A product carries no selling price](#a-product-carries-no-selling-price). **Edit a category**
   with `PUT /api/categories/{id}`.
