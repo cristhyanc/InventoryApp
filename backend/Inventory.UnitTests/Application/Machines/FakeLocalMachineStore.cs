@@ -35,12 +35,42 @@ public sealed class FakeLocalMachineStore : ILocalMachineStore
 
     public bool? LastActivation { get; private set; }
 
-    public Task<IReadOnlyList<LocalMachineRecord>> ListOrderedByNameAsync(CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<LocalMachineRecord>>(
+    /// <summary>
+    /// How many times the fleet listing was read. A caller that holds a write lock reads the narrow
+    /// <see cref="GetActivationsAsync"/> instead, so a test can assert this stayed at zero (issue
+    /// #897).
+    /// </summary>
+    public int ListCalls { get; private set; }
+
+    /// <summary>The machine ids the last <see cref="GetActivationsAsync"/> asked about.</summary>
+    public IReadOnlyList<long> LastActivationsRequested { get; private set; } = [];
+
+    public Task<IReadOnlyList<LocalMachineRecord>> ListOrderedByNameAsync(CancellationToken cancellationToken)
+    {
+        ListCalls++;
+        return Task.FromResult<IReadOnlyList<LocalMachineRecord>>(
             _machines.OrderBy(machine => machine.Name, StringComparer.Ordinal).ToList());
+    }
 
     public Task<LocalMachineRecord?> FindByIdAsync(long id, CancellationToken cancellationToken) =>
         Task.FromResult(_machines.SingleOrDefault(machine => machine.Id == id));
+
+    /// <summary>
+    /// The narrow activation read (issue #897). A machine the seed does not hold is absent rather
+    /// than inactive, exactly as the tenant query filters leave another business's machine out.
+    /// </summary>
+    public Task<IReadOnlyDictionary<long, LocalMachineActivation>> GetActivationsAsync(
+        IReadOnlyCollection<long> machineIds, CancellationToken cancellationToken)
+    {
+        LastActivationsRequested = [.. machineIds];
+
+        return Task.FromResult<IReadOnlyDictionary<long, LocalMachineActivation>>(
+            _machines
+                .Where(machine => machineIds.Contains(machine.Id))
+                .ToDictionary(
+                    machine => machine.Id,
+                    machine => new LocalMachineActivation(machine.Id, machine.IsActive)));
+    }
 
     public Task<LocalMachineWriteAttempt> CreateAsync(
         LocalMachineWriteFields fields, CancellationToken cancellationToken)

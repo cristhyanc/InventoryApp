@@ -69,8 +69,12 @@ public static class MultiMachinePickListRefillPolicy
     /// sentence states what one line asked for against the shelf, and repeating it on an allocation
     /// of 6 against an available 10 would read as wrong. This one states the sum, which is the figure
     /// that does not fit. The available quantity is a figure the caller is already entitled to see.
+    ///
+    /// <para>The total is a <see cref="long"/> because a sum of positive <see cref="int"/>
+    /// quantities need not be one: it is the real total that is reported, never a narrowed or
+    /// wrapped one, so the sentence and the comparison behind it say the same thing.</para>
     /// </summary>
-    public static string NotEnoughStockForTotalMessage(int totalRequested, int availableStock) =>
+    public static string NotEnoughStockForTotalMessage(long totalRequested, int availableStock) =>
         $"The allocations for this product take {totalRequested} units, but only {availableStock} are in stock.";
 
     /// <summary>
@@ -244,13 +248,23 @@ public static class MultiMachinePickListRefillPolicy
     /// already refused as what it is, and a stock sentence about it would be a statement about a
     /// product the caller does not have. An allocation already refused for its machine or product
     /// keeps that refusal, so a client ends up with exactly one message per line.
+    ///
+    /// <para><strong>The sum is 64-bit, and that is not a detail.</strong> Every quantity here is a
+    /// positive <see cref="int"/> - the shape half accepts any of them - and their total need not fit
+    /// in one: two allocations of <see cref="int.MaxValue"/> add up to -2 in 32 bits, which compares
+    /// as comfortably under any shelf, so the one rule this endpoint exists for would be skipped and
+    /// the batch written. A <see cref="long"/> holds
+    /// <see cref="MaximumAllocations"/> × <see cref="int.MaxValue"/> with more than seven orders of
+    /// magnitude to spare, so the accumulator cannot overflow either, and the comparison and the
+    /// refusal both use the real total - it is never narrowed back to an <see cref="int"/>
+    /// anywhere.</para>
     /// </summary>
     private static List<MultiMachineRefillAllocationRefusal> BuildAggregateStockRefusals(
         IReadOnlyList<MultiMachineRefillLine> lines,
         IReadOnlyDictionary<long, PickListRefillProductFacts> products,
         HashSet<int> refused)
     {
-        var totals = new Dictionary<long, int>();
+        var totals = new Dictionary<long, long>();
         foreach (var line in lines)
         {
             if (products.TryGetValue(line.ProductId, out var product) && product.IsActive)

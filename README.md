@@ -1876,6 +1876,8 @@ POST /api/pick-list/multi-machine-refills
 - **Storage is checked against each product's total across the run.** Six to one machine and six to
   another is twelve off one shelf: with ten in storage that is refused, and both lines say so, even
   though each would fit on its own. This is the thing several separate requests could not get right.
+  The total is added up at full width, so quantities that are each a valid whole number but together
+  come to more than two billion are refused by this same rule and the refusal states the real total.
 - **Every allocation names a machine**, one of your own active machines (the same local machine
   records the stock and expense screens use). A refill for **no** machine is still
   `POST /api/pick-list/refills`, which is why that endpoint stays.

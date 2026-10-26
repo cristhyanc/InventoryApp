@@ -9597,6 +9597,15 @@ not-enough-stock sentence: repeating "available stock: 10" on an allocation of 6
 product the business does not have, or has retired, is refused as that and no stock statement is made
 about it.
 
+**That sum is 64-bit, and the comparison happens before anything is narrowed.** Every quantity is a
+positive `int` the shape rules accept on its own, and a sum of them need not be one: two allocations of
+`int.MaxValue` add up to `-2` in 32 bits, which compares as comfortably under any shelf, so the one rule
+this endpoint exists for would be skipped and the batch written. The accumulator is therefore a `long` —
+`MaximumAllocations` (500) × `int.MaxValue` leaves it more than seven orders of magnitude of headroom, so
+it cannot overflow either — and `NotEnoughStockForTotalMessage` takes and reports that real total. The
+answer stays the promised one: `400` on every contributing allocation with nothing written, never a
+refusal that passes and leaves the arithmetic to the movement-recording path further in.
+
 **The machines, the quantities and the key claim are all read inside one write-locked transaction.**
 `Inventory.Application.PickList.RecordMultiMachinePickListRefill` runs the whole request inside the
 transaction `Inventory.Infrastructure.Persistence.PickListRefillWriteLock` opens, which on SQLite is
@@ -9605,11 +9614,15 @@ single-machine endpoint**, because both write the same tables and take from the 
 a single-machine refill that together exceed storage leave exactly one of them recorded, exactly as two
 batches do. Under the lock a losing request waits (within `Default Timeout`), re-reads the committed
 quantities and is refused having written nothing; a machine deactivated in the meantime is refused too,
-because the fleet is read in there as well — the deactivation either commits before this transaction
-opens and is seen, or after it and comes second. The fleet is read in one statement
-(`ILocalMachineStore.ListOrderedByNameAsync`) rather than one machine at a time: a business's machines
-are few, and several round trips inside a lock every other picker waits on would cost more than the rows
-do.
+because the machines are read in there as well — the deactivation either commits before this transaction
+opens and is seen, or after it and comes second. **The machine read under that lock is the narrowest one
+there is**: `ILocalMachineStore.GetActivationsAsync` is one statement over two columns of the machines the
+request named, and it answers only whether each is in service. It is deliberately not the fleet listing
+or the single-machine read, which also resolve a machine's name, its provider link and — since
+machine deletion (issue #896, § Deleting a machine added by mistake) — its deletion eligibility, whose
+reference counts are several correlated subqueries per machine and may read the business's sales provider.
+None of that decides a refill, and a read taken under a lock every other picker waits on has to be the
+read the rule needs and no more.
 
 **One key namespace, and no refill is ever reinterpreted.** The key is still unique per business on
 `PickListRefills`, shared by both endpoints, because a key identifies a *submission* and a submission is
@@ -9642,8 +9655,19 @@ whole batch and every refusal is reported, so `400` carries a `ValidationProblem
 
 **What it persists.** One additive column: `PickListRefillLines.MachineId`, nullable, with the same
 composite `(BusinessId, MachineId)` foreign key on the machines' `(BusinessId, Id)` key, restricted on
-delete, that every other column naming a local machine carries — so any future rule about deleting a
-machine (issue #896) has to count this column too. A batch stores no machine on `PickListRefills` and one
+delete, that every other column naming a local machine carries. **It is therefore a fifth place a machine
+is referred to, and machine deletion (issue #896) has to count it.** The restricted key is already the
+database's own answer — a machine a recorded allocation names cannot be deleted, proved on that reference
+alone in `EfMultiMachinePickListRefillStoreTests`, with the allocation's movement deliberately naming no
+machine so the refusal cannot be coming from the `StockAdjustments` reference an ordinary batch also
+leaves. What the database cannot supply is the operator-facing sentence:
+`Inventory.Domain.Machines.LocalMachineDeletionReferences` counts `MachineStockCounts`,
+`StockAdjustments`, `PickListRefills` (the batch header's own machine) and `OperatingExpenses`, and a
+batch leaves `PickListRefills.MachineId` `NULL`, so a machine referred to **only** by an allocation is
+refused by the foreign key's translated refusal rather than by the counted one that names what is in the
+way. Adding `PickListRefillLines` to that count (and its "pick list refill allocation" wording to
+`MachineDeletionPolicy`) is the one piece of this integration that belongs in the deletion code rather
+than here. A batch stores no machine on `PickListRefills` and one
 machine on each of its lines; a single-machine refill is the other way round, and nothing copies one into
 the other. The migration `AddPickListRefillLineMachine` rebuilds `PickListRefillLines` — SQLite cannot
 add a foreign key to an existing table — and backfills nothing: a line recorded before it keeps `NULL`,
@@ -9662,14 +9686,20 @@ is its own movement.
 
 **What proves it.** `MultiMachinePickListRefillPolicyTests` and
 `MultiMachinePickListRefillFingerprintTests` (the rules and the canonical rendering, including the
-reordered-allocation retry, the aggregate total, and that a comparable single-machine request renders
-differently), `RecordMultiMachinePickListRefillTests` (the orchestration over a fake store: the claim,
-the fleet and the stock read inside the transaction, nothing committed on any refusal, a key that
+reordered-allocation retry, the aggregate total, totals beyond `int.MaxValue` — two of `int.MaxValue`,
+ordinary in-range quantities that together pass it, and the widest batch the contract accepts — and that
+a comparable single-machine request renders differently),
+`RecordMultiMachinePickListRefillTests` (the orchestration over a fake store: the claim,
+the machines and the stock read inside the transaction, the machines read by id rather than through the
+fleet listing, nothing committed on any refusal, a key that
 recorded a single-machine refill refused, the index violation becoming the same conflict, and another
 database failure not becoming one), `EfMultiMachinePickListRefillStoreTests` (the whole use case over
 SQLite: one product across two machines, costing untouched, the aggregate refusal leaving the first
-allocation unwritten, the per-line machine, a reordered retry, both directions of the cross-endpoint key
-conflict, the single-machine endpoint still recording its own shape, and two businesses sharing one key),
+allocation unwritten, a total beyond `int.MaxValue` leaving the quantities, movements, refill rows and
+the idempotency key itself untouched, a machine a recorded allocation names refused deletion on that
+allocation's reference alone, the per-line machine, a reordered retry, both directions of the
+cross-endpoint key conflict, the single-machine endpoint still recording its own shape, and two
+businesses sharing one key),
 `MultiMachinePickListRefillConcurrencyTests` (a real SQLite file, independent connections and a barrier:
 one key submitted twice recording once, two batches that together exceed stock leaving exactly one, a
 batch racing a single-machine refill leaving exactly one, and a competing machine deactivation never
@@ -9679,7 +9709,8 @@ inventory tables byte-identical before and after), `PickListControllerTests` (th
 `200`, the aggregate refusal on every contributing line, a missing allocation and a machine-less
 allocation refused rather than read, and the key conflict propagating) and
 `MultiMachinePickListRefillApiTests` (the endpoint over the real pipeline, where a body is JSON rather
-than objects a compiler built: `[null]`, an omitted `machineId`, and the aggregate refusal all answered
+than objects a compiler built: `[null]`, an omitted `machineId`, the aggregate refusal and a total beyond
+`int.MaxValue` all answered
 `400` with nothing written, beside the recorded run that makes "nothing written" a fact about the
 refusal — and the backward-compatibility checks that `POST /api/pick-list/refills` still answers its own
 contract, with and without a machine).

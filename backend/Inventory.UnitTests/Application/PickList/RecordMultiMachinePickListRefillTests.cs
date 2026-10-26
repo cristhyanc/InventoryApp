@@ -318,6 +318,27 @@ public class RecordMultiMachinePickListRefillTests
         Assert.Equal(1, store.TransactionsOpened);
     }
 
+    /// <summary>
+    /// The machines read inside that transaction is the narrow one, bounded by the ids the request
+    /// named. The fleet listing resolves each machine's name, its provider link and - since issue
+    /// #896 - its deletion eligibility, which counts four other tables per machine and may read the
+    /// business's sales provider; none of that decides a refill, and the lock every other picker
+    /// waits on must not be held across it.
+    /// </summary>
+    [Fact]
+    public async Task The_machines_are_read_by_id_rather_than_through_the_fleet_listing()
+    {
+        var store = new FakeMultiMachinePickListRefillStore();
+        var machines = Machines();
+
+        var attempt = await UseCase(store, Storage((10, 10, true), (11, 10, true)), machines)
+            .Handle(Input(allocations: [(MachineA, 10, 1), (MachineA, 11, 2)]), CancellationToken.None);
+
+        Assert.Equal(PickListRefillOutcome.Recorded, attempt.Outcome);
+        Assert.Equal(0, machines.ListCalls);
+        Assert.Equal([MachineA], machines.LastActivationsRequested);
+    }
+
     [Fact]
     public async Task The_same_key_and_the_same_batch_returns_the_original_and_records_nothing()
     {

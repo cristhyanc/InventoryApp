@@ -13,6 +13,7 @@ public class MultiMachinePickListRefillPolicyTests
     private const string Key = "e7b1c0d2-5a6f-4c3b-9d8e-1f2a3b4c5d6e";
     private const long MachineA = 7;
     private const long MachineB = 8;
+    private const long MachineC = 9;
 
     private static MultiMachineRefillAllocation Allocation(
         long? machineId, long productId, int quantity) => new(machineId, productId, quantity);
@@ -337,6 +338,78 @@ public class MultiMachinePickListRefillPolicyTests
             MultiMachinePickListRefillPolicy.NotEnoughStockForTotalMessage(12, 10),
             rejection.Allocations[0].Message);
         Assert.Equal(PickListRefillPolicy.MachineMustBeActiveMessage, rejection.Allocations[1].Message);
+    }
+
+    /// <summary>
+    /// A total too large for a 32-bit sum is still a total that does not fit on the shelf. Two
+    /// allocations of <see cref="int.MaxValue"/> are each a positive whole number the shape half
+    /// accepts, and adding them up in an <see cref="int"/> wraps to -2 - which compares as
+    /// comfortably below a storage quantity of 10, so the one rule this endpoint exists for would be
+    /// skipped and the batch recorded. The sum is therefore accumulated in 64 bits and compared
+    /// before it is narrowed anywhere.
+    /// </summary>
+    [Fact]
+    public void Allocations_whose_total_exceeds_a_32_bit_sum_are_still_refused()
+    {
+        var rejection = State(
+            [new(MachineA, 100, int.MaxValue), new(MachineB, 100, int.MaxValue)],
+            products: [(100, 10, true)]);
+
+        Assert.Equal([0, 1], rejection.Allocations.Select(refusal => refusal.AllocationIndex));
+        Assert.All(
+            rejection.Allocations,
+            refusal => Assert.Equal(
+                MultiMachinePickListRefillPolicy.NotEnoughStockForTotalMessage(2L * int.MaxValue, 10),
+                refusal.Message));
+    }
+
+    /// <summary>
+    /// The same defect with quantities nobody would call extreme: three allocations of 800,000,000
+    /// are each far inside an <see cref="int"/>, and their real total - 2,400,000,000 - is not. The
+    /// refusal states that real total rather than the wrapped one.
+    /// </summary>
+    [Fact]
+    public void Ordinary_quantities_whose_total_exceeds_a_32_bit_sum_are_refused_with_the_real_total()
+    {
+        const int quantity = 800_000_000;
+
+        var rejection = State(
+            [new(MachineA, 100, quantity), new(MachineB, 100, quantity), new(MachineC, 100, quantity)],
+            machines: [(MachineA, true), (MachineB, true), (MachineC, true)],
+            products: [(100, 10, true)]);
+
+        Assert.Equal([0, 1, 2], rejection.Allocations.Select(refusal => refusal.AllocationIndex));
+        Assert.All(
+            rejection.Allocations,
+            refusal => Assert.Equal(
+                MultiMachinePickListRefillPolicy.NotEnoughStockForTotalMessage(3L * quantity, 10),
+                refusal.Message));
+    }
+
+    /// <summary>
+    /// The widest total the contract can be asked for - <see cref="MultiMachinePickListRefillPolicy.MaximumAllocations"/>
+    /// allocations of <see cref="int.MaxValue"/> - is summed exactly and refused, which is what makes
+    /// 64 bits sufficient rather than merely wider: the accumulator never overflows, so the refusal
+    /// is a refusal and never an arithmetic failure reported as a server error.
+    /// </summary>
+    [Fact]
+    public void The_largest_batch_of_the_largest_quantities_is_summed_exactly_and_refused()
+    {
+        const int allocations = MultiMachinePickListRefillPolicy.MaximumAllocations;
+
+        var rejection = State(
+            [.. Enumerable.Range(0, allocations).Select(index => new MultiMachineRefillLine(
+                MachineA + index, 100, int.MaxValue))],
+            machines: [.. Enumerable.Range(0, allocations).Select(index => (MachineA + index, true))],
+            products: [(100, 10, true)]);
+
+        Assert.Equal(allocations, rejection.Allocations.Count);
+        Assert.All(
+            rejection.Allocations,
+            refusal => Assert.Equal(
+                MultiMachinePickListRefillPolicy.NotEnoughStockForTotalMessage(
+                    allocations * (long)int.MaxValue, 10),
+                refusal.Message));
     }
 
     /// <summary>

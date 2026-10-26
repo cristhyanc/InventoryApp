@@ -126,11 +126,17 @@ public sealed class RecordMultiMachinePickListRefill
             return MultiMachinePickListRefillAttempt.Replayed(replayed);
         }
 
-        // Read inside the lock, so the fleet and the quantities these rules are decided on are the
-        // ones the movements below are applied to. The whole fleet is read in one statement rather
-        // than one machine at a time: a business's machines are few, and a per-allocation lookup
-        // would be several round trips inside the lock every other picker waits on.
-        var machines = await _machines.ListOrderedByNameAsync(cancellationToken).ConfigureAwait(false);
+        // Read inside the lock, so the machines and the quantities these rules are decided on are the
+        // ones the movements below are applied to. Both reads are one statement over exactly what
+        // the rules need: the machines this request names, by id, and only whether each is in service
+        // (ILocalMachineStore.GetActivationsAsync). Deliberately not the fleet listing - that one
+        // also resolves each machine's name, its provider link and, since issue #896, its deletion
+        // eligibility, which counts four other tables per machine and may read the business's sales
+        // provider. None of that decides a refill, and every other picker waits on this lock.
+        var machines = await _machines
+            .GetActivationsAsync(
+                [.. lines.Select(line => line.MachineId).Distinct()], cancellationToken)
+            .ConfigureAwait(false);
 
         var products = await _products
             .GetStorageProductsAsync(
@@ -140,8 +146,8 @@ public sealed class RecordMultiMachinePickListRefill
         var state = MultiMachinePickListRefillPolicy.ValidateAgainstState(
             lines,
             machines.ToDictionary(
-                machine => machine.Id,
-                machine => new PickListRefillMachineFacts(machine.Id, machine.IsActive)),
+                machine => machine.Key,
+                machine => new PickListRefillMachineFacts(machine.Key, machine.Value.IsActive)),
             products.ToDictionary(
                 product => product.Key,
                 product => new PickListRefillProductFacts(

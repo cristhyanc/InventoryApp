@@ -233,6 +233,55 @@ public sealed class MultiMachinePickListRefillApiTests
     }
 
     /// <summary>
+    /// The same rule over the wire when the product's total does not fit in a 32-bit sum (the
+    /// regression for the overflow reported on PR #913). Two bodies-worth of
+    /// <c>2147483647</c> bind as the positive whole numbers they are, and a 32-bit sum of them wraps
+    /// to -2, which reads as comfortably under a shelf of ten; the promised answer is the
+    /// all-or-nothing <c>400</c> on both contributing lines, never a recorded batch and never a
+    /// <c>500</c> from an arithmetic failure further in.
+    /// </summary>
+    [Fact]
+    public async Task Allocations_whose_total_exceeds_a_32_bit_sum_are_refused_on_every_contributing_line()
+    {
+        await _factory.SeedAsync();
+        const string key = "c0ffee00-0000-4000-8000-00000000ffff";
+
+        var response = await _factory.Authenticated().PostAsync(
+            Uri,
+            Json($$"""
+                {
+                  "idempotencyKey": "{{key}}",
+                  "allocations": [
+                    { "machineId": {{ApiFactory.MachineA}}, "productId": {{ApiFactory.RefusedProductId}}, "quantityTaken": {{int.MaxValue}} },
+                    { "machineId": {{ApiFactory.MachineB}}, "productId": {{ApiFactory.RefusedProductId}}, "quantityTaken": {{int.MaxValue}} }
+                  ]
+                }
+                """));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var errors = JsonDocument
+            .Parse(await response.Content.ReadAsStringAsync())
+            .RootElement
+            .GetProperty("errors");
+
+        var expected = MultiMachinePickListRefillPolicy.NotEnoughStockForTotalMessage(
+            2L * int.MaxValue, ApiFactory.StartingStock);
+        foreach (var index in new[] { 0, 1 })
+        {
+            Assert.Equal(
+                expected,
+                Assert.Single(errors
+                    .GetProperty(MultiMachinePickListRefillResponseMapper.AllocationKey(index))
+                    .EnumerateArray())
+                    .GetString());
+        }
+
+        await AssertNothingRecordedAsync(key);
+        await using var db = _factory.Database();
+        Assert.Empty(db.PickListRefillLines.Where(line => line.ProductId == ApiFactory.RefusedProductId));
+    }
+
+    /// <summary>
     /// The endpoint this one was added beside is unchanged: the same body it always took, the same
     /// response it always answered - <c>machineId</c> on the refill and <c>rows</c> rather than
     /// <c>allocations</c> - and the same stored shape, with no machine on its line.

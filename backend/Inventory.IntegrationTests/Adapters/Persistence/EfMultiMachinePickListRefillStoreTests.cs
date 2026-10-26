@@ -348,6 +348,141 @@ public class EfMultiMachinePickListRefillStoreTests
     }
 
     /// <summary>
+    /// The same refusal when the product's total is too large for a 32-bit sum (the regression for
+    /// the overflow reported on PR #913). Each quantity is a positive whole number the shape rules
+    /// accept, and adding them up in an <see cref="int"/> wraps to a value below the shelf - which
+    /// would have let the one rule this endpoint exists for pass and written the batch. Over a real
+    /// database, with the storage quantity, the movements, the refill, its lines and the idempotency
+    /// key all proved untouched: the key is still unspent afterwards, which is what shows the refusal
+    /// claimed nothing.
+    /// </summary>
+    [Fact]
+    public async Task Allocations_whose_total_exceeds_a_32_bit_sum_leave_nothing_written()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
+        await SeedProductAsync(options, BusinessA, 100, quantity: 10);
+        await SeedMachineAsync(options, BusinessA, MachineA);
+        await SeedMachineAsync(options, BusinessA, MachineB);
+
+        await using (var db = TestAppDbContext.For(options, BusinessA))
+        {
+            var attempt = await UseCaseFor(db).Handle(
+                Input(allocations: [(MachineA, 100, int.MaxValue), (MachineB, 100, int.MaxValue)]),
+                CancellationToken.None);
+
+            Assert.Equal(PickListRefillOutcome.Rejected, attempt.Outcome);
+            Assert.Equal([0, 1], attempt.Rejection!.Allocations.Select(r => r.AllocationIndex));
+            Assert.All(
+                attempt.Rejection.Allocations,
+                refusal => Assert.Equal(
+                    MultiMachinePickListRefillPolicy.NotEnoughStockForTotalMessage(2L * int.MaxValue, 10),
+                    refusal.Message));
+        }
+
+        await using (var verify = TestAppDbContext.For(options, BusinessA))
+        {
+            Assert.Equal(10, (await verify.Products.SingleAsync(p => p.Id == 100)).QuantityInStock);
+            Assert.Empty(verify.StockAdjustments
+                .Where(adjustment => adjustment.Reason == StockAdjustmentReason.MachineRefill));
+            Assert.Empty(verify.PickListRefills);
+            Assert.Empty(verify.PickListRefillLines);
+        }
+
+        // The key the refused batch carried is still that business's to spend, because nothing about
+        // the refusal was recorded.
+        await using (var db = TestAppDbContext.For(options, BusinessA))
+        {
+            var attempt = await UseCaseFor(db).Handle(
+                Input(allocations: [(MachineA, 100, 4)]), CancellationToken.None);
+
+            Assert.Equal(PickListRefillOutcome.Recorded, attempt.Outcome);
+        }
+
+        await using var after = TestAppDbContext.For(options, BusinessA);
+        Assert.Equal(6, (await after.Products.SingleAsync(p => p.Id == 100)).QuantityInStock);
+        Assert.Equal(Key, (await after.PickListRefills.SingleAsync()).IdempotencyKey);
+    }
+
+    /// <summary>
+    /// A machine a recorded allocation names cannot be deleted, and it is <em>this</em> column that
+    /// says so (issue #896's deletion rule, merged as PR #912, integrating with issue #897's new
+    /// <c>PickListRefillLines.MachineId</c>).
+    ///
+    /// <para>The point of the test is the isolation. In an ordinary batch every allocation also
+    /// leaves a <c>StockAdjustment</c> carrying the same machine, so a reference count that never
+    /// looked at a refill line would still block the delete - by accident, through a coupling nothing
+    /// asserts. Here the line's movement deliberately names no machine (the persisted shape a
+    /// no-machine refill already produces), so the <strong>only</strong> row naming the machine is the
+    /// allocation, and the composite <c>(BusinessId, MachineId)</c> restricted foreign key is proved
+    /// to be what refuses the delete. It is checked with a raw <c>DELETE</c> so the answer is the
+    /// database's own and not whatever EF has in its change tracker.</para>
+    ///
+    /// <para>This is the database's backstop, not an operator-facing refusal: the counted,
+    /// message-bearing refusal lives in <c>Inventory.Domain.Machines.MachineDeletionPolicy</c>, whose
+    /// reference count must learn about this column too - see the closing note in
+    /// <c>docs/architecture.md</c> § Multi-machine refill batch.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_machine_a_recorded_allocation_names_cannot_be_deleted_by_its_own_reference_alone()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        var options = await CreateSqliteAsync(connection);
+        await SeedProductAsync(options, BusinessA, 100, quantity: 10);
+        await SeedMachineAsync(options, BusinessA, MachineA);
+
+        await using (var seed = TestAppDbContext.For(options, BusinessA))
+        {
+            // A refill movement that names no machine, which is exactly what a no-machine refill
+            // records, so nothing but the allocation below refers to MachineA.
+            var movement = new StockAdjustment
+            {
+                ProductId = 100,
+                QuantityChange = -3,
+                QuantityAfter = 7,
+                Reason = StockAdjustmentReason.MachineRefill,
+                Source = StockAdjustmentSource.Manual,
+                MachineId = null,
+                EffectiveAt = RecordedAt,
+            };
+            seed.StockAdjustments.Add(movement);
+            await seed.SaveChangesAsync();
+
+            seed.PickListRefills.Add(new PickListRefill
+            {
+                IdempotencyKey = Key,
+                RequestFingerprint = new string('f', 64),
+                MachineId = null,
+                RecordedAtUtc = RecordedAt,
+                Lines =
+                [
+                    new PickListRefillLine
+                    {
+                        MachineId = MachineA,
+                        ProductId = 100,
+                        QuantityTaken = 3,
+                        StockAdjustmentId = movement.Id,
+                    },
+                ],
+            });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var db = TestAppDbContext.For(options, BusinessA);
+        Assert.Empty(db.StockAdjustments.Where(movement => movement.MachineId == MachineA));
+        Assert.Empty(db.PickListRefills.Where(refill => refill.MachineId == MachineA));
+
+        var failure = await Assert.ThrowsAsync<SqliteException>(
+            () => db.Database.ExecuteSqlRawAsync("DELETE FROM Machines WHERE Id = {0};", MachineA));
+        Assert.Contains("FOREIGN KEY constraint failed", failure.Message, StringComparison.OrdinalIgnoreCase);
+
+        // Nothing was deleted and nothing was reassigned or nulled: the allocation still names the
+        // machine it was walked to.
+        Assert.NotNull(await db.Machines.SingleOrDefaultAsync(machine => machine.Id == MachineA));
+        Assert.Equal(MachineA, (await db.PickListRefillLines.SingleAsync()).MachineId);
+    }
+
+    /// <summary>
     /// The transaction, proved on the ordinary case too: the first allocation is applicable and a
     /// later one is not, so everything the batch had staged is discarded.
     /// </summary>

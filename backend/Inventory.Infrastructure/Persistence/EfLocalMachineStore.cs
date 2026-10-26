@@ -58,6 +58,24 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
                 machine.Id, machine.Name, machine.IsActive, machine.ExternalMachineId != null))
             .FirstOrDefaultAsync(cancellationToken);
 
+    /// <summary>
+    /// One statement over two columns of the machines the caller named: no name, no provider link and
+    /// nothing correlated from another table, because this is the read a write holds a lock across
+    /// (issue #897). Tenant scoping is the central query filter, so a machine of another business is
+    /// simply not in the answer.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<long, LocalMachineActivation>> GetActivationsAsync(
+        IReadOnlyCollection<long> machineIds, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(machineIds);
+
+        return await _db.Machines
+            .AsNoTracking()
+            .Where(machine => machineIds.Contains(machine.Id))
+            .Select(machine => new LocalMachineActivation(machine.Id, machine.IsActive))
+            .ToDictionaryAsync(machine => machine.MachineId, cancellationToken);
+    }
+
     public async Task<LocalMachineWriteAttempt> CreateAsync(
         LocalMachineWriteFields fields, CancellationToken cancellationToken)
     {
