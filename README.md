@@ -1922,6 +1922,52 @@ that cannot be used.
   untouched by this selector. A machine list that **failed** to load says so in the selector's place
   and still lets you save without a machine, exactly as a business with none recorded would.
 
+#### Recording one pick across several machines (the API, issue #897)
+
+A pick run usually visits several machines, and until now each machine had to be saved as its own
+request. Issue #897 adds one endpoint that records the whole run at once. It is the **backend half**:
+the multi-machine entry screen is a separate issue, so the Manual Pick List screen described above
+still saves one machine (or none) per Save, and `POST /api/pick-list/refills` is unchanged.
+
+```text
+POST /api/pick-list/multi-machine-refills
+{
+  "idempotencyKey": "<your own string for this submission>",
+  "notes": "optional",
+  "allocations": [
+    { "machineId": 11, "productId": 300, "quantityTaken": 6 },
+    { "machineId": 12, "productId": 300, "quantityTaken": 4 }
+  ]
+}
+-> 200 the recorded run: the key, the note, the server's instant, and per allocation the machine,
+      the product, the quantity and the id of the stock movement that recorded it, plus
+      "replayed": true when this key had already recorded it and nothing new was written
+-> 400 a problem document addressed per line (keys "allocations[i]", "idempotencyKey", "notes")
+-> 409 the key already recorded a different refill
+```
+
+- **All or nothing.** Every allocation is recorded as one `MachineRefill` stock movement attributed
+  to its own machine, in one transaction. Any refusal — one bad line, an inactive machine, a product
+  that is not yours, not enough stock, a failure part-way — records nothing at all, so a run is never
+  partly saved.
+- **Storage is checked against each product's total across the run.** Six to one machine and six to
+  another is twelve off one shelf: with ten in storage that is refused, and both lines say so, even
+  though each would fit on its own. This is the thing several separate requests could not get right.
+  The total is added up at full width, so quantities that are each a valid whole number but together
+  come to more than two billion are refused by this same rule and the refusal states the real total.
+- **Every allocation names a machine**, one of your own active machines (the same local machine
+  records the stock and expense screens use). A refill for **no** machine is still
+  `POST /api/pick-list/refills`, which is why that endpoint stays.
+- **Nothing is deducted twice.** The `idempotencyKey` is your own string for one submission: resend
+  the same run under the same key — in any order of allocations — and the server answers with what it
+  already recorded. Change anything about the run and it is a different submission, so send a new
+  key; reusing a spent key is refused. A key already used by `POST /api/pick-list/refills` is refused
+  here too, and vice versa: a recorded refill is never re-read as the other kind.
+- **It is an internal transfer, like every refill.** Storage quantity falls by what was taken;
+  historical cost, inventory value and profit are untouched, and no cost of goods sold is created.
+- **It needs the same permission as any stock write** (`Inventory.Operate`, with Pick List access),
+  and it is refused in a read-only support session like every other write.
+
 #### The menu without a usable provider
 
 Issue #729 puts the same answer in the navigation, so the menu says which features need a provider

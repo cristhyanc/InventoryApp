@@ -313,6 +313,9 @@ public static class ApplicationServiceCollectionExtensions
         // The pick list's batch refill (issue #743): one request, one write-locked transaction, all
         // rows or none.
         services.AddScoped<RecordPickListRefill>();
+        // The multi-machine batch beside it (issue #897): one request, one write-locked transaction,
+        // every machine's allocations or none.
+        services.AddScoped<RecordMultiMachinePickListRefill>();
         services.AddScoped<RecordInventoryMovement>();
         services.AddScoped<IRecordInventoryMovement>(sp => sp.GetRequiredService<RecordInventoryMovement>());
         services.AddScoped<RebuildProductCost>();

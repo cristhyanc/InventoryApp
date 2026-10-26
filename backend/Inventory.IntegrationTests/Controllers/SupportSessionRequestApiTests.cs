@@ -136,6 +136,11 @@ public class SupportSessionRequestApiTests
     /// </summary>
     [Theory]
     [InlineData("Inventory.Operate", "POST", "/api/products/1/inventory-count/apply")]
+    // The pick list's two refill writes (issues #743 and #897). Neither carries a rule of its own:
+    // the method rule is what refuses them, which is why a multi-machine batch needed no support
+    // session handling when it was added.
+    [InlineData("Inventory.Operate", "POST", "/api/pick-list/refills")]
+    [InlineData("Inventory.Operate", "POST", "/api/pick-list/multi-machine-refills")]
     // The machine delete of issue #896, refused by the method rule before the store is reached - so
     // the central refusal is what stops it, not an eligibility check it might have passed.
     [InlineData("Inventory.Operate", "DELETE", "/api/local-machines/999999")]

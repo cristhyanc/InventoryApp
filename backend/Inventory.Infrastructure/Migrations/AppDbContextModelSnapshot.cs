@@ -1479,6 +1479,9 @@ namespace Inventory.Infrastructure.Migrations
                     b.Property<int>("BusinessId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<long?>("MachineId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<long>("ProductId")
                         .HasColumnType("INTEGER");
 
@@ -1496,6 +1499,8 @@ namespace Inventory.Infrastructure.Migrations
                     b.HasIndex("BusinessId");
 
                     b.HasIndex("RefillId");
+
+                    b.HasIndex("BusinessId", "MachineId");
 
                     b.HasIndex("BusinessId", "RefillId", "Id");
 
@@ -2453,6 +2458,12 @@ namespace Inventory.Infrastructure.Migrations
                         .HasForeignKey("RefillId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.HasOne("Inventory.Infrastructure.Models.LocalMachine", null)
+                        .WithMany()
+                        .HasForeignKey("BusinessId", "MachineId")
+                        .HasPrincipalKey("BusinessId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("Refill");
                 });

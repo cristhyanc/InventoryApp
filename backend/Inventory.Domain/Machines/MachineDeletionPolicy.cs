@@ -8,14 +8,15 @@ namespace Inventory.Domain.Machines;
 /// The references that decide whether one of the business's own machines may be deleted (issue
 /// #896). Every count is of rows that record something that happened at this machine.
 ///
-/// <para>These are exactly the four tables that hold <c>Machines.Id</c>, each as a composite
-/// <c>(BusinessId, MachineId)</c> foreign key restricted on delete (issues #741, #743 and #780). The
+/// <para>These are exactly the five places that hold <c>Machines.Id</c>, each as a composite
+/// <c>(BusinessId, MachineId)</c> foreign key restricted on delete (issues #741, #743, #780 and
+/// #897). The
 /// provider's own stored data - a sale's <c>MachineID</c>, a Nayax stock event, a sale timestamp
 /// repair, an inventory-cost transition's machine stock - still names the <em>provider's</em> machine
 /// number and is not a reference to this row at all (AGENTS.md § Database and migrations), which is
 /// why a machine carrying a provider id is refused outright instead of counted.</para>
 ///
-/// <para>The four kinds are counted rather than collapsed into one flag so the refusal can say what
+/// <para>The five kinds are counted rather than collapsed into one flag so the refusal can say what
 /// is in the way: an operator who is told "2 operating expenses" knows where to look, and one who is
 /// told "no" does not.</para>
 /// </summary>
@@ -23,20 +24,27 @@ namespace Inventory.Domain.Machines;
 /// <param name="StockMovements">Stock movements recorded against this machine - refills included.</param>
 /// <param name="PickListRefills">Batch pick-list refills of this machine (issue #743).</param>
 /// <param name="OperatingExpenses">Operating expenses attributed to this machine (issue #780).</param>
+/// <param name="PickListRefillAllocations">
+/// Allocations of a multi-machine pick-list refill attributed to this machine, on the batch's lines
+/// rather than on the batch itself (issue #897). Counted on its own, because such a batch leaves the
+/// batch's own machine empty, so the <paramref name="PickListRefills"/> count never sees it.
+/// </param>
 public sealed record LocalMachineDeletionReferences(
     int MachineStockCounts,
     int StockMovements,
     int PickListRefills,
-    int OperatingExpenses)
+    int OperatingExpenses,
+    int PickListRefillAllocations)
 {
     /// <summary>A machine nothing refers to yet.</summary>
-    public static LocalMachineDeletionReferences None { get; } = new(0, 0, 0, 0);
+    public static LocalMachineDeletionReferences None { get; } = new(0, 0, 0, 0, 0);
 
     /// <summary>Whether anything at all refers to the machine.</summary>
     public bool Any => Total > 0;
 
     private int Total =>
-        MachineStockCounts + StockMovements + PickListRefills + OperatingExpenses;
+        MachineStockCounts + StockMovements + PickListRefills + OperatingExpenses
+            + PickListRefillAllocations;
 }
 
 /// <summary>
@@ -78,8 +86,8 @@ public sealed record LocalMachineDeletionEligibility(string? Refusal)
 /// #896).
 ///
 /// <para><strong>A machine with history is deactivated, not deleted.</strong> Its machine stock
-/// counts, stock movements, pick-list refills and operating expenses are inventory and financial
-/// history, and all four foreign keys are restricted, so a delete would fail inside the database with
+/// counts, stock movements, pick-list refills (and their per-machine allocations) and operating
+/// expenses are inventory and financial history, and all five foreign keys are restricted, so a delete would fail inside the database with
 /// a message written for a developer. Refusing first, with the count of what is in the way, is the
 /// only outcome an operator can act on: deleting a machine must never be a way to lose inventory or
 /// financial history (AGENTS.md § Inventory and historical costing invariants).
@@ -142,6 +150,8 @@ public static class MachineDeletionPolicy
             yield return Count(references.PickListRefills, "pick list refill");
         if (references.OperatingExpenses > 0)
             yield return Count(references.OperatingExpenses, "operating expense");
+        if (references.PickListRefillAllocations > 0)
+            yield return Count(references.PickListRefillAllocations, "pick list refill allocation");
     }
 
     private static string Count(int count, string singular) =>

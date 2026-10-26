@@ -747,6 +747,17 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<PickListRefillLine>()
             .HasIndex(line => new { line.BusinessId, line.RefillId, line.Id });
 
+        // A multi-machine batch's per-line machine (issue #897). Every column in this application
+        // that names a local machine carries the same composite (BusinessId, MachineId) foreign key
+        // on the machines' (BusinessId, Id) key, restricted on delete, so a machine cannot be deleted
+        // out from under recorded history and a line can never name another business's machine.
+        modelBuilder.Entity<PickListRefillLine>()
+            .HasOne<LocalMachine>()
+            .WithMany()
+            .HasForeignKey(line => new { line.BusinessId, line.MachineId })
+            .HasPrincipalKey(machine => new { machine.BusinessId, machine.Id })
+            .OnDelete(DeleteBehavior.Restrict);
+
         modelBuilder.Entity<Product>()
             .HasOne(p => p.Category)
             .WithMany(c => c.Products)

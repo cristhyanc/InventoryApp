@@ -21,23 +21,26 @@ public class MachineDeletionPolicyTests
     }
 
     [Theory]
-    [InlineData(1, 0, 0, 0, "1 machine stock count")]
-    [InlineData(3, 0, 0, 0, "3 machine stock counts")]
-    [InlineData(0, 2, 0, 0, "2 stock movements")]
-    [InlineData(0, 0, 1, 0, "1 pick list refill")]
-    [InlineData(0, 0, 0, 4, "4 operating expenses")]
+    [InlineData(1, 0, 0, 0, 0, "1 machine stock count")]
+    [InlineData(3, 0, 0, 0, 0, "3 machine stock counts")]
+    [InlineData(0, 2, 0, 0, 0, "2 stock movements")]
+    [InlineData(0, 0, 1, 0, 0, "1 pick list refill")]
+    [InlineData(0, 0, 0, 4, 0, "4 operating expenses")]
+    [InlineData(0, 0, 0, 0, 1, "1 pick list refill allocation")]
+    [InlineData(0, 0, 0, 0, 3, "3 pick list refill allocations")]
     public void Each_kind_of_history_refuses_the_delete_and_is_named_with_its_count(
         int machineStockCounts,
         int stockMovements,
         int pickListRefills,
         int operatingExpenses,
+        int pickListRefillAllocations,
         string expected)
     {
         var refusal = MachineDeletionPolicy.Refusal(
             isProviderNamed: false,
             provider: null,
             new LocalMachineDeletionReferences(
-                machineStockCounts, stockMovements, pickListRefills, operatingExpenses));
+                machineStockCounts, stockMovements, pickListRefills, operatingExpenses, pickListRefillAllocations));
 
         Assert.NotNull(refusal);
         Assert.Contains(expected, refusal, StringComparison.Ordinal);
@@ -51,7 +54,7 @@ public class MachineDeletionPolicyTests
         var refusal = MachineDeletionPolicy.Refusal(
             isProviderNamed: false,
             provider: null,
-            new LocalMachineDeletionReferences(2, 1, 0, 3));
+            new LocalMachineDeletionReferences(2, 1, 0, 3, 0));
 
         Assert.Equal(
             "This machine cannot be deleted because its history refers to it (2 machine stock counts, "
@@ -87,7 +90,7 @@ public class MachineDeletionPolicyTests
         var refusal = MachineDeletionPolicy.Refusal(
             isProviderNamed: true,
             ExternalProvider.Nayax,
-            new LocalMachineDeletionReferences(1, 1, 1, 1));
+            new LocalMachineDeletionReferences(1, 1, 1, 1, 1));
 
         Assert.NotNull(refusal);
         Assert.Contains("comes from Nayax", refusal, StringComparison.Ordinal);
@@ -113,7 +116,8 @@ public class MachineDeletionPolicyTests
     public void References_report_whether_anything_refers_to_the_machine()
     {
         Assert.False(LocalMachineDeletionReferences.None.Any);
-        Assert.True(new LocalMachineDeletionReferences(0, 0, 0, 1).Any);
+        Assert.True(new LocalMachineDeletionReferences(0, 0, 0, 1, 0).Any);
+        Assert.True(new LocalMachineDeletionReferences(0, 0, 0, 0, 1).Any);
     }
 
     /// <summary>
@@ -157,7 +161,7 @@ public class MachineDeletionPolicyTests
     [Fact]
     public void Eligibility_refuses_a_machine_with_history_in_the_deletes_own_words()
     {
-        var references = new LocalMachineDeletionReferences(0, 1, 0, 0);
+        var references = new LocalMachineDeletionReferences(0, 1, 0, 0, 0);
 
         var eligibility = LocalMachineDeletionEligibility.Decide(
             isProviderNamed: false, provider: null, references);
