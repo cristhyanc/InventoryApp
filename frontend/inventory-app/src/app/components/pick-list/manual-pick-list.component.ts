@@ -522,8 +522,8 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
 
   /** How many products with a typed quantity the current filter hides. */
   hiddenProductsWithEntries(): number {
-    const visible = this.visibleProductIds();
-    return this.products.filter((product) => !visible.has(product.id) && this.rowTotal(product.id) > 0).length;
+    const visibleIds = this.visibleProductIds();
+    return this.products.filter((product) => !visibleIds.has(product.id) && this.rowTotal(product.id) > 0).length;
   }
 
   /**
@@ -693,19 +693,29 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
    */
   private buildPayload(): ManualPickPayload | null {
     if (!this.matrixMode) {
-      const rows: PickListRefillRowRequest[] = [];
-      for (const product of this.products) {
-        const parsed = parseTakenEntry(this.takenValue(product.id));
-        if ('error' in parsed) {
-          return null;
-        }
-        if (parsed.quantity > 0) {
-          rows.push({ productId: product.id, quantityTaken: parsed.quantity });
-        }
-      }
-      return { kind: 'unattributed', rows };
+      const rows = this.buildUnattributedRows();
+      return rows === null ? null : { kind: 'unattributed', rows };
     }
 
+    const allocations = this.buildBatchAllocations();
+    return allocations === null ? null : { kind: 'batch', allocations };
+  }
+
+  private buildUnattributedRows(): PickListRefillRowRequest[] | null {
+    const rows: PickListRefillRowRequest[] = [];
+    for (const product of this.products) {
+      const parsed = parseTakenEntry(this.takenValue(product.id));
+      if ('error' in parsed) {
+        return null;
+      }
+      if (parsed.quantity > 0) {
+        rows.push({ productId: product.id, quantityTaken: parsed.quantity });
+      }
+    }
+    return rows;
+  }
+
+  private buildBatchAllocations(): MultiMachineRefillAllocationRequest[] | null {
     const allocations: MultiMachineRefillAllocationRequest[] = [];
     for (const product of this.products) {
       for (const machine of this.machineColumns) {
@@ -718,7 +728,7 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
         }
       }
     }
-    return { kind: 'batch', allocations };
+    return allocations;
   }
 
   private send(submission: ManualPickSubmission): void {
