@@ -1000,8 +1000,10 @@ export interface PickListRefillRowRequest {
 
 /**
  * A batch refill request (issue #743): one request recording everything a worker took out of
- * storage. `machineId` is omitted here while #746 (the local machine selector) has not shipped, so
- * every submission from this frontend records a refill with no machine.
+ * storage. Since issue #904 this frontend sends it only for the manual pick list's **No machine**
+ * mode, so `machineId` is never set: a pick that names any machine is sent as a
+ * {@link MultiMachinePickListRefillRequest} instead, which attributes each line to its own machine.
+ * The field stays on the contract because the endpoint still accepts it.
  */
 export interface PickListRefillRequest {
   idempotencyKey: string;
@@ -1025,6 +1027,52 @@ export interface PickListRefillResponse {
   notes: string | null;
   recordedAtUtc: string;
   rows: PickListRefillRecordedRow[];
+}
+
+/**
+ * One allocation of a `POST /api/pick-list/multi-machine-refills` request (issue #897, frontend
+ * #904): a **local** machine of the caller's own business (`LocalMachine.id`, never a provider
+ * machine number), a product of its own catalogue, and the whole number of units taken out of
+ * storage for that pair. Every allocation names a machine; a refill for no machine at all is still
+ * a {@link PickListRefillRequest}.
+ */
+export interface MultiMachineRefillAllocationRequest {
+  machineId: number;
+  productId: number;
+  quantityTaken: number;
+}
+
+/**
+ * A multi-machine refill batch (issue #897): one request recording a whole pick run, machine by
+ * machine, all or nothing. `idempotencyKey` is the client's own string for one submission - the same
+ * key with the same allocations, in any order, is answered with what the server already recorded,
+ * and the key namespace is shared with {@link PickListRefillRequest}.
+ */
+export interface MultiMachinePickListRefillRequest {
+  idempotencyKey: string;
+  notes?: string | null;
+  allocations: MultiMachineRefillAllocationRequest[];
+}
+
+/** One recorded allocation of a batch: the machine, the product, the units taken, and the movement it created. */
+export interface MultiMachinePickListRefillRecordedAllocation {
+  machineId: number;
+  productId: number;
+  quantityTaken: number;
+  stockAdjustmentId: number;
+}
+
+/**
+ * What `POST /api/pick-list/multi-machine-refills` answers, for a newly recorded batch and a
+ * replayed retry alike; `replayed` is `true` when the key had already recorded it and nothing new
+ * was written.
+ */
+export interface MultiMachinePickListRefillResponse {
+  idempotencyKey: string;
+  replayed: boolean;
+  notes: string | null;
+  recordedAtUtc: string;
+  allocations: MultiMachinePickListRefillRecordedAllocation[];
 }
 
 /** Whether a Take Inventory Apply request created a stock movement (issue #245). */

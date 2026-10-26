@@ -21,15 +21,22 @@
         {{ machinesLoadFailedMessage }}
       </p>
     } @else if (machineSelectorShown) {
-      <label class="text-sm self-center" for="manual-pick-list-machine">
-        Machine (optional)
-        <select id="manual-pick-list-machine" class="ml-2 max-w-[180px]" [(ngModel)]="selectedMachineId">
-          <option [ngValue]="null">No machine</option>
-          @for (machine of activeMachines; track machine.id) {
-            <option [ngValue]="machine.id">{{ machine.name }}</option>
-          }
-        </select>
-      </label>
+      <!--
+        A disabled <fieldset> is what blocks a selection change while a save is in flight: it
+        disables the dropdown's own trigger and checkboxes natively, so the matrix the outstanding
+        request was built from cannot change underneath it. onSelectedMachineIdsChange refuses as
+        well, so the rule is enforced and not merely rendered.
+      -->
+      <fieldset class="m-0 border-0 p-0" [disabled]="saving">
+        <app-multi-select-dropdown
+          label="Machines"
+          itemLabelSingular="machine"
+          itemLabelPlural="machines"
+          [options]="machineOptions()"
+          [selectedIds]="selectedMachineIds"
+          (selectedIdsChange)="onSelectedMachineIdsChange($event)"
+        ></app-multi-select-dropdown>
+      </fieldset>
     }
 
     @if (machineResolutionPending) {
@@ -78,50 +85,127 @@
     } @else if (visibleProducts().length === 0) {
       <p class="p-4 text-md-body value-muted">No active products match your filters.</p>
     } @else {
-      <table class="table">
-        <thead class="table-head">
-          <tr>
-            <th scope="col" class="table-cell">Product</th>
-            <th scope="col" class="table-cell">Category</th>
-            <th scope="col" class="table-cell table-num">Storage Qty</th>
-            @if (!sessionActive) {
-              <th scope="col" class="table-cell">Taken</th>
-            }
-          </tr>
-        </thead>
-        <tbody>
-          @for (product of visibleProducts(); track product.id) {
-            <tr class="table-row">
-              <td class="table-cell">{{ product.name }}</td>
-              <td class="table-cell">{{ product.category?.name ?? '—' }}</td>
-              <td class="table-cell table-num" data-testid="manual-pick-list-storage-qty">{{ product.quantityInStock }}</td>
+      <!--
+        One bounded scroll area for both axes, the same shape the calculated matrix uses: a long
+        product list scrolls vertically under the sticky header row, and a wide machine selection
+        scrolls horizontally inside this container rather than widening the page - which is what
+        keeps a narrow phone from overflowing sideways.
+      -->
+      <div data-testid="manual-pick-list-table-scroll" class="max-h-[70vh] overflow-auto">
+        <table class="table">
+          <thead class="table-head">
+            <tr>
+              <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Product</th>
+              <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Category</th>
+              <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100">Storage Qty</th>
               @if (!sessionActive) {
-                <td class="table-cell">
-                  <input
-                    type="text"
-                    inputmode="numeric"
-                    class="max-w-[100px]"
-                    [attr.aria-label]="'Taken: ' + product.name"
-                    [ngModel]="takenValue(product.id)"
-                    (ngModelChange)="onTakenChange(product.id, $event)"
-                    [disabled]="saving" />
-                  @if (rowError(product.id); as message) {
-                    <p data-testid="manual-pick-list-row-error" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                @if (matrixMode) {
+                  <th scope="col" class="table-cell table-num sticky top-0 z-10 bg-md-gray-100">Total Taken</th>
+                  @for (machine of machineColumns; track machine.id) {
+                    <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100 min-w-[7.5rem]">
+                      <span class="flex items-center gap-2">
+                        <span class="truncate" [title]="machine.name">{{ machine.name }}</span>
+                        <button
+                          type="button"
+                          class="text-md-gray-500 hover:text-md-danger-text"
+                          [attr.aria-label]="'Remove machine column: ' + machine.name"
+                          [disabled]="saving"
+                          (click)="removeMachineColumn(machine.id)">&times;</button>
+                      </span>
+                    </th>
                   }
-                </td>
+                } @else {
+                  <th scope="col" class="table-cell sticky top-0 z-10 bg-md-gray-100">Taken</th>
+                }
               }
             </tr>
-          }
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            @for (product of visibleProducts(); track product.id) {
+              <tr class="table-row">
+                <td class="table-cell">{{ product.name }}</td>
+                <td class="table-cell">{{ product.category?.name ?? '—' }}</td>
+                <td class="table-cell table-num" data-testid="manual-pick-list-storage-qty">{{ product.quantityInStock }}</td>
+                @if (!sessionActive) {
+                  @if (matrixMode) {
+                    <td class="table-cell table-num" data-testid="manual-pick-list-row-total">{{ rowTotal(product.id) }}</td>
+                    @for (machine of machineColumns; track machine.id) {
+                      <td class="table-cell">
+                        <input
+                          type="text"
+                          inputmode="numeric"
+                          class="max-w-[100px]"
+                          [attr.aria-label]="cellAriaLabel(product, machine)"
+                          [ngModel]="cellValue(product.id, machine.id)"
+                          (ngModelChange)="onCellChange(product.id, machine.id, $event)"
+                          [disabled]="saving" />
+                        @if (cellError(product.id, machine.id); as message) {
+                          <p data-testid="manual-pick-list-cell-error" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                        }
+                      </td>
+                    }
+                  } @else {
+                    <td class="table-cell">
+                      <input
+                        type="text"
+                        inputmode="numeric"
+                        class="max-w-[100px]"
+                        [attr.aria-label]="'Taken: ' + product.name"
+                        [ngModel]="takenValue(product.id)"
+                        (ngModelChange)="onTakenChange(product.id, $event)"
+                        [disabled]="saving" />
+                      @if (rowError(product.id); as message) {
+                        <p data-testid="manual-pick-list-row-error" class="text-md-badge text-md-danger-text">{{ message }}</p>
+                      }
+                    </td>
+                  }
+                }
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
     }
   </div>
-  <div class="card-body flex items-center gap-4">
+  @if (!sessionActive) {
+    <!--
+      The storage this pick needs is the whole pick's, not the visible part of it: a filter hides
+      rows and changes nothing about what Save sends, so the hidden part is stated rather than left
+      to be discovered by a refusal.
+    -->
+    <div class="card-body flex flex-wrap items-center gap-4 text-md-body">
+      <span data-testid="manual-pick-list-total-required">
+        Total storage required: <span class="font-semibold text-md-gray-800">{{ totalUnitsRequired() }}</span> units
+      </span>
+      @if (hiddenUnitsRequired() > 0) {
+        <span data-testid="manual-pick-list-hidden-required" class="value-muted">
+          including {{ hiddenUnitsRequired() }} units on {{ hiddenProductsWithEntries() }}
+          {{ hiddenProductsWithEntries() === 1 ? 'product' : 'products' }} hidden by the current filters
+        </span>
+      }
+    </div>
+  }
+  <div class="card-body flex flex-wrap items-center gap-4">
+    @if (invalidEntryMessages.length > 0) {
+      <div data-testid="manual-pick-list-invalid-entries" role="alert" class="text-md-body text-md-danger-text">
+        <p>{{ invalidEntriesPrefix }}</p>
+        <ul class="list-disc pl-5">
+          @for (message of invalidEntryMessages; track message) {
+            <li>{{ message }}</li>
+          }
+        </ul>
+      </div>
+    }
     @if (requestErrors.length > 0) {
       <p data-testid="manual-pick-list-request-error" class="text-md-body text-md-danger-text">{{ requestErrors.join(' ') }}</p>
     }
     @if (unresolvedSubmission) {
       <p data-testid="manual-pick-list-unresolved" role="alert" class="text-md-body text-md-danger-text">{{ unresolvedMessage }}</p>
+      @if (!sessionActive) {
+        <button type="button" class="btn btn-primary" [disabled]="!canRetry" (click)="retry()">
+          {{ saving ? 'Retrying…' : 'Retry save' }}
+        </button>
+      }
     }
     @if (!sessionActive) {
       <button type="button" class="btn btn-primary" [disabled]="!canSave" (click)="save()">
