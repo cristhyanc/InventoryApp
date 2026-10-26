@@ -808,4 +808,12 @@ describe('ProductNeedsOrderingComponent Mark as ordered in the toolbar (issue #8
 
     expect(Array.from(host.querySelectorAll('button')).some((button) => button.textContent?.trim() === 'Mark as ordered')).toBe(false);
   });
+
+  it('spaces the filter card from the results card below it, matching All products', async () => {
+    const { host } = await render();
+
+    const filterCard = host.querySelector('.card') as HTMLElement;
+    // One existing Tailwind spacing step (1.5rem) between the filter card and the results card.
+    expect(Array.from(filterCard.classList)).toContain('mb-6');
+  });
 });
