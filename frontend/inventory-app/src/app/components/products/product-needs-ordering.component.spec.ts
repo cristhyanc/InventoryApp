@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
-import { Observable, of } from 'rxjs';
+import { Observable, Subject, of } from 'rxjs';
 import { ProductNeedsOrderingComponent } from './product-needs-ordering.component';
 import { AccessService } from '../../access/access.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
@@ -466,6 +466,196 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
     ]);
   });
 
+  /**
+   * The dialog panel bounds itself to the viewport and lets its content scroll instead of
+   * clipping past the screen's edge, and Remove lets a product be dropped from the order without
+   * cancelling the dialog (issue #906).
+   */
+  describe('Mark products as ordered dialog: scroll and Remove (issue #906)', () => {
+    it('bounds the dialog panel to the viewport height, with a scrollable body between the fixed heading and buttons', async () => {
+      const { fixture, host } = await render([product({ id: 1, name: 'Banana', needToOrder: 4 })]);
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      const panel = host.querySelector('form.needs-order-dialog-panel') as HTMLFormElement;
+      expect(panel).not.toBeNull();
+      expect(Array.from(panel.classList)).toEqual(expect.arrayContaining(['flex', 'flex-col', 'needs-order-dialog-panel']));
+
+      const [header, body, footer] = Array.from(panel.children) as HTMLElement[];
+      expect(header.querySelector('h2')?.textContent).toContain('Mark products as ordered');
+      expect(Array.from(body.classList)).toEqual(expect.arrayContaining(['overflow-y-auto', 'min-h-0', 'flex-1']));
+      expect(body.contains(host.querySelector('[name="orderSupplier"]'))).toBe(true);
+      expect(body.contains(panel.querySelector('table'))).toBe(true);
+      expect(footer.textContent).toContain('Cancel');
+      expect(footer.textContent).toContain('Create order');
+    });
+
+    it('removes a product from the dialog, unticks it on the page, and keeps the order fields and the other rows as entered', async () => {
+      const { fixture, host } = await render([
+        product({ id: 1, name: 'Banana', needToOrder: 4 }),
+        product({ id: 2, name: 'Apple', needToOrder: 2 }),
+        product({ id: 3, name: 'Cherry', needToOrder: 1 })
+      ]);
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.toggleSelection(2, true);
+      component.toggleSelection(3, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      component.orderForm.supplierId = 3;
+      component.orderQuantities[1] = 9;
+      component.orderQuantities[3] = 5;
+      fixture.detectChanges();
+
+      const removeApple = host.querySelector('[aria-label="Remove Apple from order"]') as HTMLButtonElement;
+      expect(removeApple).not.toBeNull();
+      removeApple.click();
+      fixture.detectChanges();
+
+      expect(component.selectedProductIds.has(2)).toBe(false);
+      expect(component.selectedProducts().map((p) => p.name)).toEqual(['Banana', 'Cherry']);
+      expect(host.querySelector('[aria-label="Remove Apple from order"]')).toBeNull();
+
+      const appleCheckbox = Array.from(host.querySelectorAll<HTMLInputElement>('tbody input[type="checkbox"]')).find(
+        (checkbox) => checkbox.getAttribute('aria-label') === 'Select Apple'
+      );
+      expect(appleCheckbox?.checked).toBe(false);
+
+      expect(component.orderForm.supplierId).toBe(3);
+      expect(component.orderQuantities[1]).toBe(9);
+      expect(component.orderQuantities[3]).toBe(5);
+    });
+
+    it('disables Remove once only one product is left, while Cancel stays usable', async () => {
+      const { fixture, host } = await render([
+        product({ id: 1, name: 'Banana', needToOrder: 4 }),
+        product({ id: 2, name: 'Apple', needToOrder: 2 })
+      ]);
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.toggleSelection(2, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      const removeBanana = host.querySelector('[aria-label="Remove Banana from order"]') as HTMLButtonElement;
+      expect(removeBanana.disabled).toBe(false);
+      removeBanana.click();
+      fixture.detectChanges();
+
+      const removeApple = host.querySelector('[aria-label="Remove Apple from order"]') as HTMLButtonElement;
+      expect(removeApple.disabled).toBe(true);
+
+      // Refused even if clicked anyway (the guard is in the component, not just the attribute).
+      removeApple.click();
+      fixture.detectChanges();
+      expect(component.selectedProducts().map((p) => p.name)).toEqual(['Apple']);
+
+      const cancelButton = Array.from(host.querySelectorAll('button')).find((button) => button.textContent?.trim() === 'Cancel') as HTMLButtonElement;
+      expect(cancelButton.disabled).toBe(false);
+      cancelButton.click();
+      fixture.detectChanges();
+      expect(component.showOrderForm).toBe(false);
+    });
+
+    it('sends exactly the still-listed products with their entered quantities after a Remove', async () => {
+      const create = jest.fn(() => of(undefined));
+      const { fixture } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 }), product({ id: 2, name: 'Apple', needToOrder: 2 })],
+        { suppliers: [{ id: 3, name: 'Acme' }], create }
+      );
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.toggleSelection(2, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      component.orderForm.supplierId = 3;
+      component.orderQuantities[1] = 7;
+      component.removeProduct(2);
+      fixture.detectChanges();
+
+      component.saveOrder();
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lines: [{ productId: 1, quantityOrdered: 7 }]
+        })
+      );
+    });
+
+    /**
+     * Remove while the order is in flight. Once `saveOrder()` has sent its lines, the order being
+     * created is fixed, so dropping a row would leave the dialog and the page's ticks showing an
+     * order that disagrees with the one the backend is creating - and, if the request then fails,
+     * would have silently changed the draft the user is about to retry. A `Subject` that is never
+     * completed holds the response open so the save is genuinely outstanding while Remove is
+     * attempted; a definitive failure ends the save and hands the draft back.
+     */
+    it('refuses Remove while the order is being saved, and allows it again once the save has definitively failed', async () => {
+      const response$ = new Subject<void>();
+      const create = jest.fn(() => response$.asObservable());
+      const { fixture, host } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 }), product({ id: 2, name: 'Apple', needToOrder: 2 })],
+        { suppliers: [{ id: 3, name: 'Acme' }], create }
+      );
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.toggleSelection(2, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      component.orderForm.supplierId = 3;
+      component.orderQuantities[1] = 7;
+      component.orderQuantities[2] = 5;
+      component.orderForm.reference = 'PO-42';
+      component.saveOrder();
+      fixture.detectChanges();
+
+      expect(component.savingOrder).toBe(true);
+      const removeApple = () => host.querySelector('[aria-label="Remove Apple from order"]') as HTMLButtonElement;
+      expect(removeApple().disabled).toBe(true);
+
+      // Clicked anyway, and called directly the way a stale view would reach the handler: the
+      // guard is in the component, not only in the disabled attribute.
+      removeApple().click();
+      component.removeProduct(2);
+      fixture.detectChanges();
+
+      // The draft and the page's selection still hold both products...
+      expect(component.selectedProductIds.has(2)).toBe(true);
+      expect(component.selectedProducts().map((p) => p.name)).toEqual(['Banana', 'Apple']);
+      expect(removeApple()).not.toBeNull();
+      expect(component.orderQuantities[1]).toBe(7);
+      expect(component.orderQuantities[2]).toBe(5);
+      expect(component.orderForm.reference).toBe('PO-42');
+
+      // ...and the one request sent is still exactly the order the dialog shows.
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lines: [
+            { productId: 1, quantityOrdered: 7 },
+            { productId: 2, quantityOrdered: 5 }
+          ]
+        })
+      );
+
+      // A definitive failure ends the save, so the draft is the user's to edit again.
+      response$.error(new Error('create failed'));
+      fixture.detectChanges();
+
+      expect(component.savingOrder).toBe(false);
+      expect(removeApple().disabled).toBe(false);
+      removeApple().click();
+      fixture.detectChanges();
+      expect(component.selectedProducts().map((p) => p.name)).toEqual(['Banana']);
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('in a support session (issue #661)', () => {
     const markAsOrdered = (host: HTMLElement) =>
       Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
@@ -504,6 +694,25 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
 
       expect(create).not.toHaveBeenCalled();
       expect(component.savingOrder).toBe(false);
+    });
+
+    /**
+     * Remove is one of the order dialog's edits, so it carries the same session guard as the
+     * dialog itself and `saveOrder()` (issue #906's review). The dialog cannot be opened during a
+     * session at all, which is why this reaches the handler directly.
+     */
+    it('removes no product from the order being built while a session is active', async () => {
+      const { fixture } = await render(
+        [product({ id: 9, name: 'Widget' }), product({ id: 10, name: 'Gadget' })],
+        { sessionActive: of(true) }
+      );
+
+      const component = fixture.componentInstance;
+      component.selectedProductIds.add(9);
+      component.selectedProductIds.add(10);
+      component.removeProduct(10);
+
+      expect(component.selectedProducts().map((p) => p.name)).toEqual(['Widget', 'Gadget']);
     });
 
     it('does not open the order dialog while a session is active', async () => {

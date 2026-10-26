@@ -186,58 +186,85 @@
 
 @if (showOrderForm) {
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-md-gray-800/40 p-4">
-    <form class="w-full max-w-2xl rounded-md-dialog bg-white p-6 shadow-md-lg" (ngSubmit)="saveOrder()">
-      <h2 class="mb-4 text-md-card-title font-semibold text-md-gray-800">Mark products as ordered</h2>
-      <div class="grid gap-4 sm:grid-cols-2">
-        <label class="field">
-          <span class="field-label">Supplier</span>
-          <select required name="orderSupplier" [(ngModel)]="orderForm.supplierId">
-            <option [ngValue]="null">Select supplier</option>
-            @for (supplier of suppliers; track supplier.id) {
-              <option [ngValue]="supplier.id">{{ supplier.name }}</option>
-            }
-          </select>
-        </label>
-        <label class="field">
-          <span class="field-label">Order date</span>
-          <input required type="date" name="orderDate" [(ngModel)]="orderForm.orderDate" />
-        </label>
-        <label class="field">
-          <span class="field-label">Expected date</span>
-          <input type="date" name="expectedDate" [(ngModel)]="orderForm.expectedDate" />
-        </label>
-        <label class="field">
-          <span class="field-label">Reference</span>
-          <input name="reference" [(ngModel)]="orderForm.reference" />
-        </label>
+    <!--
+      A bounded, scrollable panel instead of the unbounded one that used to clip and strand its
+      heading, fields, product rows and buttons past the viewport's edge (issue #906). The heading
+      and the Cancel/Create order buttons sit outside the scrolling body, in their own
+      `shrink-0` sections, so they stay reachable while the body between them scrolls. With few
+      enough products that the panel fits the screen, the body simply does not overflow and the
+      dialog looks as it always has.
+    -->
+    <form class="needs-order-dialog-panel flex w-full max-w-2xl flex-col rounded-md-dialog bg-white shadow-md-lg" (ngSubmit)="saveOrder()">
+      <div class="shrink-0 p-6 pb-4">
+        <h2 class="text-md-card-title font-semibold text-md-gray-800">Mark products as ordered</h2>
       </div>
-      <label class="field mt-4">
-        <span class="field-label">Notes</span>
-        <textarea name="notes" [(ngModel)]="orderForm.notes"></textarea>
-      </label>
-      <div class="mt-4 overflow-x-auto">
-        <table class="table">
-          <thead class="table-head">
-            <tr>
-              <th scope="col" class="table-cell">Product</th>
-              <th scope="col" class="table-cell table-num">Current stock</th>
-              <th scope="col" class="table-cell table-num">On order</th>
-              <th scope="col" class="table-cell table-num">Order quantity</th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (product of selectedProducts(); track product.id) {
-              <tr class="table-row">
-                <td class="table-cell">{{ product.name }}</td>
-                <td class="table-cell table-num">{{ product.quantityInStock }}</td>
-                <td class="table-cell table-num">{{ product.onOrderQuantity }}</td>
-                <td class="table-cell table-num"><input class="max-w-24" type="number" min="1" step="1" [name]="'quantity-' + product.id" [attr.aria-label]="'Order quantity for ' + product.name" [(ngModel)]="orderQuantities[product.id]" /></td>
+      <div class="min-h-0 flex-1 overflow-y-auto px-6">
+        <div class="grid gap-4 sm:grid-cols-2">
+          <label class="field">
+            <span class="field-label">Supplier</span>
+            <select required name="orderSupplier" [(ngModel)]="orderForm.supplierId">
+              <option [ngValue]="null">Select supplier</option>
+              @for (supplier of suppliers; track supplier.id) {
+                <option [ngValue]="supplier.id">{{ supplier.name }}</option>
+              }
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Order date</span>
+            <input required type="date" name="orderDate" [(ngModel)]="orderForm.orderDate" />
+          </label>
+          <label class="field">
+            <span class="field-label">Expected date</span>
+            <input type="date" name="expectedDate" [(ngModel)]="orderForm.expectedDate" />
+          </label>
+          <label class="field">
+            <span class="field-label">Reference</span>
+            <input name="reference" [(ngModel)]="orderForm.reference" />
+          </label>
+        </div>
+        <label class="field mt-4">
+          <span class="field-label">Notes</span>
+          <textarea name="notes" [(ngModel)]="orderForm.notes"></textarea>
+        </label>
+        <div class="mt-4 overflow-x-auto">
+          <table class="table">
+            <thead class="table-head">
+              <tr>
+                <th scope="col" class="table-cell">Product</th>
+                <th scope="col" class="table-cell table-num">Current stock</th>
+                <th scope="col" class="table-cell table-num">On order</th>
+                <th scope="col" class="table-cell table-num">Order quantity</th>
+                <th scope="col" class="table-cell"><span class="sr-only">Remove</span></th>
               </tr>
-            }
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              @for (product of selectedProducts(); track product.id) {
+                <tr class="table-row">
+                  <td class="table-cell">{{ product.name }}</td>
+                  <td class="table-cell table-num">{{ product.quantityInStock }}</td>
+                  <td class="table-cell table-num">{{ product.onOrderQuantity }}</td>
+                  <td class="table-cell table-num"><input class="max-w-24" type="number" min="1" step="1" [name]="'quantity-' + product.id" [attr.aria-label]="'Order quantity for ' + product.name" [(ngModel)]="orderQuantities[product.id]" /></td>
+                  <td class="table-cell">
+                    <!--
+                      Disabled on the last remaining row (issue #906): an order needs at least one line, and Cancel is still how to
+                      abandon the whole order. Also disabled while an order is in flight, like Create order beside it: the request
+                      already carries its lines, so removing a row then would show an order that disagrees with the one being created.
+                    -->
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-secondary"
+                      [disabled]="savingOrder || sessionActive || selectedProducts().length <= 1"
+                      [attr.aria-label]="'Remove ' + product.name + ' from order'"
+                      (click)="removeProduct(product.id)"
+                    >Remove</button>
+                  </td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
       </div>
-      <div class="mt-6 flex justify-end gap-3">
+      <div class="shrink-0 flex justify-end gap-3 p-6 pt-4">
         <button type="button" class="btn btn-secondary" (click)="showOrderForm = false">Cancel</button>
         <button type="submit" class="btn btn-primary" [disabled]="savingOrder">Create order</button>
       </div>
