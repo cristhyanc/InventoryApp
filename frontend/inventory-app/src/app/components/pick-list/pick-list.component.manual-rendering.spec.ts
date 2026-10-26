@@ -4,7 +4,14 @@ import { provideRouter } from '@angular/router';
 import { BehaviorSubject, Observable, Subject, of, throwError } from 'rxjs';
 import { AccessService } from '../../access/access.service';
 import { BusinessTimeZoneService } from '../../formatting/business-time-zone.service';
-import { PickListRefillRequest, PickListRefillResponse, Product } from '../../models/models';
+import {
+  LocalMachine,
+  MultiMachinePickListRefillRequest,
+  MultiMachinePickListRefillResponse,
+  PickListRefillRequest,
+  PickListRefillResponse,
+  Product
+} from '../../models/models';
 import { LocalMachineService } from '../../services/local-machine.service';
 import { MachineService } from '../../services/machine.service';
 import { PickListService } from '../../services/pick-list.service';
@@ -40,13 +47,23 @@ function product(overrides: Partial<Product>): Product {
   };
 }
 
+function localMachine(overrides: Partial<LocalMachine>): LocalMachine {
+  return { id: 1, name: 'Machine', isActive: true, isProviderNamed: false, ...overrides };
+}
+
 async function render(
   products: Product[] = [product({ id: 1, name: 'Coke', quantityInStock: 20 }), product({ id: 2, name: 'Chips', quantityInStock: 3 })],
   nayaxStatus: NayaxConnectionStatusName = 'Ready',
   recordRefill: jest.Mock = jest.fn(),
-  options: { sessionActive?: Observable<boolean>; getAllProducts?: jest.Mock } = {}
+  options: {
+    sessionActive?: Observable<boolean>;
+    getAllProducts?: jest.Mock;
+    localMachines?: LocalMachine[];
+    recordMultiMachineRefill?: jest.Mock;
+  } = {}
 ) {
   const getAllProducts = options.getAllProducts ?? jest.fn(() => of(products));
+  const recordMultiMachineRefill = options.recordMultiMachineRefill ?? jest.fn();
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
   await TestBed.configureTestingModule({
     imports: [PickListComponent],
@@ -54,8 +71,11 @@ async function render(
       provideRouter([]),
       { provide: MachineService, useValue: { getAll: jest.fn(() => of([])) } },
       { provide: ProductService, useValue: { getAll: getAllProducts } },
-      { provide: PickListService, useValue: { get: jest.fn(() => of({ products: [] })), recordRefill } },
-      { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of([])) } },
+      {
+        provide: PickListService,
+        useValue: { get: jest.fn(() => of({ products: [] })), recordRefill, recordMultiMachineRefill }
+      },
+      { provide: LocalMachineService, useValue: { getAll: jest.fn(() => of(options.localMachines ?? [])) } },
       { provide: ToastService, useValue: toast },
       { provide: NayaxConnectionService, useValue: { status: () => of({ status: nayaxStatus, machineChecksPending: false }) } },
       { provide: AccessService, useValue: { allows: () => of(true) } },
@@ -87,8 +107,38 @@ async function render(
     }
     return found;
   };
+  /** Opens manual entry's own Machines dropdown and checks one machine, as the operator does. */
+  const selectMachineColumn = (machineName: string) => {
+    const trigger = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find((b) =>
+      b.getAttribute('aria-label')?.startsWith('Machines:')
+    );
+    if (trigger === undefined) {
+      throw new Error('Expected manual entry to offer a Machines dropdown.');
+    }
+    click(trigger);
+    const option = Array.from(host.querySelectorAll('[role="group"] label')).find((label) =>
+      label.textContent?.trim() === machineName
+    );
+    if (option === undefined) {
+      throw new Error(`Expected the Machines dropdown to offer "${machineName}".`);
+    }
+    click(option.querySelector<HTMLInputElement>('input[type="checkbox"]')!);
+    click(trigger);
+  };
 
-  return { fixture, host, click, type, button, requireButton, recordRefill, getAllProducts, toast };
+  return {
+    fixture,
+    host,
+    click,
+    type,
+    button,
+    requireButton,
+    selectMachineColumn,
+    recordRefill,
+    recordMultiMachineRefill,
+    getAllProducts,
+    toast
+  };
 }
 
 function refillResponse(): PickListRefillResponse {
@@ -188,6 +238,172 @@ describe('PickListComponent + ManualPickListComponent rendering (issue #744)', (
     expect(host.querySelector('[data-testid="manual-pick-list-row-error"]')?.textContent?.trim()).toBe(
       'Enter a whole number greater than 0.'
     );
+  });
+});
+
+describe('PickListComponent + ManualPickListComponent machine matrix rendering (issue #904)', () => {
+  const machines = () => [localMachine({ id: 5, name: 'Front Lobby' }), localMachine({ id: 6, name: 'Back Room' })];
+
+  function batchResponse(request: MultiMachinePickListRefillRequest): MultiMachinePickListRefillResponse {
+    return {
+      idempotencyKey: request.idempotencyKey,
+      replayed: false,
+      notes: null,
+      recordedAtUtc: '2026-01-01T00:00:00Z',
+      allocations: request.allocations.map((allocation) => ({ ...allocation, stockAdjustmentId: 1 }))
+    };
+  }
+
+  it('renders one labelled quantity column per selected machine, with Total Taken before them', async () => {
+    const { host, requireButton, click, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
+      localMachines: machines()
+    });
+    click(requireButton('Enter quantities taken'));
+
+    selectMachineColumn('Front Lobby');
+    selectMachineColumn('Back Room');
+
+    const headers = Array.from(host.querySelectorAll('thead th')).map((th) => th.textContent?.replace(/\s+/g, ' ').trim());
+    // Each machine header carries its own remove control beside the machine's name.
+    expect(headers).toEqual(['Product', 'Category', 'Storage Qty', 'Total Taken', 'Front Lobby×', 'Back Room×']);
+    expect(host.querySelector('input[aria-label="Taken: Coke at Front Lobby"]')).not.toBeNull();
+    expect(host.querySelector('input[aria-label="Taken: Chips at Back Room"]')).not.toBeNull();
+    // The single No machine column is gone: a quantity now belongs to a machine.
+    expect(host.querySelector('input[aria-label="Taken: Coke"]')).toBeNull();
+  });
+
+  it('keeps the matrix inside one bounded scroll container, so a wide selection never widens the page', async () => {
+    const { host, requireButton, click, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
+      localMachines: machines()
+    });
+    click(requireButton('Enter quantities taken'));
+    selectMachineColumn('Front Lobby');
+
+    const scroll = host.querySelector('[data-testid="manual-pick-list-table-scroll"]');
+    expect(scroll).not.toBeNull();
+    expect(scroll!.className).toContain('overflow-auto');
+    expect(scroll!.querySelector('table')).not.toBeNull();
+  });
+
+  it('shows the row total, the whole pick’s storage requirement and the part a filter hides', async () => {
+    const { host, requireButton, click, type, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
+      localMachines: machines()
+    });
+    click(requireButton('Enter quantities taken'));
+    selectMachineColumn('Front Lobby');
+    selectMachineColumn('Back Room');
+
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, '3');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Back Room"]')!, '4');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Chips at Front Lobby"]')!, '2');
+
+    expect(host.querySelector('[data-testid="manual-pick-list-row-total"]')?.textContent?.trim()).toBe('7');
+    expect(host.querySelector('[data-testid="manual-pick-list-total-required"]')?.textContent?.replace(/\s+/g, ' ')).toContain('9');
+
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Search products"]')!, 'coke');
+
+    expect(host.querySelectorAll('tbody tr')).toHaveLength(1);
+    expect(host.querySelector('[data-testid="manual-pick-list-total-required"]')?.textContent?.replace(/\s+/g, ' ')).toContain('9');
+    expect(host.querySelector('[data-testid="manual-pick-list-hidden-required"]')?.textContent?.replace(/\s+/g, ' ').trim()).toBe(
+      'including 2 units on 1 product hidden by the current filters'
+    );
+  });
+
+  it('saves the whole matrix as one batch request and reports it', async () => {
+    const recordMultiMachineRefill = jest.fn((request: MultiMachinePickListRefillRequest) => of(batchResponse(request)));
+    const { host, requireButton, click, type, selectMachineColumn, recordRefill, toast } = await render(
+      undefined,
+      'Ready',
+      undefined,
+      { localMachines: machines(), recordMultiMachineRefill }
+    );
+    click(requireButton('Enter quantities taken'));
+    selectMachineColumn('Front Lobby');
+    selectMachineColumn('Back Room');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, '3');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Chips at Back Room"]')!, '2');
+
+    click(requireButton('Save'));
+
+    expect(recordMultiMachineRefill).toHaveBeenCalledTimes(1);
+    expect(recordRefill).not.toHaveBeenCalled();
+    expect((recordMultiMachineRefill.mock.calls[0][0] as MultiMachinePickListRefillRequest).allocations).toEqual([
+      { machineId: 5, productId: 1, quantityTaken: 3 },
+      { machineId: 6, productId: 2, quantityTaken: 2 }
+    ]);
+    expect(toast.success).toHaveBeenCalledWith('Refill recorded: 2 entries across 2 machines.');
+  });
+
+  it('shows a cell’s own error and blocks Save until it is fixed, naming the product and the machine', async () => {
+    const { host, requireButton, click, type, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
+      localMachines: machines()
+    });
+    click(requireButton('Enter quantities taken'));
+    selectMachineColumn('Front Lobby');
+
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, 'abc');
+
+    expect(host.querySelector('[data-testid="manual-pick-list-cell-error"]')?.textContent?.trim()).toBe(
+      'Enter a whole number greater than 0.'
+    );
+    expect(host.querySelector('[data-testid="manual-pick-list-invalid-entries"]')?.textContent?.replace(/\s+/g, ' ')).toContain(
+      'Coke at Front Lobby: Enter a whole number greater than 0.'
+    );
+    expect(requireButton('Save').disabled).toBe(true);
+  });
+
+  it('asks before removing a machine column that holds quantities, and keeps everything on Cancel', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { host, requireButton, click, type, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
+      localMachines: machines()
+    });
+    click(requireButton('Enter quantities taken'));
+    selectMachineColumn('Front Lobby');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, '3');
+
+    const remove = host.querySelector<HTMLButtonElement>('button[aria-label="Remove machine column: Front Lobby"]')!;
+    click(remove);
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!.value).toBe('3');
+
+    confirmSpy.mockReturnValue(true);
+    click(host.querySelector<HTMLButtonElement>('button[aria-label="Remove machine column: Front Lobby"]')!);
+
+    expect(host.querySelector('input[aria-label="Taken: Coke at Front Lobby"]')).toBeNull();
+    confirmSpy.mockRestore();
+  });
+
+  it('offers an explicit Retry save for an uncertain batch outcome and resends the identical request', async () => {
+    const requests: MultiMachinePickListRefillRequest[] = [];
+    const recordMultiMachineRefill = jest.fn((request: MultiMachinePickListRefillRequest) => {
+      requests.push(request);
+      return requests.length === 1
+        ? throwError(() => new HttpErrorResponse({ status: 0, statusText: 'Unknown Error' }))
+        : of(batchResponse(request));
+    });
+    const { host, requireButton, click, type, selectMachineColumn } = await render(undefined, 'Ready', undefined, {
+      localMachines: machines(),
+      recordMultiMachineRefill
+    });
+    click(requireButton('Enter quantities taken'));
+    selectMachineColumn('Front Lobby');
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, '3');
+
+    click(requireButton('Save'));
+
+    expect(host.querySelector('[data-testid="manual-pick-list-unresolved"]')?.textContent).toContain(
+      "Couldn't confirm whether this refill was recorded."
+    );
+
+    // An edit while the outcome is unknown must not change what the retry sends.
+    type(host.querySelector<HTMLInputElement>('input[aria-label="Taken: Coke at Front Lobby"]')!, '9');
+    click(requireButton('Retry save'));
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1].idempotencyKey).toBe(requests[0].idempotencyKey);
+    expect(requests[1].allocations).toEqual(requests[0].allocations);
+    expect(host.querySelector('[data-testid="manual-pick-list-unresolved"]')).toBeNull();
   });
 });
 

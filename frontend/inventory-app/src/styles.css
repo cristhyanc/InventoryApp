@@ -1374,6 +1374,10 @@ video {
   float: right;
 }
 
+.m-0 {
+  margin: 0px;
+}
+
 .m-4 {
   margin: 1rem;
 }
@@ -1683,6 +1687,10 @@ video {
   min-width: 44px;
 }
 
+.min-w-\[7\.5rem\] {
+  min-width: 7.5rem;
+}
+
 .min-w-\[900px\] {
   min-width: 900px;
 }
@@ -1970,6 +1978,10 @@ video {
 
 .border {
   border-width: 1px;
+}
+
+.border-0 {
+  border-width: 0px;
 }
 
 .border-x {

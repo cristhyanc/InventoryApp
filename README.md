@@ -1878,8 +1878,9 @@ that cannot be used.
   offered — there is nothing to switch to.
 - **Manual entry needs no machine, no fleet read and no product read.** It lists the business's
   active products with a search box, a category filter and a "Taken" quantity box per row, from the
-  same catalogue the calculated view's Products filter already reads. Saving sends every entered
-  quantity as one request to the batch refill endpoint (`POST /api/pick-list/refills`), recording one
+  same catalogue the calculated view's Products filter already reads. With no machine selected,
+  saving sends every entered quantity as one request to the batch refill endpoint
+  (`POST /api/pick-list/refills`), recording one
   `MachineRefill` stock movement per product in a single all-or-nothing operation — a guarantee the
   machine-detail page's old per-product Restock action, since removed in favour of this screen (see
   [Record refill from a machine's page](#record-refill-from-a-machines-page) below), never had. A
@@ -1891,10 +1892,14 @@ that cannot be used.
   nothing is saved until you click Save and that Save then records one machine refill per quantity
   entered and reduces that product's storage quantity.
 - **A retry never double-deducts.** Each save keeps an exact record of what it last sent. Clicking
-  Save again with nothing changed — after a failure that could not be confirmed, for instance — resends
-  the identical request under the identical idempotency key, which the server answers with the result
-  it already recorded rather than taking the stock twice; changing any quantity before retrying sends
-  a new key, because it is a different pick.
+  Save again with nothing changed resends the identical request under the identical idempotency key,
+  which the server answers with the result it already recorded rather than taking the stock twice;
+  changing any quantity before retrying sends a new key, because it is a different pick. **While a
+  save's outcome could not be confirmed at all** — a dropped connection, a server error — nothing you
+  do on screen can send a *different* request: the screen keeps the exact pick it sent and offers
+  **Retry save**, which resends precisely that one, so an edited quantity, a removed machine column
+  or a reordered selection cannot turn one physical pick into a second deduction. Only once that
+  attempt is answered does Save start a new pick again.
 - **An unconfirmed save is not lost by switching views.** A save whose outcome could not be confirmed
   stays reported on the screen until a later Save settles it, and switching to the calculated view and
   back keeps every quantity you typed — so the retry is still the same request under the same key, not
@@ -1909,25 +1914,59 @@ that cannot be used.
   and "No active products match your filters." appears only after a successful read. If refreshing
   storage quantities after a save fails, the screen keeps the last list, says the quantities may be
   out of date and offers **Refresh**.
-- **An optional machine selector** (issue #794) lets an operator attribute a manual pick to one of
-  the business's own machines, the same local records the stock and expense screens use (see
+- **A machine selection** (issues #794 and #904) lets an operator attribute a manual pick to the
+  business's own machines, the same local records the stock and expense screens use (see
   [Choosing a machine on the stock and expense screens](#choosing-a-machine-on-the-stock-and-expense-screens)
-  above) — with or without a provider. It offers only **active** machines, by the name you gave each
-  one, with "No machine" as the default choice, and is shown at all only once the business has at
-  least one active machine; a business with none sees exactly what it always has, with no selector
-  and no machine recorded. The machine you choose is part of the exact request a save sends and of
-  what a retry compares: changing it, like changing a quantity, sends a new idempotency key, while
-  resending unchanged reuses the same key and the same machine. It is sent only on the refill you
-  save — never to the calculated matrix's own machine selection, which keeps using Nayax's fleet
-  untouched by this selector. A machine list that **failed** to load says so in the selector's place
-  and still lets you save without a machine, exactly as a business with none recorded would.
+  above) — with or without a provider. The **Machines** dropdown offers only **active** machines, by
+  the name you gave each one, and is shown at all only once the business has at least one active
+  machine; a business with none, or whose machine list **failed** to load (which says so in the
+  dropdown's place), sees exactly what it always has: the single "No machine" column, saved with no
+  machine recorded. The machines you select never reach the calculated matrix's own machine
+  selection, which keeps using Nayax's fleet untouched by this one.
+
+#### Entering one pick run across several machines (issue #904)
+
+An operator preparing one run usually visits several machines. Select them all in the Manual Pick
+List's **Machines** dropdown and each one gets its own quantity column, so the whole run is typed
+once and saved once.
+
+- **The row reads Product, Category, Storage Qty, Total Taken, then one column per machine.** Total
+  Taken is that product's own sum across the selected machines — what the pick takes off one shelf —
+  and under the table **Total storage required** is the whole pick's, counting the rows your search
+  or category filter is currently hiding, and saying how many units and products those are. A filter
+  hides rows; it never changes what Save sends.
+- **One Save sends the whole run as a single request** (`POST /api/pick-list/multi-machine-refills`,
+  see [Recording one pick across several machines (the API)](#recording-one-pick-across-several-machines-the-api-issue-897)
+  below) — never one request per machine. That is the point of it: only one request can weigh each
+  product's **total** across the machines you allocated it to against the storage it comes off, so
+  six to one machine and six to another is refused as twelve against a shelf of ten rather than
+  half-saved. A refusal keeps everything you typed editable and puts the server's own message on each
+  cell it was about. Success reports the whole run — how many entries across how many machines — and
+  refreshes the storage quantities once.
+- **With no machine selected, nothing changes.** The screen is exactly the single "Taken" column
+  described above, saved through the existing endpoint as a refill attributed to no machine.
+- **Quantities are never silently moved, copied or dropped.** A quantity typed against "No machine"
+  is never copied into every machine column — that would invent a pick several times the size of the
+  one you typed — so selecting machines asks you to confirm discarding it first, and **Cancel keeps
+  everything**, including the selection you had. The same applies in reverse (clearing the machine
+  selection) and to **removing one machine column** that holds quantities: you are asked, by name,
+  and Cancel changes nothing at all.
+- **Nothing moves while a save is being sent.** The machine selection, the column removals and every
+  quantity box are locked until the request lands, so what is being answered is what was sent.
+- **A wide run stays inside the table.** The matrix scrolls inside its own bounded area, with the
+  machine headers staying readable, so many machine columns never widen the page — including on a
+  phone. Every quantity box is labelled with both its product and its machine for screen readers.
+- **Opening the screen from a machine's page** (the **Record refill** link) preselects exactly that
+  machine as the only column, and you can add more beside it.
+- **Read-only during a support session**, exactly as before: the quantity boxes and Save are hidden
+  and the screen says why.
 
 #### Recording one pick across several machines (the API, issue #897)
 
 A pick run usually visits several machines, and until now each machine had to be saved as its own
-request. Issue #897 adds one endpoint that records the whole run at once. It is the **backend half**:
-the multi-machine entry screen is a separate issue, so the Manual Pick List screen described above
-still saves one machine (or none) per Save, and `POST /api/pick-list/refills` is unchanged.
+request. Issue #897 adds one endpoint that records the whole run at once; the Manual Pick List's
+machine matrix (above) is what calls it, and `POST /api/pick-list/refills` is unchanged and still
+records a refill for no machine at all.
 
 ```text
 POST /api/pick-list/multi-machine-refills
@@ -2202,21 +2241,23 @@ machine selector both exist.
 
 - **One link, not a control per product.** The link sits beside the product count in the Products
   tab and opens `/pick-list` in manual entry — [Recording a pick without a
-  provider](#recording-a-pick-without-a-provider) above — with this machine already chosen in its
-  machine selector, so you can search for whatever you took and save every quantity in the one
-  atomic, idempotent request that screen already makes. It is never shown while a [support
+  provider](#recording-a-pick-without-a-provider) above — with this machine already selected as its
+  one quantity column, so you can search for whatever you took and save every quantity in the one
+  atomic, idempotent request that screen already makes, and add the rest of the run's machines beside
+  it if the run continued. It is never shown while a [support
   session](#super-admin-support-sessions) is active, exactly as the Restock inputs it replaced never
   were, because the pick list itself refuses to save during one too.
 - **The machine chosen is always this business's own machine record**, never the sales provider's
   own machine number — the same local record the Machines page, Sync Restock and the machine's stock
   and expense figures already use. If that machine is no longer one of your active machines by the
   time the pick list opens — deactivated, for instance, in the moment between opening the two pages —
-  the pick list says so plainly next to its machine selector rather than quietly recording the refill
-  against no machine at all; you can still choose a machine yourself from the list, or save without
-  one. While the pick list is still confirming which machine the link named, it says so and Save
-  waits — you can type your quantities straight away, and saving becomes available the moment the
-  machine is settled, so a refill opened from a machine's page is never recorded against no machine
-  by accident. Entering a pick from the menu, with no machine linked, never waits for this.
+  the pick list says so plainly next to its machine selection rather than quietly recording the
+  refill against no machine at all; you can still choose a machine yourself from the list, or save
+  without one. While the pick list is still confirming which machine the link named, it says so and
+  Save waits — you can type your quantities straight away, they move into that machine's column the
+  moment it is confirmed, and saving becomes available then, so a refill opened from a machine's page
+  is never recorded against no machine by accident. Entering a pick from the menu, with no machine
+  linked, never waits for this.
 - **Sync Restock is unaffected.** It still imports Nayax's own stock-adjustment alerts and still
   recognises a refill you recorded manually — through this link or otherwise — as already accounted
   for, so applying the matching Nayax event afterward still cannot deduct the same storage twice.

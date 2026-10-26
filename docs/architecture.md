@@ -9562,7 +9562,9 @@ refusal).
 `POST /api/pick-list/multi-machine-refills` records **a whole pick run across several machines in one
 request**, as one `MachineRefill` stock movement per allocation, in one transaction: every allocation
 or none. It is additive: the single-machine endpoint above, its request, its response and the refills
-it has already recorded are unchanged, and the entry screen that calls this one is a separate issue.
+it has already recorded are unchanged. Its one caller is the manual pick list's machine matrix (issue
+#904, see [Manual pick-list entry and mode selection](#manual-pick-list-entry-and-mode-selection-issue-744)),
+which sends one of these requests per Save and never one per machine.
 
 **The problem it replaces.** The refill above carries one machine for the whole batch, so a run that
 visited three machines had to be sent as three requests, each with its own idempotency key. Three
@@ -9916,23 +9918,74 @@ business's own machines](#machine-fields-from-the-businesss-own-machines-issue-7
 entry attribute a pick to one of the business's own machines, with or without a provider.**
 `ManualPickListComponent` reads `LocalMachineService.getAll()` (`/api/local-machines`, the same local
 records issue #740/#741 gave the stock and expense screens, never a provider id) and offers the
-result as `selectedMachineId` - a plain `<select>` of **active** local machines by
-`LocalMachine.name`, plus a "No machine" default - shown at all only once that read succeeds with at
-least one active machine (`machineSelectorShown`); a business with none, or whose read is still
-outstanding, behaves exactly as the machine-free slice above describes. A failed read
+result as **active** local machines by `LocalMachine.name` - shown at all only once that read
+succeeds with at least one active machine (`machineSelectorShown`); a business with none, or whose
+read is still outstanding, behaves exactly as the machine-free slice above describes. A failed read
 (`machinesLoadFailed`) is reported in the selector's place rather than hidden silently, but a save
-without a machine still works, exactly as a business with none recorded would. The chosen machine is
-sent as the manual save's optional local `machineId` and is part of what `lastSubmission` compares
-for idempotency (see **Idempotency** below): changing it, like changing a row, mints a new key, while
-an unchanged resubmission reuses the key and the machine together. It is never sent to
+without a machine still works, exactly as a business with none recorded would. It is never sent to
 `PickListService.get`, the calculated view's own machine read, which keeps using provider machine ids
-untouched by this selector.
+untouched by this selection. **Issue #794's single `selectedMachineId` `<select>` is what issue #904
+replaced with the machine matrix below**, which is also where the chosen machines now reach the
+server: a pick that names any machine is a multi-machine batch, so the single-machine endpoint's
+request-level `machineId` is no longer sent by this frontend at all.
 
 **The machine-page consolidation the 18 October 2026 owner decision describes - replacing the
 machine-detail page's per-product quantity inputs with a link into this screen, with that machine
-preselected through this same selector's `selectedMachineId` - is issue #744's own later phase**; see
+preselected as its one machine column - is issue #744's own later phase**; see
 [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
 below.
+
+**The machine matrix: one column per selected machine, one request per Save (issue #904).** The
+machine selection is `selectedMachineIds` - the shared `MultiSelectDropdownComponent` over
+`machineOptions()`, in the operator's own selection order, which is also the column order - and it is
+what chooses between the screen's **two modes, one per endpoint**:
+
+- **No machine selected** is issue #744's machine-free entry, unchanged: one "Taken" column, saved
+  through `PickListService.recordRefill` (`POST /api/pick-list/refills`) with no `machineId` at all.
+- **One or more machines selected** renders Product, Category, Storage Qty, **Total Taken** - the
+  row's own sum across the selected machines - and then one quantity column per machine, and one Save
+  sends the whole run through `PickListService.recordMultiMachineRefill`
+  (`POST /api/pick-list/multi-machine-refills`, see [Multi-machine refill batch](#multi-machine-refill-batch-issue-897))
+  as a single batch of `(machineId, productId, quantityTaken)` allocations in catalogue-then-column
+  order. **Never one request per machine**: each product's allocations come off one shelf, and only
+  one request can weigh their total against it inside the write lock - which is the reason that
+  endpoint exists. A single selected machine is a one-column matrix and takes the same path, so the
+  retry and attribution rules below do not change shape with the size of the selection.
+
+**Drafts are per mode, and nothing is silently reassigned, copied or dropped.** The "No machine"
+entries (`takenById`, by product) and the matrix cells (`cellValues`, by product **and** machine) are
+separate drafts; a generic quantity is never written into every selected column, because that would
+invent a pick several times the size of the one that was typed. A selection change that would drop a
+typed quantity therefore asks first - `DISCARD_UNATTRIBUTED_ENTRIES_CONFIRMATION` on the way into
+machine columns, `DISCARD_MACHINE_COLUMNS_CONFIRMATION` on the way back out, and
+`discardMachineColumnConfirmation(...)`, which names the columns, when some of them are removed - and
+**Cancel changes nothing at all**, neither the selection nor one entry (`window.confirm`, the same
+confirmation `MachineDetailComponent` and the Admin workflows use). A confirmed removal drops exactly
+the removed columns' cells, so re-adding a machine brings back an empty column rather than a
+discarded quantity. The search and category filters never touch a draft at all: they hide rows, and a
+hidden row's entries are still validated, still sent, and still counted in `totalUnitsRequired()` -
+which is why `hiddenUnitsRequired()`/`hiddenProductsWithEntries()` are shown beside it rather than
+leaving an operator to discover a hidden row from a refusal. The one place an entry changes column is
+the preselected machine's own window, below.
+
+**Per-cell validation, and what blocks Save.** `parseTakenEntry` is the one rule for every box in
+both modes: blank or `0` is nothing taken, a positive whole number up to `MAXIMUM_TAKEN_QUANTITY`
+(the server's `int`) is a quantity, and anything else - negative, fractional, nonnumeric, or larger
+than the server can record (`TAKEN_QUANTITY_TOO_LARGE_MESSAGE`) - is refused inline on its own cell
+and blocks Save, wherever it is. Because a cell is one product on one machine, the blocked Save also
+states which: `invalidEntryMessages` names each one as "<product> at <machine>: <message>", including
+cells on rows the current filter hides. A `400` from the batch endpoint is parsed by
+`parseMultiMachineRefillRejection`, which maps each `allocations[i]` key back to the
+**(product, machine)** pair the submitted allocation at that index named - not to a position in the
+currently filtered or reordered matrix - so a per-allocation refusal, including the aggregate
+"these allocations take N units, but only M are in stock" reported on *every* contributing
+allocation, lands on the cells it is about; `idempotencyKey`, `notes` and the bare `allocations` key
+surface as request-level messages. A definitive refusal leaves every draft editable.
+
+**Nothing moves while a save is in flight.** `saving` disables every entry box, disables the machine
+dropdown (a `<fieldset disabled>` around it, so its trigger and checkboxes go with it) and makes
+`onSelectedMachineIdsChange`, `removeMachineColumn`, `onCellChange` and `onTakenChange` return
+without doing anything, so the request being answered is the request that was built.
 
 **Entry, validation and the save contract.** Manual entry lists every product in `products` (already
 active-only, since `ProductService.getAll()` with no filters answers the working catalogue), with a
@@ -9943,10 +9996,12 @@ and contributes no row, and anything else that is not a positive whole number is
 "Enter a whole number greater than 0." (mirroring `PickListRefillPolicy.QuantityMustBePositiveMessage`
 without importing it - a second, Angular-side copy of the same rule, the same way
 `business-application-rules.ts` mirrors `BusinessSettingsPolicy`) and blocks Save until it is fixed or
-cleared, regardless of whether that row is currently visible under the search/category filter. Save
-builds its row set from every product in `products` order (not the visible/filtered subset) whose
-"Taken" box parses to a positive quantity, and sends exactly `{ idempotencyKey, rows }` - no
-`machineId`, no `notes` - to `PickListService.recordRefill` (`POST /api/pick-list/refills`). A `400`'s
+cleared, regardless of whether that row is currently visible under the search/category filter. In the
+"No machine" mode Save builds its row set from every product in `products` order (not the
+visible/filtered subset) whose "Taken" box parses to a positive quantity, and sends exactly
+`{ idempotencyKey, rows }` - no `machineId`, no `notes` - to `PickListService.recordRefill`
+(`POST /api/pick-list/refills`); with machine columns it builds allocations instead and sends the
+batch described above. A `400`'s
 `ValidationProblemDetails` is parsed by `pick-list-refill-errors.ts`'s `parsePickListRefillRejection`:
 each `rows[i]` key is mapped back to the **product id** the submitted row at that index named (not
 the row's position in the currently-visible, filtered list), so a refusal lands on the right line
@@ -9957,17 +10012,21 @@ recorded."; nothing is saved to `localStorage`, a query parameter, or any state 
 instance, matching the calculated view's own no-persistence rule.
 
 **Idempotency and the three outcomes a save can have (issue #743's contract, read correctly from the
-client side).** `ManualPickListComponent` keeps the exact row set and key of its last attempted save
-(`lastSubmission`) and compares it with what Save would send now:
+client side).** `ManualPickListComponent` keeps the exact payload and key of its last attempted save
+(`lastSubmission`, which is either a row set for the "No machine" mode or an allocation set for the
+matrix) and compares it with what Save would send now:
 
-- **An unchanged resubmission reuses the key and resends the identical rows**, generated nowhere
+- **An unchanged resubmission reuses the key and resends the identical payload**, generated nowhere
   else - not even recomputed from the current product order - so a retry is bit-for-bit the same
   request the server last saw, whatever else on screen may have changed (a filter, a sort) in
-  between. This is what makes the three failure modes safe to retry at all: `PickListRefillPolicy.
-  ValidateRequestShape`/`ValidateAgainstState` both refuse *before* `RecordPickListRefill` ever claims
+  between. A batch compares as a **set** of allocations (`multiMachineAllocationsEqual`), so merely
+  reordering the machine columns is still the same pick under the same key - which matches the
+  server, whose `MultiMachinePickListRefillFingerprint` renders a batch in its own
+  machine-then-product order. This is what makes the three failure modes safe to retry at all: the
+  request-shape and against-state rules of both endpoints refuse *before* the use case ever claims
   the idempotency key (see [Batch refill from the pick list](#batch-refill-from-the-pick-list-issue-743)
-  above), so a `400` has recorded nothing and the same key is always safe to resend once the named
-  row is fixed.
+  and [Multi-machine refill batch](#multi-machine-refill-batch-issue-897) above), so a `400` has
+  recorded nothing and the same key is always safe to resend once the named row or cell is fixed.
 - **A `400` is a definite, per-row refusal.** Nothing was recorded; `rowErrors`/`requestErrors` are
   replaced from the response (never merged with a previous attempt's), and `lastSubmission` is left
   exactly as it is - an unedited retry resends the same refused request, which is deterministic and
@@ -9978,13 +10037,23 @@ client side).** `ManualPickListComponent` keeps the exact row set and key of its
   generic one when it carries none.
 - **Anything else (a network failure, an unrelated `5xx`) is uncertain - it is not known whether the
   server recorded the refill before the response was lost.** `lastSubmission` is left untouched and
-  the entered quantities are **not** cleared, so clicking Save again - with nothing edited - resends
-  precisely the same request under precisely the same key: if the first attempt had in fact been
-  recorded, the retry is answered as a replay and writes nothing a second time; if it had not, the
-  retry records it. Either way the operator never has to decide which happened. This is the one
-  outcome that sets `unresolvedSubmission`, so the attempt stays reported on screen until a later
-  Save resolves it, and it is why the component survives a mode switch at all; a `400`, a `403` and a
-  `409` are definite answers and leave it clear.
+  the entered quantities are **not** cleared, so the retry resends precisely the same request under
+  precisely the same key: if the first attempt had in fact been recorded, the retry is answered as a
+  replay and writes nothing a second time; if it had not, the retry records it. Either way the
+  operator never has to decide which happened. This is the one outcome that sets
+  `unresolvedSubmission`, so the attempt stays reported on screen until a later attempt resolves it,
+  and it is why the component survives a mode switch at all; a `400`, a `403` and a `409` are
+  definite answers and leave it clear.
+- **While an outcome is uncertain, no new key may be minted at all - the kept payload is the only
+  request that may be sent (issue #904's tightening of this rule).** The screen offers an explicit
+  **Retry save** (`retry()`, `canRetry`) that resends exactly `lastSubmission`, and `save()` *is*
+  that retry while `unresolvedSubmission` is set, so an edited cell, a removed machine column or a
+  reordered selection cannot turn one physical pick into a second deduction. Before #904, editing a
+  quantity after an uncertain outcome minted a new key, which is a second deduction whenever the
+  first attempt had in fact committed; a matrix makes that path far easier to walk into, because the
+  columns themselves move. A different pick is accepted again only once that attempt has a definite
+  answer - which one Retry always produces, since every outcome other than another uncertain one
+  resolves it.
 - **A `403` is a definite refusal too** - a read-only support session, or a capability the member
   lacks, refused the request before anything was recorded - so it is reported as a refusal ("This
   refill was refused, so nothing was recorded.", or the response's own `detail`), never as the
@@ -9994,9 +10063,10 @@ client side).** `ManualPickListComponent` keeps the exact row set and key of its
 **A support session is read-only here too (issue #658's rule).** A support session grants
 `Inventory.Operate`, so the backend refuses this write only by its read-only method rule. Like
 `MachineDetailComponent`'s Restock, `ManualPickListComponent` subscribes to `SupportSessionService.
-active$` (`sessionActive`) and, while it is set, **hides** the "Taken" column and Save and says why
-(`data-testid="manual-pick-list-support-session"`); the product list and storage quantities stay
-readable. `canSave` is false and `save()` returns before sending, so a session that starts after the
+active$` (`sessionActive`) and, while it is set, **hides** every entry column - the "Taken" column,
+and in the matrix the Total Taken and machine columns with it - along with Save, Retry save and the
+storage-requirement line, and says why (`data-testid="manual-pick-list-support-session"`); the
+product list and storage quantities stay readable. `canSave` is false and `save()` returns before sending, so a session that starts after the
 page opened cannot send a refill either. An already-raised uncertain-save notice stays visible.
 
 **The catalogue's own load state.** Manual entry is built entirely from `allProducts`, so an empty
@@ -10016,21 +10086,33 @@ the page opened); `manual-pick-list.component.spec.ts` covers the `save()` guard
 
 **What proves it.** `idempotency-key.spec.ts` (the generator's uniqueness and the 128-character
 contract bound), `pick-list-refill-errors.spec.ts` (`rows[i]` mapped back to the submitted row's
-product id, request-level keys kept separate, and `null` for a `409`/network failure/a body with no
-`errors`), `manual-pick-list.component.spec.ts` (filtering, the blank/zero/malformed "Taken" rules,
-the exact submitted row set and order, the three failure outcomes above including the idempotency-key
-reuse/mint rules, that a save in flight is never resent, and which outcomes leave `unresolvedSubmission`
-set), `pick-list.component.mode.spec.ts` (the default calculated mode, both forced-manual triggers -
+product id, `allocations[i]` mapped back to the submitted allocation's product **and** machine,
+request-level keys kept separate, `null` for a `409`/network failure/a body with no `errors`, and
+`multiMachineAllocationsEqual` treating a reordered batch as the same submission),
+`manual-pick-list.component.spec.ts` (filtering, the blank/zero/malformed/too-large entry rules in
+both modes, the exact submitted row and allocation sets and their order, the matrix's row and whole-
+pick totals including rows a filter hides, every discard confirmation and what Cancel leaves
+untouched, the in-flight locks on the selection, the column removals and the cells, the three failure
+outcomes above including the idempotency-key reuse/mint rules and that **no** key is minted while an
+outcome is uncertain however the matrix is edited, removed from or reordered, that a save in flight is
+never resent, and which outcomes leave `unresolvedSubmission` set), `pick-list.component.mode.spec.ts`
+(the default calculated mode, both forced-manual triggers -
 up front and live - the generic-failure exception, the manual-mode toggle, that switching back to
 calculated preserves the already-fetched matrix, that the manual view is created once and kept, and
 that manual mode cannot be left while a save is in flight) and
 `pick-list.component.manual-rendering.spec.ts` (the toggle and the manual table rendered through the
 real template, including the provider-unavailable case hiding the Calculated option entirely, both
 mode-specific inventory-impact wordings, an uncertain save retried with the identical key and body
-after switching to calculated and back, and the toggle refusing to move while a save is in flight).
-Not listed above because it predates this section: `manual-pick-list.component.spec.ts`'s "machine
-selector" describe block (issue #794) already covers `machineSelectorShown`, `activeMachines`
-excluding inactive machines, the failed-read fallback, and the selector's own idempotency rules; see
+after switching to calculated and back, the toggle refusing to move while a save is in flight, and -
+for the matrix - one labelled column per selected machine with the Total Taken column before them,
+the bounded scroll container the columns live in, the per-cell error and the product-and-machine
+sentence that blocks Save, the whole-pick storage requirement with the part a filter hides, the
+confirmed and cancelled column removal, the one batch request a Save sends, and the explicit
+**Retry save** resending the identical request after an edit). Also proved in
+`pick-list.component.spec.ts`: a manual pick's local machine columns never reach the calculated
+view's provider machine ids. Not listed above because it predates this section:
+`manual-pick-list.component.spec.ts`'s machine-selection describe block (issue #794) already covers
+`machineSelectorShown`, `activeMachines` excluding inactive machines and the failed-read fallback; see
 [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
 immediately below for what issue #744's own later phase added on top of it.
 
@@ -10091,15 +10173,17 @@ if the operator had chosen it from the dropdown, only when it names one of `acti
 also what the issue's "resolve to the current business's local machine" requirement reduces to, since
 the id arriving here was already a local id by construction (previous bullet) and the only remaining
 question is whether it is still one of *this* business's *active* machines by the time the pick list
-loads. When it is not - deactivated or removed between opening the machine page and clicking the
-link, or the machine read itself failed - `machineAttributionFailed` is raised instead of silently
-leaving `selectedMachineId` at its default `null`: the link promised this refill would be attributed
-to that machine, so a save that quietly went through as "No machine" would misrepresent what
-happened. The message (`data-testid="manual-pick-list-machine-attribution-failed"`) is shown beside
-the selector rather than blocking the screen, and the dropdown itself is never forced into a false
-state - a resolved preselection is a real, changeable selection, and a failed one leaves the
-selection exactly where it already honestly was, so the operator can still pick a machine from the
-list (if one is shown) or save explicitly against "No machine".
+loads. It becomes **exactly one** machine column (`selectedMachineIds = [id]`, issue #904) and more
+may be added beside it, because a run that starts at one machine is still a run. When it is not -
+deactivated or removed between opening the machine page and clicking the link, or the machine read
+itself failed - `machineAttributionFailed` is raised instead of silently leaving the selection empty:
+the link promised this refill would be attributed to that machine, so a save that quietly went
+through as "No machine" would misrepresent what happened. The message
+(`data-testid="manual-pick-list-machine-attribution-failed"`) is shown beside the selector rather
+than blocking the screen, and the dropdown itself is never forced into a false state - a resolved
+preselection is a real, changeable selection, and a failed one leaves the selection exactly where it
+already honestly was, so the operator can still pick a machine from the list (if one is shown) or
+save explicitly against "No machine".
 
 **Until that resolution settles, Save is refused.** `machineResolutionPending` is `true` exactly
 while a link named a machine and the machine read has not answered either way, and both `canSave`
@@ -10115,7 +10199,12 @@ Refusing the save until the attribution is known means no request can leave whil
 so there is no kept submission for a late answer to change underneath. The wait is announced in the
 selector's place (`data-testid="manual-pick-list-machine-resolution-pending"`, `role="status"`) and
 the "Taken" boxes stay open, so the operator can keep typing; **ordinary entry never waits**, because
-`preselectedMachineId` is `null` and the pending state is never raised at all.
+`preselectedMachineId` is `null` and the pending state is never raised at all. A quantity typed in
+that window belongs to the one machine the link named - that is what the link and the pending notice
+both promised - so when the read answers it **moves into that machine's column** rather than being
+dropped or sent unattributed (issue #904). That is the only place an entry changes column, it is
+always one machine, and it is never a copy into several; a link whose machine does not resolve leaves
+those entries exactly where they are, as the unattributed pick they honestly still are.
 
 **Sync Restock's fallback wording now points at the pick list.** `MachineRestockSyncComponent`'s
 description previously said "Manual restocking above remains available as a fallback"; "above" named
@@ -13292,12 +13381,14 @@ that meaning.
 8. **Manual restocking is the preserved fallback, now through the pick list.** The machine-detail
    page's own per-product Restock inputs are gone (issue #744's machine-page consolidation, see
    [Machine-page consolidation: the "Record refill" link](#machine-page-consolidation-the-record-refill-link-issue-744)
-   below); its **Record refill** link opens `ManualPickListComponent` with this machine preselected,
-   which calls the same batch `RecordPickListRefill` use case every manual pick-list save already
-   used (issue #743) and so is available for exactly the same Nayax outage or unresolved machine/MDB
+   below); its **Record refill** link opens `ManualPickListComponent` with this machine preselected
+   as its one machine column, which records the pick through the batch use cases every manual
+   pick-list save uses - `RecordPickListRefill` for a pick with no machine (issue #743) and
+   `RecordMultiMachinePickListRefill` once any machine has a column (issue #897, called by issue
+   #904's matrix) - and so is available for exactly the same Nayax outage or unresolved machine/MDB
    case the old action was. `StockAdjustment.Source` (`Manual` by default, `Nayax` only when set by
    the sync-apply path) is unchanged and is still what keeps a manual and a Nayax-sourced refill
-   distinguishable in the stock history/audit trail - `RecordPickListRefill`'s own movements are
+   distinguishable in the stock history/audit trail - both use cases' own movements are
    `Manual` exactly like the removed action's were - even though both share
    `StockAdjustmentReason.MachineRefill`, so this reconciliation step still cannot mistake one for
    the other and applying a Nayax stock-adjustment event the operator already recorded this way still

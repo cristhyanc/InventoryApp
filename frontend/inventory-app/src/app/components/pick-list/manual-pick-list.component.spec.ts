@@ -1,20 +1,34 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { BehaviorSubject, Observable, Subject, of, throwError } from 'rxjs';
-import { Category, LocalMachine, PickListRefillRequest, PickListRefillResponse, Product } from '../../models/models';
+import {
+  Category,
+  LocalMachine,
+  MultiMachinePickListRefillRequest,
+  MultiMachinePickListRefillResponse,
+  PickListRefillRequest,
+  PickListRefillResponse,
+  Product
+} from '../../models/models';
 import { LocalMachineService } from '../../services/local-machine.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import {
+  DISCARD_MACHINE_COLUMNS_CONFIRMATION,
+  DISCARD_UNATTRIBUTED_ENTRIES_CONFIRMATION,
   INVALID_TAKEN_QUANTITY_MESSAGE,
   MACHINE_ATTRIBUTION_FAILED_MESSAGE,
   MACHINE_RESOLUTION_PENDING_MESSAGE,
   MACHINES_LOAD_FAILED_MESSAGE,
+  MAXIMUM_TAKEN_QUANTITY,
   REFILL_CONFLICT_MESSAGE,
   REFILL_FORBIDDEN_MESSAGE,
   REFILL_RECORDED_MESSAGE,
   REFILL_UNCERTAIN_MESSAGE,
-  ManualPickListComponent
+  TAKEN_QUANTITY_TOO_LARGE_MESSAGE,
+  ManualPickListComponent,
+  discardMachineColumnConfirmation,
+  multiMachineRefillRecordedMessage
 } from './manual-pick-list.component';
 
 function supportSessionStub(active: Observable<boolean>): SupportSessionService {
@@ -66,6 +80,16 @@ function recordedResponse(request: PickListRefillRequest): PickListRefillRespons
   };
 }
 
+function batchResponse(request: MultiMachinePickListRefillRequest): MultiMachinePickListRefillResponse {
+  return {
+    idempotencyKey: request.idempotencyKey,
+    replayed: false,
+    notes: request.notes ?? null,
+    recordedAtUtc: '2026-01-01T00:00:00Z',
+    allocations: request.allocations.map((allocation) => ({ ...allocation, stockAdjustmentId: allocation.productId * 100 }))
+  };
+}
+
 function validationError(errors: Record<string, string[]>): HttpErrorResponse {
   return new HttpErrorResponse({ status: 400, error: { title: 'Request validation failed', status: 400, errors } });
 }
@@ -73,6 +97,7 @@ function validationError(errors: Record<string, string[]>): HttpErrorResponse {
 interface Harness {
   component: ManualPickListComponent;
   recordRefill: jest.Mock;
+  recordMultiMachineRefill: jest.Mock;
   toast: { success: jest.Mock; error: jest.Mock; warning: jest.Mock; info: jest.Mock };
   getAllMachines: jest.Mock;
 }
@@ -82,10 +107,11 @@ function createHarness(
   recordRefill: jest.Mock = jest.fn((request: PickListRefillRequest) => of(recordedResponse(request))),
   sessionActive: Observable<boolean> = of(false),
   getAllMachines: jest.Mock = jest.fn(() => of([])),
-  preselectedMachineId: number | null = null
+  preselectedMachineId: number | null = null,
+  recordMultiMachineRefill: jest.Mock = jest.fn((request: MultiMachinePickListRefillRequest) => of(batchResponse(request)))
 ): Harness {
   const toast = { success: jest.fn(), error: jest.fn(), warning: jest.fn(), info: jest.fn() };
-  const pickListService = { recordRefill } as unknown as PickListService;
+  const pickListService = { recordRefill, recordMultiMachineRefill } as unknown as PickListService;
   const localMachineService = { getAll: getAllMachines } as unknown as LocalMachineService;
 
   const component = new ManualPickListComponent(
@@ -98,8 +124,20 @@ function createHarness(
   component.preselectedMachineId = preselectedMachineId;
   component.ngOnInit();
 
-  return { component, recordRefill, toast, getAllMachines };
+  return { component, recordRefill, recordMultiMachineRefill, toast, getAllMachines };
 }
+
+/** The two machines every matrix test selects columns from. */
+function twoMachines(): jest.Mock {
+  return jest.fn(() => of([localMachine({ id: 5, name: 'Front Lobby' }), localMachine({ id: 6, name: 'Back Room' })]));
+}
+
+/** Answers the next `window.confirm` and reports what it was asked, so a discard is never silent. */
+function stubConfirm(answer: boolean): jest.SpyInstance<boolean, [message?: string]> {
+  return jest.spyOn(window, 'confirm').mockImplementation(() => answer);
+}
+
+afterEach(() => jest.restoreAllMocks());
 
 describe('ManualPickListComponent filtering', () => {
   it('derives category options from the products it was given, deduplicated and sorted by name', () => {
@@ -136,25 +174,27 @@ describe('ManualPickListComponent filtering', () => {
   });
 });
 
-describe('ManualPickListComponent machine selector (issue #794)', () => {
-  it('shows the selector and submits the chosen machine as the local machineId when active local machines exist', () => {
-    const getAllMachines = jest.fn(() => of([localMachine({ id: 5, name: 'Front Lobby' })]));
-    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines);
+describe('ManualPickListComponent machine selection (issues #794, #904)', () => {
+  it('offers every active local machine as a selectable column, and starts with none selected', () => {
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
 
     expect(component.machineSelectorShown).toBe(true);
-    expect(component.activeMachines.map((m) => m.id)).toEqual([5]);
-
-    component.selectedMachineId = 5;
-    component.onTakenChange(1, '3');
-    component.save();
-
-    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
-    expect(request.machineId).toBe(5);
+    expect(component.machineOptions().map((option) => option.label)).toEqual(['Front Lobby', 'Back Room']);
+    expect(component.selectedMachineIds).toEqual([]);
+    expect(component.machineColumns).toEqual([]);
   });
 
-  it('hides the selector and submits no machineId when the business has no active local machines', () => {
-    const getAllMachines = jest.fn(() => of([]));
-    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines);
+  it('gives each selected machine its own clearly labelled quantity column, in selection order', () => {
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+
+    component.onSelectedMachineIdsChange([6, 5]);
+
+    expect(component.machineColumns.map((machine) => machine.name)).toEqual(['Back Room', 'Front Lobby']);
+    expect(component.cellAriaLabel(component.products[0], component.machineColumns[0])).toBe('Taken: Coke at Back Room');
+  });
+
+  it('hides the selector when the business has no active local machines, and saves unattributed', () => {
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, jest.fn(() => of([])));
 
     expect(component.machineSelectorShown).toBe(false);
 
@@ -165,7 +205,7 @@ describe('ManualPickListComponent machine selector (issue #794)', () => {
     expect(request.machineId).toBeUndefined();
   });
 
-  it('does not offer a deactivated machine in the selector', () => {
+  it('does not offer a deactivated machine as a column', () => {
     const getAllMachines = jest.fn(() =>
       of([localMachine({ id: 5, name: 'Front Lobby', isActive: true }), localMachine({ id: 6, name: 'Back Room', isActive: false })])
     );
@@ -173,6 +213,10 @@ describe('ManualPickListComponent machine selector (issue #794)', () => {
 
     expect(component.machineSelectorShown).toBe(true);
     expect(component.activeMachines.map((m) => m.id)).toEqual([5]);
+
+    // A machine the business no longer offers cannot become a column even if something names it.
+    component.onSelectedMachineIdsChange([5, 6]);
+    expect(component.machineColumns.map((m) => m.id)).toEqual([5]);
   });
 
   it('shows an explicit message and still allows saving without a machine when the local machine read fails', () => {
@@ -191,57 +235,544 @@ describe('ManualPickListComponent machine selector (issue #794)', () => {
     const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
     expect(request.machineId).toBeUndefined();
   });
+});
 
-  it('gives a changed machine choice a new idempotency key, and an unchanged retry reuses both the key and the machine', () => {
-    const getAllMachines = jest.fn(() =>
-      of([localMachine({ id: 5, name: 'Front Lobby' }), localMachine({ id: 6, name: 'Back Room' })])
+describe('ManualPickListComponent matrix entry and the one batch save (issue #904)', () => {
+  it('sends one batch request naming each cell’s own machine, never one request per machine', () => {
+    const { component, recordRefill, recordMultiMachineRefill } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '4');
+    component.onCellChange(2, 6, '2');
+
+    component.save();
+
+    expect(recordMultiMachineRefill).toHaveBeenCalledTimes(1);
+    expect(recordRefill).not.toHaveBeenCalled();
+    const request: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+    expect(request.allocations).toEqual([
+      { machineId: 5, productId: 1, quantityTaken: 3 },
+      { machineId: 6, productId: 1, quantityTaken: 4 },
+      { machineId: 6, productId: 2, quantityTaken: 2 }
+    ]);
+    expect(request.idempotencyKey.length).toBeGreaterThan(0);
+  });
+
+  it('sends nothing for a blank or explicitly zero cell', () => {
+    const { component, recordMultiMachineRefill } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '0');
+    component.onCellChange(2, 5, '');
+
+    component.save();
+
+    const request: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+    expect(request.allocations).toEqual([{ machineId: 5, productId: 1, quantityTaken: 3 }]);
+    expect(component.cellError(1, 6)).toBeNull();
+  });
+
+  it('totals each row across the selected machines, and the whole pick including rows a filter hides', () => {
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '4');
+    component.onCellChange(2, 5, '5');
+
+    expect(component.rowTotal(1)).toBe(7);
+    expect(component.rowTotal(2)).toBe(5);
+    expect(component.totalUnitsRequired()).toBe(12);
+
+    // Chips is now hidden, but the storage its entry needs is still part of the pick.
+    component.search = 'coke';
+    expect(component.visibleProducts().map((p) => p.id)).toEqual([1]);
+    expect(component.totalUnitsRequired()).toBe(12);
+    expect(component.hiddenUnitsRequired()).toBe(5);
+    expect(component.hiddenProductsWithEntries()).toBe(1);
+  });
+
+  it('keeps every typed cell when the search or category filter changes', () => {
+    const { component, recordMultiMachineRefill } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(2, 6, '2');
+
+    component.search = 'coke';
+    expect(component.cellValue(2, 6)).toBe('2');
+    component.search = '';
+    component.categoryId = 99;
+    component.save();
+
+    const request: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+    expect(request.allocations).toEqual([
+      { machineId: 5, productId: 1, quantityTaken: 3 },
+      { machineId: 6, productId: 2, quantityTaken: 2 }
+    ]);
+  });
+
+  it('reports the whole batch as saved, clears the cells and refreshes storage once', () => {
+    const { component, toast } = createHarness(undefined, undefined, undefined, twoMachines());
+    const refreshed = jest.fn();
+    component.refillRecorded.subscribe(refreshed);
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '4');
+
+    component.save();
+
+    expect(toast.success).toHaveBeenCalledWith(multiMachineRefillRecordedMessage(2, 2));
+    expect(component.cellValue(1, 5)).toBe('');
+    expect(component.cellValue(1, 6)).toBe('');
+    expect(refreshed).toHaveBeenCalledTimes(1);
+    // The machines stay selected: the columns are the operator's run, not the save's leftovers.
+    expect(component.selectedMachineIds).toEqual([5, 6]);
+  });
+});
+
+describe('ManualPickListComponent per-cell validation (issue #904)', () => {
+  it('blocks Save with a message naming the product and the machine of a malformed cell', () => {
+    const { component, recordMultiMachineRefill } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(2, 6, 'abc');
+
+    expect(component.cellError(2, 6)).toBe(INVALID_TAKEN_QUANTITY_MESSAGE);
+    expect(component.cellError(1, 5)).toBeNull();
+    expect(component.invalidEntryMessages).toEqual([`Chips at Back Room: ${INVALID_TAKEN_QUANTITY_MESSAGE}`]);
+    expect(component.canSave).toBe(false);
+
+    component.save();
+    expect(recordMultiMachineRefill).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a negative quantity', '-2'],
+    ['a fractional quantity', '1.5'],
+    ['a nonnumeric quantity', 'two']
+  ])('refuses %s in a cell', (_description, typed) => {
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5]);
+
+    component.onCellChange(1, 5, typed);
+
+    expect(component.cellError(1, 5)).toBe(INVALID_TAKEN_QUANTITY_MESSAGE);
+    expect(component.canSave).toBe(false);
+  });
+
+  it('refuses a quantity larger than the server can record, rather than sending it', () => {
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5]);
+
+    component.onCellChange(1, 5, `${MAXIMUM_TAKEN_QUANTITY + 1}`);
+
+    expect(component.cellError(1, 5)).toBe(TAKEN_QUANTITY_TOO_LARGE_MESSAGE);
+    expect(component.canSave).toBe(false);
+
+    component.onCellChange(1, 5, `${MAXIMUM_TAKEN_QUANTITY}`);
+    expect(component.cellError(1, 5)).toBeNull();
+  });
+
+  it('blocks Save for a malformed cell on a row the current filter hides', () => {
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5]);
+    component.onCellChange(2, 5, 'abc');
+    component.onCellChange(1, 5, '3');
+
+    component.search = 'coke';
+
+    expect(component.visibleProducts().map((p) => p.id)).toEqual([1]);
+    expect(component.canSave).toBe(false);
+    expect(component.invalidEntryMessages).toEqual([`Chips at Front Lobby: ${INVALID_TAKEN_QUANTITY_MESSAGE}`]);
+  });
+
+  it('puts each per-allocation refusal from a 400 back on its own cell', () => {
+    const recordMultiMachineRefill = jest.fn((_request: MultiMachinePickListRefillRequest) =>
+      throwError(() =>
+        validationError({
+          'allocations[1]': ['The allocations for this product take 12 units, but only 10 are in stock.'],
+          notes: ['A note may be at most 500 characters.']
+        })
+      )
     );
-    const recordRefill = jest.fn((_request: PickListRefillRequest) => throwError(() => new HttpErrorResponse({ status: 0 })));
-    const { component } = createHarness(undefined, recordRefill, undefined, getAllMachines);
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines(), null, recordMultiMachineRefill);
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '6');
+    component.onCellChange(1, 6, '6');
+
+    component.save();
+
+    expect(component.cellError(1, 6)).toContain('take 12 units, but only 10 are in stock');
+    expect(component.cellError(1, 5)).toBeNull();
+    expect(component.requestErrors).toEqual(['A note may be at most 500 characters.']);
+    // A definitive refusal recorded nothing, so the drafts stay editable.
+    expect(component.cellValue(1, 5)).toBe('6');
+    expect(component.unresolvedSubmission).toBe(false);
+  });
+});
+
+describe('ManualPickListComponent switching between No machine and machine columns (issue #904)', () => {
+  it('asks before discarding typed No machine quantities, and never copies them into every machine', () => {
+    const confirmed = stubConfirm(true);
+    const { component, recordMultiMachineRefill } = createHarness(undefined, undefined, undefined, twoMachines());
     component.onTakenChange(1, '3');
-    component.selectedMachineId = 5;
+
+    component.onSelectedMachineIdsChange([5, 6]);
+
+    expect(confirmed).toHaveBeenCalledWith(DISCARD_UNATTRIBUTED_ENTRIES_CONFIRMATION);
+    expect(component.selectedMachineIds).toEqual([5, 6]);
+    expect(component.takenValue(1)).toBe('');
+    expect(component.cellValue(1, 5)).toBe('');
+    expect(component.cellValue(1, 6)).toBe('');
+    expect(component.canSave).toBe(false);
+
+    component.onCellChange(1, 5, '3');
+    component.save();
+    const request: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+    expect(request.allocations).toEqual([{ machineId: 5, productId: 1, quantityTaken: 3 }]);
+  });
+
+  it('keeps everything when the discard of typed No machine quantities is cancelled', () => {
+    stubConfirm(false);
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onTakenChange(1, '3');
+
+    component.onSelectedMachineIdsChange([5]);
+
+    expect(component.selectedMachineIds).toEqual([]);
+    expect(component.takenValue(1)).toBe('3');
 
     component.save();
-    const firstRequest: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
+    expect(request.rows).toEqual([{ productId: 1, quantityTaken: 3 }]);
+  });
+
+  it('switches into machine columns without asking when nothing is typed', () => {
+    const confirmed = stubConfirm(true);
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+
+    component.onSelectedMachineIdsChange([5]);
+
+    expect(confirmed).not.toHaveBeenCalled();
+    expect(component.selectedMachineIds).toEqual([5]);
+  });
+
+  it('asks before clearing the machine selection while cells hold quantities, and Cancel keeps the matrix', () => {
+    const cancelled = stubConfirm(false);
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+
+    component.onSelectedMachineIdsChange([]);
+
+    expect(cancelled).toHaveBeenCalledWith(DISCARD_MACHINE_COLUMNS_CONFIRMATION);
+    expect(component.selectedMachineIds).toEqual([5, 6]);
+    expect(component.cellValue(1, 5)).toBe('3');
+  });
+
+  it('discards the matrix entries once clearing the selection is confirmed', () => {
+    stubConfirm(true);
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+
+    component.onSelectedMachineIdsChange([]);
+
+    expect(component.selectedMachineIds).toEqual([]);
+    expect(component.cellValue(1, 5)).toBe('');
+    expect(component.takenValue(1)).toBe('');
+  });
+
+  it('asks before removing one machine column that holds quantities, and Cancel keeps everything', () => {
+    const cancelled = stubConfirm(false);
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '4');
+
+    component.removeMachineColumn(6);
+
+    expect(cancelled).toHaveBeenCalledWith(discardMachineColumnConfirmation('Back Room'));
+    expect(component.selectedMachineIds).toEqual([5, 6]);
+    expect(component.cellValue(1, 6)).toBe('4');
+  });
+
+  it('drops only the removed column’s quantities once the removal is confirmed', () => {
+    stubConfirm(true);
+    const { component, recordMultiMachineRefill } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '4');
+
+    component.removeMachineColumn(6);
+
+    expect(component.selectedMachineIds).toEqual([5]);
+    expect(component.cellValue(1, 5)).toBe('3');
+    expect(component.cellValue(1, 6)).toBe('');
 
     component.save();
-    const secondRequest: PickListRefillRequest = recordRefill.mock.calls[1][0];
-    expect(secondRequest.idempotencyKey).toBe(firstRequest.idempotencyKey);
-    expect(secondRequest.machineId).toBe(5);
+    const request: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+    expect(request.allocations).toEqual([{ machineId: 5, productId: 1, quantityTaken: 3 }]);
+  });
 
-    component.selectedMachineId = 6;
+  it('removes an empty machine column without asking', () => {
+    const confirmed = stubConfirm(true);
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+
+    component.removeMachineColumn(6);
+
+    expect(confirmed).not.toHaveBeenCalled();
+    expect(component.selectedMachineIds).toEqual([5]);
+    expect(component.cellValue(1, 5)).toBe('3');
+  });
+
+  it('re-adding a machine column brings back an empty column, never the discarded quantities', () => {
+    stubConfirm(true);
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines());
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 6, '4');
+    component.removeMachineColumn(6);
+
+    component.onSelectedMachineIdsChange([5, 6]);
+
+    expect(component.cellValue(1, 6)).toBe('');
+  });
+});
+
+describe('ManualPickListComponent while a batch save is in flight (issue #904)', () => {
+  it('blocks selection changes, column removal and cell edits until the save lands', () => {
+    const pending = new Subject<MultiMachinePickListRefillResponse>();
+    const recordMultiMachineRefill = jest.fn(() => pending.asObservable());
+    stubConfirm(true);
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines(), null, recordMultiMachineRefill);
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+
     component.save();
-    const thirdRequest: PickListRefillRequest = recordRefill.mock.calls[2][0];
-    expect(thirdRequest.idempotencyKey).not.toBe(firstRequest.idempotencyKey);
-    expect(thirdRequest.machineId).toBe(6);
+    expect(component.saving).toBe(true);
+
+    component.onSelectedMachineIdsChange([5]);
+    component.removeMachineColumn(6);
+    component.onCellChange(1, 5, '9');
+
+    expect(component.selectedMachineIds).toEqual([5, 6]);
+    expect(component.cellValue(1, 5)).toBe('3');
+
+    pending.next(batchResponse({ idempotencyKey: 'k', allocations: [{ machineId: 5, productId: 1, quantityTaken: 3 }] }));
+    pending.complete();
+
+    expect(component.saving).toBe(false);
+    component.onSelectedMachineIdsChange([5]);
+    expect(component.selectedMachineIds).toEqual([5]);
+  });
+
+  it('does not resend while a batch save is already in flight', () => {
+    const pending = new Subject<MultiMachinePickListRefillResponse>();
+    const recordMultiMachineRefill = jest.fn(() => pending.asObservable());
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines(), null, recordMultiMachineRefill);
+    component.onSelectedMachineIdsChange([5]);
+    component.onCellChange(1, 5, '3');
+
+    component.save();
+    component.save();
+
+    expect(recordMultiMachineRefill).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ManualPickListComponent uncertain batch outcome (issue #904)', () => {
+  const uncertain = () =>
+    jest.fn((_request: MultiMachinePickListRefillRequest) => throwError(() => new HttpErrorResponse({ status: 503 })));
+
+  it('keeps the exact payload and key, and the explicit Retry resends precisely that request', () => {
+    const recordMultiMachineRefill = uncertain();
+    const { component, toast } = createHarness(undefined, undefined, undefined, twoMachines(), null, recordMultiMachineRefill);
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '4');
+
+    component.save();
+
+    expect(component.unresolvedSubmission).toBe(true);
+    expect(toast.error).toHaveBeenCalledWith(REFILL_UNCERTAIN_MESSAGE);
+    expect(component.canRetry).toBe(true);
+    const first: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+
+    component.retry();
+
+    const retried: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[1][0];
+    expect(retried.idempotencyKey).toBe(first.idempotencyKey);
+    expect(retried.allocations).toEqual(first.allocations);
+    expect(component.cellValue(1, 5)).toBe('3');
+  });
+
+  it('mints no new key while the outcome is uncertain, whatever is edited, removed or reordered', () => {
+    const recordMultiMachineRefill = uncertain();
+    stubConfirm(true);
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines(), null, recordMultiMachineRefill);
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '4');
+
+    component.save();
+    const first: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+
+    // An edited cell, a removed column and a reordered selection are all things an operator may do
+    // while waiting; none of them may turn this same physical pick into a second deduction.
+    component.onCellChange(1, 5, '9');
+    component.removeMachineColumn(6);
+    component.onSelectedMachineIdsChange([6, 5]);
+
+    component.save();
+
+    const second: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[1][0];
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    expect(second.allocations).toEqual(first.allocations);
+  });
+
+  it('resolves the uncertainty once a retry is answered, and only then accepts a different pick', () => {
+    let failing = true;
+    const recordMultiMachineRefill = jest.fn((request: MultiMachinePickListRefillRequest) =>
+      failing ? throwError(() => new HttpErrorResponse({ status: 0 })) : of(batchResponse(request))
+    );
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines(), null, recordMultiMachineRefill);
+    component.onSelectedMachineIdsChange([5]);
+    component.onCellChange(1, 5, '3');
+    component.save();
+    const firstKey = (recordMultiMachineRefill.mock.calls[0][0] as MultiMachinePickListRefillRequest).idempotencyKey;
+
+    failing = false;
+    component.retry();
+    expect(component.unresolvedSubmission).toBe(false);
+    expect(component.canRetry).toBe(false);
+
+    component.onCellChange(1, 5, '7');
+    component.save();
+
+    const third: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[2][0];
+    expect(third.idempotencyKey).not.toBe(firstKey);
+    expect(third.allocations).toEqual([{ machineId: 5, productId: 1, quantityTaken: 7 }]);
+  });
+
+  it('reuses the key for a reordered resubmission of the same pick after a definitive refusal', () => {
+    const recordMultiMachineRefill = jest.fn((_request: MultiMachinePickListRefillRequest) =>
+      throwError(() => validationError({ 'allocations[0]': ['Not enough stock.'] }))
+    );
+    const { component } = createHarness(undefined, undefined, undefined, twoMachines(), null, recordMultiMachineRefill);
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '4');
+    component.save();
+    const first: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+
+    component.onSelectedMachineIdsChange([6, 5]);
+    component.save();
+
+    const second: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[1][0];
+    expect(second.idempotencyKey).toBe(first.idempotencyKey);
+    expect(second.allocations).toEqual(first.allocations);
+  });
+
+  it('reports a 403 on a batch as a definite refusal and mints a fresh key afterwards', () => {
+    const refused = new HttpErrorResponse({ status: 403, error: { title: 'Forbidden', status: 403 } });
+    const recordMultiMachineRefill = jest
+      .fn()
+      .mockImplementationOnce(() => throwError(() => refused))
+      .mockImplementation((request: MultiMachinePickListRefillRequest) => of(batchResponse(request)));
+    const { component, toast } = createHarness(undefined, undefined, undefined, twoMachines(), null, recordMultiMachineRefill);
+    component.onSelectedMachineIdsChange([5]);
+    component.onCellChange(1, 5, '3');
+
+    component.save();
+    expect(component.unresolvedSubmission).toBe(false);
+    expect(toast.error).toHaveBeenCalledWith(REFILL_FORBIDDEN_MESSAGE);
+
+    component.save();
+    const firstKey = (recordMultiMachineRefill.mock.calls[0][0] as MultiMachinePickListRefillRequest).idempotencyKey;
+    const secondKey = (recordMultiMachineRefill.mock.calls[1][0] as MultiMachinePickListRefillRequest).idempotencyKey;
+    expect(secondKey).not.toBe(firstKey);
+  });
+
+  it('mints a fresh key after a 409 on a batch, because that key is spent on another request', () => {
+    const recordMultiMachineRefill = jest.fn((_request: MultiMachinePickListRefillRequest) =>
+      throwError(() => new HttpErrorResponse({ status: 409, error: { detail: 'conflict' } }))
+    );
+    const { component, toast } = createHarness(undefined, undefined, undefined, twoMachines(), null, recordMultiMachineRefill);
+    component.onSelectedMachineIdsChange([5]);
+    component.onCellChange(1, 5, '3');
+
+    component.save();
+    component.save();
+
+    expect(toast.error).toHaveBeenCalledWith('conflict');
+    const firstKey = (recordMultiMachineRefill.mock.calls[0][0] as MultiMachinePickListRefillRequest).idempotencyKey;
+    const secondKey = (recordMultiMachineRefill.mock.calls[1][0] as MultiMachinePickListRefillRequest).idempotencyKey;
+    expect(secondKey).not.toBe(firstKey);
+  });
+
+  it('refuses to save a batch while a support session is active', () => {
+    const { component, recordMultiMachineRefill } = createHarness(
+      undefined,
+      undefined,
+      of(true),
+      twoMachines(),
+      null,
+      jest.fn((request: MultiMachinePickListRefillRequest) => of(batchResponse(request)))
+    );
+    component.onSelectedMachineIdsChange([5]);
+    component.onCellChange(1, 5, '3');
+
+    expect(component.canSave).toBe(false);
+    component.save();
+
+    expect(recordMultiMachineRefill).not.toHaveBeenCalled();
   });
 });
 
 describe('ManualPickListComponent machine preselection from a link (issue #744 machine-page consolidation)', () => {
-  it('selects the local machine the link named, once it is confirmed active', () => {
-    const getAllMachines = jest.fn(() => of([localMachine({ id: 5, name: 'Front Lobby' })]));
-    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
+  it('preselects exactly the local machine the link named, once it is confirmed active', () => {
+    const getAllMachines = jest.fn(() => of([localMachine({ id: 5, name: 'Front Lobby' }), localMachine({ id: 6, name: 'Back Room' })]));
+    const { component, recordMultiMachineRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
 
-    expect(component.selectedMachineId).toBe(5);
+    expect(component.selectedMachineIds).toEqual([5]);
     expect(component.machineAttributionFailed).toBe(false);
 
-    component.onTakenChange(1, '3');
+    component.onCellChange(1, 5, '3');
     component.save();
 
-    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
-    expect(request.machineId).toBe(5);
+    const request: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+    expect(request.allocations).toEqual([{ machineId: 5, productId: 1, quantityTaken: 3 }]);
+  });
+
+  it('lets the operator add more machines to the preselected one', () => {
+    const getAllMachines = jest.fn(() => of([localMachine({ id: 5, name: 'Front Lobby' }), localMachine({ id: 6, name: 'Back Room' })]));
+    const { component, recordMultiMachineRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
+
+    component.onSelectedMachineIdsChange([5, 6]);
+    component.onCellChange(1, 5, '3');
+    component.onCellChange(1, 6, '2');
+    component.save();
+
+    const request: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+    expect(request.allocations).toEqual([
+      { machineId: 5, productId: 1, quantityTaken: 3 },
+      { machineId: 6, productId: 1, quantityTaken: 2 }
+    ]);
   });
 
   it('reports attribution as failed, and leaves the selection at "No machine", when the linked machine is not an active local machine', () => {
     const getAllMachines = jest.fn(() => of([localMachine({ id: 6, name: 'Back Room' })]));
     const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
 
-    expect(component.selectedMachineId).toBeNull();
+    expect(component.selectedMachineIds).toEqual([]);
     expect(component.machineAttributionFailed).toBe(true);
     expect(component.machineAttributionFailedMessage).toBe(MACHINE_ATTRIBUTION_FAILED_MESSAGE);
 
-    // Not silent: the dropdown still reflects the true, unattributed selection and a save against
-    // it is an explicit "No machine" choice, not one disguised as the linked machine.
+    // Not silent: the selection still reflects the true, unattributed pick and a save against it is
+    // an explicit "No machine" choice, not one disguised as the linked machine.
     component.onTakenChange(1, '3');
     component.save();
     const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
@@ -253,7 +784,7 @@ describe('ManualPickListComponent machine preselection from a link (issue #744 m
     const { component } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
 
     expect(component.machineAttributionFailed).toBe(true);
-    expect(component.selectedMachineId).toBeNull();
+    expect(component.selectedMachineIds).toEqual([]);
   });
 
   it('does not report a failure when no machine was linked at all', () => {
@@ -261,7 +792,7 @@ describe('ManualPickListComponent machine preselection from a link (issue #744 m
     const { component } = createHarness(undefined, undefined, undefined, getAllMachines, null);
 
     expect(component.machineAttributionFailed).toBe(false);
-    expect(component.selectedMachineId).toBeNull();
+    expect(component.selectedMachineIds).toEqual([]);
   });
 
   it('refuses Save while the linked machine is still being resolved, and attributes the refill once the read answers', () => {
@@ -270,7 +801,7 @@ describe('ManualPickListComponent machine preselection from a link (issue #744 m
     // and save an unattributed refill in that window.
     const machines = new Subject<LocalMachine[]>();
     const getAllMachines = jest.fn(() => machines.asObservable());
-    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 42);
+    const { component, recordRefill, recordMultiMachineRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 42);
 
     component.onTakenChange(1, '3');
     expect(component.machineResolutionPending).toBe(true);
@@ -279,18 +810,25 @@ describe('ManualPickListComponent machine preselection from a link (issue #744 m
 
     component.save();
     expect(recordRefill).not.toHaveBeenCalled();
+    expect(recordMultiMachineRefill).not.toHaveBeenCalled();
 
     machines.next([localMachine({ id: 42, name: 'Front Lobby' })]);
     machines.complete();
 
     expect(component.machineResolutionPending).toBe(false);
-    expect(component.selectedMachineId).toBe(42);
+    expect(component.selectedMachineIds).toEqual([42]);
+
+    // A quantity typed while the link's machine was still being confirmed belongs to that one
+    // machine - the link promised attribution to it and the pending notice says so - so it moves
+    // into that machine's column rather than being dropped or left unattributed.
+    expect(component.cellValue(1, 42)).toBe('3');
+    expect(component.takenValue(1)).toBe('');
     expect(component.canSave).toBe(true);
 
     component.save();
-    expect(recordRefill).toHaveBeenCalledTimes(1);
-    const request: PickListRefillRequest = recordRefill.mock.calls[0][0];
-    expect(request.machineId).toBe(42);
+    expect(recordMultiMachineRefill).toHaveBeenCalledTimes(1);
+    const request: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+    expect(request.allocations).toEqual([{ machineId: 42, productId: 1, quantityTaken: 3 }]);
   });
 
   it('never waits on the machine read for ordinary entry with no linked machine', () => {
@@ -311,32 +849,34 @@ describe('ManualPickListComponent machine preselection from a link (issue #744 m
   it('cannot let a late machine answer turn an uncertain attempt into a second deduction', () => {
     const machines = new Subject<LocalMachine[]>();
     const getAllMachines = jest.fn(() => machines.asObservable());
-    const recordRefill = jest.fn((_request: PickListRefillRequest) => throwError(() => new HttpErrorResponse({ status: 503 })));
-    const { component } = createHarness(undefined, recordRefill, undefined, getAllMachines, 42);
+    const recordMultiMachineRefill = jest.fn((_request: MultiMachinePickListRefillRequest) =>
+      throwError(() => new HttpErrorResponse({ status: 503 }))
+    );
+    const { component, recordRefill } = createHarness(undefined, undefined, undefined, getAllMachines, 42, recordMultiMachineRefill);
 
     // No request may leave while the attribution is unresolved, so there is no uncertain attempt
     // for a late answer to change underneath.
     component.onTakenChange(1, '3');
     component.save();
     expect(recordRefill).not.toHaveBeenCalled();
+    expect(recordMultiMachineRefill).not.toHaveBeenCalled();
 
     machines.next([localMachine({ id: 42, name: 'Front Lobby' })]);
     machines.complete();
 
     component.save();
-    expect(recordRefill).toHaveBeenCalledTimes(1);
+    expect(recordMultiMachineRefill).toHaveBeenCalledTimes(1);
     expect(component.unresolvedSubmission).toBe(true);
-    const first: PickListRefillRequest = recordRefill.mock.calls[0][0];
-    expect(first.machineId).toBe(42);
+    const first: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[0][0];
+    expect(first.allocations).toEqual([{ machineId: 42, productId: 1, quantityTaken: 3 }]);
 
-    // The unchanged retry is the identical request: the same key, machine and rows, so a first
-    // attempt that did commit is replayed rather than deducting storage again.
-    component.save();
-    expect(recordRefill).toHaveBeenCalledTimes(2);
-    const retry: PickListRefillRequest = recordRefill.mock.calls[1][0];
-    expect(retry.idempotencyKey).toBe(first.idempotencyKey);
-    expect(retry.machineId).toBe(42);
-    expect(retry.rows).toEqual(first.rows);
+    // The retry is the identical request: the same key and the same allocations, so a first attempt
+    // that did commit is replayed rather than deducting storage again.
+    component.retry();
+    expect(recordMultiMachineRefill).toHaveBeenCalledTimes(2);
+    const retried: MultiMachinePickListRefillRequest = recordMultiMachineRefill.mock.calls[1][0];
+    expect(retried.idempotencyKey).toBe(first.idempotencyKey);
+    expect(retried.allocations).toEqual(first.allocations);
   });
 
   it('treats a deactivated machine named by the link the same as one that no longer exists', () => {
@@ -345,7 +885,7 @@ describe('ManualPickListComponent machine preselection from a link (issue #744 m
     );
     const { component } = createHarness(undefined, undefined, undefined, getAllMachines, 5);
 
-    expect(component.selectedMachineId).toBeNull();
+    expect(component.selectedMachineIds).toEqual([]);
     expect(component.machineAttributionFailed).toBe(true);
   });
 });
@@ -514,19 +1054,63 @@ describe('ManualPickListComponent save', () => {
       expect(component.takenValue(1)).toBe('3');
     });
 
-    it('mints a new key once the submission actually changes before the retry', () => {
+    /**
+     * Issue #904 tightened this rule. Before it, editing a quantity after an uncertain outcome
+     * minted a new key - which is a second deduction whenever the first attempt had in fact been
+     * recorded. While the outcome is unknown the kept request is the only one that may be sent.
+     */
+    it('mints no new key while the outcome is uncertain, even after the entries are edited', () => {
       const recordRefill = jest.fn((_request: PickListRefillRequest) => throwError(() => new HttpErrorResponse({ status: 0 })));
       const { component } = createHarness(undefined, recordRefill);
       component.onTakenChange(1, '3');
       component.save();
-      const firstKey = (recordRefill.mock.calls[0][0] as PickListRefillRequest).idempotencyKey;
+      const first: PickListRefillRequest = recordRefill.mock.calls[0][0];
 
       component.onTakenChange(1, '7');
       component.save();
       const secondRequest: PickListRefillRequest = recordRefill.mock.calls[1][0];
 
+      expect(secondRequest.idempotencyKey).toBe(first.idempotencyKey);
+      expect(secondRequest.rows).toEqual([{ productId: 1, quantityTaken: 3 }]);
+    });
+
+    it('mints a new key for an edited pick once the uncertain attempt has been resolved', () => {
+      let uncertain = true;
+      const recordRefill = jest.fn((request: PickListRefillRequest) =>
+        uncertain ? throwError(() => new HttpErrorResponse({ status: 0 })) : of(recordedResponse(request))
+      );
+      const { component } = createHarness(undefined, recordRefill);
+      component.onTakenChange(1, '3');
+      component.save();
+      const firstKey = (recordRefill.mock.calls[0][0] as PickListRefillRequest).idempotencyKey;
+
+      uncertain = false;
+      component.retry();
+      expect(component.unresolvedSubmission).toBe(false);
+
+      component.onTakenChange(1, '7');
+      component.save();
+      const thirdRequest: PickListRefillRequest = recordRefill.mock.calls[2][0];
+
+      expect(thirdRequest.idempotencyKey).not.toBe(firstKey);
+      expect(thirdRequest.rows).toEqual([{ productId: 1, quantityTaken: 7 }]);
+    });
+
+    it('mints a new key once an edit changes a pick a 400 definitively refused', () => {
+      const recordRefill = jest.fn((_request: PickListRefillRequest) =>
+        throwError(() => validationError({ 'rows[0]': ['Not enough stock.'] }))
+      );
+      const { component } = createHarness(undefined, recordRefill);
+      component.onTakenChange(1, '3');
+      component.save();
+      const firstKey = (recordRefill.mock.calls[0][0] as PickListRefillRequest).idempotencyKey;
+
+      component.onTakenChange(1, '2');
+      component.save();
+      const secondRequest: PickListRefillRequest = recordRefill.mock.calls[1][0];
+
       expect(secondRequest.idempotencyKey).not.toBe(firstKey);
-      expect(secondRequest.rows).toEqual([{ productId: 1, quantityTaken: 7 }]);
+      expect(secondRequest.rows).toEqual([{ productId: 1, quantityTaken: 2 }]);
     });
 
     it('mints a new key for the next save after a 409 key conflict, rather than reusing a spent key', () => {

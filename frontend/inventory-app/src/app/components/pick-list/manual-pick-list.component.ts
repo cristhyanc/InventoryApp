@@ -2,19 +2,50 @@ import { CommonModule } from '@angular/common';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Component, EventEmitter, Input, OnDestroy, OnInit, Output } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Subscription } from 'rxjs';
-import { Category, LocalMachine, PickListRefillRequest, PickListRefillRowRequest, Product } from '../../models/models';
+import { Observable, Subscription } from 'rxjs';
+import {
+  Category,
+  LocalMachine,
+  MultiMachinePickListRefillRequest,
+  MultiMachineRefillAllocationRequest,
+  PickListRefillRequest,
+  PickListRefillRowRequest,
+  Product
+} from '../../models/models';
 import { LocalMachineService } from '../../services/local-machine.service';
 import { PickListService } from '../../services/pick-list.service';
 import { ToastService } from '../../services/toast.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
+import { MultiSelectDropdownComponent, MultiSelectOption } from '../shared/multi-select-dropdown.component';
 import { generateIdempotencyKey } from './idempotency-key';
-import { parsePickListRefillRejection, pickListRefillRowsEqual } from './pick-list-refill-errors';
+import {
+  multiMachineAllocationsEqual,
+  parseMultiMachineRefillRejection,
+  parsePickListRefillRejection,
+  pickListRefillRowsEqual,
+  refillCellKey
+} from './pick-list-refill-errors';
 
 /** The message a malformed "Taken" entry gets, matching `PickListRefillPolicy.QuantityMustBePositiveMessage`'s rule. */
 export const INVALID_TAKEN_QUANTITY_MESSAGE = 'Enter a whole number greater than 0.';
 
+/**
+ * The largest quantity one entry may hold: the server records a quantity as a 32-bit integer, so a
+ * bigger number is refused here, naming the cell it was typed into, rather than by model binding
+ * with a message about a JSON field nobody typed.
+ */
+export const MAXIMUM_TAKEN_QUANTITY = 2147483647;
+
+export const TAKEN_QUANTITY_TOO_LARGE_MESSAGE = `Enter a quantity of ${MAXIMUM_TAKEN_QUANTITY} or less.`;
+
 export const REFILL_RECORDED_MESSAGE = 'Refill recorded.';
+
+/** What a recorded multi-machine batch reports: the whole run, not one machine of it (issue #904). */
+export function multiMachineRefillRecordedMessage(allocationCount: number, machineCount: number): string {
+  const entries = allocationCount === 1 ? 'entry' : 'entries';
+  const machines = machineCount === 1 ? 'machine' : 'machines';
+  return `Refill recorded: ${allocationCount} ${entries} across ${machineCount} ${machines}.`;
+}
 
 export const REFILL_CONFLICT_MESSAGE = 'This refill could not be recorded. Review your entries and click Save to try again.';
 
@@ -41,89 +72,156 @@ export const MACHINE_RESOLUTION_PENDING_MESSAGE =
   'Confirming the machine this entry was opened for. Quantities can be typed now and saved once it is confirmed.';
 
 /**
+ * What the operator is asked before the "No machine" column's quantities are dropped on the way into
+ * machine columns (issue #904). They cannot be carried over: a quantity typed against no machine
+ * says nothing about which machine it was walked to, and copying it into every selected column would
+ * invent a pick several times the size of the one that was typed.
+ */
+export const DISCARD_UNATTRIBUTED_ENTRIES_CONFIRMATION =
+  'Selecting machines replaces the single Taken column with one column per machine. The quantities already typed cannot be attributed to a machine, so they will be discarded. Continue?';
+
+/** What the operator is asked before every machine column's quantities are dropped on the way back to "No machine". */
+export const DISCARD_MACHINE_COLUMNS_CONFIRMATION =
+  'Clearing the machine selection replaces the machine columns with a single Taken column. The quantities typed per machine will be discarded. Continue?';
+
+/** What the operator is asked before one or more machine columns that hold quantities are removed. */
+export function discardMachineColumnConfirmation(...machineNames: string[]): string {
+  const columns = machineNames.length === 1 ? 'column' : 'columns';
+  return `Remove the ${machineNames.join(', ')} ${columns}? The quantities already typed there will be discarded.`;
+}
+
+/** The sentence introducing every entry that has to be fixed before Save is offered again. */
+export const INVALID_ENTRIES_PREFIX = 'Fix these entries before saving:';
+
+/**
  * Where the page's read of the active catalogue stands. Only `'loaded'` means {@link
  * ManualPickListComponent.products} is a real answer, so only then may an empty list be described
  * as "no products".
  */
 export type ManualPickListCatalogueState = 'loading' | 'failed' | 'loaded';
 
+/** A parsed entry: a quantity (`0` for "nothing taken") or the message the entry is refused with. */
+type ParsedTakenEntry = { readonly quantity: number } | { readonly error: string };
+
 /**
- * A blank "Taken" box is zero - the operator typed nothing for that product - and an explicit `0`
- * means the same thing, so neither is a row to submit and neither is an error. Anything else that
- * is not a positive whole number is malformed input, reported inline rather than sent to the
- * server.
+ * A blank "Taken" box is zero - the operator typed nothing there - and an explicit `0` means the
+ * same thing, so neither is something to submit and neither is an error. Anything else that is not a
+ * positive whole number the server can record is malformed input, reported inline rather than sent.
  */
-function parseTakenQuantity(raw: string): number | null {
+function parseTakenEntry(raw: string): ParsedTakenEntry {
   const trimmed = raw.trim();
   if (trimmed === '' || trimmed === '0') {
-    return 0;
+    return { quantity: 0 };
   }
-  return /^\d+$/.test(trimmed) ? Number(trimmed) : null;
+  if (!/^\d+$/.test(trimmed)) {
+    return { error: INVALID_TAKEN_QUANTITY_MESSAGE };
+  }
+  const quantity = Number(trimmed);
+  return quantity > MAXIMUM_TAKEN_QUANTITY ? { error: TAKEN_QUANTITY_TOO_LARGE_MESSAGE } : { quantity };
+}
+
+/** Whether an entry holds something the operator would mind losing; an explicit `0` is nothing. */
+function holdsQuantity(raw: string | undefined): boolean {
+  const trimmed = (raw ?? '').trim();
+  return trimmed !== '' && trimmed !== '0';
 }
 
 /**
- * The machine-free manual pick-list entry screen (issue #744, parent #329 child H2): a worker types
- * how many of each active product they took and saves it as one atomic, idempotent
- * `POST /api/pick-list/refills` request (issue #743). It is `PickListComponent`'s alternative to
- * the calculated matrix - offered whenever the operator chooses it, and the only choice offered at
- * all without a usable provider or the permission the calculated list needs.
+ * Exactly what one Save sends, and the one thing an uncertain retry resends. The two shapes are the
+ * two endpoints: an unattributed pick is the single-machine batch endpoint with no machine at all
+ * (issue #743), and a pick with machine columns is the multi-machine batch (issue #897).
+ */
+type ManualPickPayload =
+  | { readonly kind: 'unattributed'; readonly rows: PickListRefillRowRequest[] }
+  | { readonly kind: 'batch'; readonly allocations: MultiMachineRefillAllocationRequest[] };
+
+/** One attempted submission: its idempotency key and the exact payload that key stands for. */
+interface ManualPickSubmission {
+  readonly key: string;
+  readonly payload: ManualPickPayload;
+}
+
+/**
+ * The manual pick-list entry screen (issue #744, parent #329 child H2, extended to a machine matrix
+ * by issue #904): a worker types how many of each active product they took and saves the whole pick
+ * as one atomic, idempotent request. It is `PickListComponent`'s alternative to the calculated
+ * matrix - offered whenever the operator chooses it, and the only choice offered at all without a
+ * usable provider or the permission the calculated list needs.
  *
  * `products` is the page's own already-fetched active catalogue (the same list its Products filter
  * dropdown uses), passed in rather than fetched a second time; `refillRecorded` tells the page a
  * save just reduced storage quantities, so it can refresh that list.
  *
- * **An optional machine selector** (issue #794, parent #329 child G2b) is read from
+ * **Two modes, one per endpoint, chosen by the machine selection.** The machine list comes from
  * `LocalMachineService.getAll()` and offers only the business's **active** local machines, labelled
- * by {@link LocalMachine.name}, plus a "No machine" choice that is the default; it is shown at all
- * only once that read succeeds with at least one active machine - a business with none, or whose
- * read is still outstanding, behaves exactly as before this issue. A failed read ({@link
- * machinesLoadFailed}) is reported in the selector's place rather than silently hiding it, but still
- * lets the worker save without a machine, exactly as a business with none recorded would. The chosen
- * machine is sent as the optional local `machineId` on the submitted refill and is part of what
- * {@link lastSubmission} compares for idempotency, so changing it - like changing a row - mints a
- * new key; see `save`. It is never sent to `PickListService.get`, the calculated list's own machine
- * read, which keeps using provider machine ids untouched by this selector.
+ * by {@link LocalMachine.name} - never a provider machine number, and never a Nayax call.
+ *
+ * - **No machine selected** is the machine-free entry issue #744 shipped, unchanged: one "Taken"
+ *   column, saved as unattributed refills through `POST /api/pick-list/refills` with no `machineId`
+ *   at all. A business with no active machine, or whose machine read failed
+ *   ({@link machinesLoadFailed}), has only this mode, exactly as before.
+ * - **One or more machines selected** gives each machine its own quantity column, in selection
+ *   order, and one Save sends the whole run as a single `POST /api/pick-list/multi-machine-refills`
+ *   batch (issue #897) - never one request per machine, which is what that endpoint exists to
+ *   replace: only one request can weigh each product's **total** across the machines it was
+ *   allocated to against the one shelf it comes off. The row shows Product, Category, Storage Qty,
+ *   Total Taken - the row's own sum across the selected machines - and then the machine columns.
+ *
+ * **Drafts are per mode and are never silently reassigned.** The "No machine" entries and the matrix
+ * cells are separate drafts, and nothing copies one into the other: a generic quantity is never
+ * written into every selected machine, because that would invent a pick several times the size of
+ * the one that was typed. A selection change that would drop entries therefore asks first
+ * ({@link DISCARD_UNATTRIBUTED_ENTRIES_CONFIRMATION}, {@link DISCARD_MACHINE_COLUMNS_CONFIRMATION},
+ * {@link discardMachineColumnConfirmation}) and Cancel changes nothing at all - neither the
+ * selection nor a single entry. The search and category filters never touch a draft: they hide rows,
+ * and a hidden row's entries are still part of the pick, still validated and still counted in
+ * {@link totalUnitsRequired}, which is why {@link hiddenUnitsRequired} says so on screen.
  *
  * **A machine can also arrive preselected, from the machine-details page's "Record refill" link**
  * (issue #744's machine-page consolidation). `PickListComponent` reads the link's `machineId` query
  * parameter - already the local machine id `MachineDetailComponent` resolved for that page, never
  * the raw Nayax number - and hands it in as {@link preselectedMachineId}. Once the machine read
- * settles, it is accepted only if it names one of this business's own **active** machines; if it
- * does, {@link selectedMachineId} is set to it exactly as if the operator had chosen it from the
- * dropdown. If it does not - the machine was deactivated or removed after the link was opened, or
- * the machine read itself failed - {@link machineAttributionFailed} is set instead of silently
- * leaving the selection at "No machine": the link promised this refill would be attributed to that
- * machine, so failing to do so has to be visible rather than indistinguishable from an operator who
- * deliberately chose "No machine". **Until that read settles, Save is refused** ({@link
- * machineResolutionPending}): the catalogue can answer first, so an operator could otherwise type
- * quantities and submit an unattributed refill while the link's own machine was still being
- * confirmed - and a late answer arriving afterwards would change the kept submission's machine, so
- * retrying an uncertain attempt would mint a new key and could deduct storage a second time. An
- * entry with no linked machine at all never waits.
+ * settles it is accepted only if it names one of this business's own **active** machines; if it
+ * does, it becomes the one selected column and more machines may be added beside it. If it does not
+ * - the machine was deactivated or removed after the link was opened, or the machine read itself
+ * failed - {@link machineAttributionFailed} is set instead of silently leaving the selection empty:
+ * the link promised this refill would be attributed to that machine, so failing to do so has to be
+ * visible rather than indistinguishable from an operator who deliberately chose no machine.
+ * **Until that read settles, Save is refused** ({@link machineResolutionPending}): the catalogue can
+ * answer first, so an operator could otherwise type quantities and submit an unattributed refill
+ * while the link's own machine was still being confirmed. A quantity typed in that window belongs to
+ * that one machine - the pending notice says so - so it moves into that machine's column when the
+ * read answers, rather than being dropped or sent unattributed. An entry with no linked machine at
+ * all never waits.
  *
- * **Idempotency.** Each save keeps the rows the operator currently has typed into an exact submitted
- * row set - the products with a positive "Taken" value, in catalogue order - and compares it, together
- * with the chosen machine, with the last attempt. An unchanged resubmission (a retry after an
- * uncertain failure, or simply clicking Save again before changing anything) reuses the same key and
- * the exact same row set and machine; changing either - an edited quantity, an added or removed row,
- * or a different machine choice - gets a new key, because it is a different pick. Nothing here
- * guesses which case a failure was: a `400` names what was wrong with a row and nothing was recorded,
- * a `409` means the key is spent on a different request and must never be reused, and anything else
- * (a network failure, a `5xx`) is uncertain, so the exact same request is kept ready to retry rather
- * than quietly replaced.
+ * **Idempotency, and the rule an uncertain outcome adds.** Each save keeps the exact payload it sent
+ * and the key it sent it under ({@link lastSubmission}). An unchanged resubmission - including one
+ * whose machine columns were merely reordered, since the server fingerprints a batch in its own
+ * machine-then-product order - reuses that key and resends that payload; a different pick gets a new
+ * key. A `400` names what was wrong and recorded nothing, so the same key stays safe to resend once
+ * the named cells are fixed; a `409` means the key is spent on a different request and must never be
+ * reused; a `403` is a definite refusal.
  *
- * **An uncertain attempt is visible until it is resolved, and this instance is what holds it.** The
- * kept rows and key only protect against a double deduction while they still exist, so an uncertain
- * outcome also raises {@link unresolvedSubmission} - an inline notice that stays on screen until a
- * later Save resolves it, rather than only the toast that disappears - and {@link saveInFlightChange}
- * tells the page a request is outstanding, which it uses to refuse switching views until it lands.
+ * **While an outcome is uncertain - a network failure or a `5xx` - no new key may be minted at all.**
+ * It is not known whether the server recorded the batch, so the only request this component will
+ * send is the one it already sent: {@link retry} (and Save, which becomes that retry) resends the
+ * kept payload under the kept key, and an edited cell, a removed column or a reordered selection
+ * cannot change either. That is what makes the retry safe: if the first attempt did commit, the
+ * server replays it and nothing is deducted twice; if it did not, the retry records it. The
+ * uncertain attempt also stays on screen as {@link unresolvedSubmission} until a later attempt
+ * resolves it, rather than only as a toast that fades, and {@link saveInFlightChange} tells the page
+ * a request is outstanding, which it uses to refuse switching views until it lands.
  * `PickListComponent` keeps this component alive (hidden) rather than destroying it when the other
  * view is shown, so neither the typed quantities nor the key can be lost by a mode switch; see
  * docs/architecture.md § Manual pick-list entry and mode selection.
  *
+ * **Nothing moves while a save is in flight.** {@link saving} disables every entry box and blocks a
+ * selection change, a column removal and a cell edit outright, so the request that is being answered
+ * is the request that was built.
+ *
  * **A support session is read-only here too.** A session grants `Inventory.Operate`, so the backend
  * refuses this write only by its read-only method rule; like `MachineDetailComponent`'s Restock, the
- * "Taken" boxes and Save are hidden while {@link sessionActive} is set, and {@link save} refuses on
+ * entry boxes and Save are hidden while {@link sessionActive} is set, and {@link save} refuses on
  * its own as well, so a session that starts after the page opened cannot send a refill either. A
  * `403` that does reach here is a definite refusal - nothing was recorded - and is reported as one,
  * never as the uncertain outcome that asks for a retry.
@@ -136,7 +234,7 @@ function parseTakenQuantity(raw: string): number | null {
 @Component({
   selector: 'app-manual-pick-list',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, MultiSelectDropdownComponent],
   templateUrl: './manual-pick-list.component.html'
 })
 export class ManualPickListComponent implements OnInit, OnDestroy {
@@ -176,16 +274,19 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
 
   /**
    * Set when a save ended without the server's answer - a network failure or a `5xx` - so it is not
-   * known whether the refill was recorded. Stays set, and stays on screen, until a later Save
-   * resolves it; the kept rows and key make that retry the identical request.
+   * known whether the refill was recorded. Stays set, and stays on screen, until a later attempt
+   * resolves it; while it is set the kept payload and key are the only request that may be sent.
    */
   unresolvedSubmission = false;
 
   /** The inline wording for {@link unresolvedSubmission}; the same sentence the toast carries. */
   readonly unresolvedMessage = REFILL_UNCERTAIN_MESSAGE;
 
-  /** Per-row refusal messages from the last save attempt, keyed by product id. */
+  /** Per-row refusal messages from the last unattributed save attempt, keyed by product id. */
   rowErrors = new Map<number, readonly string[]>();
+
+  /** Per-cell refusal messages from the last batch save attempt, keyed by {@link refillCellKey}. */
+  cellErrors = new Map<string, readonly string[]>();
 
   /** Refusals about the request as a whole from the last save attempt. */
   requestErrors: string[] = [];
@@ -196,8 +297,8 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   /** Set when the local machine list could not be read; the selector is replaced by an explicit message, but saving without a machine still works. */
   machinesLoadFailed = false;
 
-  /** The chosen machine's id, or `null` for the default "No machine" choice. */
-  selectedMachineId: number | null = null;
+  /** The machines that have a quantity column, in the order the operator selected them; empty is the "No machine" mode. */
+  selectedMachineIds: number[] = [];
 
   /**
    * Set when {@link preselectedMachineId} named a machine that, once the machine read settled, was
@@ -214,16 +315,20 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   /** Whether the local machine read has answered, either way; see {@link machineResolutionPending}. */
   private machineReadSettled = false;
 
-  /** The raw text typed into each product's "Taken" box, keyed by product id. */
+  /** The raw text typed into each product's "Taken" box in the "No machine" mode, keyed by product id. */
   private readonly takenById = new Map<number, string>();
 
-  /** The exact rows, machine and key of the last attempted save, kept so an unchanged retry reuses all three. */
-  private lastSubmission: { key: string; rows: PickListRefillRowRequest[]; machineId: number | null } | null = null;
+  /** The raw text typed into each matrix cell, keyed by {@link refillCellKey}. */
+  private readonly cellValues = new Map<string, string>();
+
+  /** The exact payload and key of the last attempted save, kept so a retry resends precisely it. */
+  private lastSubmission: ManualPickSubmission | null = null;
 
   readonly supportSessionMessage = SUPPORT_SESSION_READ_ONLY_MESSAGE;
   readonly catalogueLoadFailedMessage = CATALOGUE_LOAD_FAILED_MESSAGE;
   readonly catalogueRefreshFailedMessage = CATALOGUE_REFRESH_FAILED_MESSAGE;
   readonly machinesLoadFailedMessage = MACHINES_LOAD_FAILED_MESSAGE;
+  readonly invalidEntriesPrefix = INVALID_ENTRIES_PREFIX;
 
   private readonly sessionActiveSubscription: Subscription;
 
@@ -262,9 +367,26 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
     return this.machines.filter((machine) => machine.isActive);
   }
 
-  /** Whether the machine selector is offered at all; see the class doc. */
+  /** Whether the machine selection is offered at all; see the class doc. */
   get machineSelectorShown(): boolean {
     return !this.machinesLoadFailed && this.activeMachines.length > 0;
+  }
+
+  /** The selectable machine columns, by the name the business gave each machine. */
+  machineOptions(): MultiSelectOption[] {
+    return this.activeMachines.map((machine) => ({ id: machine.id, label: machine.name }));
+  }
+
+  /** The machines that currently have a quantity column, in column order. */
+  get machineColumns(): LocalMachine[] {
+    return this.selectedMachineIds
+      .map((id) => this.activeMachines.find((machine) => machine.id === id))
+      .filter((machine): machine is LocalMachine => machine !== undefined);
+  }
+
+  /** Whether the matrix is showing: at least one machine has a column of its own. */
+  get matrixMode(): boolean {
+    return this.machineColumns.length > 0;
   }
 
   /**
@@ -303,73 +425,207 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
   }
 
   onTakenChange(productId: number, value: string): void {
+    if (this.saving) {
+      return;
+    }
     this.takenById.set(productId, value);
     this.rowErrors.delete(productId);
   }
 
-  /** The one message for this row: a malformed entry first, else the server's own last refusal. */
+  /** The one message for this row of the "No machine" column: a malformed entry first, else the server's own last refusal. */
   rowError(productId: number): string | null {
-    if (parseTakenQuantity(this.takenValue(productId)) === null) {
-      return INVALID_TAKEN_QUANTITY_MESSAGE;
+    const parsed = parseTakenEntry(this.takenValue(productId));
+    if ('error' in parsed) {
+      return parsed.error;
     }
     const messages = this.rowErrors.get(productId);
     return messages && messages.length > 0 ? messages.join(' ') : null;
   }
 
-  get canSave(): boolean {
-    if (this.saving || this.sessionActive || this.machineResolutionPending) {
-      return false;
-    }
-    const rows = this.buildRows();
-    return rows !== null && rows.length > 0;
+  cellValue(productId: number, machineId: number): string {
+    return this.cellValues.get(refillCellKey(productId, machineId)) ?? '';
   }
 
+  onCellChange(productId: number, machineId: number, value: string): void {
+    if (this.saving) {
+      return;
+    }
+    this.cellValues.set(refillCellKey(productId, machineId), value);
+    this.cellErrors.delete(refillCellKey(productId, machineId));
+  }
+
+  /** The one message for this cell: a malformed entry first, else the server's own last per-allocation refusal. */
+  cellError(productId: number, machineId: number): string | null {
+    const parsed = parseTakenEntry(this.cellValue(productId, machineId));
+    if ('error' in parsed) {
+      return parsed.error;
+    }
+    const messages = this.cellErrors.get(refillCellKey(productId, machineId));
+    return messages && messages.length > 0 ? messages.join(' ') : null;
+  }
+
+  /** The accessible name of one cell, which has to name both things it is about. */
+  cellAriaLabel(product: Product, machine: LocalMachine): string {
+    return `Taken: ${product.name} at ${machine.name}`;
+  }
+
+  /** Every malformed entry, naming the product and - in the matrix - the machine it was typed against. */
+  get invalidEntryMessages(): string[] {
+    const messages: string[] = [];
+    for (const product of this.products) {
+      if (this.matrixMode) {
+        for (const machine of this.machineColumns) {
+          const parsed = parseTakenEntry(this.cellValue(product.id, machine.id));
+          if ('error' in parsed) {
+            messages.push(`${product.name} at ${machine.name}: ${parsed.error}`);
+          }
+        }
+        continue;
+      }
+      const parsed = parseTakenEntry(this.takenValue(product.id));
+      if ('error' in parsed) {
+        messages.push(`${product.name}: ${parsed.error}`);
+      }
+    }
+    return messages;
+  }
+
+  /** What this row takes out of storage: in the matrix, its sum across every machine column. */
+  rowTotal(productId: number): number {
+    if (!this.matrixMode) {
+      const parsed = parseTakenEntry(this.takenValue(productId));
+      return 'error' in parsed ? 0 : parsed.quantity;
+    }
+    return this.machineColumns.reduce((total, machine) => {
+      const parsed = parseTakenEntry(this.cellValue(productId, machine.id));
+      return 'error' in parsed ? total : total + parsed.quantity;
+    }, 0);
+  }
+
+  /**
+   * What the whole pick takes out of storage, over **every** product - including the rows the
+   * current search or category filter hides, because a filter changes what is on screen and not what
+   * Save sends.
+   */
+  totalUnitsRequired(): number {
+    return this.products.reduce((total, product) => total + this.rowTotal(product.id), 0);
+  }
+
+  /** The part of {@link totalUnitsRequired} that comes from rows the current filter hides. */
+  hiddenUnitsRequired(): number {
+    const visible = this.visibleProductIds();
+    return this.products.reduce(
+      (total, product) => (visible.has(product.id) ? total : total + this.rowTotal(product.id)),
+      0
+    );
+  }
+
+  /** How many products with a typed quantity the current filter hides. */
+  hiddenProductsWithEntries(): number {
+    const visibleIds = this.visibleProductIds();
+    return this.products.filter((product) => !visibleIds.has(product.id) && this.rowTotal(product.id) > 0).length;
+  }
+
+  /**
+   * Applies a new machine selection, asking first whenever it would drop a typed quantity, and
+   * changing nothing at all when that is refused. Blocked outright while a save is in flight: the
+   * request being answered is the request that was built.
+   */
+  onSelectedMachineIdsChange(machineIds: number[]): void {
+    if (this.saving) {
+      return;
+    }
+
+    const next = machineIds.filter((id) => this.activeMachines.some((machine) => machine.id === id));
+    const previous = this.selectedMachineIds;
+    const removed = previous.filter((id) => !next.includes(id));
+
+    if (previous.length === 0 && next.length > 0 && this.unattributedEntriesPresent()) {
+      if (!window.confirm(DISCARD_UNATTRIBUTED_ENTRIES_CONFIRMATION)) {
+        return;
+      }
+      this.discardUnattributedEntries();
+    }
+
+    const removedWithEntries = removed.filter((id) => this.machineEntriesPresent(id));
+    if (removedWithEntries.length > 0) {
+      // Leaving the matrix altogether is one decision about every column, not one question per
+      // machine; removing some of them names exactly the ones whose quantities are about to go.
+      const question =
+        next.length === 0
+          ? DISCARD_MACHINE_COLUMNS_CONFIRMATION
+          : discardMachineColumnConfirmation(...removedWithEntries.map((id) => this.machineName(id)));
+      if (!window.confirm(question)) {
+        return;
+      }
+    }
+
+    this.selectedMachineIds = next;
+    for (const id of removed) {
+      this.discardMachineEntries(id);
+    }
+  }
+
+  /** Removes one machine's column, asking first when it holds quantities. */
+  removeMachineColumn(machineId: number): void {
+    this.onSelectedMachineIdsChange(this.selectedMachineIds.filter((id) => id !== machineId));
+  }
+
+  get canSave(): boolean {
+    if (!this.readyToSend) {
+      return false;
+    }
+    if (this.unresolvedSubmission) {
+      return this.lastSubmission !== null;
+    }
+    const payload = this.buildPayload();
+    return payload !== null && !isEmptyPayload(payload);
+  }
+
+  /** Whether the explicit Retry of an uncertain attempt is available. */
+  get canRetry(): boolean {
+    return this.readyToSend && this.unresolvedSubmission && this.lastSubmission !== null;
+  }
+
+  /**
+   * Sends the pick as one request. While an outcome is uncertain this *is* {@link retry}: the kept
+   * payload and key are the only request that may be sent until that attempt is resolved, so no edit,
+   * column removal or reordering can mint a new key and turn one physical pick into two deductions.
+   */
   save(): void {
-    const rows = this.buildRows();
+    if (this.unresolvedSubmission) {
+      this.retry();
+      return;
+    }
     // Checked here as well as hidden in the template, so the write is actually unavailable during a
     // support session rather than merely invisible - the endpoint refuses it either way. The
     // pending-resolution check is here for the same reason, and because the machine the link named
     // must not be able to arrive after this request was built: see machineResolutionPending.
-    if (this.saving || this.sessionActive || this.machineResolutionPending || rows === null || rows.length === 0) {
+    if (!this.readyToSend) {
       return;
     }
 
-    const machineId = this.selectedMachineId;
-    const reuse =
-      this.lastSubmission !== null &&
-      pickListRefillRowsEqual(this.lastSubmission.rows, rows) &&
-      this.lastSubmission.machineId === machineId;
-    const key = reuse ? this.lastSubmission!.key : generateIdempotencyKey();
-    const submittedRows = reuse ? this.lastSubmission!.rows : rows;
-    const submittedMachineId = reuse ? this.lastSubmission!.machineId : machineId;
-    this.lastSubmission = { key, rows: submittedRows, machineId: submittedMachineId };
-
-    this.saving = true;
-    this.unresolvedSubmission = false;
-    this.requestErrors = [];
-    this.rowErrors.clear();
-    this.saveInFlightChange.emit(true);
-
-    const request: PickListRefillRequest = { idempotencyKey: key, rows: submittedRows };
-    if (submittedMachineId !== null) {
-      request.machineId = submittedMachineId;
+    const payload = this.buildPayload();
+    if (payload === null || isEmptyPayload(payload)) {
+      return;
     }
 
-    this.pickListService.recordRefill(request).subscribe({
-      next: () => {
-        this.saving = false;
-        this.lastSubmission = null;
-        this.takenById.clear();
-        this.saveInFlightChange.emit(false);
-        this.toastService.success(REFILL_RECORDED_MESSAGE);
-        this.refillRecorded.emit();
-      },
-      error: (error: unknown) => {
-        this.saving = false;
-        this.saveInFlightChange.emit(false);
-        this.handleSaveError(error, submittedRows);
-      }
-    });
+    const kept = this.lastSubmission;
+    const reuse = kept !== null && payloadsEqual(kept.payload, payload);
+    this.send(reuse ? kept : { key: generateIdempotencyKey(), payload });
+  }
+
+  /** Resends the uncertain attempt exactly: the same key, the same payload, the same endpoint. */
+  retry(): void {
+    if (!this.canRetry) {
+      return;
+    }
+    this.send(this.lastSubmission!);
+  }
+
+  /** Whether a request may leave at all right now, whatever is typed. */
+  private get readyToSend(): boolean {
+    return !this.saving && !this.sessionActive && !this.machineResolutionPending;
   }
 
   /**
@@ -383,37 +639,165 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
       return;
     }
     const match = this.activeMachines.find((machine) => machine.id === this.preselectedMachineId);
-    if (match) {
-      this.selectedMachineId = match.id;
-    } else {
+    if (!match) {
       this.machineAttributionFailed = true;
+      return;
+    }
+
+    this.selectedMachineIds = [match.id];
+    // A quantity typed while this machine was being confirmed belongs to it - that is what the link
+    // and the pending notice both promised - so it moves into its column rather than being dropped
+    // or left as a pick against no machine. This is the one place an entry changes column, and it is
+    // one machine, never a copy into several.
+    for (const [productId, raw] of this.takenById) {
+      if (holdsQuantity(raw)) {
+        this.cellValues.set(refillCellKey(productId, match.id), raw);
+      }
+    }
+    this.discardUnattributedEntries();
+  }
+
+  /** Whether the "No machine" column holds anything the operator would mind losing. */
+  private unattributedEntriesPresent(): boolean {
+    return [...this.takenById.values()].some(holdsQuantity);
+  }
+
+  /** Whether one machine's column holds anything the operator would mind losing. */
+  private machineEntriesPresent(machineId: number): boolean {
+    return this.products.some((product) => holdsQuantity(this.cellValue(product.id, machineId)));
+  }
+
+  private discardUnattributedEntries(): void {
+    this.takenById.clear();
+    this.rowErrors.clear();
+  }
+
+  private discardMachineEntries(machineId: number): void {
+    for (const product of this.products) {
+      this.cellValues.delete(refillCellKey(product.id, machineId));
+      this.cellErrors.delete(refillCellKey(product.id, machineId));
     }
   }
 
-  /** Every row with a positive, well-formed quantity, in catalogue order; `null` while any typed entry is malformed. */
-  private buildRows(): PickListRefillRowRequest[] | null {
+  private machineName(machineId: number): string {
+    return this.activeMachines.find((machine) => machine.id === machineId)?.name ?? `Machine #${machineId}`;
+  }
+
+  private visibleProductIds(): Set<number> {
+    return new Set(this.visibleProducts().map((product) => product.id));
+  }
+
+  /**
+   * Exactly what Save would send now, or `null` while any entry of the current mode is malformed -
+   * including one on a row the filter hides, because a hidden entry is still part of the pick.
+   */
+  private buildPayload(): ManualPickPayload | null {
+    if (!this.matrixMode) {
+      const rows = this.buildUnattributedRows();
+      return rows === null ? null : { kind: 'unattributed', rows };
+    }
+
+    const allocations = this.buildBatchAllocations();
+    return allocations === null ? null : { kind: 'batch', allocations };
+  }
+
+  private buildUnattributedRows(): PickListRefillRowRequest[] | null {
     const rows: PickListRefillRowRequest[] = [];
     for (const product of this.products) {
-      const quantity = parseTakenQuantity(this.takenValue(product.id));
-      if (quantity === null) {
+      const parsed = parseTakenEntry(this.takenValue(product.id));
+      if ('error' in parsed) {
         return null;
       }
-      if (quantity > 0) {
-        rows.push({ productId: product.id, quantityTaken: quantity });
+      if (parsed.quantity > 0) {
+        rows.push({ productId: product.id, quantityTaken: parsed.quantity });
       }
     }
     return rows;
   }
 
-  private handleSaveError(error: unknown, submittedRows: PickListRefillRowRequest[]): void {
-    const rejection = parsePickListRefillRejection(error, submittedRows);
-    if (rejection !== null) {
-      // Nothing was recorded: ValidateRequestShape/ValidateAgainstState both refuse before the
-      // idempotency key is ever claimed, so the same key is safe to resend once the operator fixes
-      // the rows this refusal named - `lastSubmission` is left exactly as it is.
-      this.rowErrors = rejection.rowErrors;
-      this.requestErrors = [...rejection.requestErrors];
+  private buildBatchAllocations(): MultiMachineRefillAllocationRequest[] | null {
+    const allocations: MultiMachineRefillAllocationRequest[] = [];
+    for (const product of this.products) {
+      for (const machine of this.machineColumns) {
+        const parsed = parseTakenEntry(this.cellValue(product.id, machine.id));
+        if ('error' in parsed) {
+          return null;
+        }
+        if (parsed.quantity > 0) {
+          allocations.push({ machineId: machine.id, productId: product.id, quantityTaken: parsed.quantity });
+        }
+      }
+    }
+    return allocations;
+  }
+
+  private send(submission: ManualPickSubmission): void {
+    this.lastSubmission = submission;
+    this.saving = true;
+    this.unresolvedSubmission = false;
+    this.requestErrors = [];
+    this.rowErrors.clear();
+    this.cellErrors.clear();
+    this.saveInFlightChange.emit(true);
+
+    this.sendRequest(submission).subscribe({
+      next: () => {
+        this.saving = false;
+        this.lastSubmission = null;
+        this.discardRecordedEntries(submission.payload);
+        this.saveInFlightChange.emit(false);
+        this.toastService.success(recordedMessage(submission.payload));
+        this.refillRecorded.emit();
+      },
+      error: (error: unknown) => {
+        this.saving = false;
+        this.saveInFlightChange.emit(false);
+        this.handleSaveError(error, submission.payload);
+      }
+    });
+  }
+
+  /** The one place a payload becomes a call: a batch goes to issue #897's endpoint, an unattributed pick to #743's. */
+  private sendRequest(submission: ManualPickSubmission): Observable<unknown> {
+    if (submission.payload.kind === 'batch') {
+      const request: MultiMachinePickListRefillRequest = {
+        idempotencyKey: submission.key,
+        allocations: submission.payload.allocations
+      };
+      return this.pickListService.recordMultiMachineRefill(request);
+    }
+
+    const request: PickListRefillRequest = { idempotencyKey: submission.key, rows: submission.payload.rows };
+    return this.pickListService.recordRefill(request);
+  }
+
+  /** Clears only the mode that was actually recorded, so the other mode's draft is never touched by it. */
+  private discardRecordedEntries(payload: ManualPickPayload): void {
+    if (payload.kind === 'batch') {
+      this.cellValues.clear();
       return;
+    }
+    this.takenById.clear();
+  }
+
+  private handleSaveError(error: unknown, payload: ManualPickPayload): void {
+    // Nothing was recorded by a refusal of either shape: the request and state rules both refuse
+    // before the idempotency key is ever claimed, so the same key is safe to resend once the
+    // operator fixes what the refusal named - `lastSubmission` is left exactly as it is.
+    if (payload.kind === 'batch') {
+      const rejection = parseMultiMachineRefillRejection(error, payload.allocations);
+      if (rejection !== null) {
+        this.cellErrors = new Map(rejection.cellErrors);
+        this.requestErrors = [...rejection.requestErrors];
+        return;
+      }
+    } else {
+      const rejection = parsePickListRefillRejection(error, payload.rows);
+      if (rejection !== null) {
+        this.rowErrors = rejection.rowErrors;
+        this.requestErrors = [...rejection.requestErrors];
+        return;
+      }
     }
 
     if (error instanceof HttpErrorResponse && error.status === 403) {
@@ -432,10 +816,10 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // An uncertain outcome - a network failure, a 5xx - so the exact submitted rows and key stay
-    // ready: clicking Save again with nothing changed resends precisely this request. The notice
-    // stays on screen until that retry resolves it, because a toast the operator missed is not a
-    // reason to let an unconfirmed pick look finished.
+    // An uncertain outcome - a network failure, a 5xx - so the exact payload and key stay ready and
+    // become the only request that may be sent: Retry resends precisely this one. The notice stays
+    // on screen until that retry resolves it, because a toast the operator missed is not a reason to
+    // let an unconfirmed pick look finished.
     this.unresolvedSubmission = true;
     this.toastService.error(REFILL_UNCERTAIN_MESSAGE);
   }
@@ -446,4 +830,31 @@ export class ManualPickListComponent implements OnInit, OnDestroy {
     const detail = body && typeof body === 'object' ? body.detail : null;
     return typeof detail === 'string' && detail.trim().length > 0 ? detail : fallback;
   }
+}
+
+/** Whether a payload would record nothing at all, which is not a pick to send. */
+function isEmptyPayload(payload: ManualPickPayload): boolean {
+  return payload.kind === 'batch' ? payload.allocations.length === 0 : payload.rows.length === 0;
+}
+
+/**
+ * Whether two payloads are the same submission. A batch compares as a set of machine/product/quantity
+ * allocations, so merely reordering the machine columns is still the same pick under the same key.
+ */
+function payloadsEqual(a: ManualPickPayload, b: ManualPickPayload): boolean {
+  if (a.kind === 'batch' && b.kind === 'batch') {
+    return multiMachineAllocationsEqual(a.allocations, b.allocations);
+  }
+  if (a.kind === 'unattributed' && b.kind === 'unattributed') {
+    return pickListRefillRowsEqual(a.rows, b.rows);
+  }
+  return false;
+}
+
+function recordedMessage(payload: ManualPickPayload): string {
+  if (payload.kind !== 'batch') {
+    return REFILL_RECORDED_MESSAGE;
+  }
+  const machineCount = new Set(payload.allocations.map((allocation) => allocation.machineId)).size;
+  return multiMachineRefillRecordedMessage(payload.allocations.length, machineCount);
 }
