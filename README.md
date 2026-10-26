@@ -8,6 +8,7 @@ InventoryApp is a full-stack operations and bookkeeping system for a vending-mac
 - Nayax is an optional add-on: inventory, purchasing, expenses and the Bookkeeping and GST reports work without it, while the features that depend on it — the live Nayax pages, and the five sales reports that need a Nayax connection to exist at all — are shown locked until a provider is connected, with no stored sales removed (see [The menu without a usable provider](#the-menu-without-a-usable-provider)).
 - Purchases, their supporting documents, supplier orders, and stock movements.
 - Sites, vending machines, product assignments, and machine refills.
+- A **home dashboard reminder when machine restock sync is behind** (see [Machine restock sync reminder](#machine-restock-sync-reminder)): Sync Restock is something an operator asks for, so the dashboard says which Nayax-linked machines have not had a successful restock sync in the last three business days, or still have restock events waiting to be reviewed.
 - Nayax product and transaction imports with explicit payment/status handling.
 - Owner-driven Nayax connection setup: test a token, see which permissions it carries, save it and re-test it later (see [Connecting Nayax (Admin page)](#connecting-nayax-admin-page)).
 - Historical weighted-average inventory costing and persisted COGS provenance.
@@ -1129,10 +1130,39 @@ maintains every product and category itself, and a business with one keeps the f
 does not manage.
 
 - **Create a product** with `POST /api/products`, and a **category** with `POST /api/categories`.
-  Both answer the created record with its new id. A product needs a name; a category needs a name,
+  Both answer the created record with its new id. A product needs a name and a **unit label**; a
+  category needs a name,
   unique within the business (compared without case, so
   "Drinks" and "drinks" are the same category). Creating a product with an opening quantity records
   the initial restock movement it always did, at the optional initial unit **cost**.
+- **Unit Label is required** (issue #895). It is what a quantity of this product is counted in — a
+  bag, a can, a bottle — and every product you create or edit by hand has one. **Products → New
+  Product** and **Products → Edit Product** mark the field with `*`, refuse to save while it is
+  empty or only spaces, and say "Unit label is required." beside it; what is saved is the label
+  trimmed. New Product still starts with `unit` filled in, so you only change it when the product is
+  counted in something else. **A product from before this rule, with no label stored, opens Edit
+  Product with the field empty** rather than with `unit` filled in for you: you choose the label it
+  should have, and nothing was changed or filled in behind you. `POST /api/products` refuses a
+  missing label with `400` and that same sentence, and saves nothing. `PUT /api/products/{id}`
+  refuses one **only when the product's stored label is not blank** — no request can erase a label —
+  while a product whose stored label is already blank is still accepted with none, so the Products
+  list's **Deactivate** and **Reactivate** (which send the whole product back) keep working for
+  those older products. Imported products are unaffected: the catalogue import gives a product it
+  creates the `unit` default and leaves a linked product's own label alone, and no label is
+  backfilled anywhere.
+- **New Product is read down in titled sections** (issue #892). **Products → New Product** groups
+  its fields under **Product details** — Name beside SKU, Category beside Unit Label, Description
+  across the row below them, and then the compact **Active product** checkbox — **Opening
+  inventory** (Opening Stock beside Initial Unit Cost) and **Reordering** (Low Stock Threshold
+  beside Restock To, with the same hints and the same "Restock To must be greater than or equal to
+  the Low Stock Threshold" message). Each section is one column on a narrow screen and two columns
+  from a medium one, and the controls in a row start at the same height, so a field's help text no
+  longer pushes the control beside it to the bottom of the row. **GST rule** is the last choice the
+  page asks for and the single **Create Product** / **Cancel** row is below it, by reading and by
+  Tab alike — so the rule is chosen before the product is created. Nothing else changed: the same
+  fields, values, defaults, labels and validation, the same category picker, the same
+  support-session restriction, and the same two writes described next. **Editing** a product keeps
+  its existing layout, because a provider-managed name and category are locked there.
 - **Choose the new product's GST rule while creating it** (issue #829). **Products → New Product**
   offers the same **GST rule** picker the edit page does — **Taxable**, **GST-free** or **No rule**,
   with the same meanings and the same help. The rule is its own resource, so creating a product with
@@ -1141,7 +1171,8 @@ does not manage.
   If the rule write fails the page says exactly that — "The product was created, but its GST rule
   was not saved." — keeps the product that now exists along with the rule you chose, and offers
   **Save GST rule** beside the picker, which retries the rule alone with the choice on screen now.
-  **Create Product** is gone at that point, so there is no way to create a second product; a create
+  **Create Product** is gone from the row below at that point, so there is no way to create a
+  second product; a create
   whose rule was not stored is never reported as finished, and you can also leave the page and set
   the rule later by editing the product.
   Choosing the rule here classifies no purchase and is not retroactive — see
@@ -1170,7 +1201,8 @@ does not manage.
   manages is locked there.
 - **Edit a product** with `PUT /api/products/{id}`, which now accepts its **name and
   category** as well as the SKU, description, unit, low-stock threshold, restock target
-  and active flag. There is no supplier among them — see
+  and active flag. The unit label may not be blanked — see **Unit Label is required** above for the
+  one case a blank one is still accepted. There is no supplier among them — see
   [A product carries no supplier](#a-product-carries-no-supplier) — and no selling price either —
   see [A product carries no selling price](#a-product-carries-no-selling-price). **Edit a category**
   with `PUT /api/categories/{id}`.
@@ -1218,7 +1250,11 @@ does not manage.
   and the reorder alerts, keeps its history, stock and costs, and can be reactivated at any time.") and
   then writes the ordinary product update with `isActive: false`. The **Status** badge deactivates
   through that same confirmation; reactivating a deactivated product stays one click, and a
-  deactivated product offers no Deactivate. That `canDelete` answer is **advisory**: it is as
+  deactivated product's row offers **Reactivate** in that same slot instead of Deactivate (issue
+  #900), reusing the Status badge's own one-click activation write rather than a new endpoint. A
+  failed reactivation leaves the product deactivated and shows the server's own refusal, the same
+  way a failed deactivation does - the two controls share the one write and its error reporting.
+  That `canDelete` answer is **advisory**: it is as
   fresh as the last fetch, the delete counts again inside its own transaction, and a refusal for a
   product the screen had offered is still shown as the server worded it. A **category** has no such
   answer published and no retirement flag at all, so **Categories** attempts every delete and shows
@@ -1395,6 +1431,46 @@ need** column is gone; it was only the stock figure minus the machine-need figur
 - **The two columns need the same permission as the dashboard's money figures.** An Operator does not
   see them at all, and nothing is requested on their behalf; a Manager or an Owner sees both.
 
+## Machine restock sync reminder
+
+**Sync Restock never runs by itself.** You open a machine and ask for it, which means forgetting it
+is silent: the storage figures drift, and what you see looks like missing product rather than
+missing bookkeeping. The home dashboard therefore shows a reminder when that work is waiting.
+
+- **A machine is listed for either of two reasons.** Its last fully successful restock sync is three
+  or more business days old — counted as calendar days in your own business time zone, so a
+  daylight-saving change never moves the line — or it still has imported restock events nobody has
+  resolved. Either one alone is enough, and both are shown: a recent sync clears only the first.
+- **"No recorded sync" means exactly that, not "never synced".** A successful sync has been recorded
+  since this feature was added; machines you were already syncing before then start with nothing
+  recorded, and nothing guesses a date for them from an event, a sales sync or a stock count. The
+  first time you run Sync Restock for a machine, it fills in.
+- **A fetch only counts when the whole thing worked.** A sync that failed, or that imported only part
+  of what it read, records nothing at all — and one that succeeded and found no new alert counts as
+  a success, because an empty answer is an answer. A successful sync is never a promise that all of
+  your history has been fetched: Nayax's last-alerts list is a rolling window of recent events.
+- **Pending counts are what has been imported.** They include events needing review, events you have
+  not got enough storage stock for, and possible duplicates you have not resolved; they exclude ones
+  you have applied or marked as already recorded manually. A count of zero means nothing imported is
+  outstanding — it cannot promise that Nayax is holding no alert nobody has fetched yet, which is why
+  the overdue-sync warning is reported separately.
+- **Old work never disappears quietly.** The Sync Restock dialog opens on the last three days by
+  default, so when a machine has pending events older than that, the reminder says so and tells you
+  to clear the From date or move it back to the oldest pending date.
+- **It reminds, and does nothing else.** Each row links to the machine and names the **Sync Restock**
+  action there. Opening the dashboard, following a link or opening a preview applies nothing,
+  resolves no duplicate, changes no inventory and does not mark anything as seen — after you apply or
+  reconcile, reloading the dashboard shows what is left. The dashboard read is entirely local: it
+  makes no Nayax request, so it costs nothing and cannot fail because Nayax is slow.
+- **When it is not shown.** A business with no usable Nayax connection, and machines you created
+  yourself rather than ones Nayax names, have no provider restock sync to be behind on. It is hidden
+  inside a [support session](#super-admin-support-sessions) too, which is read-only and cannot sync.
+  If the reminder itself cannot be loaded it says so — unknown, rather than up to date — and the rest
+  of the dashboard keeps working.
+- **Who sees it.** The same permission as Sync Restock itself, which every role holds (Operator,
+  Manager and Owner). If your Nayax connection has not been confirmed for machine alerts, the
+  reminder says the sync may be unavailable instead of sending you to an action that will refuse you.
+
 ## Product and supplier GST rules
 
 Purchase amounts are GST-inclusive, and GST is recorded per purchase line and per delivery/package
@@ -1406,7 +1482,8 @@ classified:
   bookkeeping configuration rather than a catalogue field.
 - **Products → New Product → GST rule** (issue #829). The same picker, for a product that does not
   exist yet: there is no stored rule to read, so it is ready to use immediately and has no Save of
-  its own — **Create Product** saves it with the product, as described under
+  its own — **Create Product**, in the action row below it (issue #892), saves it with the product,
+  as described under
   [Products and categories](#products-and-categories). A **Save GST rule** button appears there only
   if the product was created and its rule was not, to retry that one write.
 - **Suppliers → Edit a supplier → GST defaults.** Choose a default for the supplier's **product
@@ -1980,8 +2057,8 @@ connected (issue #740). Before it, a machine was never stored at all — every m
 of the live Nayax fleet — so a business with no provider had no machines.
 
 - **The Machines page is two lists.** *Your machines* is always there: it lists every machine this
-  business has recorded, active and inactive, and holds the Add, Rename, Deactivate and Reactivate
-  actions. *Live from Nayax* — the revenue and profit figures, and the links into each machine's
+  business has recorded, active and inactive, and holds the Add, Rename, Deactivate, Reactivate and
+  Delete actions. *Live from Nayax* — the revenue and profit figures, and the links into each machine's
   stock and Sync Restock workflow — appears below it only while the Nayax connection can serve the
   fleet read. With no usable provider the live section is not shown at all, and the page is the local
   machine list alone; if the fleet read fails for some other reason (an outage, a transport failure),
@@ -1992,16 +2069,26 @@ of the live Nayax fleet — so a business with no provider had no machines.
   resolves a machine by its name.
 - **Rename one** with `PUT /api/local-machines/{id}`.
 - **Deactivate and reactivate**, with `POST /api/local-machines/{id}/deactivate` and
-  `.../reactivate`. **There is no delete.** Recorded transactions, refills, machine counts and
-  expenses refer to a machine, so a machine that stops trading keeps all of its history and stays in
-  the list, marked *Inactive*, ready to be put back in service.
-- **A machine from Nayax is renamed and deactivated in Nayax, not here.** The list offers no
-  Rename or Deactivate on a row marked "From Nayax", and the API refuses both with `400` and the
-  sentence "This machine comes from Nayax and cannot be renamed here. Nothing was saved." (or
-  "deactivated here").
-  **Reactivate** is still offered, so a Nayax machine deactivated before this rule can be put back
-  in service. The machine keeps the name it was given when it was recorded or linked: nothing
-  copies a later Nayax rename across.
+  `.../reactivate`. **This is what a machine with history gets instead of a delete.** Recorded
+  transactions, refills, machine counts and expenses refer to a machine, so a machine that stops
+  trading keeps all of its history and stays in the list, marked *Inactive*, ready to be put back in
+  service.
+- **Delete a machine you added by mistake**, with `DELETE /api/local-machines/{id}` — and only one
+  that nothing refers to yet. **Delete** appears on a row only where the server says the machine may
+  be deleted, asks you to confirm and names the machine, and nothing is sent if you cancel. Every
+  other machine says, in the server's own words, what refers to it — "This machine cannot be deleted
+  because its history refers to it (2 machine stock counts, 1 operating expense)" — and is
+  deactivated instead. What counts as history is a machine stock count, a stock movement (a refill
+  included), a pick-list refill or an operating expense; **nothing is ever deleted along with the
+  machine**, which is exactly why a machine with any of them is refused. A machine from Nayax is
+  never offered Delete.
+- **A machine from Nayax is renamed, deactivated and deleted in Nayax, not here.** The list offers no
+  Rename, Deactivate or Delete on a row marked "From Nayax", and the API refuses all three with `400`
+  and the sentence "This machine comes from Nayax and cannot be renamed here. Nothing was saved." (or
+  "deactivated here", or "This machine comes from Nayax and cannot be deleted here. Nothing was
+  deleted."). **Reactivate** is still offered, so a Nayax machine deactivated before this rule can be
+  put back in service. The machine keeps the name it was given when it was recorded or linked:
+  nothing copies a later Nayax rename across.
 - **A machine the provider named is marked "From Nayax".** Every machine this database already
   referred to — through a sale, a refill, a machine count, an expense, a stock event, a sale
   timestamp repair or an inventory-cost transition — was given a local record when this change was

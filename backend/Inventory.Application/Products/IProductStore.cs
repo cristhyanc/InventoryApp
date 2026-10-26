@@ -17,17 +17,28 @@ public interface IProductStore
     /// business does not own (issue #736): a product's category is a relationship between two
     /// tenant-owned rows and may not cross a business, and the id a request supplies is the one
     /// place that could be attempted.</para>
+    ///
+    /// <para>Refused too when <see cref="ProductCreateFields.Unit"/> is blank (issue #895), the same
+    /// way a blank name is: the create use case has already applied that rule, and the adapter
+    /// applies it again at the write so the column cannot be written blank. An accepted label is
+    /// stored trimmed.</para>
     /// </summary>
     Task<ProductWriteAttempt> CreateAsync(ProductCreateFields fields, CancellationToken cancellationToken);
 
     Task<bool> ExistsAsync(long id, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Updates the product's editable fields, after reading the stored row and deciding the two
-    /// refusals that depend on it (issue #736): a change to a field the business's sales provider
-    /// manages, and a category the business does not own. The read, the comparison and the write are
-    /// one operation, so a product linked to a provider between a caller's read and this write is
+    /// Updates the product's editable fields, after reading the stored row and deciding the three
+    /// refusals that depend on it: a change to a field the business's sales provider manages, and a
+    /// category the business does not own (issue #736), and a request that would blank a nonblank
+    /// stored unit label (issue #895). The read, the comparison and the write are one operation, so a
+    /// product linked to a provider, or given a unit label, between a caller's read and this write is
     /// still refused.
+    ///
+    /// <para>A product whose stored label is already blank accepts a blank one, which is what keeps
+    /// the Products list's activation write - the whole product sent back with <c>isActive</c>
+    /// flipped - working for a legacy row (<c>ProductCataloguePolicy.UnitChangeRefusal</c>). An
+    /// accepted nonblank label is stored trimmed.</para>
     ///
     /// <para><see cref="ProductWriteOutcome.NotFound"/> is the authoritative not-found answer: an
     /// earlier <see cref="ExistsAsync"/> result is only a read, and the row can be deleted by

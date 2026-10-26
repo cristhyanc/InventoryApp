@@ -76,8 +76,13 @@ public class RepointStockMachineReferencesMigrationTests
         await MigrateAsync(options, TargetMigration);
 
         await using var after = TestAppDbContext.Unrestricted(options);
-        var machines = await after.Machines.ToDictionaryAsync(
-            machine => machine.Id, machine => (machine.BusinessId, machine.ExternalMachineId));
+        // Projected rather than materialised whole: this context is pinned to an older migration,
+        // so selecting every column of the entity would read columns a later migration added
+        // (issue #891's restock-sync coverage, for one) and fail on a schema that is correct for
+        // the point in history under test.
+        var machines = await after.Machines
+            .Select(machine => new { machine.Id, machine.BusinessId, machine.ExternalMachineId })
+            .ToDictionaryAsync(machine => machine.Id, machine => (machine.BusinessId, machine.ExternalMachineId));
 
         string? ProviderNumber(long? localMachineId) =>
             localMachineId is null ? null : machines[localMachineId.Value].ExternalMachineId;

@@ -123,7 +123,14 @@ public class AddMachinesMigrationTests
 
         // A business that refers to no machine gets none - including the one with no provider at
         // all, and including the sale that carried no machine number.
-        Assert.Empty(await after.Machines.Where(machine => machine.BusinessId >= 3).ToListAsync());
+        // Projected rather than materialised whole, like the reads above: this context is pinned to
+        // an older migration, so selecting every column of the entity would read columns a later
+        // migration added (issue #891's restock-sync coverage, for one).
+        Assert.Empty(
+            await after.Machines
+                .Where(machine => machine.BusinessId >= 3)
+                .Select(machine => machine.Id)
+                .ToListAsync());
 
         // Nothing is repointed: every stored reference still holds the provider's own number.
         Assert.Equal(

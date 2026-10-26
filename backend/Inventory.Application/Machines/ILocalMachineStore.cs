@@ -25,9 +25,17 @@ public interface ILocalMachineStore
     /// Every machine of the caller's business, active and inactive alike, ordered by name. A
     /// deactivated machine stays listed: it is history an operator may want to reactivate, not a
     /// row to hide.
+    ///
+    /// <para>Each record carries its <see cref="LocalMachineRecord.DeletionEligibility"/> (issue
+    /// #896), so the list can offer <strong>Delete</strong> only where <see cref="DeleteAsync"/>
+    /// would allow it.</para>
     /// </summary>
     Task<IReadOnlyList<LocalMachineRecord>> ListOrderedByNameAsync(CancellationToken cancellationToken);
 
+    /// <summary>
+    /// One machine of the caller's business, with its <see cref="LocalMachineRecord.DeletionEligibility"/>
+    /// resolved too, or <see langword="null"/> when the business has no such machine.
+    /// </summary>
     Task<LocalMachineRecord?> FindByIdAsync(long id, CancellationToken cancellationToken);
 
     /// <summary>
@@ -70,4 +78,21 @@ public interface ILocalMachineStore
     /// one is not.
     /// </summary>
     Task<LocalMachineWriteAttempt> SetActiveAsync(long id, bool isActive, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Deletes a machine the business added by mistake, when it may be deleted at all (issue #896).
+    ///
+    /// <para>The authoritative read, the reference count and the delete are <strong>one</strong>
+    /// operation, under the write lock the provider machine review's own apply takes: a machine that
+    /// gained a provider link, an expense, a count, a movement or a refill after a caller read it is
+    /// refused rather than deleted. The refusal is
+    /// <c>Inventory.Domain.Machines.MachineDeletionPolicy</c>'s, and the restricted foreign keys are
+    /// the database's own backstop behind it - a constraint violation becomes the same refusal, never
+    /// an unhandled failure.</para>
+    ///
+    /// <para>Nothing is cascaded, nulled, reassigned or compensated for: a machine with history is
+    /// deactivated instead, which is what keeps every stored count, movement, refill and expense
+    /// exactly where it is.</para>
+    /// </summary>
+    Task<LocalMachineWriteAttempt> DeleteAsync(long id, CancellationToken cancellationToken);
 }

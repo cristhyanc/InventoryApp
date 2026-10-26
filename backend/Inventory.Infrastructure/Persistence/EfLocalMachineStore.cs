@@ -3,6 +3,7 @@ using Inventory.Domain.Machines;
 using Inventory.Domain.Providers;
 using Inventory.Infrastructure.Data;
 using Inventory.Infrastructure.Models;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 namespace Inventory.Infrastructure.Persistence;
@@ -30,9 +31,25 @@ namespace Inventory.Infrastructure.Persistence;
 /// issue #742, by <see cref="EfProviderMachineLinkStore"/> - the provider machine review's own
 /// adapter, which is where a link is decided against the stored rows inside its own
 /// transaction.</para>
+///
+/// <para><strong>The delete is the one write that counts other tables</strong> (issue #896). It runs
+/// under the same <c>BEGIN IMMEDIATE</c> write lock the provider machine review's apply takes
+/// (<see cref="SqliteWriteLockTransaction"/>), counts the four tables that name a machine inside it,
+/// and applies <see cref="MachineDeletionPolicy"/>; the restricted foreign keys are the database's own
+/// backstop behind that count, and a violation of one becomes the same refusal rather than an
+/// unhandled failure. Nothing is cascaded, nulled or reassigned.</para>
 /// </summary>
 public sealed class EfLocalMachineStore : ILocalMachineStore
 {
+    /// <summary>SQLITE_CONSTRAINT, the primary result code a foreign-key violation reports.</summary>
+    private const int SqliteConstraintViolation = 19;
+
+    /// <summary>
+    /// What SQLite calls a restricted foreign key it refused. Required as well as the code above, so
+    /// a violation of any other constraint stays untranslated and surfaces as the failure it is.
+    /// </summary>
+    private const string ForeignKeyViolationMessage = "FOREIGN KEY constraint failed";
+
     private readonly AppDbContext _db;
 
     public EfLocalMachineStore(AppDbContext db)
@@ -42,21 +59,19 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
 
     public async Task<IReadOnlyList<LocalMachineRecord>> ListOrderedByNameAsync(
         CancellationToken cancellationToken) =>
-        await _db.Machines
-            .AsNoTracking()
-            .OrderBy(machine => machine.Name)
-            .ThenBy(machine => machine.Id)
-            .Select(machine => new LocalMachineRecord(
-                machine.Id, machine.Name, machine.IsActive, machine.ExternalMachineId != null))
-            .ToListAsync(cancellationToken);
+        await WithDeletionEligibilityAsync(
+            await Rows(_db.Machines.AsNoTracking().OrderBy(machine => machine.Name).ThenBy(machine => machine.Id))
+                .ToListAsync(cancellationToken),
+            cancellationToken);
 
-    public async Task<LocalMachineRecord?> FindByIdAsync(long id, CancellationToken cancellationToken) =>
-        await _db.Machines
-            .AsNoTracking()
-            .Where(machine => machine.Id == id)
-            .Select(machine => new LocalMachineRecord(
-                machine.Id, machine.Name, machine.IsActive, machine.ExternalMachineId != null))
+    public async Task<LocalMachineRecord?> FindByIdAsync(long id, CancellationToken cancellationToken)
+    {
+        var row = await Rows(_db.Machines.AsNoTracking().Where(machine => machine.Id == id))
             .FirstOrDefaultAsync(cancellationToken);
+        if (row is null) return null;
+
+        return (await WithDeletionEligibilityAsync([row], cancellationToken))[0];
+    }
 
     /// <summary>
     /// One statement over two columns of the machines the caller named: no name, no provider link and
@@ -159,5 +174,153 @@ public sealed class EfLocalMachineStore : ILocalMachineStore
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
 
         return LocalMachineWriteAttempt.Succeeded(machine.Id);
+    }
+
+    /// <summary>
+    /// Deletes a machine nothing refers to and no provider names (issue #896).
+    ///
+    /// <para>The read, the reference count and the delete are one <c>BEGIN IMMEDIATE</c> operation.
+    /// Immediate rather than deferred, and the same lock <see cref="EfProviderMachineLinkStore"/>
+    /// takes, because the race the restricted foreign keys cannot stop is that review's apply
+    /// linking this very row: a deferred transaction would let both read a machine with no provider
+    /// id, and SQLite could then only answer one of them with a lock error instead of serialising
+    /// them.</para>
+    ///
+    /// <para>The foreign keys are still the backstop under the count, for the reference that lands in
+    /// a window no lock covers - another process, or a provider this application does not serialise
+    /// against. SQLite refuses the statement, and that refusal is translated into the same sentence
+    /// an operator would have been shown had the count seen it, never into a 500.</para>
+    /// </summary>
+    public async Task<LocalMachineWriteAttempt> DeleteAsync(long id, CancellationToken cancellationToken)
+    {
+        await using var transaction = await SqliteWriteLockTransaction.BeginAsync(_db, cancellationToken);
+
+        var machine = await _db.Machines.FirstOrDefaultAsync(
+            candidate => candidate.Id == id, cancellationToken);
+        if (machine is null) return LocalMachineWriteAttempt.NotFound();
+
+        // Counted inside the lock, so a provider link, an expense, a count, a movement or a refill
+        // recorded since a caller read the machine refuses this delete rather than being destroyed
+        // by it.
+        var references = await CountReferencesAsync(id, cancellationToken);
+        var provider = machine.ExternalMachineId is null
+            ? null
+            : await EfSalesProviderQueries.CurrentBusinessSalesProviderAsync(_db, cancellationToken);
+
+        // Returned without committing: nothing was written, and the transaction's disposal ends it.
+        if (MachineDeletionPolicy.Refusal(machine.ExternalMachineId is not null, provider, references)
+            is { } refusal)
+            return LocalMachineWriteAttempt.Refused(refusal);
+
+        _db.Machines.Remove(machine);
+
+        try
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException failure) when (IsForeignKeyViolation(failure))
+        {
+            // Nothing was deleted - the statement itself was refused - so the row the caller still
+            // sees is intact. Untracked again so the context this request shares does not retry the
+            // delete on a later save.
+            _db.Entry(machine).State = EntityState.Unchanged;
+            return LocalMachineWriteAttempt.Refused(MachineDeletionPolicy.ReferencedWhileDeletingRefusal);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return LocalMachineWriteAttempt.Succeeded(id);
+    }
+
+    /// <summary>
+    /// Everything that already refers to the machine, counted in one place so
+    /// <see cref="MachineDeletionPolicy"/> can say what is in the way. These are the four tables that
+    /// hold <c>Machines.Id</c>; the provider's own stored data names the provider's machine number
+    /// and is not a reference to this row (AGENTS.md § Database and migrations), which is why a
+    /// machine the provider names is refused outright rather than counted.
+    /// </summary>
+    private async Task<LocalMachineDeletionReferences> CountReferencesAsync(
+        long id, CancellationToken cancellationToken) => new(
+            MachineStockCounts: await _db.MachineStockCounts
+                .CountAsync(count => count.MachineId == id, cancellationToken),
+            StockMovements: await _db.StockAdjustments
+                .CountAsync(adjustment => adjustment.MachineId == id, cancellationToken),
+            PickListRefills: await _db.PickListRefills
+                .CountAsync(refill => refill.MachineId == id, cancellationToken),
+            OperatingExpenses: await _db.OperatingExpenses
+                .CountAsync(expense => expense.MachineId == id, cancellationToken));
+
+    /// <summary>
+    /// Whether SQLite refused the statement because one of the restricted machine foreign keys
+    /// pointed at the row - the database's own backstop under the count above.
+    /// </summary>
+    private static bool IsForeignKeyViolation(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is SqliteException sqlite
+                && sqlite.SqliteErrorCode == SqliteConstraintViolation
+                && sqlite.Message.Contains(ForeignKeyViolationMessage, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The chosen machines with the four reference counts beside them, in one statement: the counts
+    /// are correlated subqueries rather than a read per machine, so a list of machines stays one
+    /// round trip. The caller filters and orders <paramref name="machines"/> on the entity, because
+    /// neither translates once the projection has happened. Tenant scoping is the central query
+    /// filter, here as everywhere else in this adapter.
+    /// </summary>
+    private IQueryable<MachineRow> Rows(IQueryable<LocalMachine> machines) =>
+        machines
+            .Select(machine => new MachineRow(
+                machine.Id,
+                machine.Name,
+                machine.IsActive,
+                machine.ExternalMachineId != null,
+                _db.MachineStockCounts.Count(count => count.MachineId == machine.Id),
+                _db.StockAdjustments.Count(adjustment => adjustment.MachineId == machine.Id),
+                _db.PickListRefills.Count(refill => refill.MachineId == machine.Id),
+                _db.OperatingExpenses.Count(expense => expense.MachineId == machine.Id)));
+
+    /// <summary>
+    /// Turns the rows into records with their deletion eligibility decided by the one rule
+    /// <see cref="DeleteAsync"/> applies (issue #896). The business's sales provider is read once,
+    /// and only when a machine on the page carries a provider id - it is needed solely to name the
+    /// provider in that machine's refusal.
+    /// </summary>
+    private async Task<IReadOnlyList<LocalMachineRecord>> WithDeletionEligibilityAsync(
+        List<MachineRow> rows, CancellationToken cancellationToken)
+    {
+        var provider = rows.Exists(row => row.IsProviderNamed)
+            ? await EfSalesProviderQueries.CurrentBusinessSalesProviderAsync(_db, cancellationToken)
+            : null;
+
+        return rows
+            .Select(row => new LocalMachineRecord(row.Id, row.Name, row.IsActive, row.IsProviderNamed)
+            {
+                DeletionEligibility = LocalMachineDeletionEligibility.Decide(
+                    row.IsProviderNamed, provider, row.References),
+            })
+            .ToList();
+    }
+
+    /// <summary>One machine as the reads project it, with what refers to it counted alongside.</summary>
+    private sealed record MachineRow(
+        long Id,
+        string Name,
+        bool IsActive,
+        bool IsProviderNamed,
+        int MachineStockCounts,
+        int StockMovements,
+        int PickListRefills,
+        int OperatingExpenses)
+    {
+        public LocalMachineDeletionReferences References =>
+            new(MachineStockCounts, StockMovements, PickListRefills, OperatingExpenses);
     }
 }

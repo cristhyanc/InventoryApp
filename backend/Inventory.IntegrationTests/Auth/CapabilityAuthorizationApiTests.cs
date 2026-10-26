@@ -79,6 +79,10 @@ public sealed class CapabilityAuthorizationApiTests : IClassFixture<CapabilityAu
         // the criterion: a site picker reaches exactly the roles the page it filters already does.
         { "Inventory.Operate", "GET", "/api/sites/list", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/machines", "Operator,Manager,Owner" },
+        // Issue #891. The Dashboard's restock-sync reminder declares the capability of the work it
+        // points at - reconciling restocks - rather than the Dashboard's own: a role that may not
+        // run Sync Restock has nothing to do with a reminder to go and run it.
+        { "Inventory.Operate", "GET", "/api/machine-restock-sync/reminder", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/stock-history", "Operator,Manager,Owner" },
         { "Inventory.Operate", "GET", "/api/products/1/stock", "Operator,Manager,Owner" },
         { "Inventory.Operate", "POST", "/api/products/1/inventory-count/apply", "Operator,Manager,Owner" },

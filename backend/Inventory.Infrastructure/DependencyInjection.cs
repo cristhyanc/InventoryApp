@@ -254,6 +254,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IProductPurchaseCostFactsProvider, EfProductPurchaseCostFactsProvider>();
         services.AddScoped<ILocalCatalogSnapshotProvider, EfLocalCatalogSnapshotProvider>();
         services.AddScoped<IMachineStockEventStore, EfMachineStockEventStore>();
+        // The Sync Restock workflow's own successful-fetch coverage and the unresolved-event counts
+        // the Dashboard reminder is built from (issue #891).
+        services.AddScoped<IMachineRestockSyncCoverageStore, EfMachineRestockSyncCoverageStore>();
         services.AddScoped<IMachineStockLedgerStore, EfMachineStockLedgerStore>();
         // What the machine itself reports it is holding (issue #56). Scoped because reading it spends
         // the current business's own Nayax credentials, which are resolved per request.

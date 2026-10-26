@@ -9,8 +9,9 @@ public class CreateProductTests
         int lowStockThreshold = 5,
         int restockTo = 10,
         decimal? initialUnitCost = null,
-        string name = "Coke") =>
-        new(name, "SKU-1", null, 0, lowStockThreshold, restockTo, "unit", null, true,
+        string name = "Coke",
+        string? unit = "unit") =>
+        new(name, "SKU-1", null, 0, lowStockThreshold, restockTo, unit, null, true,
             initialUnitCost);
 
     [Fact]
@@ -56,6 +57,27 @@ public class CreateProductTests
         Assert.False(result.IsValid);
         Assert.Equal(Inventory.Domain.Products.ProductCataloguePolicy.NameRequiredMessage, result.ValidationError);
         Assert.Null(store.LastCreated);
+    }
+
+    /// <summary>
+    /// Issue #895: a product created by hand has a unit label. The create refuses a blank one
+    /// outright - unlike an update, which refuses only a blank that would erase a stored label -
+    /// and nothing is persisted.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Handle_RejectsAMissingUnitLabel_WithoutPersisting(string? unit)
+    {
+        var store = new FakeProductStore();
+
+        var result = await new CreateProduct(store).Handle(ValidFields(unit: unit), CancellationToken.None);
+
+        Assert.False(result.IsValid);
+        Assert.Equal(Inventory.Domain.Products.ProductCataloguePolicy.UnitRequiredMessage, result.ValidationError);
+        Assert.Null(store.LastCreated);
+        Assert.Null(result.ProductId);
     }
 
     /// <summary>

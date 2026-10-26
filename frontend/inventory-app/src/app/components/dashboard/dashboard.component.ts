@@ -38,6 +38,7 @@ import { siteStockClass } from '../../formatting/site-stock-status';
 import { money } from '../reports/report-formatting';
 import { IconComponent } from '../shared/icon.component';
 import { LegacyBusinessSettingsPromptComponent } from '../shared/legacy-business-settings-prompt/legacy-business-settings-prompt.component';
+import { MachineRestockSyncReminderComponent } from './machine-restock-sync-reminder/machine-restock-sync-reminder.component';
 import { NAYAX_UNAVAILABLE_IN_SUPPORT_VIEW_MESSAGE } from '../../support-session/support-session-messages';
 import { SupportSessionService } from '../../support-session/support-session.service';
 
@@ -80,6 +81,7 @@ export type PurchaseCostLoadState = 'idle' | 'loading' | 'loaded' | 'failed';
     RouterLink,
     IconComponent,
     LegacyBusinessSettingsPromptComponent,
+    MachineRestockSyncReminderComponent,
     BusinessDateTimePipe
   ],
   templateUrl: './dashboard.component.html'

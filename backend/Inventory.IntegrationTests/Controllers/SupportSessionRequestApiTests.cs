@@ -141,6 +141,9 @@ public class SupportSessionRequestApiTests
     // session handling when it was added.
     [InlineData("Inventory.Operate", "POST", "/api/pick-list/refills")]
     [InlineData("Inventory.Operate", "POST", "/api/pick-list/multi-machine-refills")]
+    // The machine delete of issue #896, refused by the method rule before the store is reached - so
+    // the central refusal is what stops it, not an eligibility check it might have passed.
+    [InlineData("Inventory.Operate", "DELETE", "/api/local-machines/999999")]
     [InlineData("Purchasing.Operate", "POST", "/api/supplierorders")]
     [InlineData("Expenses.Manage", "POST", "/api/operating-expenses")]
     [InlineData("Expenses.Manage", "PUT", "/api/operating-expenses/999999")]

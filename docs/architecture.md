@@ -1628,6 +1628,7 @@ Issue #526 is #502's second and last enforcement slice. The twelve controllers #
 | --- | --- | --- | --- | --- | --- |
 | Home Dashboard | `GET api/dashboard/summary`, `GET api/business/current` | `Dashboard.View` | ✔ | ✔ | ✔ |
 | Home Dashboard (sales refresh, issue #187) | `POST api/nayax-sales-sync` | `Dashboard.View` **and** `Inventory.Operate` (issue #681) | ✔ | ✔ | ✔ |
+| Home Dashboard → machine restock-sync reminder (issue #891) | `GET api/machine-restock-sync/reminder` | `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Pick List | `GET api/pick-list` | `PickList.View` | ✔ | ✔ | ✔ |
 | Pick List → record a refill (issue #743) | `POST api/pick-list/refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
 | Pick List → record a multi-machine run (issue #897) | `POST api/pick-list/multi-machine-refills` | `PickList.View` **and** `Inventory.Operate` | ✔ | ✔ | ✔ |
@@ -4343,9 +4344,13 @@ its route exist — not a template change in the shell.
   `mx-auto` either, so the page is as wide as the content area the shell leaves it. The short
   controls inside it are laid out in a responsive column grid (one column, two from `md`, three
   from `xl`, with a textarea spanning the row at `md`) rather than stretched across the whole page;
-  `product-form.component.html`, `purchase-upload.component.html`,
+  `product-form.component.html`'s edit layout, `purchase-upload.component.html`,
   `purchase-edit/purchase-edit-page.component.html` and
-  `stock-adjustment-form.component.html` are the worked examples. A narrower `max-w-*` remains
+  `stock-adjustment-form.component.html` are the worked examples. A form long enough to need
+  grouping stops at **two** columns and puts them in titled sections instead, so related fields
+  share a row rather than being dealt across three columns in field order — what
+  `product-form.component.html` does on New Product since issue #892
+  ([the action row's placement](#choosing-a-products-gst-rule-while-creating-it-issue-829)). A narrower `max-w-*` remains
   correct, and stays, on the things it genuinely serves: dialogs and modals, the sidebar, menus and
   dropdowns, toasts, a single filter control or table cell, a readable explanatory paragraph, and a
   report's label/value summary panel (`card-body max-w-xl`), where a full-width line would put the
@@ -4507,8 +4512,8 @@ withholds entirely, happens to hide itself this way already. `SupportSessionServ
 `distinctUntilChanged` projection of the banner's own `state$` - is the one flag every other write
 control reads instead: presentation only, exactly as a capability-gated control already is, and the
 backend's read-only enforcement is still what would refuse the write if this page failed to hide or
-disable it. `ProductListComponent` (Delete and, since issue #825, Deactivate and New Product, hidden; the
-Active/Inactive toggle, disabled) and
+disable it. `ProductListComponent` (Delete and, since issue #825, Deactivate and New Product, hidden, and since
+issue #900, Reactivate the same way; the Active/Inactive toggle, disabled) and
 `ProductFormComponent` (Save, disabled) are this slice's representative pages; rolling the same
 `active$` subscription out to every remaining write control across the application is tracked as
 follow-up under #513 - issues #659, #658, #660 and #657 extend this to expenses and site
@@ -7488,6 +7493,13 @@ A person had to create a product and then edit it to say how it is treated for G
 - **Nothing about the rule's reach changes.** Choosing it at creation classifies no purchase, pre-fills none, and is not retroactive: a rule still reaches recorded purchase data only through the [historical Preview/Apply workflow](#historical-gst-classification-preview-and-apply-issue-433), which classifies only still-unclassified components and reads the rules as they are configured when Apply runs. The create's own validation, opening stock and initial unit cost are untouched, and the read-only support-session refusal is unchanged: the page's submit control stays disabled, the rule component's retry is disabled, and both writes are refused in code as well.
 - **What proves it.** `product-create-gst-rule.component.spec.ts` covers that component on its own - the shared choices and help, no read and no write before a product exists, each rule stored, "No rule" storing nothing, the partial failure with its message and retry, a retry that re-sends the choice on screen without re-reading the stored rule, no second write while one is in flight, and the support-session refusal. `product-form.component.spec.ts` covers the composed page: both writes in order, no rule write when the create is refused, a create that is never reported as finished while the rule is unsaved, no create control once the product exists, and the edit page still saving its rule in its own panel.
 
+**Where the action row sits, and why it is outside the form (issue #892).** New Product is laid out as titled sections - *Product details*, *Opening inventory*, *Reordering* - followed by the GST choice and then **one** *Create Product* / *Cancel* row, so the last decision the page asks for is made before the control that acts on it is reached, by reading and by Tab alike. That is a layout change only: no API, DTO, schema, Domain rule, capability, field, default or validation moved with it, and the edit page keeps the layout issue #478 gave it, because a provider-managed name and category are locked there (`providerManagedFields`) and preserving those restrictions exactly is worth more than one shared layout.
+
+- **The row is outside the `<form>`, and it submits that form by naming it.** `ProductCreateGstRuleComponent` sits between the fields and the row and composes the deferred `ProductGstRuleComponent`, which owns a form control of its own; a form nested in another form is not markup a browser keeps, and a second save handler would be a second write path to reason about. So the product form carries `id="new-product-form"` and the button carries `type="submit" form="new-product-form"` - the native form-owner attribute. There is still exactly one submit path, one `(ngSubmit)` and one `save()`.
+- **Everything the two-write flow guarantees is unchanged, and none of it depends on where the row is.** The create is still `POST api/products` followed by `PUT api/products/{id}/gst-rule` on the id it answered, made by `ProductCreateGstRuleComponent`; the page still keeps that id in `createdProductId` and navigates only on `(persisted)`; the same `@if (createdProductId === null)` guard that used to withdraw the control inside the form now withdraws it from the row, and `save()` still refuses a second create in code, so **a duplicate product stays impossible**; a failed rule write still leaves the message and the *Save GST rule* retry with the choice, and still exposes no second create. The panel is mounted **once**, with the same `[createdProductId]` input and `(persisted)`/`(failed)` outputs and the same lifecycle.
+- **The category picker's own controls still submit nothing.** Its rows and its *Retry* are `type="button"` (issue #830), which is what keeps a category selection or an inline category create from submitting the product now that the submit control is reached through a form attribute rather than by containment.
+- **What proves it.** `product-form.component.spec.ts` adds the layout contract: the four section headings in order, the field pairing and the full-width description, the Active checkbox outside the field grid, the two-column grids with `items-start` and without the three-column auto-flow, one GST panel before the one action row, a footer whose button names the form and does create the product through it, picker buttons that create nothing, *Create Product* withdrawn once the product exists with the retry still offered, and the edit page still on its own grid with its own action row inside the form. Rendered geometry at 375px and 1440px is not something jsdom can answer at all, so the browser half of the proof is `e2e/tests/new-product-form-layout.e2e.ts` in the opt-in Playwright suite: at both widths it measures the paired rows' input tops, the compact *Active product* box, the full-width description, the action row laid out below the GST select with Tab reaching *Create Product* from it, and no sideways scroll on the page, the card or any section. That suite is **not** part of `scripts/validate.sh` and does not run in CI (see [Browser-level end-to-end suite](#browser-level-end-to-end-suite-issue-46)), so it protects this layout only when somebody runs it; each pull request records what was actually executed.
+
 ### Purchase input GST in the GST accounting aid (issue #432)
 
 The GST accounting aid (`GET api/reports/gst` and its CSV/XLSX export) reports purchase input GST for the period and subtracts it from net GST (parent issue #62, decision D1). It reuses the classification model above; it defines no GST rule of its own.
@@ -7989,6 +8001,15 @@ session: the same contract with `needsRefill` and `needsOrdering` replaced by
 credentials and those two cards are the only part of this summary the live fleet feeds. The fleet
 read is not attempted at all in that state, and every other section is the real local figure. See
 [Support sessions in the request pipeline](#support-sessions-in-the-request-pipeline-issue-551).
+
+**The machine restock-sync reminder is deliberately not part of this contract** (issue #891). The
+Dashboard's reminder banner reads `GET /api/machine-restock-sync/reminder`, its own endpoint with
+its own capability, because it answers a different question from a different source: it is a purely
+local aggregate over the business's machines and their imported restock events, it needs
+`Inventory.Operate` rather than `Dashboard.View`, and its failure must leave every card below it
+usable. Adding it to this summary would have coupled a local read to the live fleet read, and
+widened who sees restock work to every role that may open the Dashboard. See
+[Dashboard reminder for overdue machine restock sync](#dashboard-reminder-for-overdue-machine-restock-sync-issue-891).
 
 Since issue #726, `needsRefill` is additionally withheld - and `needsOrdering` is counted over
 storage alone and says so - for a business whose Nayax connection is unusable or whose Nayax account
@@ -11421,8 +11442,10 @@ machines it refills.
 | `Id` | this application's own key, **assigned by the database** (#735's rule, decision A4). Nothing assigns it, and a local id equal to a Nayax machine id is a coincidence |
 | `BusinessId` | the owning business. Ordinary tenant-owned data: the central query filters and `BusinessOwnershipEnforcer` scope every read and stamp every write, and no adapter writes a `BusinessId` predicate of its own |
 | `Name` | required, and otherwise unconstrained. Deliberately **not** unique per business: two machines in one corridor may legitimately be called "Level 3", and nothing resolves a machine by its name |
-| `IsActive` | whether the machine is in service. There is no delete |
+| `IsActive` | whether the machine is in service. A machine with history is deactivated rather than deleted; a machine nothing refers to can be deleted (issue #896, below) |
 | `ExternalMachineId` | the business's sales provider's own id for the machine, as **opaque text** bounded by `ExternalId.MaxLength`, or `null` when the provider names none. For Nayax it is written only through `Inventory.Domain.Providers.NayaxExternalId` |
+| `LastSuccessfulRestockSyncStartedAtUtc` | when the last fully successful **Sync Restock** for this machine *started*, or `null` for "no recorded sync" (issue #891). Integration state like `ExternalMachineId`: off the machine wire contract, never a value a request chooses, and written only by the monotonic conditional update described in [Dashboard reminder for overdue machine restock sync](#dashboard-reminder-for-overdue-machine-restock-sync-issue-891) |
+| `LastSuccessfulRestockSyncCredentialRevision` | the `BusinessNayaxConnection.CredentialRevision` that fetch authenticated under, or `null` (issue #891). Coverage stamped with a superseded revision is read as no recorded sync at all |
 
 `(BusinessId, ExternalMachineId)` carries a **filtered** unique index, `WHERE "ExternalMachineId" IS
 NOT NULL`, for the two reasons the product and category columns do: "this machine has no provider id"
@@ -11463,21 +11486,20 @@ half applied. Both refusals are raised the way #759's copy raises its own, throu
 and a SQLite trigger, and the scratch table is dropped again.
 
 **The API.** `/api/local-machines` — `GET` (the list, active and inactive, ordered by name), `GET
-{id}`, `POST` (create), `PUT {id}` (rename), `POST {id}/deactivate`, `POST {id}/reactivate` — behind
-`Inventory.Operate`, the capability the fleet reads and the rest of day-to-day stock keeping already
-declare. It is a **separate resource from `/api/machines`**, which is the live Nayax fleet and needs
-working credentials for every one of its reads; nothing on this one touches the provider, so it works
-identically for a business that has never connected one.
+{id}`, `POST` (create), `PUT {id}` (rename), `POST {id}/deactivate`, `POST {id}/reactivate`, `DELETE
+{id}` (issue #896, below) — behind `Inventory.Operate`, the capability the fleet reads and the rest of
+day-to-day stock keeping already declare. It is a **separate resource from `/api/machines`**, which is
+the live Nayax fleet and needs working credentials for every one of its reads; nothing on this one
+touches the provider, so it works identically for a business that has never connected one.
 
-Three things it deliberately does not do. It **never writes `ExternalMachineId`**: no request field
+Two things it deliberately does not do. It **never writes `ExternalMachineId`**: no request field
 corresponds to it, a created machine has none, a rename leaves it alone, and the [provider machine
 review](#provider-machine-linking-automatic-or-reviewed-issue-742) (issue #742) is the one thing that
-attaches one. It **publishes no
-provider identifier** either — the response carries `isProviderNamed`, the fact and not the id. And
-it offers **no delete**: stored sales, refills, counts and expenses refer to a machine, so a machine
-that stops trading is deactivated and stays listed. Because the capability is `Inventory.Operate`,
-which a support session grants, every write here is refused in a read-only support session by the one
-central rule that allows it only `GET` and `HEAD` (issue #551) — there is no per-action check for it.
+attaches one. And it **publishes no provider identifier** either — the response carries
+`isProviderNamed`, the fact and not the id, and the deletion refusal below names the *provider*, never
+its id for the machine. Because the capability is `Inventory.Operate`, which a support session grants,
+every write here is refused in a read-only support session by the one central rule that allows it only
+`GET` and `HEAD` (issue #551) — there is no per-action check for it.
 
 **A provider-named machine is not renamed or deactivated here.** #740 originally allowed both;
 the owner reversed that, because a machine the provider names is managed at the provider.
@@ -11492,6 +11514,56 @@ Rename and Deactivate on a row whose `isProviderNamed` is true, and refuses both
 Nothing synchronises a machine's name, so a provider machine keeps the name it was recorded or
 linked with even after a rename at the provider.
 
+#### Deleting a machine added by mistake (issue #896)
+
+`DELETE /api/local-machines/{id}` removes a machine **only while nothing refers to it and no provider
+names it**. A machine added by mistake is a mistake an operator has to be able to undo; a machine with
+history is not, and gets deactivation instead. `204` on success, `404` for a machine that is not this
+business's (the central tenant query filters, so another business's id is simply not a machine the
+caller named), `400` with the reason otherwise — the same shape every other refusal on this resource
+uses.
+
+**The four protected references.** Exactly four tables hold `Machines.Id`, each as a composite
+`(BusinessId, MachineId)` foreign key on the `(BusinessId, Id)` key of `Machines`, restricted on
+delete: `MachineStockCount.MachineId` and `StockAdjustment.MachineId` (issue #741),
+`PickListRefill.MachineId` (issue #743) and `OperatingExpense.MachineId` (issue #780). Any row in any
+of them refuses the delete, with the kinds and counts named — "2 machine stock counts, 1 operating
+expense" — so an operator knows where to look. **Nothing is cascaded, nulled, reassigned or
+compensated for**: every stored count, movement, refill and expense stays exactly where it is, which
+is what refusing is for. The provider's own stored data (`NayaxSales.MachineID`,
+`NayaxMachineStockEvent`, `NayaxSaleTimestampRepair`, `InventoryCostTransitionMachineStock`, the
+report filters and the calculated pick list) names the *provider's* machine number and is not a
+reference to this row at all — which is why a machine carrying `ExternalMachineId` is refused outright
+rather than counted: it is managed at the provider, exactly as its rename and deactivation are, and
+its provider id is what every later lookup resolves that machine's sales through. No inventory,
+costing or report total changes either way, and the delete makes no provider request at all.
+
+**One rule, published and enforced from the same place.**
+`Inventory.Domain.Machines.MachineDeletionPolicy` decides the refusal, and
+`LocalMachineDeletionEligibility` is a projection of that same call — the shape a product's deletion
+established in [Manual catalogue: who owns a product's
+fields](#manual-catalogue-who-owns-a-products-fields-issue-736) (issues #737 and #825). Both machine
+reads publish it as `canDelete`/`deletionRefusal`, so the page offers **Delete** only where the API
+allows it and explains every other machine in the server's own words; `LocalMachineListComponent`
+offers it only on a plain `true` (an absent answer is not permission), hides it during a support
+session, opens the shared confirmation dialog naming the machine, sends one request, and reloads only
+on success so a refusal leaves the row it is about on screen. The eligibility is **advisory**: it
+describes rows as they were read.
+
+**The check and the delete are one operation, under the link's own write lock.** `EfLocalMachineStore.DeleteAsync`
+reads the machine, counts the four tables and removes the row inside one `BEGIN IMMEDIATE`
+transaction (`SqliteWriteLockTransaction`, the shape issues #522, #537 and #743 each use), and
+`EfProviderMachineLinkStore` takes **that same** lock. That is the race the foreign keys cannot stop:
+linking is a write to the machine row itself, not a reference to it, so a deferred transaction would
+let a delete and an apply both read a machine with no provider id and SQLite could then only answer
+one of them with a lock error. With the write lock taken when the transaction opens, the loser waits
+and reads the winner's committed state, so the two coherent outcomes are the only ones — the machine
+is gone and nothing was linked, or the machine carries the provider id and the delete is refused as a
+provider machine. The restricted foreign keys remain the **database's own backstop** under the count:
+a reference that lands inside the delete's transaction makes SQLite refuse the statement, and that
+violation is translated into `MachineDeletionPolicy.ReferencedWhileDeletingRefusal` — the same kind of
+`400` an operator can act on, never an unhandled `500`.
+
 **The page, and why it stopped being provider-locked.** The Machines menu entry came off the
 provider signal - out of the "Needs Nayax" section issue #868 has since removed altogether - and
 `/machines` carries no `requireProvider` guard any more
@@ -11499,7 +11571,7 @@ provider signal - out of the "Needs Nayax" section issue #868 has since removed 
 something to show, so it is never locked. It is two lists. `LocalMachineListComponent` — the
 dedicated feature component the [page composition
 boundary](#page-composition-boundary-issue-191) requires, holding the list, its load state, the add
-and rename drafts, the refusal message and every write — is always shown. The live Nayax fleet below
+and rename drafts, the delete confirmation, the refusal message and every write — is always shown. The live Nayax fleet below
 it (revenue, profit, and the links into each machine's stock and Sync Restock workflow) is shown only
 while the shared availability signal says the fleet read can be served, through the one shared path
 `loadProviderList` (issue #728): an unavailable provider withholds that section entirely rather than
@@ -12190,6 +12262,52 @@ membership as everywhere else. `PUT api/products/{id}` now also binds `name` and
 `unitPrice` too until issue #792 removed the field (see [A product carries no selling
 price](#a-product-carries-no-selling-price-issue-792)).
 
+**Create and update validation, and the unit label's deliberate asymmetry** (issue #895).
+`Inventory.Domain.Products.ProductCataloguePolicy` is the one statement of the invariants on the
+fields an operator maintains by hand, and it holds two: a product has a **name**, and a product has
+a **unit label**. The name rule is symmetric and unchanged — `CreateProduct` and `UpdateProduct`
+both call `Validate`, so a product cannot be edited into a state it could not have been created in.
+The unit label is required **asymmetrically**, and that is the rule rather than a concession to it:
+
+- `POST api/products` refuses a null, empty or whitespace `unit` with `400` and
+  `ProductCataloguePolicy.UnitRequiredMessage`, and saves nothing — not the product, and not the
+  opening stock movement a quantity would have recorded. The check is `ValidateUnit`, applied by
+  `CreateProduct`, because a create's answer depends on nothing but the request: a new product has no
+  stored label to preserve. `EfProductStore.CreateAsync` applies it again at the write, exactly as it
+  does for the name, so the column cannot be written blank by a future caller that forgets.
+- `PUT api/products/{id}` refuses a null, empty or whitespace `unit` **only while the stored label is
+  nonblank**, with the same `400` and the same message. So **no request can erase a label**, and a
+  product whose stored label is already blank — a row from before this rule, which nothing ever gave
+  one — is still accepted with none and keeps the blank it has. That exception exists because
+  activation is written through the *whole* product: `ProductListComponent.writeActive` sends every
+  field back with `isActive` flipped (issue #825's Deactivate, and issue #900's Reactivate), so a
+  blanket required rule on `PUT` would have made every such legacy product impossible to deactivate
+  or reactivate from the list. The rule is `ProductCataloguePolicy.UnitChangeRefusal`, and it is
+  decided by `EfProductStore.UpdateAsync` — inside the write's own transaction, on the row that
+  transaction read — for the same reason the provider-managed and category refusals are: it compares
+  a *stored* value, so the read, the comparison and the write have to be one operation. `UpdateProduct`
+  deliberately does not check it; checking the request alone could only either blank a label or
+  strand a legacy row out of use.
+- An accepted label is stored **trimmed** on both routes (`NormalizeUnit`) — trailing space is not a
+  different unit — and the column's length and type limits are unchanged. The wire contract is
+  unchanged too: `unit` stays nullable on `ProductCreateDto`/`ProductUpdateDto`, because what changed
+  is which values are *accepted*, not which are bound.
+- **Nothing is backfilled, and the provider paths are untouched.** A legacy product with no label
+  stays readable with its history exactly as it is, and gets a label only when a person edits it.
+  The catalogue import and the catalogue review still create a product without setting `Unit`, so the
+  `Product.Unit` entity default `"unit"` applies, and a linked product keeps its own local label; no
+  provider field is read for the unit, because the authoritative Lynx product contract publishes no
+  unit or volume label at all (see [Provider catalogue
+  review](#provider-catalogue-review-link-or-create-and-change-review-issue-738)). Proposing one
+  from the provider is issue #902.
+
+`ProductFormComponent` matches the server rather than wording a second rule: **New Product** and
+**Edit Product** label the field `Unit Label *`, mark the input `required`, show
+"Unit label is required." beside it and disable Save while it is blank, submit the trimmed value, and
+keep the `"unit"` default on New Product. Editing a product whose stored label is null or blank opens
+the field **empty** — the `p.unit ?? 'unit'` prefill is gone — so the operator chooses the label
+instead of having one substituted and silently saved.
+
 **Provider-managed fields.** `Inventory.Domain.Providers.ProviderManagedCatalogueFields` is the one
 statement of which fields a provider owns: a product carrying an `ExternalProductId` has its `name`
 and `categoryId` managed, a category carrying an `ExternalCategoryId` has its `name` managed, and a
@@ -12255,11 +12373,15 @@ naming the product and what deactivation keeps, and on confirmation writes the o
 activation update - `ProductService.update` with `isActive: false` and every other field as it was
 fetched. The Status badge routes a *deactivation* through that same confirmation, so the two
 controls cannot come to mean different things, while a *reactivation* stays the single immediate
-write it always was; an inactive product offers no Deactivate at all. `confirmDeactivate` refuses a
-support session and an already-inactive product in code as well as in the template, the same
-belt-and-suspenders shape `confirmDelete` uses, and a refused deactivation surfaces the API's own
-message through `apiErrorMessage` with the row left as it was fetched. The deletion rule itself is
-untouched: this is presentation, and `ProductDeletionPolicy` stays the one authority.
+write it always was. Since issue #900 an **inactive** product gets **Reactivate** in that same
+fixed-width slot instead of leaving it empty, calling the same `toggleActive` method the Status
+badge uses for its own one-click reactivation - no second endpoint or payload. `confirmDeactivate`
+refuses a support session and an already-inactive product in code as well as in the template, the
+same belt-and-suspenders shape `confirmDelete` uses; `toggleActive` itself refuses a support session
+the same way, hiding Reactivate alongside Deactivate and Delete. A refused deactivation or
+reactivation surfaces the API's own message through `apiErrorMessage` with the row left as it was
+fetched - both controls share that reporting because they share `toggleActive`. The deletion rule
+itself is untouched: this is presentation, and `ProductDeletionPolicy` stays the one authority.
 
 Three things keep that honest:
 
@@ -13328,7 +13450,172 @@ removed (issue #306).
 
 Scheduling this sync automatically, writing to Nayax, auto-creating purchases/receipts to cover an
 insufficient-storage shortfall, and auto-deciding the accounting/tax treatment of a negative
-discrepancy are all explicitly out of scope for this feature.
+discrepancy are all explicitly out of scope for this feature. Issue #891 adds a Dashboard
+**reminder** that this sync is overdue, which is not a schedule: it only tells an operator that the
+explicit action above is waiting for them.
+
+### Dashboard reminder for overdue machine restock sync (issue #891)
+
+Sync Restock above is explicit: nothing imports a machine's stock-adjustment alerts until an
+operator opens that machine and asks. Forgetting it is therefore silent, and the storage inventory
+drifts in exactly the way that looks like missing product rather than missing bookkeeping — an
+inventory count found restocks that had not been synced for a week. This feature is the reminder,
+and only the reminder: it never syncs, applies an event, resolves a duplicate or changes an
+inventory quantity, and opening the Dashboard, following one of its links or opening a preview
+acknowledges nothing.
+
+**What makes a machine overdue: three business calendar days, not 72 hours.**
+`Inventory.Domain.Nayax.MachineRestockSyncReminderPolicy` owns every rule here, and it compares
+business calendar *dates* in the current business's own IANA timezone (issue #499), derived through
+`IBusinessCalendar`. A daylight-saving transition that makes a day 23 or 25 hours long therefore
+cannot move the boundary, and an operator who syncs each morning is never warned because the clocks
+changed. `OverdueAfterDays` is `3`, which is also the Sync Restock dialog's own From-date default
+window, so the reminder and the dialog describe one window rather than two.
+
+**Successful coverage is recorded, never inferred.** `SyncMachineStockFromNayax` records that a run
+succeeded only after its alert read, its import and its preview construction have *all* completed.
+A run that threw, imported partially or never built a preview records nothing at all; a run that
+succeeded and found no alert records coverage exactly as one that found ten, because an empty
+answer from Nayax is an answer. Nothing else writes it: it is never derived from a
+`NayaxMachineStockEvent`'s `CreatedAt`/`ProcessedAt`, from the latest-sales or catalogue sync, or
+from a machine stock count, and no migration backfills it. **It is also never a claim of complete
+historical coverage** — the Lynx contract for `GET /v1/machines/{MachineID}/lastAlerts` is "the most
+recent alerts" and declares neither a range nor a completeness guarantee, so what is recorded is
+when this workflow last succeeded and nothing more. A machine with nothing recorded is published as
+**"No recorded sync"**, not as "never synced": machines restocked before this metadata existed have
+no record of syncs that really happened, and every machine starts there.
+
+**Where it is stored, and the monotonic, credential-fenced conditional write.** Two additive
+nullable columns on `Machines` (`AddMachineRestockSyncCoverage`):
+`LastSuccessfulRestockSyncStartedAtUtc`, the instant the operation *started* — a fetch can only have
+accounted for alerts that already existed when it began — and
+`LastSuccessfulRestockSyncCredentialRevision`, the `BusinessNayaxConnection.CredentialRevision` it
+authenticated under. They sit on the machine row rather than in a table of their own precisely so the
+write can be one statement:
+`Inventory.Infrastructure.Persistence.EfMachineRestockSyncCoverageStore.TryRecordSuccessfulSyncAsync`
+is a single conditional `UPDATE ... WHERE` whose predicate *is* both comparisons, the same shape
+`EfNayaxConnectionStore.TryApplyStatusResultAsync` already uses, with
+`SetBasedWriteEnforcer.RequireWritableScope` applied because an `ExecuteUpdate` never reaches
+`BusinessOwnershipEnforcer` (issue #681).
+
+The first condition is the **credential fence**: the business's stored connection must *still* hold
+exactly the revision being recorded. `CredentialRevision` only ever increases — the save increments
+it in the database, nothing lowers it and nothing deletes the row — so that equality is what
+*proves* no credential save landed between the use case's revision read and this write, and
+therefore that every Nayax request of the operation resolved its credentials from that same
+revision.
+
+The second orders coverage by `(revision, started instant)`, and only a strictly greater pair wins:
+
+- a higher revision always wins — the credentials were replaced and this is the first success under
+  the new ones;
+- at the same revision, only a later start instant wins, so two concurrent syncs cannot let the one
+  that started earlier move the timestamp backwards;
+- a *lower* revision never wins, which refuses an old-revision completion in the one case the fence
+  cannot speak about — stored coverage already newer than what the operation can claim.
+
+**Why the fence and not the read.** `SyncMachineStockFromNayax` reads the revision before its first
+Nayax call, from `INayaxConnectionStore.FindAsync` (the status and revision, never the token) — but
+that read is *not* the credential snapshot the operation authenticates with. The credentials of each
+ordinary Nayax call are resolved per call by `INayaxRequestCredentialProvider`
+([Per-business Nayax credentials](#per-business-nayax-credentials-issue-520)), inside the call, so a
+save landing after the use case's read and before the request captured its credentials would have the
+request running under revision R+1 while the use case still held R. The use case cannot see that, and
+the pre-read on its own is therefore a *candidate* revision rather than provenance evidence. The
+fence is what turns it into evidence: a save anywhere in that window — before or after the request
+authenticated — moves the stored revision past the candidate, matches no row, and leaves the coverage
+unrecorded rather than misattributed. The reminder keeps warning, which is the safe direction.
+Reading side, the same rule applies through `MachineRestockSyncReminderPolicy.IsCoverageCurrent`:
+coverage stamped with any revision other than the connection's current one is read as no recorded
+sync at all.
+
+Both interleavings are pinned relationally in
+`backend/Inventory.IntegrationTests/Application/MachineStockSync/MachineRestockSyncCoverageTests.cs`,
+with the credentials replaced by the real connection store and the request's own revision resolved by
+the real credential provider at the moment the request happens, and with no coverage pre-seeded — so
+the refusal can only be the fence. The earlier/later completion cases are exercised there as
+genuinely overlapping operations held at barriers inside their own Nayax request, across two
+businesses whose machines share one provider number.
+
+**Recording the claim can fail without costing the operator their reconciliation.** The coverage
+write is the last thing `SyncMachineStockFromNayax` does, and a failure of it is swallowed: the
+alerts are already imported and the preview is the operator's working list. The unrecorded coverage
+leaves the Dashboard warning that the machine is overdue, which is a reminder too many rather than a
+machine quietly presented as fresh.
+
+**What counts as pending work.** Exactly what the Sync Restock working list already treats as
+outstanding: an imported event that is still `Unprocessed` and not explicitly reconciled as already
+recorded manually. A needs-review event, an insufficient-storage event and an unresolved
+possible-duplicate event therefore all count — each is work an operator still has to do — while an
+applied event and one reconciled as already recorded manually do not. **There is no date bound**: an
+event that ages out of the three-day window is still unresolved work, and letting the window clear it
+is the silent disappearance this reminder exists to prevent. Because that is also wider than the
+dialog's default From date, a machine with pending work older than that date is flagged
+`hasPendingWorkBeforeDefaultFrom`, and the banner tells the operator to clear the From date or move
+it back to the oldest pending date — otherwise the work would stay hidden inside the dialog they
+were just sent to. The counts describe **persisted** facts only: a zero says nothing about alerts
+Nayax holds that nobody has fetched, which is why an overdue fetch and pending events are reported as
+two separate conditions and either one alone puts a machine on the banner.
+
+**The Dashboard read is local, and it is read-only.**
+`Inventory.Application.MachineStockSync.GetMachineRestockSyncReminder` makes exactly two local
+reads — the business's own connection record without its token, and one aggregate query over the
+machines and their imported events (`IMachineRestockSyncCoverageStore.GetProviderMachineCoverageAsync`)
+— and no Nayax request at all. It decrypts no credential, calls no per-machine endpoint, never
+invokes the mutation-capable preview endpoint, and writes nothing. The aggregate is two statements
+rather than a join, because the two sides are keyed differently: a machine by `Machines.Id`, an
+event by the provider's machine number, with `Inventory.Domain.Providers.NayaxExternalId` as the one
+translation (see [Local machines and external machine ids](#local-machines-and-external-machine-ids-issue-740)).
+Both halves are scoped by the central tenant query filters, so two businesses whose machines
+legitimately share provider number 900 never see one another's coverage or counts.
+
+**Three businesses are shown nothing at all, each with its own stable reason.** The response is a
+union — `MachineRestockSyncReminderDto`, or `HiddenMachineRestockSyncReminderDto` with
+`applicable: false` and a `reason` code — rather than a reminder with an empty machine list, for the
+same reason `UnavailableDashboardSectionDto` is a union: an empty list reads as "every machine is up
+to date", and that is a claim about machines.
+
+- `SupportView` — a support session resolves no Nayax credentials and may take no action
+  (issue #551), so a reminder to go and sync would name work its reader cannot do. The decision is
+  taken from `IBusinessScope.State`, the very state `NayaxRequestCredentialProvider` refuses in, and
+  it is made before anything is read.
+- `NayaxNotConnected` — the business has no credentials `NayaxConnectionStatusGate` allows. Nayax is
+  an optional add-on, so this is an ordinary property of a working business, not an error.
+- `NoProviderMachines` — the business's sales provider names none of its machines. A machine an
+  operator created themselves carries no `ExternalMachineId` and so has no provider restock sync to
+  be overdue for; such machines are absent from the aggregate entirely.
+
+**Whether Sync Restock will actually work is reported honestly, from local state alone.** Whether
+the Lynx machine-alerts permission is granted can only be settled by a Nayax call, and this reminder
+makes none; what is stored is the connection status and whether the last completed check left the
+machine-scoped checks unverified (issue #537). So `syncAvailability` has exactly two values:
+`Confirmed` for a `Ready` connection whose machine checks were verified, and `NotConfirmed` for
+everything else the gate allows — `PendingPermissions`, or `Ready` with the machine checks still
+pending. With `NotConfirmed` the banner says Sync Restock may be unavailable and points at the Nayax
+connection (as a link for a member with `Integration.Manage`, as "ask a business Owner" otherwise)
+instead of presenting a working action.
+
+**Authorization.** `InventoryApi.Controllers.MachineRestockSyncRemindersController` is a thin
+binding over the use case and declares `Inventory.Operate` (class 1 of issue #525) — the capability
+Sync Restock itself requires, because a role that may not reconcile restocks has nothing to do with
+a reminder to go and reconcile them. It takes no business, machine or site identifier from the
+caller. It is its own controller rather than an action on `DashboardController` for exactly the
+reason `ProductPurchaseCostsController` is: a controller declares one capability for all its
+actions, and putting this on the Dashboard's controller would have widened it to `Dashboard.View`.
+
+**Frontend.** `components/dashboard/machine-restock-sync-reminder/MachineRestockSyncReminderComponent`
+is a focused child component the Dashboard composes with
+`<app-machine-restock-sync-reminder></app-machine-restock-sync-reminder>`; it owns its capability
+decision, its one request, its loading/hidden/failed lifecycle and its own wording, and the page
+only places it. Like `LegacyBusinessSettingsPromptComponent` — and unlike `NayaxStatusBannerComponent`'s
+fail-open default — it fetches nothing while `Inventory.Operate` is not affirmatively granted, and it
+asks for nothing at all while a support session is active. **A failed read is visible**: it renders
+"Machine restock sync status is unavailable … unknown rather than up to date", because rendering
+nothing would read as "no machine needs attention", which is the one thing a failed read cannot say.
+Each row links to `/machines/{localMachineId}` and names the **Sync Restock** action there; the
+banner itself offers no action, and the component derives no date, threshold or count of its own -
+the three-day rule, the business dates, the day counts and the pending definition are all the
+server's.
 
 ### Machine latest sales (issue #768)
 
@@ -14279,7 +14566,14 @@ The other consequence is that nothing in validation notices when the application
 
 **What it covers.** The reorder alert → supplier order → receive-as-purchase chain (including the resulting AVCO position); the stock-correction workflow, where a positive magnitude in the form must persist a negative movement; purchase create/edit/delete inventory and costing effects at smoke level; a report state where COGS and profit are unavailable and must not render as zero; and tenant isolation across two synthetic businesses, by page, by id, and for an authenticated actor with no membership. It deliberately does not cover every page, the interactive Entra sign-in, or anything that would need a live Nayax or production service.
 
-It also holds one **layout** check, which is here for a reason the other tests are not: the rendered geometry of the Needs Ordering search/filter toolbar at 1440px and 390px (issue #832, `needs-ordering-toolbar-layout.e2e.ts`). Jest runs in jsdom, which computes no flex geometry and no scroll width, so "aligned right on desktop" and "wraps instead of overflowing on a narrow screen" cannot be asserted there at all — only the classes and the DOM order can. That check reads the one seeded alerting product and **writes nothing**, so it has to run before the reorder workflow test turns that alert into a supplier order and leaves the page with no rows; the suite runs its files in alphabetical order with one worker, which keeps it ahead. A layout check belongs here only when the question is genuinely about laid-out boxes; placement, DOM order and conditional rendering stay in the Jest specs beside the component.
+It also holds several **layout** checks, which are here for a reason the other tests are not: Jest runs in jsdom, which computes no geometry at all, so the Jest specs beside a component can assert its classes, its DOM order and what it renders conditionally, and nothing about laid-out boxes. A layout check belongs here only when the question is genuinely about those boxes; placement, DOM order and conditional rendering stay in the Jest specs. The two Needs Ordering checks are:
+
+- **The search/filter toolbar at 1440px and 390px** (issue #832, `needs-ordering-toolbar-layout.e2e.ts`): "aligned right on desktop" and "wraps instead of overflowing on a narrow screen" need real flex geometry and a real scroll width.
+- **The "Mark products as ordered" dialog on a short viewport** (issue #906, `needs-ordering-dialog-scroll.e2e.ts`): that the panel bounds itself to the viewport instead of being clipped by the fixed backdrop, that the body between the heading and the buttons genuinely overflows (`scrollHeight` above `clientHeight`, asserted so the test cannot pass without exercising the scroll path), and that the heading, the product row and Create order are each reachable — the heading and the buttons because they sit outside the scrolling body, the row because that body scrolls. It reaches overflow with a **390x320** viewport rather than by selecting more products: the fixture seeds exactly one alerting product per business, and issue #906 excluded any backend or fixture change, so a viewport short enough that even one product row does not fit is how this suite can ask that question at all.
+
+Both of them read the one seeded alerting product and **write nothing** — the dialog check opens the dialog and cancels it, never submitting an order — so both have to run before the reorder workflow test turns that alert into a supplier order and leaves the page with no rows. The suite runs its files in alphabetical order with one worker, which keeps `needs-ordering-dialog-scroll.e2e.ts` ahead of `needs-ordering-toolbar-layout.e2e.ts` and both ahead of `reorder-to-supplier-order-to-purchase.e2e.ts`. The checkbox and radio geometry of issues #872 and #874 (`avco-transition-checkbox-layout.e2e.ts`, `checkbox-radio-global-sizing.e2e.ts`) is measured here for the same jsdom reason. Being in this suite, none of these checks runs in repository validation, so they protect a change only when somebody runs the suite.
+
+New Product's titled sections at 1440px and 375px are the same kind of check (issue #892, `new-product-form-layout.e2e.ts`): aligned input tops in each paired row, a compact *Active product* checkbox, the action row below the GST choice with Tab reaching *Create Product* from it, and no horizontal overflow. It only opens `/products/new` and measures, so it writes nothing, needs no seeded row and is independent of the file order.
 
 ## Build and delivery
 

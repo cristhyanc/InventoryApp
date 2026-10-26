@@ -675,9 +675,11 @@ public class AppDbContext : DbContext
         // machines (issue #741), with the same composite foreign key the operating expense uses
         // (issue #780, see below): (BusinessId, MachineId) against the (BusinessId, Id) key on
         // Machines, so SQLite itself refuses a reference to another business's machine. Restrict,
-        // never cascade: a count and a movement are inventory history, and there is no machine
-        // delete path at all - a machine is deactivated instead. No navigation property, for the
-        // same reason as the expense.
+        // never cascade: a count and a movement are inventory history, so a machine they refer to
+        // is deactivated rather than deleted. Since issue #896 a machine *nothing* refers to can be
+        // deleted, and this key is the database's own backstop under that delete's own count - a
+        // reference that lands in between makes SQLite refuse the statement, which the store turns
+        // into the operator's refusal. No navigation property, for the same reason as the expense.
         modelBuilder.Entity<MachineStockCount>()
             .HasOne<LocalMachine>()
             .WithMany()
@@ -915,9 +917,9 @@ public class AppDbContext : DbContext
         // machine of its own business" something SQLite enforces on every insert and update rather
         // than a rule only BusinessOwnershipEnforcer applies. Restrict, never cascade and never
         // set-null: an expense is financial data, so deleting the machine it belongs to must fail
-        // loudly - and there is no machine delete path at all, a machine is deactivated instead.
-        // No navigation property: an expense carries the id, and a reader that wants the machine
-        // reads it through the machine queries.
+        // loudly - a machine with expenses is deactivated instead, and the delete of issue #896
+        // refuses it before the database has to. No navigation property: an expense carries the id,
+        // and a reader that wants the machine reads it through the machine queries.
         modelBuilder.Entity<OperatingExpense>()
             .HasOne<LocalMachine>()
             .WithMany()
@@ -1351,6 +1353,20 @@ public class AppDbContext : DbContext
             .HasFilter(@"""ExternalMachineId"" IS NOT NULL");
 
         machine.HasAlternateKey(x => new { x.BusinessId, x.Id });
+
+        // The Sync Restock coverage of issue #891. The SQLite provider does not round-trip
+        // DateTimeKind - see the StockAdjustment.CreatedAt comment for the complete explanation -
+        // and this instant is published by the Dashboard reminder, so it is marked UTC on every
+        // read. Without it the reminder's lastSuccessfulSyncAtUtc serialises with no "Z" and the
+        // frontend's BusinessDateTimePipe would read it as browser-local time, which is exactly how
+        // "synced 3 days ago" becomes the wrong number for an operator in another zone.
+        machine
+            .Property(x => x.LastSuccessfulRestockSyncStartedAtUtc)
+            .HasConversion(
+                toProvider => toProvider,
+                fromProvider => fromProvider.HasValue
+                    ? DateTime.SpecifyKind(fromProvider.Value, DateTimeKind.Utc)
+                    : fromProvider);
     }
 
     /// <summary>
