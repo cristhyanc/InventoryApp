@@ -1,7 +1,8 @@
-import { TestBed } from '@angular/core/testing';
+import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Router, provideRouter } from '@angular/router';
 import { Observable, Subject, of, throwError } from 'rxjs';
 import { ProductNeedsOrderingComponent } from './product-needs-ordering.component';
+import { SEARCH_DEBOUNCE_MS } from '../shared/filter-request-trigger';
 import { AccessService } from '../../access/access.service';
 import { SupportSessionService } from '../../support-session/support-session.service';
 import { ProductService } from '../../services/product.service';
@@ -666,14 +667,42 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
    * drops an added row the same way as any other.
    */
   describe('Add product (issue #907)', () => {
+    /**
+     * The search is debounced through the component's own `createFilterTrigger$` convention, so a
+     * *settled* term - not a keystroke - is what sends a request. Jest's fake clock is how these
+     * specs settle one, the same pattern `app.component.spec.ts` uses to advance that component's
+     * retry backoff; `advanceTimersByTime` runs the debounce outside Angular's zone, which is why
+     * every settle is followed by an explicit `detectChanges()`.
+     */
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
     function typeAddProductQuery(host: HTMLElement, value: string): void {
       const input = host.querySelector('input[name="addProductQuery"]') as HTMLInputElement;
       input.value = value;
       input.dispatchEvent(new Event('input'));
     }
 
+    function settleAddProductSearch(fixture: ComponentFixture<ProductNeedsOrderingComponent>): void {
+      jest.advanceTimersByTime(SEARCH_DEBOUNCE_MS);
+      fixture.detectChanges();
+    }
+
+    function searchAddProduct(
+      fixture: ComponentFixture<ProductNeedsOrderingComponent>,
+      host: HTMLElement,
+      value: string
+    ): void {
+      typeAddProductQuery(host, value);
+      settleAddProductSearch(fixture);
+    }
+
     function addProductButton(host: HTMLElement, name: string): HTMLButtonElement {
       return host.querySelector(`[aria-label="Add ${name} to order"]`) as HTMLButtonElement;
+    }
+
+    function pageCheckbox(host: HTMLElement, name: string): HTMLInputElement {
+      return host.querySelector(`[aria-label="Select ${name}"]`) as HTMLInputElement;
     }
 
     it('searches the active catalogue with the typed text and offers a match not already on the order', async () => {
@@ -685,12 +714,76 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       component.openOrderForm();
       fixture.detectChanges();
 
-      typeAddProductQuery(host, 'Car');
-      fixture.detectChanges();
+      searchAddProduct(fixture, host, 'Car');
 
       expect(getAll).toHaveBeenCalledWith({ search: 'Car' });
       expect(component.addableProducts.map((p) => p.name)).toEqual(['Carrot']);
       expect(addProductButton(host, 'Carrot')).not.toBeNull();
+    });
+
+    /**
+     * One request per settled term, through the same `createFilterTrigger$`/`SEARCH_DEBOUNCE_MS`
+     * contract as the page's own search (the architecture check's finding on this PR): the
+     * keystrokes on the way to a term spend no request, and a term typed again unchanged is not
+     * asked a second time in a row.
+     */
+    it('asks once for a settled term, not once per keystroke, and not again while the term is unchanged', async () => {
+      const carrot = product({ id: 5, name: 'Carrot', needToOrder: 0 });
+      const getAll = jest.fn(() => of([carrot]));
+      const { fixture, host } = await render([product({ id: 1, name: 'Banana', needToOrder: 4 })], { getAll });
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      typeAddProductQuery(host, 'C');
+      typeAddProductQuery(host, 'Ca');
+      typeAddProductQuery(host, 'Car');
+      expect(getAll).not.toHaveBeenCalled();
+
+      settleAddProductSearch(fixture);
+      expect(getAll).toHaveBeenCalledTimes(1);
+      expect(getAll).toHaveBeenCalledWith({ search: 'Car' });
+
+      searchAddProduct(fixture, host, 'Car');
+      expect(getAll).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * A superseded answer can never land: the earlier term's request is unsubscribed - and the HTTP
+     * request cancelled - the moment a newer settled term starts one, so its late response cannot
+     * replace the matches of the text now in the box.
+     */
+    it('ignores a superseded search answer, keeping only the settled term the user is still on', async () => {
+      const carrot = product({ id: 5, name: 'Carrot', needToOrder: 0 });
+      const chocolate = product({ id: 6, name: 'Chocolate', needToOrder: 0 });
+      const carrotAnswer$ = new Subject<Product[]>();
+      const chocolateAnswer$ = new Subject<Product[]>();
+      const getAll = jest.fn((filters: { search?: string }) =>
+        (filters.search === 'Car' ? carrotAnswer$ : chocolateAnswer$).asObservable()
+      );
+      const { fixture, host } = await render([product({ id: 1, name: 'Banana', needToOrder: 4 })], { getAll });
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      searchAddProduct(fixture, host, 'Car');
+      searchAddProduct(fixture, host, 'Choc');
+      expect(getAll.mock.calls.map(([filters]) => filters.search)).toEqual(['Car', 'Choc']);
+
+      chocolateAnswer$.next([chocolate]);
+      fixture.detectChanges();
+      expect(component.addableProducts.map((p) => p.name)).toEqual(['Chocolate']);
+
+      // The cancelled search answering late changes nothing, and neither does it failing late.
+      carrotAnswer$.next([carrot]);
+      carrotAnswer$.error(new Error('too late'));
+      fixture.detectChanges();
+
+      expect(component.addableProducts.map((p) => p.name)).toEqual(['Chocolate']);
+      expect(component.addProductSearchState).toBe('loaded');
+      expect(addProductButton(host, 'Carrot')).toBeNull();
     });
 
     it('does not offer a product already in the order, or a retired product the search returned', async () => {
@@ -703,8 +796,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       component.openOrderForm();
       fixture.detectChanges();
 
-      typeAddProductQuery(host, 'an');
-      fixture.detectChanges();
+      searchAddProduct(fixture, host, 'an');
 
       expect(component.addableProducts).toEqual([]);
       expect(host.textContent).toContain('No matching products.');
@@ -719,8 +811,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       component.openOrderForm();
       fixture.detectChanges();
 
-      typeAddProductQuery(host, 'Car');
-      fixture.detectChanges();
+      searchAddProduct(fixture, host, 'Car');
       addProductButton(host, 'Carrot').click();
       fixture.detectChanges();
 
@@ -741,8 +832,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       component.openOrderForm();
       fixture.detectChanges();
 
-      typeAddProductQuery(host, 'Car');
-      fixture.detectChanges();
+      searchAddProduct(fixture, host, 'Car');
       addProductButton(host, 'Carrot').click();
       fixture.detectChanges();
 
@@ -768,8 +858,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       component.orderQuantities[1] = 9;
       fixture.detectChanges();
 
-      typeAddProductQuery(host, 'Car');
-      fixture.detectChanges();
+      searchAddProduct(fixture, host, 'Car');
       addProductButton(host, 'Carrot').click();
       fixture.detectChanges();
 
@@ -796,8 +885,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       component.orderForm.supplierId = 3;
       component.orderQuantities[1] = 4;
 
-      typeAddProductQuery(host, 'Car');
-      fixture.detectChanges();
+      searchAddProduct(fixture, host, 'Car');
       addProductButton(host, 'Carrot').click();
       fixture.detectChanges();
       component.orderQuantities[5] = 2;
@@ -823,14 +911,22 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       fixture.detectChanges();
 
       component.orderForm.reference = 'PO-1';
+      component.orderQuantities[1] = 9;
 
-      typeAddProductQuery(host, 'Car');
-      fixture.detectChanges();
+      searchAddProduct(fixture, host, 'Car');
 
       expect(component.showOrderForm).toBe(true);
       expect(component.orderForm.reference).toBe('PO-1');
+      expect(component.orderQuantities[1]).toBe(9);
       expect(component.orderLines().map((p) => p.name)).toEqual(['Banana']);
       expect(host.textContent).toContain('Product search failed');
+
+      // The failed term is still what the box holds, and asking again is a new settled term - the
+      // failure left the draft, including the typed query, exactly as it was.
+      expect(component.addProductQuery).toBe('Car');
+      searchAddProduct(fixture, host, 'Carr');
+      expect(getAll).toHaveBeenLastCalledWith({ search: 'Carr' });
+      expect(component.addProductSearchState).toBe('failed');
     });
 
     it('removes an added row with the same Remove button as the other rows, leaving the page list unaffected', async () => {
@@ -842,8 +938,7 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       component.openOrderForm();
       fixture.detectChanges();
 
-      typeAddProductQuery(host, 'Car');
-      fixture.detectChanges();
+      searchAddProduct(fixture, host, 'Car');
       addProductButton(host, 'Carrot').click();
       fixture.detectChanges();
 
@@ -852,6 +947,177 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
 
       expect(component.orderLines().map((p) => p.name)).toEqual(['Banana']);
       expect(component.selectedProductIds.has(1)).toBe(true);
+    });
+
+    /**
+     * The acceptance criterion's other half: a product the Needs ordering list *does* hold, which
+     * simply was not ticked, is added through the page's own selection set, so its checkbox there
+     * is ticked rather than the dialog growing a second, parallel row for it.
+     */
+    it('ticks an unticked Needs ordering product on the page instead of adding a second row for it', async () => {
+      const apple = product({ id: 2, name: 'Apple', needToOrder: 2, quantityInStock: 4, onOrderQuantity: 1 });
+      const getAll = jest.fn(() => of([apple]));
+      const create = jest.fn(() => of(undefined));
+      const { fixture, host } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 }), apple],
+        { getAll, create, suppliers: [{ id: 3, name: 'Acme' }] }
+      );
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      expect(pageCheckbox(host, 'Apple').checked).toBe(false);
+
+      component.orderForm.supplierId = 3;
+      component.orderQuantities[1] = 4;
+
+      searchAddProduct(fixture, host, 'App');
+      addProductButton(host, 'Apple').click();
+      fixture.detectChanges();
+
+      // One row for it, and the tick on the page the criterion asks for.
+      expect(component.orderLines().map((p) => p.name)).toEqual(['Banana', 'Apple']);
+      expect(component.addedProducts).toEqual([]);
+      expect(component.selectedProductIds.has(2)).toBe(true);
+      expect(pageCheckbox(host, 'Apple').checked).toBe(true);
+      expect(component.orderQuantities[2]).toBe(2);
+
+      component.saveOrder();
+
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lines: [
+            { productId: 1, quantityOrdered: 4 },
+            { productId: 2, quantityOrdered: 2 }
+          ]
+        })
+      );
+    });
+
+    it('unticks a Needs ordering product it ticked when that row is removed again', async () => {
+      const apple = product({ id: 2, name: 'Apple', needToOrder: 2 });
+      const getAll = jest.fn(() => of([apple]));
+      const { fixture, host } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 }), apple],
+        { getAll }
+      );
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      searchAddProduct(fixture, host, 'App');
+      addProductButton(host, 'Apple').click();
+      fixture.detectChanges();
+
+      (host.querySelector('[aria-label="Remove Apple from order"]') as HTMLButtonElement).click();
+      fixture.detectChanges();
+
+      expect(component.orderLines().map((p) => p.name)).toEqual(['Banana']);
+      expect(component.selectedProductIds.has(2)).toBe(false);
+      expect(pageCheckbox(host, 'Apple').checked).toBe(false);
+      expect(component.selectedProductIds.has(1)).toBe(true);
+    });
+
+    /**
+     * The duplicate guard sits in `addProduct` itself, not only in the search never offering a
+     * product that is already a line: a stale view or a direct call must not be able to create a
+     * second line for one product - which `CreateSupplierOrder` refuses outright - or reset the
+     * quantity the user already typed for it back to a default.
+     */
+    it('refuses a product already on the order, whether it was ticked on the page or added here', async () => {
+      const banana = product({ id: 1, name: 'Banana', needToOrder: 4 });
+      const carrot = product({ id: 5, name: 'Carrot', needToOrder: 6 });
+      const getAll = jest.fn(() => of([carrot]));
+      const { fixture, host } = await render([banana], { getAll });
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      searchAddProduct(fixture, host, 'Car');
+      addProductButton(host, 'Carrot').click();
+      fixture.detectChanges();
+
+      component.orderQuantities[1] = 7;
+      component.orderQuantities[5] = 3;
+
+      component.addProduct(banana);
+      component.addProduct(carrot);
+      fixture.detectChanges();
+
+      expect(component.orderLines().map((p) => p.name)).toEqual(['Banana', 'Carrot']);
+      expect(component.addedProducts.map((p) => p.name)).toEqual(['Carrot']);
+      expect(component.orderQuantities[1]).toBe(7);
+      expect(component.orderQuantities[5]).toBe(3);
+    });
+
+    /**
+     * Adding clears the box without a keystroke, so the debounced, change-only trigger has to be
+     * told the term is no longer applied - otherwise searching the same text again would silently
+     * do nothing.
+     */
+    it('searches the same text again after an add cleared the box', async () => {
+      const carrot = product({ id: 5, name: 'Carrot', needToOrder: 0 });
+      const celery = product({ id: 6, name: 'Celery', needToOrder: 0 });
+      const getAll = jest.fn(() => of([carrot, celery]));
+      const { fixture, host } = await render([product({ id: 1, name: 'Banana', needToOrder: 4 })], { getAll });
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      searchAddProduct(fixture, host, 'Ce');
+      addProductButton(host, 'Carrot').click();
+      fixture.detectChanges();
+
+      expect(component.addProductQuery).toBe('');
+      expect(component.addProductResults).toEqual([]);
+
+      searchAddProduct(fixture, host, 'Ce');
+
+      expect(getAll).toHaveBeenCalledTimes(2);
+      expect(component.addableProducts.map((p) => p.name)).toEqual(['Celery']);
+    });
+
+    /**
+     * The in-flight guard `removeProduct` carries, for the same reason (issue #906's review): once
+     * `saveOrder` has sent its lines the order being created is fixed, so a line added afterwards
+     * would leave the dialog showing an order the backend was never asked for.
+     */
+    it('adds no product while the order is being saved', async () => {
+      const response$ = new Subject<void>();
+      const carrot = product({ id: 5, name: 'Carrot', needToOrder: 6 });
+      const getAll = jest.fn(() => of([carrot]));
+      const create = jest.fn(() => response$.asObservable());
+      const { fixture, host } = await render(
+        [product({ id: 1, name: 'Banana', needToOrder: 4 })],
+        { getAll, create, suppliers: [{ id: 3, name: 'Acme' }] }
+      );
+      const component = fixture.componentInstance;
+      component.toggleSelection(1, true);
+      component.openOrderForm();
+      fixture.detectChanges();
+
+      component.orderForm.supplierId = 3;
+      component.orderQuantities[1] = 4;
+      searchAddProduct(fixture, host, 'Car');
+      component.saveOrder();
+      fixture.detectChanges();
+
+      expect(component.savingOrder).toBe(true);
+      expect(addProductButton(host, 'Carrot').disabled).toBe(true);
+
+      // Clicked anyway, and called directly the way a stale view would reach the handler.
+      addProductButton(host, 'Carrot').click();
+      component.addProduct(carrot);
+      fixture.detectChanges();
+
+      expect(component.orderLines().map((p) => p.name)).toEqual(['Banana']);
+      expect(component.orderQuantities[5]).toBeUndefined();
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ lines: [{ productId: 1, quantityOrdered: 4 }] }));
     });
   });
 
@@ -912,6 +1178,24 @@ describe('ProductNeedsOrderingComponent row navigation, Delete removal and sorti
       component.removeProduct(10);
 
       expect(component.selectedProducts().map((p) => p.name)).toEqual(['Widget', 'Gadget']);
+    });
+
+    /**
+     * Add product is the dialog's other edit (issue #907) and carries the same session guard, for
+     * the same reason: a session grants `InventoryOperate`, so this page refuses its own writes -
+     * including the draft they are built from - rather than relying on the backend's read-only
+     * method rule. The dialog cannot be opened during a session at all, which is why this reaches
+     * the handler directly.
+     */
+    it('adds no product to the order being built while a session is active', async () => {
+      const { fixture } = await render([product({ id: 9, name: 'Widget' })], { sessionActive: of(true) });
+
+      const component = fixture.componentInstance;
+      component.selectedProductIds.add(9);
+      component.addProduct(product({ id: 11, name: 'Chocolate', needToOrder: 5 }));
+
+      expect(component.addedProducts).toEqual([]);
+      expect(component.orderQuantities[11]).toBeUndefined();
     });
 
     it('does not open the order dialog while a session is active', async () => {
